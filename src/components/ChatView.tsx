@@ -316,6 +316,7 @@ export function ChatView({
   const fileInput = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const pinnedToBottomRef = useRef(true);
+  const forceScrollToBottomRef = useRef(false);
   const previousChatIdRef = useRef(friend.id);
   const lastPendingMessageAtRef = useRef(0);
   const typingTimer = useRef<number | null>(null);
@@ -409,9 +410,11 @@ export function ChatView({
       previousChatIdRef.current = friend.id;
       pinnedToBottomRef.current = true;
     }
-    if (!pinnedToBottomRef.current) return;
+    if (!pinnedToBottomRef.current && !forceScrollToBottomRef.current) return;
+    forceScrollToBottomRef.current = false;
     const frame = window.requestAnimationFrame(() => {
       scrollToBottom();
+      window.requestAnimationFrame(scrollToBottom);
     });
     return () => window.cancelAnimationFrame(frame);
   }, [lastMessageId, friend.id, scrollToBottom]);
@@ -507,6 +510,7 @@ export function ChatView({
     const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
     lastPendingMessageAtRef.current = sentAt;
     pinnedToBottomRef.current = true;
+    forceScrollToBottomRef.current = true;
     const pendingId = `pending-${sentAt}`;
     const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
     if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
@@ -528,7 +532,6 @@ export function ChatView({
     setFile(null);
     setReplyTo(null);
     setError(null);
-    window.requestAnimationFrame(() => composerRef.current?.focus());
     if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
     typingActive.current = false;
     void setTyping(friend.id, false).catch((err: unknown) => {
@@ -810,7 +813,12 @@ export function ChatView({
             }
           }}
         />
-        <button className="send-btn" type="submit" disabled={isFriendBlocked || (!draft.trim() && !file)}>
+        <button
+          className="send-btn"
+          type="submit"
+          disabled={isFriendBlocked || (!draft.trim() && !file)}
+          onPointerDown={(event) => event.preventDefault()}
+        >
           ➤
         </button>
       </form>

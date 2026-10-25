@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { App as CapacitorApp } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
 import { ChatView } from "./components/ChatView";
 import { LoginPage } from "./components/LoginPage";
 import { Onboarding } from "./components/Onboarding";
@@ -33,6 +35,11 @@ export default function App() {
   const [toastClosing, setToastClosing] = useState(false);
   const previousPreviews = useRef<Map<string, string> | null>(null);
   const toastTimer = useRef<number | null>(null);
+  const navigationStateRef = useRef({
+    activeChatId,
+    hasProfile: Boolean(profileUser),
+    settingsOpen,
+  });
 
   const activeFriend = useMemo(
     () => store.friends.find((f) => f.id === store.activeChatId) ?? null,
@@ -148,6 +155,35 @@ export default function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    navigationStateRef.current = {
+      activeChatId,
+      hasProfile: Boolean(profileUser),
+      settingsOpen,
+    };
+  }, [activeChatId, profileUser, settingsOpen]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const listener = CapacitorApp.addListener("backButton", ({ canGoBack }) => {
+      const navigation = navigationStateRef.current;
+      if (navigation.settingsOpen) {
+        setSettingsOpen(false);
+      } else if (navigation.hasProfile) {
+        setProfileUser(null);
+      } else if (navigation.activeChatId) {
+        setActiveChatId(null);
+      } else if (canGoBack) {
+        window.history.back();
+      } else {
+        void CapacitorApp.exitApp();
+      }
+    });
+    return () => {
+      void listener.then((handle) => handle.remove());
+    };
+  }, [setActiveChatId]);
 
   useEffect(() => {
     const preventNativeContextMenu = (event: MouseEvent) => event.preventDefault();
