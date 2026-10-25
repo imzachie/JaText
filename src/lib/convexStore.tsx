@@ -66,12 +66,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     api.friends.activity,
     isAuthenticated ? {} : "skip",
   ) ?? []) as FriendActivity[];
-  const activeMessages = (useQuery(
+  const activeMessagesQuery = useQuery(
     api.messages.list,
     isAuthenticated && activeChatId
       ? { otherId: activeChatId as Id<"users"> }
       : "skip",
-  ) ?? []) as ChatMessage[];
+  );
+  const activeMessages = (activeMessagesQuery ?? []) as ChatMessage[];
   const stickerLibrary = useQuery(
     api.stickers.library,
     isAuthenticated ? {} : "skip",
@@ -572,6 +573,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     activeChatId,
     setActiveChatId,
     activeMessages,
+    activeMessagesReady:
+      !isAuthenticated || !activeChatId || activeMessagesQuery !== undefined,
     blockedUserIds,
     signInEmail,
     signUpEmail,

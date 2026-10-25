@@ -79,7 +79,8 @@ const ChatHistory = memo(function ChatHistory({
   isTyping,
   status,
   messagesRef,
-  pinnedToBottomRef,
+  initialScrollAllowedRef,
+  messagesReady,
   onOpenProfile,
   onOpenMessageMenu,
   onOpenImage,
@@ -91,7 +92,8 @@ const ChatHistory = memo(function ChatHistory({
   isTyping: boolean;
   status: ActivityStatus;
   messagesRef: { current: HTMLDivElement | null };
-  pinnedToBottomRef: { current: boolean };
+  initialScrollAllowedRef: { current: boolean };
+  messagesReady: boolean;
   onOpenProfile: (user: JaUser) => void;
   onOpenMessageMenu: (event: MouseEvent, message: ChatMessage) => void;
   onOpenImage: (url: string) => void;
@@ -101,13 +103,14 @@ const ChatHistory = memo(function ChatHistory({
     <div
       className="messages"
       ref={messagesRef}
-      onScroll={(event) => {
-        const element = event.currentTarget;
-        pinnedToBottomRef.current =
-          element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+      onWheel={() => {
+        initialScrollAllowedRef.current = false;
+      }}
+      onTouchStart={() => {
+        initialScrollAllowedRef.current = false;
       }}
     >
-      {messages.length === 0 && (
+      {messagesReady && messages.length === 0 && (
         <div className="empty-box center">
           <Avatar user={friend} size={72} onClick={() => onOpenProfile(friend)} />
           <p>
@@ -182,7 +185,7 @@ const ChatHistory = memo(function ChatHistory({
                               src={message.attachmentUrl}
                               alt={message.attachmentName ?? "attachment"}
                               onLoad={() => {
-                                if (pinnedToBottomRef.current) {
+                                if (initialScrollAllowedRef.current) {
                                   const container = messagesRef.current;
                                   if (container) container.scrollTop = container.scrollHeight;
                                 }
@@ -297,6 +300,7 @@ export function ChatView({
   const {
     me,
     activeMessages,
+    activeMessagesReady,
     friendActivities,
     sendMessage,
     markMessagesRead,
@@ -322,8 +326,9 @@ export function ChatView({
   const messagesRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const pinnedToBottomRef = useRef(true);
+  const initialScrollAllowedRef = useRef(true);
   const hasScrolledOnOpenRef = useRef(false);
+  const scrollTargetChatRef = useRef<string | null>(null);
   const imagePinchStartRef = useRef<{ distance: number; scale: number } | null>(null);
   const lastPendingMessageAtRef = useRef(0);
   const typingTimer = useRef<number | null>(null);
@@ -347,8 +352,6 @@ export function ChatView({
     () => getConversationMessages(pendingMessages, conversationMessages, friend.id),
     [conversationMessages, friend.id, pendingMessages],
   );
-  const lastMessage = displayedMessages.at(-1);
-  const lastMessageKey = lastMessage?.renderKey ?? lastMessage?.id;
   const scrollToBottom = useCallback(() => {
     const container = messagesRef.current;
     if (container) {
@@ -359,6 +362,8 @@ export function ChatView({
     friendActivity?.status === "dnd"
       ? "Do Not Disturb"
       : friendActivity?.status ?? "offline";
+  const conversationReady =
+    activeMessagesReady && store.activeChatId === friend.id;
 
   const openImagePreview = useCallback((url: string) => {
     if (imageCloseTimerRef.current !== null) {
@@ -414,15 +419,18 @@ export function ChatView({
   }, [setTyping]);
 
   useLayoutEffect(() => {
-    if (!hasScrolledOnOpenRef.current) {
-      pinnedToBottomRef.current = true;
-      scrollToBottom();
-      hasScrolledOnOpenRef.current = true;
-      return;
+    if (scrollTargetChatRef.current !== friend.id) {
+      scrollTargetChatRef.current = friend.id;
+      hasScrolledOnOpenRef.current = false;
+      initialScrollAllowedRef.current = true;
     }
-    if (!pinnedToBottomRef.current) return;
-    scrollToBottom();
-  }, [lastMessageKey, friend.id, scrollToBottom]);
+    if (!conversationReady || hasScrolledOnOpenRef.current) return;
+
+    hasScrolledOnOpenRef.current = true;
+    window.requestAnimationFrame(() => {
+      if (initialScrollAllowedRef.current) scrollToBottom();
+    });
+  }, [conversationReady, friend.id, scrollToBottom]);
 
   function zoomImageWithPinch(event: React.TouchEvent<HTMLImageElement>) {
     if (event.touches.length < 2) {
@@ -535,6 +543,7 @@ export function ChatView({
         deliveryStatus: "delivered",
       },
     ]);
+    window.requestAnimationFrame(scrollToBottom);
     setDraft("");
     setFile(null);
     setReplyTo(null);
@@ -789,7 +798,8 @@ export function ChatView({
         isTyping={friendActivity?.isTyping ?? false}
         status={friendActivity?.status ?? "offline"}
         messagesRef={messagesRef}
-        pinnedToBottomRef={pinnedToBottomRef}
+        initialScrollAllowedRef={initialScrollAllowedRef}
+        messagesReady={conversationReady}
         onOpenProfile={onOpenProfile}
         onOpenMessageMenu={openMessageMenu}
         onOpenImage={openImagePreview}

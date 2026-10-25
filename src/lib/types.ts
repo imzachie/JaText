@@ -112,6 +112,7 @@ export interface JaTextStore {
   activeChatId: string | null;
   setActiveChatId: (id: string | null) => void;
   activeMessages: ChatMessage[];
+  activeMessagesReady: boolean;
   blockedUserIds: string[];
 
   signInEmail: (email: string, password: string) => Promise<void>;

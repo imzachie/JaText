@@ -1306,6 +1306,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     activeChatId,
     setActiveChatId,
     activeMessages,
+    activeMessagesReady: true,
     blockedUserIds,
     signInEmail,
     signUpEmail,
