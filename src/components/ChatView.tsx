@@ -1,10 +1,19 @@
-import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type MouseEvent,
+} from "react";
 import { playMessageSound } from "../lib/alerts";
 import { ContextMenu } from "./ContextMenu";
 import { StickerPicker } from "./StickerPicker";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
-import type { ChatMessage, JaUser } from "../lib/types";
+import type { ActivityStatus, ChatMessage, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
@@ -27,6 +36,166 @@ function fmtDay(ts: number) {
   return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 }
 
+const ChatHistory = memo(function ChatHistory({
+  messages,
+  friend,
+  me,
+  isTyping,
+  status,
+  messagesRef,
+  pinnedToBottomRef,
+  onOpenProfile,
+  onOpenMessageMenu,
+  onReactToMessage,
+}: {
+  messages: ChatMessage[];
+  friend: JaUser;
+  me: JaUser;
+  isTyping: boolean;
+  status: ActivityStatus;
+  messagesRef: { current: HTMLDivElement | null };
+  pinnedToBottomRef: { current: boolean };
+  onOpenProfile: (user: JaUser) => void;
+  onOpenMessageMenu: (event: MouseEvent, message: ChatMessage) => void;
+  onReactToMessage: (message: ChatMessage, emoji: string) => void;
+}) {
+  return (
+    <div
+      className="messages"
+      ref={messagesRef}
+      onScroll={(event) => {
+        const element = event.currentTarget;
+        pinnedToBottomRef.current =
+          element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+      }}
+    >
+      {messages.length === 0 && (
+        <div className="empty-box center">
+          <Avatar user={friend} size={72} onClick={() => onOpenProfile(friend)} />
+          <p>
+            You're now friends with <strong>{friend.displayName}</strong> 🎉
+          </p>
+          <p className="muted small">Send the first message below — photos &amp; files work too!</p>
+        </div>
+      )}
+      {messages.map((message, index) => {
+        const day = fmtDay(message.createdAt);
+        const showDay =
+          index === 0 || fmtDay(messages[index - 1].createdAt) !== day;
+        const mine = message.senderId === me.id;
+        const isImage = message.attachmentType?.startsWith("image/");
+        return (
+          <div key={message.id}>
+            {showDay && <div className="day-divider">{day}</div>}
+            <div
+              className={`msg-row ${mine ? "mine" : "theirs"}`}
+              id={`message-${message.id}`}
+            >
+              {!mine && (
+                <Avatar user={friend} size={30} ringWidth={2} onClick={() => onOpenProfile(friend)} />
+              )}
+              <div className="msg-col">
+                {message.forwardedFrom && (
+                  <span className="message-meta forwarded-label">
+                    ↗ Forwarded from {message.forwardedFrom}
+                  </span>
+                )}
+                <div
+                  className={`bubble ${mine ? "mine" : "theirs"} ${message.unsentAt ? "unsent" : ""}`}
+                  onContextMenu={(event) => onOpenMessageMenu(event, message)}
+                >
+                  {message.replyTo && (
+                    <button
+                      type="button"
+                      className="reply-quote"
+                      onClick={() =>
+                        document
+                          .getElementById(`message-${message.replyTo?.id}`)
+                          ?.scrollIntoView({ behavior: "smooth", block: "center" })
+                      }
+                    >
+                      <strong>
+                        {message.replyTo.senderId === me.id ? "You" : friend.displayName}
+                      </strong>
+                      <span>{message.replyTo.body || "📎 Attachment"}</span>
+                    </button>
+                  )}
+                  {message.unsentAt ? (
+                    <p className="unsent-copy">This message was unsent</p>
+                  ) : (
+                    <>
+                      {message.attachmentUrl &&
+                        (isImage ? (
+                          <a href={message.attachmentUrl} target="_blank" rel="noreferrer">
+                            <img
+                              className="msg-image"
+                              src={message.attachmentUrl}
+                              alt={message.attachmentName ?? "attachment"}
+                            />
+                          </a>
+                        ) : (
+                          <a
+                            className="file-chip"
+                            href={message.attachmentUrl}
+                            download={message.attachmentName ?? "file"}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            📎 {message.attachmentName ?? "Attachment"}
+                          </a>
+                        ))}
+                      {message.body && <p>{message.body}</p>}
+                    </>
+                  )}
+                </div>
+                {!!message.reactions?.length && (
+                  <div className="message-reactions">
+                    {Array.from(new Set(message.reactions.map((reaction) => reaction.emoji))).map(
+                      (emoji) => {
+                        const users = message.reactions?.filter((reaction) => reaction.emoji === emoji) ?? [];
+                        const mineReacted = users.some((reaction) => reaction.userId === me.id);
+                        return (
+                          <button
+                            type="button"
+                            key={emoji}
+                            className={`reaction-chip ${mineReacted ? "selected" : ""}`}
+                            onClick={() => onReactToMessage(message, emoji)}
+                            aria-label={`${emoji} reaction, ${users.length} people`}
+                          >
+                            {emoji} <span>{users.length}</span>
+                          </button>
+                        );
+                      },
+                    )}
+                  </div>
+                )}
+                <span className="msg-time">{fmtTime(message.createdAt)}</span>
+                {mine && !message.unsentAt && message.deliveryStatus && (
+                  <span className="message-delivery-status">
+                    {message.deliveryStatus === "delivered"
+                      ? "Delivered"
+                      : message.deliveryStatus === "sent"
+                        ? "Sent"
+                        : "Read"}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      {isTyping && (
+        <div className="msg-row theirs typing-row" aria-label={`${friend.displayName} is typing`}>
+          <Avatar user={friend} size={30} ringWidth={2} status={status} />
+          <div className="typing-bubble" aria-hidden="true">
+            <span>.</span><span>.</span><span>.</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
 export function ChatView({
   friend,
   onOpenProfile,
@@ -45,6 +214,7 @@ export function ChatView({
     markMessagesRead,
     setTyping,
     soundsEnabled,
+    toggleMessageReaction,
   } = store;
   const [draft, setDraft] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -58,6 +228,8 @@ export function ChatView({
   const messagesRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const pinnedToBottomRef = useRef(true);
+  const previousChatIdRef = useRef(friend.id);
   const typingTimer = useRef<number | null>(null);
   const typingActive = useRef(false);
   const lastTypingUpdate = useRef(0);
@@ -65,7 +237,10 @@ export function ChatView({
   const friendActivity = friendActivities.find((activity) => activity.userId === friend.id);
   const isFriendBlocked = store.blockedUserIds.includes(friend.id);
   const lastMessageId = activeMessages.at(-1)?.id;
-  const incomingMessageCount = activeMessages.filter((message) => message.senderId === friend.id).length;
+  const incomingMessageCount = useMemo(
+    () => activeMessages.filter((message) => message.senderId === friend.id).length,
+    [activeMessages, friend.id],
+  );
   const friendStatusLabel =
     friendActivity?.status === "dnd"
       ? "Do Not Disturb"
@@ -76,14 +251,19 @@ export function ChatView({
   }, [setTyping]);
 
   useEffect(() => {
+    if (previousChatIdRef.current !== friend.id) {
+      previousChatIdRef.current = friend.id;
+      pinnedToBottomRef.current = true;
+    }
+    if (!pinnedToBottomRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       const container = messagesRef.current;
       if (container) {
-        container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+        container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [lastMessageId, friend.id, friendActivity?.isTyping]);
+  }, [lastMessageId, friend.id]);
 
   useEffect(() => {
     if (incomingMessageCount === 0) return;
@@ -103,8 +283,6 @@ export function ChatView({
     },
     [friend.id],
   );
-
-  if (!me) return null;
 
   async function onSend(e?: FormEvent) {
     e?.preventDefault();
@@ -157,7 +335,7 @@ export function ChatView({
     }, 2_500);
   }
 
-  function openMessageMenu(event: MouseEvent, message: ChatMessage) {
+  const openMessageMenu = useCallback((event: MouseEvent, message: ChatMessage) => {
     event.preventDefault();
     event.stopPropagation();
     const eventTime =
@@ -174,7 +352,7 @@ export function ChatView({
         eventTime - message.createdAt < UNSEND_WINDOW_MS,
     });
     setReactionPickerOpen(false);
-  }
+  }, [me?.id]);
 
   function replyToMessage(message: ChatMessage) {
     setReplyTo(message);
@@ -214,15 +392,17 @@ export function ChatView({
     }
   }
 
-  async function reactToMessage(message: ChatMessage, emoji: string) {
+  const reactToMessage = useCallback(async (message: ChatMessage, emoji: string) => {
     try {
-      await store.toggleMessageReaction(message.id, emoji);
+      await toggleMessageReaction(message.id, emoji);
       setMessageMenu(null);
       setReactionPickerOpen(false);
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't add the reaction. Please try again."));
     }
-  }
+  }, [toggleMessageReaction]);
+
+  if (!me) return null;
 
   async function favoriteSticker(message: ChatMessage) {
     try {
@@ -243,8 +423,6 @@ export function ChatView({
       setError(friendlyError(actionError, "Couldn't forward the message. Please try again."));
     }
   }
-
-  let lastDay = "";
 
   return (
     <section className="chat">
@@ -290,128 +468,18 @@ export function ChatView({
         </div>
       )}
 
-      <div className="messages" ref={messagesRef}>
-        {activeMessages.length === 0 && (
-          <div className="empty-box center">
-            <Avatar user={friend} size={72} onClick={() => onOpenProfile(friend)} />
-            <p>
-              You're now friends with <strong>{friend.displayName}</strong> 🎉
-            </p>
-            <p className="muted small">Send the first message below — photos &amp; files work too!</p>
-          </div>
-        )}
-
-        {activeMessages.map((m) => {
-          const day = fmtDay(m.createdAt);
-          const showDay = day !== lastDay;
-          lastDay = day;
-          const mine = m.senderId === me.id;
-          const isImage = m.attachmentType?.startsWith("image/");
-          return (
-            <div key={m.id}>
-              {showDay && <div className="day-divider">{day}</div>}
-              <div
-                className={`msg-row ${mine ? "mine" : "theirs"}`}
-                id={`message-${m.id}`}
-              >
-                {!mine && (
-                  <Avatar user={friend} size={30} ringWidth={2} onClick={() => onOpenProfile(friend)} />
-                )}
-                <div className="msg-col">
-                  {m.forwardedFrom && (
-                    <span className="message-meta forwarded-label">
-                      ↗ Forwarded from {m.forwardedFrom}
-                    </span>
-                  )}
-                  <div
-                    className={`bubble ${mine ? "mine" : "theirs"} ${m.unsentAt ? "unsent" : ""}`}
-                    onContextMenu={(event) => openMessageMenu(event, m)}
-                  >
-                    {m.replyTo && (
-                      <button
-                        type="button"
-                        className="reply-quote"
-                        onClick={() =>
-                          document
-                            .getElementById(`message-${m.replyTo?.id}`)
-                            ?.scrollIntoView({ behavior: "smooth", block: "center" })
-                        }
-                      >
-                        <strong>
-                          {m.replyTo.senderId === me.id ? "You" : friend.displayName}
-                        </strong>
-                        <span>{m.replyTo.body || "📎 Attachment"}</span>
-                      </button>
-                    )}
-                    {m.unsentAt ? (
-                      <p className="unsent-copy">This message was unsent</p>
-                    ) : (
-                      <>
-                    {m.attachmentUrl &&
-                      (isImage ? (
-                        <a href={m.attachmentUrl} target="_blank" rel="noreferrer">
-                          <img className="msg-image" src={m.attachmentUrl} alt={m.attachmentName ?? "attachment"} />
-                        </a>
-                      ) : (
-                        <a
-                          className="file-chip"
-                          href={m.attachmentUrl}
-                          download={m.attachmentName ?? "file"}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          📎 {m.attachmentName ?? "Attachment"}
-                        </a>
-                      ))}
-                    {m.body && <p>{m.body}</p>}
-                      </>
-                    )}
-                  </div>
-                  {!!m.reactions?.length && (
-                    <div className="message-reactions">
-                      {Array.from(new Set(m.reactions.map((reaction) => reaction.emoji))).map(
-                        (emoji) => {
-                          const users = m.reactions?.filter((reaction) => reaction.emoji === emoji) ?? [];
-                          const mineReacted = users.some((reaction) => reaction.userId === me.id);
-                          return (
-                            <button
-                              type="button"
-                              key={emoji}
-                              className={`reaction-chip ${mineReacted ? "selected" : ""}`}
-                              onClick={() => void reactToMessage(m, emoji)}
-                              aria-label={`${emoji} reaction, ${users.length} people`}
-                            >
-                              {emoji} <span>{users.length}</span>
-                            </button>
-                          );
-                        },
-                      )}
-                    </div>
-                  )}
-                  <span className="msg-time">{fmtTime(m.createdAt)}</span>
-                  {mine && !m.unsentAt && m.deliveryStatus && (
-                    <span className="message-delivery-status">
-                      {m.deliveryStatus === "delivered"
-                        ? "Delivered"
-                        : m.deliveryStatus === "sent"
-                          ? "Sent"
-                          : "Read"}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-        {friendActivity?.isTyping && (
-          <div className="msg-row theirs typing-row" aria-label={`${friend.displayName} is typing`}>
-            <Avatar user={friend} size={30} ringWidth={2} status={friendActivity.status} />
-            <div className="typing-bubble" aria-hidden="true">
-              <span>.</span><span>.</span><span>.</span>
-            </div>
-          </div>
-        )}
-      </div>
+      <ChatHistory
+        messages={activeMessages}
+        friend={friend}
+        me={me}
+        isTyping={friendActivity?.isTyping ?? false}
+        status={friendActivity?.status ?? "offline"}
+        messagesRef={messagesRef}
+        pinnedToBottomRef={pinnedToBottomRef}
+        onOpenProfile={onOpenProfile}
+        onOpenMessageMenu={openMessageMenu}
+        onReactToMessage={reactToMessage}
+      />
 
       {error && <div className="error-box chat-error">{error}</div>}
 
