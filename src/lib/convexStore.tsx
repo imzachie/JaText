@@ -4,6 +4,7 @@ import { useAuthActions } from "@convex-dev/auth/react";
 // Works with both the checked-in stub and the real generated API
 // (run `npx convex dev` once to generate convex/_generated for real).
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { JaTextContext } from "./store";
 import type {
   ChatMessage,
@@ -49,7 +50,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   ) ?? []) as ChatPreview[];
   const activeMessages = (useQuery(
     api.messages.list,
-    isAuthenticated && activeChatId ? { otherId: activeChatId } : "skip",
+    isAuthenticated && activeChatId
+      ? { otherId: activeChatId as Id<"users"> }
+      : "skip",
   ) ?? []) as ChatMessage[];
 
   const saveProfileMut = useMutation(api.users.saveProfile);
@@ -60,7 +63,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   /** Upload a file to Convex storage, returns its storage id. */
   const upload = useCallback(
-    async (file: File): Promise<string> => {
+    async (file: File): Promise<Id<"_storage">> => {
       const url = (await generateUploadUrl()) as string;
       const res = await fetch(url, {
         method: "POST",
@@ -69,7 +72,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       });
       if (!res.ok) throw new Error("Upload failed. Please try again.");
       const { storageId } = await res.json();
-      return storageId as string;
+      return storageId as Id<"_storage">;
     },
     [generateUploadUrl],
   );
@@ -144,7 +147,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const respondRequest = useCallback<JaTextStore["respondRequest"]>(
     async (requestId, accept) => {
-      await respondMut({ requestId, accept });
+      await respondMut({
+        requestId: requestId as Id<"friendRequests">,
+        accept,
+      });
     },
     [respondMut],
   );
@@ -153,7 +159,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     async (receiverId, body, file) => {
       const attachmentId = file ? await upload(file) : undefined;
       await sendMessageMut({
-        receiverId,
+        receiverId: receiverId as Id<"users">,
         body: body.trim(),
         ...(attachmentId
           ? { attachmentId, attachmentName: file!.name, attachmentType: file!.type }
