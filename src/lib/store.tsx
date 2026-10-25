@@ -694,14 +694,20 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       )
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((message) => {
-        const favoriteMedia = message.stickerKey
-          ? db.stickerLibrary.find(
-              (item) =>
-                item.userId === me.id && item.key === message.stickerKey,
-            )
-          : undefined;
+        const favoriteMedia = db.stickerLibrary.find(
+          (item) =>
+            item.userId === me.id &&
+            (message.stickerKey
+              ? item.key === message.stickerKey
+              : !!message.attachmentUrl &&
+                item.key === `upload:${message.attachmentUrl}`),
+        );
         const withFavorite = favoriteMedia
-          ? { ...message, isStickerFavorite: favoriteMedia.isFavorite }
+          ? {
+              ...message,
+              stickerKey: favoriteMedia.key,
+              isStickerFavorite: favoriteMedia.isFavorite,
+            }
           : message;
         if (!message.replyTo) return withFavorite;
         const source = db.messages.find((entry) => entry.id === message.replyTo?.id);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { friendlyError } from "../lib/errors";
 import { useJaText } from "../lib/store";
 import type { StickerMedia } from "../lib/types";
@@ -22,6 +22,7 @@ export function StickerPicker({
   const store = useJaText();
   const searchKlipy = store.searchKlipy;
   const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [tab, setTab] = useState<PickerTab>("favorites");
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<StickerMedia[]>([]);
@@ -33,6 +34,34 @@ export function StickerPicker({
   const anchorRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
+
+  const closePicker = useCallback(() => {
+    if (!open || closing) return;
+    setClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+      closeTimerRef.current = null;
+    }, 160);
+  }, [closing, open]);
+
+  const openPicker = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    setClosing(false);
+    setOpen(true);
+    setError(null);
+    setSearching(tab === "klipy");
+  }, [tab]);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -42,12 +71,12 @@ export function StickerPicker({
         !anchorRef.current?.contains(event.target) &&
         !panelRef.current?.contains(event.target)
       ) {
-        setOpen(false);
+        closePicker();
       }
     };
     document.addEventListener("pointerdown", closeOnOutsideClick);
     return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
-  }, [open]);
+  }, [closePicker, open]);
 
   useEffect(() => {
     if (!open || tab !== "klipy") return;
@@ -76,7 +105,7 @@ export function StickerPicker({
     setError(null);
     try {
       await store.sendSticker(friendId, sticker);
-      setOpen(false);
+      closePicker();
     } catch (cause) {
       setError(friendlyError(cause, "Couldn't send this sticker. Please try again."));
     } finally {
@@ -132,7 +161,7 @@ export function StickerPicker({
       setSavedUpload(saved);
       if (sendNow) {
         await store.sendSticker(friendId, saved);
-        setOpen(false);
+        closePicker();
       }
     } catch (cause) {
       setError(friendlyError(cause, "Couldn't upload this image. Please try again."));
@@ -158,9 +187,8 @@ export function StickerPicker({
         aria-expanded={open}
         disabled={disabled}
         onClick={() => {
-          setOpen((current) => !current);
-          setError(null);
-          setSearching(tab === "klipy");
+          if (open) closePicker();
+          else openPicker();
         }}
       >
         GIF
@@ -168,7 +196,7 @@ export function StickerPicker({
       {open && (
         <section
           ref={panelRef}
-          className="sticker-picker"
+          className={`sticker-picker ${closing ? "closing" : ""}`}
           aria-label="GIF and sticker picker"
         >
           <header className="sticker-picker-header">
@@ -177,7 +205,7 @@ export function StickerPicker({
               type="button"
               className="mini-btn"
               aria-label="Close sticker picker"
-              onClick={() => setOpen(false)}
+              onClick={closePicker}
             >
               ×
             </button>

@@ -30,6 +30,7 @@ export default function App() {
   const [profileUser, setProfileUser] = useState<JaUser | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [messageToast, setMessageToast] = useState<MessageToast | null>(null);
+  const [toastClosing, setToastClosing] = useState(false);
   const previousPreviews = useRef<Map<string, string> | null>(null);
   const toastTimer = useRef<number | null>(null);
 
@@ -102,9 +103,16 @@ export default function App() {
         activeChatId === friend.id;
       if (focusedOnThisChat) continue;
 
+      setToastClosing(false);
       setMessageToast({ friendId: friend.id, name: friend.displayName, body: preview.body });
       if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-      toastTimer.current = window.setTimeout(() => setMessageToast(null), 4_500);
+      toastTimer.current = window.setTimeout(() => {
+        setToastClosing(true);
+        toastTimer.current = window.setTimeout(() => {
+          setMessageToast(null);
+          setToastClosing(false);
+        }, 180);
+      }, 4_500);
 
       if (
         notificationsEnabled &&
@@ -196,12 +204,17 @@ export default function App() {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {messageToast && (
         <button
-          className="message-toast"
+          className={`message-toast ${toastClosing ? "closing" : ""}`}
           type="button"
           aria-live="polite"
           onClick={() => {
             store.setActiveChatId(messageToast.friendId);
-            setMessageToast(null);
+            setToastClosing(true);
+            if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+            toastTimer.current = window.setTimeout(() => {
+              setMessageToast(null);
+              setToastClosing(false);
+            }, 180);
           }}
         >
           <strong>New message from {messageToast.name}</strong>

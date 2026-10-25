@@ -128,7 +128,12 @@ export const favoriteFromMessage = mutation({
     }
 
     const url = message.attachmentUrl;
-    if (url && !isKlipyUrl(url)) {
+    const source =
+      message.stickerKey?.startsWith("klipy:") ||
+      (!message.attachmentId && !!url && isKlipyUrl(url))
+        ? "klipy"
+        : "upload";
+    if (source === "klipy" && url && !isKlipyUrl(url)) {
       throw new Error("This media cannot be saved to your collection.");
     }
     await ctx.db.insert("stickerLibrary", {
@@ -142,7 +147,7 @@ export const favoriteFromMessage = mutation({
         message.attachmentType === "image/gif" || message.stickerKey?.startsWith("klipy:")
           ? "gif"
           : "image",
-      source: message.stickerKey?.startsWith("klipy:") || url ? "klipy" : "upload",
+      source,
       isFavorite: true,
       useCount: 0,
     });

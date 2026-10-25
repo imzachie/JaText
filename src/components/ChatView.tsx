@@ -46,6 +46,7 @@ const ChatHistory = memo(function ChatHistory({
   pinnedToBottomRef,
   onOpenProfile,
   onOpenMessageMenu,
+  onOpenImage,
   onReactToMessage,
 }: {
   messages: ChatMessage[];
@@ -57,6 +58,7 @@ const ChatHistory = memo(function ChatHistory({
   pinnedToBottomRef: { current: boolean };
   onOpenProfile: (user: JaUser) => void;
   onOpenMessageMenu: (event: MouseEvent, message: ChatMessage) => void;
+  onOpenImage: (url: string) => void;
   onReactToMessage: (message: ChatMessage, emoji: string) => void;
 }) {
   return (
@@ -84,6 +86,9 @@ const ChatHistory = memo(function ChatHistory({
           index === 0 || fmtDay(messages[index - 1].createdAt) !== day;
         const mine = message.senderId === me.id;
         const isImage = message.attachmentType?.startsWith("image/");
+        const isVideo =
+          message.attachmentType?.startsWith("video/") ||
+          /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? "");
         return (
           <div key={message.id}>
             {showDay && <div className="day-divider">{day}</div>}
@@ -102,7 +107,11 @@ const ChatHistory = memo(function ChatHistory({
                 )}
                 <div
                   className={`bubble ${mine ? "mine" : "theirs"} ${message.unsentAt ? "unsent" : ""}`}
-                  onContextMenu={(event) => onOpenMessageMenu(event, message)}
+                  onContextMenu={
+                    message.id.startsWith("pending-")
+                      ? undefined
+                      : (event) => onOpenMessageMenu(event, message)
+                  }
                 >
                   {message.replyTo && (
                     <button
@@ -126,13 +135,50 @@ const ChatHistory = memo(function ChatHistory({
                     <>
                       {message.attachmentUrl &&
                         (isImage ? (
-                          <a href={message.attachmentUrl} target="_blank" rel="noreferrer">
+                          <button
+                            type="button"
+                            className="image-message-button"
+                            onClick={() => onOpenImage(message.attachmentUrl!)}
+                            aria-label="Open image viewer"
+                          >
                             <img
                               className="msg-image"
                               src={message.attachmentUrl}
                               alt={message.attachmentName ?? "attachment"}
                             />
-                          </a>
+                          </button>
+                        ) : isVideo ? (
+                          <div className="video-attachment">
+                            <video
+                              className="msg-video"
+                              controls
+                              playsInline
+                              preload="metadata"
+                              src={message.attachmentUrl}
+                            >
+                              Your browser does not support video playback.
+                            </video>
+                            <label className="video-speed-control">
+                              <span>Speed</span>
+                              <select
+                                defaultValue="1"
+                                aria-label="Video playback speed"
+                                onChange={(event) => {
+                                  const video = event.currentTarget
+                                    .closest(".video-attachment")
+                                    ?.querySelector("video");
+                                  if (video) video.playbackRate = Number(event.target.value);
+                                }}
+                              >
+                                <option value="0.5">0.5×</option>
+                                <option value="0.75">0.75×</option>
+                                <option value="1">1×</option>
+                                <option value="1.25">1.25×</option>
+                                <option value="1.5">1.5×</option>
+                                <option value="2">2×</option>
+                              </select>
+                            </label>
+                          </div>
                         ) : (
                           <a
                             className="file-chip"
@@ -223,28 +269,102 @@ export function ChatView({
   const [showUnsendWarning, setShowUnsendWarning] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
+  const [messageMenuClosing, setMessageMenuClosing] = useState(false);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
+  const [forwardClosing, setForwardClosing] = useState(false);
+  const [pendingMessage, setPendingMessage] = useState<ChatMessage | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageScale, setImageScale] = useState(1);
+  const [imageClosing, setImageClosing] = useState(false);
+  const [chatClosing, setChatClosing] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const pinnedToBottomRef = useRef(true);
   const previousChatIdRef = useRef(friend.id);
   const typingTimer = useRef<number | null>(null);
+  const pendingAttachmentUrlRef = useRef<string | null>(null);
+  const imageCloseTimerRef = useRef<number | null>(null);
+  const messageMenuCloseTimerRef = useRef<number | null>(null);
+  const forwardCloseTimerRef = useRef<number | null>(null);
+  const chatCloseTimerRef = useRef<number | null>(null);
   const typingActive = useRef(false);
   const lastTypingUpdate = useRef(0);
   const setTypingRef = useRef(setTyping);
   const friendActivity = friendActivities.find((activity) => activity.userId === friend.id);
   const isFriendBlocked = store.blockedUserIds.includes(friend.id);
-  const lastMessageId = activeMessages.at(-1)?.id;
   const incomingMessageCount = useMemo(
     () => activeMessages.filter((message) => message.senderId === friend.id).length,
     [activeMessages, friend.id],
   );
+  const displayedMessages = useMemo(() => {
+    if (!pendingMessage) return activeMessages;
+    const isConfirmed = activeMessages.some(
+      (message) =>
+        message.senderId === pendingMessage.senderId &&
+        message.createdAt >= pendingMessage.createdAt - 1_000 &&
+        message.body === pendingMessage.body &&
+        message.attachmentName === pendingMessage.attachmentName,
+    );
+    return isConfirmed
+      ? activeMessages
+      : [...activeMessages, pendingMessage].sort((a, b) => a.createdAt - b.createdAt);
+  }, [activeMessages, pendingMessage]);
+  const lastMessageId = displayedMessages.at(-1)?.id;
   const friendStatusLabel =
     friendActivity?.status === "dnd"
       ? "Do Not Disturb"
       : friendActivity?.status ?? "offline";
+
+  const openImagePreview = useCallback((url: string) => {
+    if (imageCloseTimerRef.current !== null) {
+      window.clearTimeout(imageCloseTimerRef.current);
+      imageCloseTimerRef.current = null;
+    }
+    setImageScale(1);
+    setImageClosing(false);
+    setImagePreview(url);
+  }, []);
+
+  const closeImagePreview = useCallback(() => {
+    if (imageCloseTimerRef.current !== null) window.clearTimeout(imageCloseTimerRef.current);
+    setImageClosing(true);
+    imageCloseTimerRef.current = window.setTimeout(() => {
+      setImagePreview(null);
+      setImageClosing(false);
+      imageCloseTimerRef.current = null;
+    }, 160);
+  }, []);
+
+  const closeMessageMenu = useCallback(() => {
+    if (messageMenuCloseTimerRef.current !== null) return;
+    setMessageMenuClosing(true);
+    messageMenuCloseTimerRef.current = window.setTimeout(() => {
+      setMessageMenu(null);
+      setMessageMenuClosing(false);
+      messageMenuCloseTimerRef.current = null;
+    }, 140);
+  }, []);
+
+  function closeForwardDialog() {
+    if (!forwardMessage || forwardClosing) return;
+    setForwardClosing(true);
+    forwardCloseTimerRef.current = window.setTimeout(() => {
+      setForwardMessage(null);
+      setForwardClosing(false);
+      forwardCloseTimerRef.current = null;
+    }, 160);
+  }
+
+  function closeChat() {
+    if (chatCloseTimerRef.current !== null) return;
+    setChatClosing(true);
+    chatCloseTimerRef.current = window.setTimeout(() => {
+      onBack();
+      chatCloseTimerRef.current = null;
+    }, 160);
+  }
 
   useEffect(() => {
     setTypingRef.current = setTyping;
@@ -264,6 +384,59 @@ export function ChatView({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [lastMessageId, friend.id]);
+
+  useEffect(() => {
+    if (!pendingMessage) return;
+    const isConfirmed = activeMessages.some(
+      (message) =>
+        message.senderId === pendingMessage.senderId &&
+        message.createdAt >= pendingMessage.createdAt - 1_000 &&
+        message.body === pendingMessage.body &&
+        message.attachmentName === pendingMessage.attachmentName,
+    );
+    const timeout = window.setTimeout(
+      () => setPendingMessage((current) => (current?.id === pendingMessage.id ? null : current)),
+      isConfirmed ? 100 : 15_000,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [activeMessages, pendingMessage]);
+
+  useEffect(() => {
+    if (pendingMessage || !pendingAttachmentUrlRef.current) return;
+    URL.revokeObjectURL(pendingAttachmentUrlRef.current);
+    pendingAttachmentUrlRef.current = null;
+  }, [pendingMessage]);
+
+  useEffect(
+    () => () => {
+      if (pendingAttachmentUrlRef.current) {
+        URL.revokeObjectURL(pendingAttachmentUrlRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!imagePreview) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeImagePreview();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [closeImagePreview, imagePreview]);
+
+  useEffect(
+    () => () => {
+      if (imageCloseTimerRef.current !== null) window.clearTimeout(imageCloseTimerRef.current);
+      if (messageMenuCloseTimerRef.current !== null)
+        window.clearTimeout(messageMenuCloseTimerRef.current);
+      if (forwardCloseTimerRef.current !== null)
+        window.clearTimeout(forwardCloseTimerRef.current);
+      if (chatCloseTimerRef.current !== null)
+        window.clearTimeout(chatCloseTimerRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (incomingMessageCount === 0) return;
@@ -287,6 +460,26 @@ export function ChatView({
   async function onSend(e?: FormEvent) {
     e?.preventDefault();
     if ((!draft.trim() && !file) || sending) return;
+    const sentBody = draft.trim();
+    const sentFile = file;
+    const sentReply = replyTo;
+    const sentAt = Date.now();
+    const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
+    pendingAttachmentUrlRef.current = attachmentUrl ?? null;
+    setPendingMessage({
+      id: `pending-${sentAt}`,
+      senderId: me?.id ?? "",
+      receiverId: friend.id,
+      body: sentBody,
+      attachmentUrl,
+      attachmentName: sentFile?.name,
+      attachmentType: sentFile?.type,
+      createdAt: sentAt,
+      deliveryStatus: "delivered",
+    });
+    setDraft("");
+    setFile(null);
+    setReplyTo(null);
     setSending(true);
     setError(null);
     if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
@@ -295,12 +488,16 @@ export function ChatView({
       setError(friendlyError(err, "Couldn't update your typing status."));
     });
     try {
-      await sendMessage(friend.id, draft, file ?? undefined, replyTo?.id);
+      await sendMessage(friend.id, sentBody, sentFile ?? undefined, sentReply?.id);
       if (soundsEnabled) playMessageSound("sent");
       setDraft("");
       setFile(null);
       setReplyTo(null);
     } catch (err) {
+      setPendingMessage(null);
+      setDraft(sentBody);
+      setFile(sentFile);
+      setReplyTo(sentReply);
       setError(friendlyError(err, "Couldn't send the message. Please try again."));
     } finally {
       setSending(false);
@@ -338,6 +535,11 @@ export function ChatView({
   const openMessageMenu = useCallback((event: MouseEvent, message: ChatMessage) => {
     event.preventDefault();
     event.stopPropagation();
+    if (messageMenuCloseTimerRef.current !== null) {
+      window.clearTimeout(messageMenuCloseTimerRef.current);
+      messageMenuCloseTimerRef.current = null;
+    }
+    setMessageMenuClosing(false);
     const eventTime =
       event.timeStamp > 1_000_000_000_000
         ? event.timeStamp
@@ -356,7 +558,7 @@ export function ChatView({
 
   function replyToMessage(message: ChatMessage) {
     setReplyTo(message);
-    setMessageMenu(null);
+    closeMessageMenu();
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }
 
@@ -367,16 +569,42 @@ export function ChatView({
           ? "This message was unsent"
           : message.body || message.attachmentName || message.attachmentUrl || "",
       );
-      setMessageMenu(null);
+      closeMessageMenu();
     } catch (copyError) {
       setError(friendlyError(copyError, "Couldn't copy the message."));
+    }
+  }
+
+  async function copyImageAddress(message: ChatMessage) {
+    if (!message.attachmentUrl) return;
+    try {
+      await navigator.clipboard.writeText(message.attachmentUrl);
+      closeMessageMenu();
+    } catch (copyError) {
+      setError(friendlyError(copyError, "Couldn't copy the image address."));
+    }
+  }
+
+  async function copyImage(message: ChatMessage) {
+    if (!message.attachmentUrl) return;
+    try {
+      if (!navigator.clipboard.write || typeof ClipboardItem === "undefined") {
+        throw new Error("Copying images isn't supported by this browser.");
+      }
+      const response = await fetch(message.attachmentUrl);
+      if (!response.ok) throw new Error("Couldn't load the image.");
+      const image = await response.blob();
+      await navigator.clipboard.write([new ClipboardItem({ [image.type]: image })]);
+      closeMessageMenu();
+    } catch (copyError) {
+      setError(friendlyError(copyError, "Couldn't copy the image."));
     }
   }
 
   async function deleteForMe(message: ChatMessage) {
     try {
       await store.deleteMessageForMe(message.id);
-      setMessageMenu(null);
+      closeMessageMenu();
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't delete the message. Please try again."));
     }
@@ -386,7 +614,7 @@ export function ChatView({
     try {
       const shouldShowWarning = await store.unsendMessage(message.id);
       if (shouldShowWarning) setShowUnsendWarning(true);
-      setMessageMenu(null);
+      closeMessageMenu();
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't unsend the message. Please try again."));
     }
@@ -395,19 +623,19 @@ export function ChatView({
   const reactToMessage = useCallback(async (message: ChatMessage, emoji: string) => {
     try {
       await toggleMessageReaction(message.id, emoji);
-      setMessageMenu(null);
+      closeMessageMenu();
       setReactionPickerOpen(false);
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't add the reaction. Please try again."));
     }
-  }, [toggleMessageReaction]);
+  }, [closeMessageMenu, toggleMessageReaction]);
 
   if (!me) return null;
 
   async function favoriteSticker(message: ChatMessage) {
     try {
       await store.favoriteStickerFromMessage(message.id);
-      setMessageMenu(null);
+      closeMessageMenu();
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't update your sticker favourites."));
     }
@@ -417,17 +645,17 @@ export function ChatView({
     if (!forwardMessage) return;
     try {
       await store.forwardMessage(forwardMessage.id, receiverId);
-      setForwardMessage(null);
-      setMessageMenu(null);
+      closeForwardDialog();
+      closeMessageMenu();
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't forward the message. Please try again."));
     }
   }
 
   return (
-    <section className="chat">
+    <section className={`chat ${chatClosing ? "closing" : ""}`}>
       <header className="chat-header">
-        <button className="icon-btn back-btn" onClick={onBack} aria-label="Back">
+        <button className="icon-btn back-btn" onClick={closeChat} aria-label="Back">
           ←
         </button>
         <Avatar
@@ -469,7 +697,7 @@ export function ChatView({
       )}
 
       <ChatHistory
-        messages={activeMessages}
+        messages={displayedMessages}
         friend={friend}
         me={me}
         isTyping={friendActivity?.isTyping ?? false}
@@ -478,6 +706,7 @@ export function ChatView({
         pinnedToBottomRef={pinnedToBottomRef}
         onOpenProfile={onOpenProfile}
         onOpenMessageMenu={openMessageMenu}
+        onOpenImage={openImagePreview}
         onReactToMessage={reactToMessage}
       />
 
@@ -515,22 +744,19 @@ export function ChatView({
           type="button"
           className="icon-btn attach-btn"
           title="Attach a photo or file"
-          disabled={isFriendBlocked}
+          disabled={isFriendBlocked || sending}
           onClick={() => fileInput.current?.click()}
         >
           📎
         </button>
-        <StickerPicker friendId={friend.id} disabled={isFriendBlocked} />
+        <StickerPicker friendId={friend.id} disabled={isFriendBlocked || sending} />
         <textarea
           ref={composerRef}
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
-          placeholder={
-            isFriendBlocked
-              ? `Unblock @${friend.username} to message`
-              : `Message @${friend.username}…`
-          }
-          disabled={isFriendBlocked}
+          placeholder={isFriendBlocked ? "Unblock to message" : "Message…"}
+          aria-label={`Message @${friend.username}`}
+          disabled={isFriendBlocked || sending}
           rows={1}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -549,8 +775,8 @@ export function ChatView({
           x={messageMenu.x}
           y={messageMenu.y}
           label="Message actions"
-          className="message-context-menu"
-          onClose={() => setMessageMenu(null)}
+          className={`message-context-menu ${messageMenuClosing ? "closing" : ""}`}
+          onClose={closeMessageMenu}
         >
           <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}>
             <span>↩️</span> Reply
@@ -561,8 +787,13 @@ export function ChatView({
                 type="button"
                 role="menuitem"
                 onClick={() => {
+                  if (forwardCloseTimerRef.current !== null) {
+                    window.clearTimeout(forwardCloseTimerRef.current);
+                    forwardCloseTimerRef.current = null;
+                  }
+                  setForwardClosing(false);
                   setForwardMessage(messageMenu.message);
-                  setMessageMenu(null);
+                  closeMessageMenu();
                 }}
               >
                 <span>↗️</span> Forward
@@ -605,10 +836,27 @@ export function ChatView({
               onClick={() => void favoriteSticker(messageMenu.message)}
             >
               <span>{messageMenu.message.isStickerFavorite ? "☆" : "⭐"}</span>
-              {messageMenu.message.isStickerFavorite
-                ? "Remove from favourites"
-                : "Add to favourites"}
+              {messageMenu.message.attachmentType?.startsWith("image/") &&
+              !messageMenu.message.stickerKey
+                ? "Make this image a sticker..."
+                : messageMenu.message.isStickerFavorite
+                  ? "Remove from favourites"
+                  : "Add to favourites"}
             </button>
+          )}
+          {messageMenu.message.attachmentType?.startsWith("image/") && (
+            <>
+              <button type="button" role="menuitem" onClick={() => void copyImage(messageMenu.message)}>
+                <span>🖼️</span> Copy image
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => void copyImageAddress(messageMenu.message)}
+              >
+                <span>🔗</span> Copy image address
+              </button>
+            </>
           )}
           {messageMenu.canUnsend && (
             <button
@@ -624,7 +872,10 @@ export function ChatView({
       )}
 
       {forwardMessage && (
-        <div className="forward-backdrop" onClick={() => setForwardMessage(null)}>
+        <div
+          className={`forward-backdrop ${forwardClosing ? "closing" : ""}`}
+          onClick={closeForwardDialog}
+        >
           <section
             className="forward-dialog"
             aria-label="Forward message"
@@ -639,7 +890,7 @@ export function ChatView({
                 type="button"
                 className="icon-btn"
                 aria-label="Close forward dialog"
-                onClick={() => setForwardMessage(null)}
+                onClick={closeForwardDialog}
               >
                 ✕
               </button>
@@ -662,6 +913,39 @@ export function ChatView({
               )}
             </div>
           </section>
+        </div>
+      )}
+      {imagePreview && (
+        <div
+          className={`media-lightbox ${imageClosing ? "closing" : ""}`}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Image viewer"
+          onClick={closeImagePreview}
+        >
+          <button
+            type="button"
+            className="media-lightbox-close"
+            aria-label="Close image viewer"
+            onClick={closeImagePreview}
+          >
+            ×
+          </button>
+          <img
+            src={imagePreview}
+            alt="Full-size attachment"
+            style={{ transform: `scale(${imageScale})` }}
+            onClick={(event) => event.stopPropagation()}
+            onWheel={(event) => {
+              event.preventDefault();
+              setImageScale((scale) =>
+                Math.min(4, Math.max(0.5, scale + (event.deltaY < 0 ? 0.15 : -0.15))),
+              );
+            }}
+          />
+          <span className="media-lightbox-hint">
+            Scroll to zoom · Click outside or press Esc to close
+          </span>
         </div>
       )}
     </section>

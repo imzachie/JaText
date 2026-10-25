@@ -81,18 +81,18 @@ async function withMessageDetails(
     m.replyToId ? ctx.db.get(m.replyToId) : null,
     m.forwardedFromId ? ctx.db.get(m.forwardedFromId) : null,
   ]);
-  const stickerKey =
+  const mediaKey =
     m.stickerKey ??
     (m.attachmentId
       ? `upload:${m.attachmentId}`
       : m.attachmentUrl
         ? `klipy:${m.attachmentUrl}`
         : undefined);
-  const favorite = stickerKey
+  const favorite = mediaKey
     ? await ctx.db
         .query("stickerLibrary")
         .withIndex("by_user_media", (q) =>
-          q.eq("userId", currentUserId).eq("mediaKey", stickerKey),
+          q.eq("userId", currentUserId).eq("mediaKey", mediaKey),
         )
         .unique()
     : null;
@@ -109,7 +109,8 @@ async function withMessageDetails(
           : undefined),
     attachmentName: m.unsentAt ? undefined : m.attachmentName,
     attachmentType: m.unsentAt ? undefined : m.attachmentType,
-    stickerKey,
+    stickerKey:
+      m.stickerKey ?? (favorite ? mediaKey : undefined),
     isStickerFavorite: favorite?.isFavorite ?? false,
     deliveryStatus: m.deliveryStatus,
     createdAt: m._creationTime,
