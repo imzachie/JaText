@@ -36,6 +36,7 @@ export interface FriendRequest {
 
 export interface ChatMessage {
   id: string;
+  renderKey?: string;
   senderId: string;
   receiverId: string;
   body: string;

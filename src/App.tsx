@@ -174,6 +174,7 @@ export default function App() {
       <main className="main-pane">
         {activeFriend ? (
           <ChatView
+            key={activeFriend.id}
             friend={activeFriend}
             onOpenProfile={setProfileUser}
             onBack={() => store.setActiveChatId(null)}

@@ -19,6 +19,7 @@ import { Avatar } from "./Avatar";
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
+const EMPTY_MESSAGES: ChatMessage[] = [];
 
 interface MessageMenuState {
   x: number;
@@ -37,24 +38,37 @@ function fmtDay(ts: number) {
   return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 }
 
-function getUnconfirmedPendingMessages(
+function getConversationMessages(
   pendingMessages: ChatMessage[],
   activeMessages: ChatMessage[],
+  friendId: string,
 ) {
-  const unmatchedActiveMessages = [...activeMessages];
-  return pendingMessages.filter((pendingMessage) => {
-    const matchIndex = unmatchedActiveMessages.findIndex(
-      (message) =>
-        message.senderId === pendingMessage.senderId &&
+  const conversationPendingMessages = pendingMessages.filter(
+    (message) => message.receiverId === friendId,
+  );
+  const matchedPendingIds = new Set<string>();
+  const confirmedMessages = activeMessages.map((message) => {
+    const pendingIndex = conversationPendingMessages.findIndex(
+      (pendingMessage) =>
+        pendingMessage.senderId === message.senderId &&
+        pendingMessage.receiverId === message.receiverId &&
         message.createdAt >= pendingMessage.createdAt - 1_000 &&
         message.createdAt <= pendingMessage.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
         message.body === pendingMessage.body &&
         message.attachmentName === pendingMessage.attachmentName,
     );
-    if (matchIndex === -1) return true;
-    unmatchedActiveMessages.splice(matchIndex, 1);
-    return false;
+    if (pendingIndex === -1) return message;
+
+    const [pendingMessage] = conversationPendingMessages.splice(pendingIndex, 1);
+    matchedPendingIds.add(pendingMessage.id);
+    return { ...message, renderKey: pendingMessage.id };
   });
+  return {
+    messages: [...confirmedMessages, ...conversationPendingMessages].sort(
+      (a, b) => a.createdAt - b.createdAt,
+    ),
+    matchedPendingIds,
+  };
 }
 
 const ChatHistory = memo(function ChatHistory({
@@ -111,7 +125,7 @@ const ChatHistory = memo(function ChatHistory({
           message.attachmentType?.startsWith("video/") ||
           /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? "");
         return (
-          <div key={message.id}>
+          <div key={message.renderKey ?? message.id}>
             {showDay && <div className="day-divider">{day}</div>}
             <div
               className={`msg-row ${mine ? "mine" : "theirs"}`}
@@ -306,7 +320,6 @@ export function ChatView({
   const lastPendingMessageAtRef = useRef(0);
   const typingTimer = useRef<number | null>(null);
   const pendingAttachmentUrlsRef = useRef(new Map<string, string>());
-  const pendingMessageTimersRef = useRef(new Map<string, number>());
   const imageCloseTimerRef = useRef<number | null>(null);
   const messageMenuCloseTimerRef = useRef<number | null>(null);
   const forwardCloseTimerRef = useRef<number | null>(null);
@@ -316,17 +329,15 @@ export function ChatView({
   const setTypingRef = useRef(setTyping);
   const friendActivity = friendActivities.find((activity) => activity.userId === friend.id);
   const isFriendBlocked = store.blockedUserIds.includes(friend.id);
+  const conversationMessages =
+    store.activeChatId === friend.id ? activeMessages : EMPTY_MESSAGES;
   const incomingMessageCount = useMemo(
-    () => activeMessages.filter((message) => message.senderId === friend.id).length,
-    [activeMessages, friend.id],
+    () => conversationMessages.filter((message) => message.senderId === friend.id).length,
+    [conversationMessages, friend.id],
   );
-  const visiblePendingMessages = useMemo(
-    () => getUnconfirmedPendingMessages(pendingMessages, activeMessages),
-    [activeMessages, pendingMessages],
-  );
-  const displayedMessages = useMemo(
-    () => [...activeMessages, ...visiblePendingMessages].sort((a, b) => a.createdAt - b.createdAt),
-    [activeMessages, visiblePendingMessages],
+  const { messages: displayedMessages, matchedPendingIds } = useMemo(
+    () => getConversationMessages(pendingMessages, conversationMessages, friend.id),
+    [conversationMessages, friend.id, pendingMessages],
   );
   const lastMessageId = displayedMessages.at(-1)?.id;
   const friendStatusLabel =
@@ -403,11 +414,6 @@ export function ChatView({
   }, [lastMessageId, friend.id]);
 
   const removePendingMessage = useCallback((id: string) => {
-    const timer = pendingMessageTimersRef.current.get(id);
-    if (timer !== undefined) {
-      window.clearTimeout(timer);
-      pendingMessageTimersRef.current.delete(id);
-    }
     const attachmentUrl = pendingAttachmentUrlsRef.current.get(id);
     if (attachmentUrl) {
       URL.revokeObjectURL(attachmentUrl);
@@ -418,17 +424,23 @@ export function ChatView({
 
   useEffect(
     () => () => {
-      for (const timer of pendingMessageTimersRef.current.values()) {
-        window.clearTimeout(timer);
-      }
       for (const attachmentUrl of pendingAttachmentUrlsRef.current.values()) {
         URL.revokeObjectURL(attachmentUrl);
       }
-      pendingMessageTimersRef.current.clear();
       pendingAttachmentUrlsRef.current.clear();
     },
     [],
   );
+
+  useEffect(() => {
+    for (const id of matchedPendingIds) {
+      const attachmentUrl = pendingAttachmentUrlsRef.current.get(id);
+      if (attachmentUrl) {
+        URL.revokeObjectURL(attachmentUrl);
+        pendingAttachmentUrlsRef.current.delete(id);
+      }
+    }
+  }, [matchedPendingIds]);
 
   useEffect(() => {
     if (!imagePreview) return;
@@ -482,21 +494,20 @@ export function ChatView({
     const pendingId = `pending-${sentAt}`;
     const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
     if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
-    setPendingMessages((current) => [...current, {
-      id: pendingId,
-      senderId: me?.id ?? "",
-      receiverId: friend.id,
-      body: sentBody,
-      attachmentUrl,
-      attachmentName: sentFile?.name,
-      attachmentType: sentFile?.type,
-      createdAt: sentAt,
-      deliveryStatus: "delivered",
-    }]);
-    pendingMessageTimersRef.current.set(
-      pendingId,
-      window.setTimeout(() => removePendingMessage(pendingId), 15_000),
-    );
+    setPendingMessages((current) => [
+      ...current.slice(-299),
+      {
+        id: pendingId,
+        senderId: me?.id ?? "",
+        receiverId: friend.id,
+        body: sentBody,
+        attachmentUrl,
+        attachmentName: sentFile?.name,
+        attachmentType: sentFile?.type,
+        createdAt: sentAt,
+        deliveryStatus: "delivered",
+      },
+    ]);
     setDraft("");
     setFile(null);
     setReplyTo(null);

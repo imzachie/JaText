@@ -124,9 +124,10 @@ separate Android UI to copy or maintain.
 1. Install Android Studio, including its Android SDK, and install a compatible
    JDK (JDK 21). Open Android Studio once and let it finish installing SDK
    components.
-2. Make sure `.env.local` has the production `VITE_CONVEX_URL` before building
-   if you want the APK to use the live Convex backend. Vite embeds this value
-   into the app at build time.
+2. Android builds use the production Convex deployment configured in
+   `.env.android`, so friends, requests, and conversations use the live
+   production account data. Vite embeds this public URL into the APK at build
+   time.
 3. Build and open the native project:
 
    ```bash
