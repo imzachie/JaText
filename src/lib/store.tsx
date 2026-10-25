@@ -18,6 +18,7 @@ import {
   type JaTextStore,
   type JaUser,
   type ProfileInput,
+  type StickerMedia,
 } from "./types";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
 
@@ -56,6 +57,11 @@ interface DemoDb {
   messages: DemoMessage[];
   presence: DemoPresence[];
   conversationSettings: DemoConversationSetting[];
+  stickerLibrary: DemoStickerMedia[];
+}
+
+interface DemoStickerMedia extends StickerMedia {
+  userId: string;
 }
 
 interface DemoConversationSetting {
@@ -144,6 +150,7 @@ function seedDb(): DemoDb {
     requests: [],
     messages: [],
     conversationSettings: [],
+    stickerLibrary: [],
     presence: bots.map((bot) => ({
       userId: bot.id,
       lastSeenAt: now,
@@ -165,6 +172,7 @@ function loadDb(): DemoDb {
           lastActiveAt: Date.now(),
         }));
       db.conversationSettings ??= [];
+      db.stickerLibrary ??= [];
       db.users.forEach((user) => {
         user.statusPreference ??= "online";
         user.customStatus ??= "";
@@ -639,6 +647,24 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     });
   }, [db, friends, me]);
 
+  const stickerFavorites = useMemo(
+    () =>
+      db.stickerLibrary
+        .filter((item) => item.userId === me?.id && item.isFavorite)
+        .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
+        .map(({ userId: _userId, ...item }) => item),
+    [db.stickerLibrary, me?.id],
+  );
+  const recentStickers = useMemo(
+    () =>
+      db.stickerLibrary
+        .filter((item) => item.userId === me?.id && !item.isFavorite)
+        .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
+        .slice(0, 50)
+        .map(({ userId: _userId, ...item }) => item),
+    [db.stickerLibrary, me?.id],
+  );
+
   const activeMessages = useMemo<ChatMessage[]>(() => {
     if (!me || !activeChatId) return [];
     const deletedAt = db.conversationSettings.find(
@@ -654,11 +680,20 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       )
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((message) => {
-        if (!message.replyTo) return message;
+        const favoriteMedia = message.stickerKey
+          ? db.stickerLibrary.find(
+              (item) =>
+                item.userId === me.id && item.key === message.stickerKey,
+            )
+          : undefined;
+        const withFavorite = favoriteMedia
+          ? { ...message, isStickerFavorite: favoriteMedia.isFavorite }
+          : message;
+        if (!message.replyTo) return withFavorite;
         const source = db.messages.find((entry) => entry.id === message.replyTo?.id);
-        if (!source) return message;
+        if (!source) return withFavorite;
         return {
-          ...message,
+          ...withFavorite,
           replyTo: {
             id: source.id,
             senderId: source.senderId,
@@ -745,6 +780,133 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       if (target?.provider === "bot") botReply(receiverId, me.id);
     },
     [botReply, me, transact],
+  );
+
+  const searchKlipy = useCallback<JaTextStore["searchKlipy"]>(async () => {
+    throw new Error("Klipy search needs a live deployment and an API key.");
+  }, []);
+
+  const saveSticker = useCallback<JaTextStore["saveSticker"]>(
+    async (file) => {
+      if (!me) throw new Error("Please sign in to save stickers.");
+      const url = await fileToDataUrl(file);
+      const mediaType = file.type === "image/gif" ? "gif" : "sticker";
+      const sticker: StickerMedia = {
+        key: `upload:${uid()}`,
+        url,
+        previewUrl: url,
+        name: file.name,
+        mediaType,
+        source: "upload",
+        isFavorite: true,
+        useCount: 0,
+      };
+      transact((draft) => {
+        draft.stickerLibrary.push({ ...sticker, userId: me.id });
+      });
+      return sticker;
+    },
+    [me, transact],
+  );
+
+  const setStickerFavorite = useCallback<JaTextStore["setStickerFavorite"]>(
+    async (sticker, favorite) => {
+      if (!me) throw new Error("Please sign in to manage stickers.");
+      transact((draft) => {
+        const existing = draft.stickerLibrary.find(
+          (item) => item.userId === me.id && item.key === sticker.key,
+        );
+        if (existing) {
+          existing.isFavorite = favorite;
+          return;
+        }
+        draft.stickerLibrary.push({
+          ...sticker,
+          userId: me.id,
+          isFavorite: favorite,
+        });
+      });
+    },
+    [me, transact],
+  );
+
+  const favoriteStickerFromMessage = useCallback<JaTextStore["favoriteStickerFromMessage"]>(
+    async (messageId) => {
+      if (!me) throw new Error("Please sign in to favorite media.");
+      transact((draft) => {
+        const message = draft.messages.find((item) => item.id === messageId);
+        if (
+          !message ||
+          (message.senderId !== me.id && message.receiverId !== me.id) ||
+          message.hiddenFor?.includes(me.id) ||
+          message.unsentAt ||
+          !message.attachmentUrl ||
+          !message.attachmentType?.startsWith("image/")
+        ) {
+          throw new Error("This image or sticker is no longer available.");
+        }
+        const key = message.stickerKey ?? `upload:${message.attachmentUrl}`;
+        const existing = draft.stickerLibrary.find(
+          (item) => item.userId === me.id && item.key === key,
+        );
+        if (existing) {
+          existing.isFavorite = !existing.isFavorite;
+          return;
+        }
+        draft.stickerLibrary.push({
+          userId: me.id,
+          key,
+          url: message.attachmentUrl,
+          previewUrl: message.attachmentUrl,
+          name: message.attachmentName ?? "Shared media",
+          mediaType: message.attachmentType === "image/gif" ? "gif" : "image",
+          source: message.stickerKey?.startsWith("klipy:") ? "klipy" : "upload",
+          isFavorite: true,
+          useCount: 0,
+        });
+      });
+    },
+    [me, transact],
+  );
+
+  const sendSticker = useCallback<JaTextStore["sendSticker"]>(
+    async (receiverId, sticker) => {
+      if (!me) throw new Error("Please sign in to send stickers.");
+      if (!friends.some((friend) => friend.id === receiverId))
+        throw new Error("You can only send stickers to accepted friends.");
+      const now = Date.now();
+      transact((draft) => {
+        const existing = draft.stickerLibrary.find(
+          (item) => item.userId === me.id && item.key === sticker.key,
+        );
+        if (existing) {
+          existing.useCount += 1;
+          existing.lastUsedAt = now;
+        } else {
+          draft.stickerLibrary.push({
+            ...sticker,
+            userId: me.id,
+            isFavorite: false,
+            useCount: 1,
+            lastUsedAt: now,
+          });
+        }
+        draft.messages.push({
+          id: uid(),
+          senderId: me.id,
+          receiverId,
+          body: "",
+          attachmentUrl: sticker.url,
+          attachmentName: sticker.name,
+          attachmentType: sticker.mediaType === "gif" ? "image/gif" : "image/*",
+          stickerKey: sticker.key,
+          createdAt: now,
+        });
+      });
+      const target = loadDb().users.find((user) => user.id === receiverId);
+      if (target?.provider === "bot") botReply(receiverId, me.id);
+    },
+    [botReply, friends, me, transact],
   );
 
   const forwardMessage = useCallback<JaTextStore["forwardMessage"]>(
@@ -1014,6 +1176,13 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     setConversationArchived,
     setConversationMuted,
     deleteConversationForMe,
+    stickerFavorites,
+    recentStickers,
+    searchKlipy,
+    saveSticker,
+    setStickerFavorite,
+    favoriteStickerFromMessage,
+    sendSticker,
     setActivity,
     setTyping,
     setNotificationsEnabled,

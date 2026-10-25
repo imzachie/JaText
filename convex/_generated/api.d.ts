@@ -11,8 +11,10 @@
 import type * as auth from "../auth.js";
 import type * as friends from "../friends.js";
 import type * as http from "../http.js";
+import type * as klipy from "../klipy.js";
 import type * as lib from "../lib.js";
 import type * as messages from "../messages.js";
+import type * as stickers from "../stickers.js";
 import type * as users from "../users.js";
 
 import type {
@@ -25,8 +27,10 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   friends: typeof friends;
   http: typeof http;
+  klipy: typeof klipy;
   lib: typeof lib;
   messages: typeof messages;
+  stickers: typeof stickers;
   users: typeof users;
 }>;
 

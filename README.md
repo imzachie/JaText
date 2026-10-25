@@ -22,7 +22,10 @@ profiles, and real-time chat with attachments — powered by **Convex**
 - **Real-time texting + photo/file attachments** through Convex queries,
   mutations, and Convex file storage
 - **Message actions** — right-click for replies, forwarding, emoji reactions,
-  copy, delete-for-me, and one-hour unsend for your own messages
+  copy, delete-for-me, favourite media, and one-hour unsend for your own
+  messages
+- **GIFs and stickers** — Klipy search, personal favourites and recent items,
+  image/GIF uploads, and right-click-to-favourite from chat
 - **Conversation actions** — right-click a chat to archive, mute, or clear your
   own chat history
 - **Typing indicators and presence** — online, automatic away, Do Not Disturb,
@@ -101,13 +104,23 @@ API implemented in the browser so every feature works instantly. Demo users
 | Friend requests / friends list | `convex/friends.ts` → `sendRequest`, `respond`, `listIncoming`, `listOutgoing`, `listFriends` |
 | Texting and chat actions | `convex/messages.ts` → `send`, `list`, `previews`, `updateConversation` |
 | Attachments & profile photos | `convex/messages.ts` → `generateUploadUrl` (Convex file storage) |
-| Database tables | `convex/schema.ts` → `users`, `friendRequests`, `messages`, `conversationSettings` (+ auth tables) |
+| Klipy GIF search and sticker library | `convex/klipy.ts` and `convex/stickers.ts` |
+| Database tables | `convex/schema.ts` → `users`, `friendRequests`, `messages`, `conversationSettings`, `stickerLibrary` (+ auth tables) |
 
 The frontend has one data interface (`src/lib/types.ts` → `JaTextStore`)
 with two implementations: `src/lib/convexStore.tsx` (real Convex) and
 `src/lib/store.tsx` (demo). Avatar colors live in `src/lib/colors.ts`.
 
 ## Deploying to production
+
+Set the Klipy API key as a Convex environment variable (never expose it in
+frontend environment variables):
+
+```bash
+npx convex env set KLIPY_API_KEY <api-key>
+```
+
+Run this for each deployment you use, including production.
 
 ```bash
 npx convex deploy            # pushes backend to prod deployment

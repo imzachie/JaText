@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { useConvex, useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useAction, useConvex, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 // Works with both the checked-in stub and the real generated API
 // (run `npx convex dev` once to generate convex/_generated for real).
@@ -15,6 +15,7 @@ import type {
   JaTextStore,
   JaUser,
   ProfileInput,
+  StickerMedia,
   StatusPreference,
 } from "./types";
 
@@ -63,6 +64,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       ? { otherId: activeChatId as Id<"users"> }
       : "skip",
   ) ?? []) as ChatMessage[];
+  const stickerLibrary = useQuery(
+    api.stickers.library,
+    isAuthenticated ? {} : "skip",
+  ) as { favorites: StickerMedia[]; recent: StickerMedia[] } | undefined;
 
   const saveProfileMut = useMutation(api.users.saveProfile);
   const sendRequestMut = useMutation(api.friends.sendRequest);
@@ -78,6 +83,11 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const heartbeatMut = useMutation(api.users.heartbeat);
   const disconnectMut = useMutation(api.users.disconnect);
   const generateUploadUrl = useMutation(api.messages.generateUploadUrl);
+  const klipySearchAction = useAction(api.klipy.search);
+  const saveStickerMut = useMutation(api.stickers.saveUpload);
+  const setStickerFavoriteMut = useMutation(api.stickers.setFavorite);
+  const favoriteStickerFromMessageMut = useMutation(api.stickers.favoriteFromMessage);
+  const sendStickerMut = useMutation(api.stickers.send);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -215,6 +225,73 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [sendMessageMut, upload],
   );
 
+  const searchKlipy = useCallback<JaTextStore["searchKlipy"]>(
+    async (query) => {
+      const results = await klipySearchAction({ query });
+      return results.map((item) => ({
+        ...item,
+        isFavorite: false,
+        useCount: 0,
+      })) as StickerMedia[];
+    },
+    [klipySearchAction],
+  );
+
+  const saveSticker = useCallback<JaTextStore["saveSticker"]>(
+    async (file) => {
+      const storageId = await upload(file);
+      return (await saveStickerMut({
+        storageId,
+        name: file.name,
+        mediaType: file.type === "image/gif" ? "gif" : "sticker",
+      })) as StickerMedia;
+    },
+    [saveStickerMut, upload],
+  );
+
+  const setStickerFavorite = useCallback<JaTextStore["setStickerFavorite"]>(
+    async (sticker, isFavorite) => {
+      await setStickerFavoriteMut({
+        mediaKey: sticker.key,
+        ...(sticker.source === "klipy"
+          ? { url: sticker.url, previewUrl: sticker.previewUrl }
+          : {}),
+        name: sticker.name,
+        mediaType: sticker.mediaType,
+        source: sticker.source,
+        isFavorite,
+      });
+    },
+    [setStickerFavoriteMut],
+  );
+
+  const favoriteStickerFromMessage = useCallback<
+    JaTextStore["favoriteStickerFromMessage"]
+  >(
+    async (messageId) => {
+      await favoriteStickerFromMessageMut({ messageId: messageId as Id<"messages"> });
+    },
+    [favoriteStickerFromMessageMut],
+  );
+
+  const sendSticker = useCallback<JaTextStore["sendSticker"]>(
+    async (receiverId, sticker) => {
+      await sendStickerMut({
+        receiverId: receiverId as Id<"users">,
+        mediaKey: sticker.key,
+        ...(sticker.source === "klipy" ? { url: sticker.url } : {}),
+        ...(sticker.previewUrl ? { previewUrl: sticker.previewUrl } : {}),
+        ...(sticker.storageId
+          ? { storageId: sticker.storageId as Id<"_storage"> }
+          : {}),
+        name: sticker.name,
+        mediaType: sticker.mediaType,
+        source: sticker.source,
+      });
+    },
+    [sendStickerMut],
+  );
+
   const forwardMessage = useCallback<JaTextStore["forwardMessage"]>(
     async (messageId, receiverId) => {
       await forwardMessageMut({
@@ -340,6 +417,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     setConversationArchived,
     setConversationMuted,
     deleteConversationForMe,
+    stickerFavorites: stickerLibrary?.favorites ?? [],
+    recentStickers: stickerLibrary?.recent ?? [],
+    searchKlipy,
+    saveSticker,
+    setStickerFavorite,
+    favoriteStickerFromMessage,
+    sendSticker,
     setActivity,
     setTyping,
     setNotificationsEnabled,

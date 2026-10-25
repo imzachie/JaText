@@ -65,6 +65,8 @@ export default defineSchema({
     attachmentId: v.optional(v.id("_storage")),
     attachmentName: v.optional(v.string()),
     attachmentType: v.optional(v.string()),
+    attachmentUrl: v.optional(v.string()),
+    stickerKey: v.optional(v.string()),
     replyToId: v.optional(v.id("messages")),
     forwardedFromId: v.optional(v.id("users")),
     unsentAt: v.optional(v.number()),
@@ -86,6 +88,27 @@ export default defineSchema({
     isMuted: v.boolean(),
     deletedAt: v.optional(v.number()),
   }).index("by_user_friend", ["userId", "friendId"]),
+
+  stickerLibrary: defineTable({
+    userId: v.id("users"),
+    mediaKey: v.string(),
+    url: v.optional(v.string()),
+    previewUrl: v.optional(v.string()),
+    storageId: v.optional(v.id("_storage")),
+    name: v.string(),
+    mediaType: v.union(
+      v.literal("gif"),
+      v.literal("sticker"),
+      v.literal("image"),
+    ),
+    source: v.union(v.literal("klipy"), v.literal("upload")),
+    isFavorite: v.boolean(),
+    useCount: v.number(),
+    lastUsedAt: v.optional(v.number()),
+  })
+    .index("by_user_media", ["userId", "mediaKey"])
+    .index("by_user_favorite", ["userId", "isFavorite"])
+    .index("by_user_recent", ["userId", "lastUsedAt"]),
 
   presence: defineTable({
     userId: v.id("users"),

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { playMessageSound } from "../lib/alerts";
 import { ContextMenu } from "./ContextMenu";
+import { StickerPicker } from "./StickerPicker";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import type { ChatMessage, JaUser } from "../lib/types";
@@ -203,6 +204,15 @@ export function ChatView({
       setReactionPickerOpen(false);
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't add the reaction. Please try again."));
+    }
+  }
+
+  async function favoriteSticker(message: ChatMessage) {
+    try {
+      await store.favoriteStickerFromMessage(message.id);
+      setMessageMenu(null);
+    } catch (actionError) {
+      setError(friendlyError(actionError, "Couldn't update your sticker favourites."));
     }
   }
 
@@ -410,6 +420,7 @@ export function ChatView({
         >
           📎
         </button>
+        <StickerPicker friendId={friend.id} />
         <textarea
           ref={composerRef}
           value={draft}
@@ -481,6 +492,19 @@ export function ChatView({
           <button type="button" role="menuitem" onClick={() => void deleteForMe(messageMenu.message)}>
             <span>🗑️</span> Delete for me
           </button>
+          {(messageMenu.message.stickerKey ||
+            messageMenu.message.attachmentType?.startsWith("image/")) && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void favoriteSticker(messageMenu.message)}
+            >
+              <span>{messageMenu.message.isStickerFavorite ? "☆" : "⭐"}</span>
+              {messageMenu.message.isStickerFavorite
+                ? "Remove from favourites"
+                : "Add to favourites"}
+            </button>
+          )}
           {messageMenu.canUnsend && (
             <button
               type="button"

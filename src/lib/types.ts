@@ -42,11 +42,29 @@ export interface ChatMessage {
   attachmentUrl?: string;
   attachmentName?: string;
   attachmentType?: string;
+  stickerKey?: string;
+  isStickerFavorite?: boolean;
   createdAt: number;
   replyTo?: { id: string; senderId: string; body: string };
   forwardedFrom?: string;
   unsentAt?: number;
   reactions?: MessageReaction[];
+}
+
+export type StickerMediaType = "gif" | "sticker" | "image";
+export type StickerMediaSource = "klipy" | "upload";
+
+export interface StickerMedia {
+  key: string;
+  url: string;
+  previewUrl?: string;
+  name: string;
+  mediaType: StickerMediaType;
+  source: StickerMediaSource;
+  storageId?: string;
+  isFavorite: boolean;
+  useCount: number;
+  lastUsedAt?: number;
 }
 
 export interface MessageReaction {
@@ -110,6 +128,13 @@ export interface JaTextStore {
   setConversationArchived: (friendId: string, archived: boolean) => Promise<void>;
   setConversationMuted: (friendId: string, muted: boolean) => Promise<void>;
   deleteConversationForMe: (friendId: string) => Promise<void>;
+  stickerFavorites: StickerMedia[];
+  recentStickers: StickerMedia[];
+  searchKlipy: (query: string) => Promise<StickerMedia[]>;
+  saveSticker: (file: File) => Promise<StickerMedia>;
+  setStickerFavorite: (sticker: StickerMedia, favorite: boolean) => Promise<void>;
+  favoriteStickerFromMessage: (messageId: string) => Promise<void>;
+  sendSticker: (receiverId: string, sticker: StickerMedia) => Promise<void>;
   setActivity: (status: StatusPreference, customStatus: string) => Promise<void>;
   setTyping: (receiverId: string, isTyping: boolean) => Promise<void>;
   setNotificationsEnabled: (enabled: boolean) => void;

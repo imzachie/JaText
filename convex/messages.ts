@@ -62,6 +62,8 @@ async function withMessageDetails(
   attachmentUrl?: string;
   attachmentName?: string;
   attachmentType?: string;
+  stickerKey?: string;
+  isStickerFavorite?: boolean;
   createdAt: number;
   replyTo?: { id: string; senderId: string; body: string };
   forwardedFrom?: string;
@@ -72,16 +74,36 @@ async function withMessageDetails(
     m.replyToId ? ctx.db.get(m.replyToId) : null,
     m.forwardedFromId ? ctx.db.get(m.forwardedFromId) : null,
   ]);
+  const stickerKey =
+    m.stickerKey ??
+    (m.attachmentId
+      ? `upload:${m.attachmentId}`
+      : m.attachmentUrl
+        ? `klipy:${m.attachmentUrl}`
+        : undefined);
+  const favorite = stickerKey
+    ? await ctx.db
+        .query("stickerLibrary")
+        .withIndex("by_user_media", (q) =>
+          q.eq("userId", currentUserId).eq("mediaKey", stickerKey),
+        )
+        .unique()
+    : null;
   return {
     id: m._id as string,
     senderId: m.senderId as string,
     receiverId: m.receiverId as string,
     body: m.unsentAt ? "" : m.body,
-    attachmentUrl: !m.unsentAt && m.attachmentId
-      ? ((await ctx.storage.getUrl(m.attachmentId)) ?? undefined)
-      : undefined,
+    attachmentUrl: m.unsentAt
+      ? undefined
+      : m.attachmentUrl ??
+        (m.attachmentId
+          ? ((await ctx.storage.getUrl(m.attachmentId)) ?? undefined)
+          : undefined),
     attachmentName: m.unsentAt ? undefined : m.attachmentName,
     attachmentType: m.unsentAt ? undefined : m.attachmentType,
+    stickerKey,
+    isStickerFavorite: favorite?.isFavorite ?? false,
     createdAt: m._creationTime,
     replyTo: reply
       ? {
@@ -170,8 +192,10 @@ export const forward = mutation({
       pairKey: pairKey(me._id, receiverId),
       body: source.body,
       attachmentId: source.attachmentId,
+      attachmentUrl: source.attachmentUrl,
       attachmentName: source.attachmentName,
       attachmentType: source.attachmentType,
+      stickerKey: source.stickerKey,
       forwardedFromId: source.senderId,
     });
   },
@@ -253,6 +277,8 @@ export const unsend = mutation({
       attachmentId: undefined,
       attachmentName: undefined,
       attachmentType: undefined,
+      attachmentUrl: undefined,
+      stickerKey: undefined,
       reactions: [],
       unsentAt: now,
     });
