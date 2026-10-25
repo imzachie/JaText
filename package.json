@@ -2,6 +2,7 @@
   "name": "jatext",
   "private": true,
   "version": "0.0.0",
+  "packageManager": "pnpm@9.15.9",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,12 +12,15 @@
     "android:sync": "npm run build && cap sync android",
     "android:open": "cap open android",
     "android:apk": "npm run build && cap sync android && cd android && gradlew.bat assembleDebug",
+    "android:release": "npm run build && cap sync android && cd android && gradlew.bat assembleRelease",
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy"
   },
   "dependencies": {
     "@auth/core": "^0.41.3",
     "@capacitor/android": "^8.5.3",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/browser": "^8.0.5",
     "@capacitor/core": "^8.5.3",
     "@capacitor/push-notifications": "^8.1.3",
     "@convex-dev/auth": "^0.0.96",

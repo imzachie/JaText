@@ -1,6 +1,9 @@
 import Google from "@auth/core/providers/google";
 import { Password } from "@convex-dev/auth/providers/Password";
 import { convexAuth } from "@convex-dev/auth/server";
+import { env } from "./_generated/server";
+
+const ANDROID_AUTH_CALLBACK = "com.ahad00010.jatext://auth";
 
 /**
  * JaText sign-in options:
@@ -12,4 +15,20 @@ import { convexAuth } from "@convex-dev/auth/server";
  */
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [Google, Password],
+  callbacks: {
+    async redirect({ redirectTo }) {
+      if (redirectTo === ANDROID_AUTH_CALLBACK) return ANDROID_AUTH_CALLBACK;
+      const siteUrl = env.SITE_URL ?? env.CONVEX_SITE_URL;
+      if (redirectTo.startsWith("?") || redirectTo.startsWith("/")) {
+        return `${siteUrl}${redirectTo}`;
+      }
+      if (redirectTo.startsWith(siteUrl)) {
+        const suffix = redirectTo.slice(siteUrl.length);
+        if (suffix === "" || suffix.startsWith("?") || suffix.startsWith("/")) {
+          return redirectTo;
+        }
+      }
+      throw new Error(`Invalid authentication redirect: ${redirectTo}`);
+    },
+  },
 });

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useAction, useConvex, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
+import { App } from "@capacitor/app";
+import { Browser } from "@capacitor/browser";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 // Works with both the checked-in stub and the real generated API
@@ -22,6 +24,7 @@ import type {
 } from "./types";
 
 const PUSH_TOKEN_STORAGE_KEY = "jatext-push-token-v1";
+const ANDROID_AUTH_CALLBACK = "com.ahad00010.jatext://auth";
 
 /* ------------------------------------------------------------------ */
 /* Real Convex store — active when VITE_CONVEX_URL is set.             */
@@ -36,6 +39,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const { signIn, signOut: convexSignOut } = useAuthActions();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [notificationPreferences, setNotificationPreferences] = useState(loadNotificationPreferences);
+  const handledOAuthCodes = useRef(new Set<string>());
   const previewsQuery = useQuery(
     api.messages.previews,
     isAuthenticated ? {} : "skip",
@@ -238,10 +242,62 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const signInGoogle = useCallback<JaTextStore["signInGoogle"]>(
     async () => {
-      await signIn("google");
+      if (!Capacitor.isNativePlatform()) {
+        await signIn("google");
+        return;
+      }
+
+      Object.defineProperty(navigator, "product", {
+        configurable: true,
+        value: "ReactNative",
+      });
+      const result = await signIn("google", { redirectTo: ANDROID_AUTH_CALLBACK });
+      if (!result.redirect) throw new Error("Google sign-in did not return an authorization URL.");
+      await Browser.open({ url: result.redirect.toString() });
     },
     [signIn],
   );
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const handleAuthUrl = async (url: string) => {
+      const callback = new URL(url);
+      if (
+        callback.protocol !== "com.ahad00010.jatext:" ||
+        callback.hostname !== "auth"
+      ) {
+        return;
+      }
+      const code = callback.searchParams.get("code");
+      if (!code || handledOAuthCodes.current.has(code)) return;
+      handledOAuthCodes.current.add(code);
+      try {
+        await Browser.close();
+        await signIn("google", { code });
+      } catch (error) {
+        handledOAuthCodes.current.delete(code);
+        console.error("Could not complete Google sign-in in the Android app.", error);
+      }
+    };
+
+    let listener: PluginListenerHandle | undefined;
+    void App.addListener("appUrlOpen", ({ url }) => {
+      void handleAuthUrl(url);
+    })
+      .then((registeredListener) => {
+        listener = registeredListener;
+        return App.getLaunchUrl();
+      })
+      .then((launch) => {
+        if (launch?.url) void handleAuthUrl(launch.url);
+      })
+      .catch((error: unknown) => {
+        console.error("Could not register the Android OAuth callback handler.", error);
+      });
+    return () => {
+      if (listener) void listener.remove();
+    };
+  }, [signIn]);
 
   const signOut = useCallback(async () => {
     setActiveChatId(null);

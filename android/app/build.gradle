@@ -1,5 +1,11 @@
 apply plugin: 'com.android.application'
 
+def releaseSigningPropertiesFile = rootProject.file("keystore.properties")
+def releaseSigningProperties = new Properties()
+if (releaseSigningPropertiesFile.exists()) {
+    releaseSigningProperties.load(new FileInputStream(releaseSigningPropertiesFile))
+}
+
 android {
     namespace = "com.ahad00010.jatext"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -19,6 +25,14 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            if (releaseSigningPropertiesFile.exists()) {
+                signingConfig signingConfigs.create("releaseLocal") {
+                    storeFile rootProject.file(releaseSigningProperties["storeFile"])
+                    storePassword releaseSigningProperties["storePassword"]
+                    keyAlias releaseSigningProperties["keyAlias"]
+                    keyPassword releaseSigningProperties["keyPassword"]
+                }
+            }
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }

@@ -5,5 +5,6 @@ export default defineApp({
   env: {
     KLIPY_API_KEY: v.optional(v.string()),
     FCM_SERVICE_ACCOUNT_JSON: v.optional(v.string()),
+    SITE_URL: v.optional(v.string()),
   },
 });

@@ -142,6 +142,21 @@ separate Android UI to copy or maintain.
    has configured the SDK. It builds the web app, syncs it into Android, and
    assembles the debug APK.
 
+   To build a signed release APK, first create a private release keystore and
+   save its settings in the ignored `android/keystore.properties` file:
+
+   ```properties
+   storeFile=jatext-release.jks
+   storePassword=YOUR_PRIVATE_STORE_PASSWORD
+   keyAlias=jatext
+   keyPassword=YOUR_PRIVATE_KEY_PASSWORD
+   ```
+
+   Keep both this file and `android/jatext-release.jks` backed up securely;
+   Android updates must be signed with the same key. Then run
+   `npm run android:release`. The APK is written to
+   `android/app/build/outputs/apk/release/app-release.apk`.
+
 The APK uses the same UI as the website, but it is a native WebView wrapper,
 not a fully native rewrite. To enable remote Android push notifications:
 
@@ -171,8 +186,9 @@ not a fully native rewrite. To enable remote Android push notifications:
    Settings. FCM displays received messages while the app is backgrounded or
    closed; tapping a push opens that sender's conversation.
 
-Native Google OAuth sign-in still needs separate Android OAuth/deep-link
-configuration.
+Android Google sign-in opens the system browser and returns to JaText through
+the `com.ahad00010.jatext://auth` deep link. The Google OAuth web client must
+continue using the Convex callback URL documented below.
 
 ## Deploying to production
 
