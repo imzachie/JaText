@@ -181,6 +181,12 @@ const ChatHistory = memo(function ChatHistory({
                               className="msg-image"
                               src={message.attachmentUrl}
                               alt={message.attachmentName ?? "attachment"}
+                              onLoad={() => {
+                                if (pinnedToBottomRef.current) {
+                                  const container = messagesRef.current;
+                                  if (container) container.scrollTop = container.scrollHeight;
+                                }
+                              }}
                             />
                           </button>
                         ) : isVideo ? (
@@ -317,8 +323,8 @@ export function ChatView({
   const fileInput = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const pinnedToBottomRef = useRef(true);
-  const forceScrollToBottomRef = useRef(false);
-  const previousChatIdRef = useRef(friend.id);
+  const hasScrolledOnOpenRef = useRef(false);
+  const imagePinchStartRef = useRef<{ distance: number; scale: number } | null>(null);
   const lastPendingMessageAtRef = useRef(0);
   const typingTimer = useRef<number | null>(null);
   const pendingAttachmentUrlsRef = useRef(new Map<string, string>());
@@ -346,7 +352,7 @@ export function ChatView({
   const scrollToBottom = useCallback(() => {
     const container = messagesRef.current;
     if (container) {
-      container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
+      container.scrollTop = container.scrollHeight;
     }
   }, []);
   const friendStatusLabel =
@@ -408,14 +414,31 @@ export function ChatView({
   }, [setTyping]);
 
   useLayoutEffect(() => {
-    if (previousChatIdRef.current !== friend.id) {
-      previousChatIdRef.current = friend.id;
+    if (!hasScrolledOnOpenRef.current) {
       pinnedToBottomRef.current = true;
+      scrollToBottom();
+      hasScrolledOnOpenRef.current = true;
+      return;
     }
-    if (!pinnedToBottomRef.current && !forceScrollToBottomRef.current) return;
-    forceScrollToBottomRef.current = false;
+    if (!pinnedToBottomRef.current) return;
     scrollToBottom();
   }, [lastMessageKey, friend.id, scrollToBottom]);
+
+  function zoomImageWithPinch(event: React.TouchEvent<HTMLImageElement>) {
+    if (event.touches.length < 2) {
+      imagePinchStartRef.current = null;
+      return;
+    }
+    event.preventDefault();
+    const [first, second] = Array.from(event.touches);
+    const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+    const pinchStart = imagePinchStartRef.current;
+    if (!pinchStart) {
+      imagePinchStartRef.current = { distance, scale: imageScale };
+      return;
+    }
+    setImageScale(Math.min(4, Math.max(0.5, pinchStart.scale * distance / pinchStart.distance)));
+  }
 
   const removePendingMessage = useCallback((id: string) => {
     const attachmentUrl = pendingAttachmentUrlsRef.current.get(id);
@@ -495,8 +518,6 @@ export function ChatView({
     const sentReply = replyTo;
     const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
     lastPendingMessageAtRef.current = sentAt;
-    pinnedToBottomRef.current = true;
-    forceScrollToBottomRef.current = true;
     const pendingId = `pending-${sentAt}`;
     const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
     if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
@@ -532,6 +553,7 @@ export function ChatView({
       if (sentFile) setFile((current) => current ?? sentFile);
       setError(friendlyError(err, "Couldn't send the message. Please try again."));
     }
+
   }
 
   function publishTyping(isTyping: boolean) {
@@ -1017,6 +1039,22 @@ export function ChatView({
             alt="Full-size attachment"
             style={{ transform: `scale(${imageScale})` }}
             onClick={(event) => event.stopPropagation()}
+            onTouchStart={(event) => {
+              if (event.touches.length === 2) {
+                const [first, second] = Array.from(event.touches);
+                imagePinchStartRef.current = {
+                  distance: Math.hypot(
+                    second.clientX - first.clientX,
+                    second.clientY - first.clientY,
+                  ),
+                  scale: imageScale,
+                };
+              }
+            }}
+            onTouchMove={zoomImageWithPinch}
+            onTouchEnd={() => {
+              imagePinchStartRef.current = null;
+            }}
             onWheel={(event) => {
               event.preventDefault();
               setImageScale((scale) =>
@@ -1025,7 +1063,7 @@ export function ChatView({
             }}
           />
           <span className="media-lightbox-hint">
-            Scroll to zoom · Click outside or press Esc to close
+            Pinch or scroll to zoom · Click outside or press Esc to close
           </span>
         </div>
       )}

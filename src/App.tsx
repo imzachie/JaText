@@ -4,6 +4,7 @@ import { Capacitor } from "@capacitor/core";
 import { ChatView } from "./components/ChatView";
 import { LoginPage } from "./components/LoginPage";
 import { Onboarding } from "./components/Onboarding";
+import { NotificationWelcome } from "./components/NotificationWelcome";
 import { ProfileModal } from "./components/ProfileCard";
 import { SettingsModal } from "./components/Settings";
 import { Sidebar } from "./components/Sidebar";
@@ -16,6 +17,8 @@ interface MessageToast {
   name: string;
   body: string;
 }
+
+const NOTIFICATION_WELCOME_KEY = "jatext-notification-welcome-seen-v1";
 
 export default function App() {
   const store = useJaText();
@@ -33,6 +36,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [messageToast, setMessageToast] = useState<MessageToast | null>(null);
   const [toastClosing, setToastClosing] = useState(false);
+  const [notificationWelcomeSeen, setNotificationWelcomeSeen] = useState(
+    () => localStorage.getItem(NOTIFICATION_WELCOME_KEY) === "true",
+  );
   const previousPreviews = useRef<Map<string, string> | null>(null);
   const toastTimer = useRef<number | null>(null);
   const navigationStateRef = useRef({
@@ -197,6 +203,17 @@ export default function App() {
         <img className="logo-icon splash-logo" src="/jatext-logo-icon.png" alt="" />
         <p>Loading JaText…</p>
       </div>
+    );
+  }
+
+  if (!store.me && !notificationWelcomeSeen) {
+    return (
+      <NotificationWelcome
+        onContinue={() => {
+          localStorage.setItem(NOTIFICATION_WELCOME_KEY, "true");
+          setNotificationWelcomeSeen(true);
+        }}
+      />
     );
   }
 

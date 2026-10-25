@@ -13,6 +13,18 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        applyStatusBarAppearance();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            applyStatusBarAppearance();
+        }
+    }
+
+    private void applyStatusBarAppearance() {
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().getDecorView().setBackgroundColor(Color.rgb(11, 11, 16));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
