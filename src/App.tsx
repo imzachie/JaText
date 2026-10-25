@@ -83,7 +83,12 @@ export default function App() {
       if (previous.get(preview.friendId) === `${preview.createdAt}:${preview.senderId}`) {
         continue;
       }
-      if (preview.senderId === me.id || me.statusPreference === "dnd") {
+      if (
+        preview.createdAt === 0 ||
+        preview.senderId === me.id ||
+        preview.isMuted ||
+        me.statusPreference === "dnd"
+      ) {
         continue;
       }
 

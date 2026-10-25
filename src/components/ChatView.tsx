@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { playMessageSound } from "../lib/alerts";
+import { ContextMenu } from "./ContextMenu";
 import { useJaText } from "../lib/store";
+import { friendlyError } from "../lib/errors";
 import type { ChatMessage, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 
@@ -93,7 +95,7 @@ export function ChatView({
     if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
     typingActive.current = false;
     void setTyping(friend.id, false).catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : "Could not update typing status.");
+      setError(friendlyError(err, "Couldn't update your typing status."));
     });
     try {
       await sendMessage(friend.id, draft, file ?? undefined, replyTo?.id);
@@ -102,7 +104,7 @@ export function ChatView({
       setFile(null);
       setReplyTo(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Message failed to send.");
+      setError(friendlyError(err, "Couldn't send the message. Please try again."));
     } finally {
       setSending(false);
     }
@@ -110,7 +112,7 @@ export function ChatView({
 
   function publishTyping(isTyping: boolean) {
     void setTyping(friend.id, isTyping).catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : "Could not update typing status.");
+      setError(friendlyError(err, "Couldn't update your typing status."));
     });
   }
 
@@ -139,10 +141,13 @@ export function ChatView({
   function openMessageMenu(event: MouseEvent, message: ChatMessage) {
     event.preventDefault();
     event.stopPropagation();
-    const eventTime = performance.timeOrigin + event.timeStamp;
+    const eventTime =
+      event.timeStamp > 1_000_000_000_000
+        ? event.timeStamp
+        : performance.timeOrigin + event.timeStamp;
     setMessageMenu({
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 232)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 400)),
+      x: event.clientX,
+      y: event.clientY,
       message,
       canUnsend:
         message.senderId === me?.id &&
@@ -167,7 +172,7 @@ export function ChatView({
       );
       setMessageMenu(null);
     } catch (copyError) {
-      setError(copyError instanceof Error ? copyError.message : "Could not copy message.");
+      setError(friendlyError(copyError, "Couldn't copy the message."));
     }
   }
 
@@ -176,7 +181,7 @@ export function ChatView({
       await store.deleteMessageForMe(message.id);
       setMessageMenu(null);
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "Could not delete message.");
+      setError(friendlyError(actionError, "Couldn't delete the message. Please try again."));
     }
   }
 
@@ -185,7 +190,7 @@ export function ChatView({
       await store.unsendMessage(message.id);
       setMessageMenu(null);
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "Could not unsend message.");
+      setError(friendlyError(actionError, "Couldn't unsend the message. Please try again."));
     }
   }
 
@@ -195,7 +200,7 @@ export function ChatView({
       setMessageMenu(null);
       setReactionPickerOpen(false);
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "Could not add reaction.");
+      setError(friendlyError(actionError, "Couldn't add the reaction. Please try again."));
     }
   }
 
@@ -206,7 +211,7 @@ export function ChatView({
       setForwardMessage(null);
       setMessageMenu(null);
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "Could not forward message.");
+      setError(friendlyError(actionError, "Couldn't forward the message. Please try again."));
     }
   }
 
@@ -405,70 +410,69 @@ export function ChatView({
       </form>
 
       {messageMenu && (
-        <div
-          className="message-menu-backdrop"
-          onClick={() => setMessageMenu(null)}
-          onContextMenu={(event) => event.preventDefault()}
+        <ContextMenu
+          x={messageMenu.x}
+          y={messageMenu.y}
+          label="Message actions"
+          className="message-context-menu"
+          onClose={() => setMessageMenu(null)}
         >
-          <div
-            className="message-context-menu"
-            style={{ left: messageMenu.x, top: messageMenu.y }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button type="button" onClick={() => replyToMessage(messageMenu.message)}>
-              <span>↩️</span> Reply
-            </button>
-            {!messageMenu.message.unsentAt && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setForwardMessage(messageMenu.message);
-                    setMessageMenu(null);
-                  }}
-                >
-                  <span>↗️</span> Forward
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setReactionPickerOpen((open) => !open)}
-                  aria-expanded={reactionPickerOpen}
-                >
-                  <span>✨</span> Reaction
-                </button>
-                {reactionPickerOpen && (
-                  <div className="context-reactions" aria-label="Choose reaction">
-                    {REACTION_EMOJIS.map((emoji) => (
-                      <button
-                        type="button"
-                        key={emoji}
-                        aria-label={`React with ${emoji}`}
-                        onClick={() => void reactToMessage(messageMenu.message, emoji)}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-            <button type="button" onClick={() => void copyMessage(messageMenu.message)}>
-              <span>📋</span> Copy text
-            </button>
-            <button type="button" onClick={() => void deleteForMe(messageMenu.message)}>
-              <span>🗑️</span> Delete for me
-            </button>
-            {messageMenu.canUnsend && (
-                <button
-                  type="button"
-                  className="destructive-menu-item"
-                  onClick={() => void unsend(messageMenu.message)}
-                >
-                  <span>↩️</span> Unsend
-                </button>
+          <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}>
+            <span>↩️</span> Reply
+          </button>
+          {!messageMenu.message.unsentAt && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setForwardMessage(messageMenu.message);
+                  setMessageMenu(null);
+                }}
+              >
+                <span>↗️</span> Forward
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setReactionPickerOpen((open) => !open)}
+                aria-expanded={reactionPickerOpen}
+              >
+                <span>✨</span> Reaction
+              </button>
+              {reactionPickerOpen && (
+                <div className="context-reactions" aria-label="Choose reaction">
+                  {REACTION_EMOJIS.map((emoji) => (
+                    <button
+                      type="button"
+                      key={emoji}
+                      aria-label={`React with ${emoji}`}
+                      onClick={() => void reactToMessage(messageMenu.message, emoji)}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
               )}
-          </div>
-        </div>
+            </>
+          )}
+          <button type="button" role="menuitem" onClick={() => void copyMessage(messageMenu.message)}>
+            <span>📋</span> Copy text
+          </button>
+          <button type="button" role="menuitem" onClick={() => void deleteForMe(messageMenu.message)}>
+            <span>🗑️</span> Delete for me
+          </button>
+          {messageMenu.canUnsend && (
+            <button
+              type="button"
+              role="menuitem"
+              className="destructive-menu-item"
+              onClick={() => void unsend(messageMenu.message)}
+            >
+              <span>↩️</span> Unsend
+            </button>
+          )}
+        </ContextMenu>
       )}
 
       {forwardMessage && (

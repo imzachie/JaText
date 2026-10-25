@@ -72,6 +72,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const toggleReactionMut = useMutation(api.messages.toggleReaction);
   const deleteForMeMut = useMutation(api.messages.deleteForMe);
   const unsendMut = useMutation(api.messages.unsend);
+  const updateConversationMut = useMutation(api.messages.updateConversation);
   const setTypingMut = useMutation(api.messages.setTyping);
   const setActivityMut = useMutation(api.users.setActivity);
   const heartbeatMut = useMutation(api.users.heartbeat);
@@ -245,6 +246,36 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [unsendMut],
   );
 
+  const setConversationArchived = useCallback<JaTextStore["setConversationArchived"]>(
+    async (friendId, archived) => {
+      await updateConversationMut({
+        friendId: friendId as Id<"users">,
+        archived,
+      });
+    },
+    [updateConversationMut],
+  );
+
+  const setConversationMuted = useCallback<JaTextStore["setConversationMuted"]>(
+    async (friendId, muted) => {
+      await updateConversationMut({
+        friendId: friendId as Id<"users">,
+        muted,
+      });
+    },
+    [updateConversationMut],
+  );
+
+  const deleteConversationForMe = useCallback<JaTextStore["deleteConversationForMe"]>(
+    async (friendId) => {
+      await updateConversationMut({
+        friendId: friendId as Id<"users">,
+        deleteHistory: true,
+      });
+    },
+    [updateConversationMut],
+  );
+
   const setActivity = useCallback<JaTextStore["setActivity"]>(
     async (status: StatusPreference, customStatus: string) => {
       await setActivityMut({ status, customStatus });
@@ -307,6 +338,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     toggleMessageReaction,
     deleteMessageForMe,
     unsendMessage,
+    setConversationArchived,
+    setConversationMuted,
+    deleteConversationForMe,
     setActivity,
     setTyping,
     setNotificationsEnabled,

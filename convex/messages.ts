@@ -252,6 +252,40 @@ export const unsend = mutation({
   },
 });
 
+/** Save per-user conversation actions without changing the other participant's chat. */
+export const updateConversation = mutation({
+  args: {
+    friendId: v.id("users"),
+    archived: v.optional(v.boolean()),
+    muted: v.optional(v.boolean()),
+    deleteHistory: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { friendId, archived, muted, deleteHistory }) => {
+    const me = await requireUser(ctx);
+    if (!(await areFriends(ctx, me._id, friendId)))
+      throw new Error("This conversation is unavailable.");
+
+    const existing = await ctx.db
+      .query("conversationSettings")
+      .withIndex("by_user_friend", (q) =>
+        q.eq("userId", me._id).eq("friendId", friendId),
+      )
+      .unique();
+    const settings = {
+      isArchived: archived ?? existing?.isArchived ?? false,
+      isMuted: muted ?? existing?.isMuted ?? false,
+      ...(deleteHistory
+        ? { deletedAt: Date.now() }
+        : existing?.deletedAt !== undefined
+          ? { deletedAt: existing.deletedAt }
+          : {}),
+    };
+
+    if (existing) await ctx.db.patch(existing._id, settings);
+    else await ctx.db.insert("conversationSettings", { userId: me._id, friendId, ...settings });
+  },
+});
+
 /** The conversation with one friend, oldest → newest (last 300 messages). */
 export const list = query({
   args: { otherId: v.id("users") },
@@ -262,10 +296,21 @@ export const list = query({
       .withIndex("by_pair", (q) => q.eq("pairKey", pairKey(me._id, otherId)))
       .order("desc")
       .take(300);
+    const settings = await ctx.db
+      .query("conversationSettings")
+      .withIndex("by_user_friend", (q) =>
+        q.eq("userId", me._id).eq("friendId", otherId),
+      )
+      .unique();
     rows.reverse();
     return Promise.all(
       rows
-        .filter((message) => !message.hiddenFor?.includes(me._id))
+        .filter(
+          (message) =>
+            !message.hiddenFor?.includes(me._id) &&
+            (settings?.deletedAt === undefined ||
+              message._creationTime > settings.deletedAt),
+        )
         .map((message) => withMessageDetails(ctx, message, me._id)),
     );
   },
@@ -279,25 +324,41 @@ export const previews = query({
     const ids = await friendIds(ctx, me._id);
     const out = await Promise.all(
       ids.map(async (friendId) => {
-        const recent = await ctx.db
-          .query("messages")
-          .withIndex("by_pair", (q) =>
-            q.eq("pairKey", pairKey(me._id, friendId)),
-          )
-          .order("desc")
-          .take(300);
-        const last = recent.find((message) => !message.hiddenFor?.includes(me._id));
-        if (!last) return null;
+        const [recent, settings] = await Promise.all([
+          ctx.db
+            .query("messages")
+            .withIndex("by_pair", (q) =>
+              q.eq("pairKey", pairKey(me._id, friendId)),
+            )
+            .order("desc")
+            .take(300),
+          ctx.db
+            .query("conversationSettings")
+            .withIndex("by_user_friend", (q) =>
+              q.eq("userId", me._id).eq("friendId", friendId),
+            )
+            .unique(),
+        ]);
+        const last = recent.find(
+          (message) =>
+            !message.hiddenFor?.includes(me._id) &&
+            (settings?.deletedAt === undefined ||
+              message._creationTime > settings.deletedAt),
+        );
         return {
           friendId: friendId as string,
-          body: last.unsentAt
-            ? "This message was unsent"
-            : last.body || "📎 Attachment",
-          createdAt: last._creationTime,
-          senderId: last.senderId as string,
+          body: last
+            ? last.unsentAt
+              ? "This message was unsent"
+              : last.body || "📎 Attachment"
+            : "",
+          createdAt: last?._creationTime ?? 0,
+          senderId: (last?.senderId ?? me._id) as string,
+          isArchived: settings?.isArchived ?? false,
+          isMuted: settings?.isMuted ?? false,
         };
       }),
     );
-    return out.filter((p) => p !== null);
+    return out;
   },
 });

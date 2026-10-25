@@ -77,6 +77,14 @@ export default defineSchema({
     ),
   }).index("by_pair", ["pairKey"]),
 
+  conversationSettings: defineTable({
+    userId: v.id("users"),
+    friendId: v.id("users"),
+    isArchived: v.boolean(),
+    isMuted: v.boolean(),
+    deletedAt: v.optional(v.number()),
+  }).index("by_user_friend", ["userId", "friendId"]),
+
   presence: defineTable({
     userId: v.id("users"),
     lastSeenAt: v.number(),

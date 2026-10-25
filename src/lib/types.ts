@@ -59,6 +59,8 @@ export interface ChatPreview {
   body: string;
   createdAt: number;
   senderId: string;
+  isArchived?: boolean;
+  isMuted?: boolean;
 }
 
 export interface ProfileInput {
@@ -105,6 +107,9 @@ export interface JaTextStore {
   toggleMessageReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteMessageForMe: (messageId: string) => Promise<void>;
   unsendMessage: (messageId: string) => Promise<void>;
+  setConversationArchived: (friendId: string, archived: boolean) => Promise<void>;
+  setConversationMuted: (friendId: string, muted: boolean) => Promise<void>;
+  deleteConversationForMe: (friendId: string) => Promise<void>;
   setActivity: (status: StatusPreference, customStatus: string) => Promise<void>;
   setTyping: (receiverId: string, isTyping: boolean) => Promise<void>;
   setNotificationsEnabled: (enabled: boolean) => void;

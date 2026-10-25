@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
+import { ContextMenu } from "./ContextMenu";
 import { useJaText } from "../lib/store";
+import { friendlyError } from "../lib/errors";
 import type { JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 
@@ -34,6 +36,13 @@ export function Sidebar({
   const [addName, setAddName] = useState("");
   const [addMsg, setAddMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [addBusy, setAddBusy] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [chatMenu, setChatMenu] = useState<{
+    x: number;
+    y: number;
+    friend: JaUser;
+  } | null>(null);
+  const [chatActionError, setChatActionError] = useState<string | null>(null);
 
   // greeting under the logo — re-check every minute so it flips
   // from "Good afternoon" to "Good evening" etc. on its own
@@ -54,12 +63,17 @@ export function Sidebar({
         f.displayName.toLowerCase().includes(search.toLowerCase()) ||
         f.username.toLowerCase().includes(search.toLowerCase()),
     );
-    return filtered.sort(
+    return filtered
+      .filter((friend) => (previewByFriend.get(friend.id)?.isArchived ?? false) === showArchived)
+      .sort(
       (a, b) =>
         (previewByFriend.get(b.id)?.createdAt ?? 0) -
         (previewByFriend.get(a.id)?.createdAt ?? 0),
-    );
-  }, [friends, previewByFriend, search]);
+      );
+  }, [friends, previewByFriend, search, showArchived]);
+  const archivedCount = friends.filter(
+    (friend) => previewByFriend.get(friend.id)?.isArchived,
+  ).length;
 
   if (!me) return null;
 
@@ -74,9 +88,43 @@ export function Sidebar({
       setAddMsg({ ok: true, text: `Friend request sent to @${username}! They'll need to accept before you can chat.` });
       setAddName("");
     } catch (err) {
-      setAddMsg({ ok: false, text: err instanceof Error ? err.message : "Could not send request." });
+      setAddMsg({ ok: false, text: friendlyError(err, "Could not send the friend request. Please try again.") });
     } finally {
       setAddBusy(false);
+    }
+  }
+
+  function openChatMenu(event: MouseEvent, friend: JaUser) {
+    event.preventDefault();
+    event.stopPropagation();
+    setChatActionError(null);
+    setChatMenu({ x: event.clientX, y: event.clientY, friend });
+  }
+
+  async function updateChat(action: "archive" | "unarchive" | "mute" | "unmute" | "delete") {
+    if (!chatMenu) return;
+    const { friend } = chatMenu;
+    try {
+      if (action === "archive" || action === "unarchive") {
+        await store.setConversationArchived(friend.id, action === "archive");
+      } else if (action === "mute" || action === "unmute") {
+        await store.setConversationMuted(friend.id, action === "mute");
+      } else {
+        if (
+          !window.confirm(
+            `Delete your chat history with ${friend.displayName}? This won't delete their copy.`,
+          )
+        ) {
+          setChatMenu(null);
+          return;
+        }
+        await store.deleteConversationForMe(friend.id);
+      }
+      setChatMenu(null);
+      if (action === "delete" && activeChatId === friend.id) setActiveChatId(null);
+    } catch (error) {
+      setChatMenu(null);
+      setChatActionError(friendlyError(error, "Couldn't update this chat. Please try again."));
     }
   }
 
@@ -125,8 +173,23 @@ export function Sidebar({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          <button
+            type="button"
+            className={`archive-toggle ${showArchived ? "active" : ""}`}
+            onClick={() => setShowArchived((current) => !current)}
+          >
+            {showArchived ? "← Chats" : `📦 Archived${archivedCount ? ` (${archivedCount})` : ""}`}
+          </button>
+          {chatActionError && (
+            <div className="error-box sidebar-error" role="alert">{chatActionError}</div>
+          )}
           <div className="friend-list">
-            {sortedFriends.length === 0 && (
+            {sortedFriends.length === 0 && friends.length > 0 && (
+              <div className="empty-box">
+                <p>{showArchived ? "No archived chats." : "No chats match your search."}</p>
+              </div>
+            )}
+            {friends.length === 0 && (
               <div className="empty-box">
                 <p>No friends yet 🥲</p>
                 <p className="muted small">
@@ -145,6 +208,7 @@ export function Sidebar({
                   key={friend.id}
                   className={`friend-row ${activeChatId === friend.id ? "active" : ""}`}
                   onClick={() => setActiveChatId(friend.id)}
+                  onContextMenu={(event) => openChatMenu(event, friend)}
                 >
                   <Avatar
                     user={friend}
@@ -158,10 +222,16 @@ export function Sidebar({
                   <div className="friend-row-text">
                     <div className="friend-row-top">
                       <strong>{friend.displayName}</strong>
-                      {preview && <span className="muted small">{fmtTime(preview.createdAt)}</span>}
+                      <span className="friend-row-badges">
+                        {preview?.isArchived && <span title="Archived">📦</span>}
+                        {preview?.isMuted && <span title="Muted">🔕</span>}
+                        {preview?.createdAt ? (
+                          <span className="muted small">{fmtTime(preview.createdAt)}</span>
+                        ) : null}
+                      </span>
                     </div>
                     <span className="muted small friend-preview">
-                      {preview
+                      {preview?.createdAt
                         ? `${preview.senderId === me.id ? "You: " : ""}${preview.body}`
                         : `@${friend.username} — say hi! 👋`}
                     </span>
@@ -254,6 +324,46 @@ export function Sidebar({
       <footer className="sidebar-footer muted small">
         {store.mode === "convex" ? "⚡ Powered by Convex" : "🧪 Demo mode — connect Convex to go live"}
       </footer>
+      {chatMenu && (
+        <ContextMenu
+          x={chatMenu.x}
+          y={chatMenu.y}
+          label={`Actions for ${chatMenu.friend.displayName}`}
+          className="message-context-menu conversation-context-menu"
+          onClose={() => setChatMenu(null)}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() =>
+              void updateChat(
+                previewByFriend.get(chatMenu.friend.id)?.isArchived ? "unarchive" : "archive",
+              )
+            }
+          >
+            <span>📦</span>
+            {previewByFriend.get(chatMenu.friend.id)?.isArchived ? "Unarchive" : "Archive chat"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() =>
+              void updateChat(previewByFriend.get(chatMenu.friend.id)?.isMuted ? "unmute" : "mute")
+            }
+          >
+            <span>{previewByFriend.get(chatMenu.friend.id)?.isMuted ? "🔔" : "🔕"}</span>
+            {previewByFriend.get(chatMenu.friend.id)?.isMuted ? "Unmute" : "Mute"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="destructive-menu-item"
+            onClick={() => void updateChat("delete")}
+          >
+            <span>🗑️</span> Delete chat
+          </button>
+        </ContextMenu>
+      )}
     </aside>
   );
 }

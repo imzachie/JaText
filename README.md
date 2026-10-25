@@ -23,6 +23,8 @@ profiles, and real-time chat with attachments — powered by **Convex**
   mutations, and Convex file storage
 - **Message actions** — right-click for replies, forwarding, emoji reactions,
   copy, delete-for-me, and one-hour unsend for your own messages
+- **Conversation actions** — right-click a chat to archive, mute, or clear your
+  own chat history
 - **Typing indicators and presence** — online, automatic away, Do Not Disturb,
   or persistent offline, with an optional custom status
 - **Message alerts and sounds** — in-app and browser notifications plus
@@ -97,9 +99,9 @@ API implemented in the browser so every feature works instantly. Demo users
 | Google / email auth | `convex/auth.ts` (Convex Auth: `Google` + `Password`) |
 | Profile + onboarding + 14-day username rule | `convex/users.ts` → `current`, `checkUsername`, `saveProfile` |
 | Friend requests / friends list | `convex/friends.ts` → `sendRequest`, `respond`, `listIncoming`, `listOutgoing`, `listFriends` |
-| Texting | `convex/messages.ts` → `send`, `list`, `previews` |
+| Texting and chat actions | `convex/messages.ts` → `send`, `list`, `previews`, `updateConversation` |
 | Attachments & profile photos | `convex/messages.ts` → `generateUploadUrl` (Convex file storage) |
-| Database tables | `convex/schema.ts` → `users`, `friendRequests`, `messages` (+ auth tables) |
+| Database tables | `convex/schema.ts` → `users`, `friendRequests`, `messages`, `conversationSettings` (+ auth tables) |
 
 The frontend has one data interface (`src/lib/types.ts` → `JaTextStore`)
 with two implementations: `src/lib/convexStore.tsx` (real Convex) and

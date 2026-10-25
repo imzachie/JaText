@@ -54,6 +54,15 @@ interface DemoDb {
   requests: { id: string; fromId: string; toId: string; status: FriendRequest["status"]; createdAt: number }[];
   messages: DemoMessage[];
   presence: DemoPresence[];
+  conversationSettings: DemoConversationSetting[];
+}
+
+interface DemoConversationSetting {
+  userId: string;
+  friendId: string;
+  isArchived: boolean;
+  isMuted: boolean;
+  deletedAt?: number;
 }
 
 interface DemoMessage extends ChatMessage {
@@ -133,6 +142,7 @@ function seedDb(): DemoDb {
     users: bots,
     requests: [],
     messages: [],
+    conversationSettings: [],
     presence: bots.map((bot) => ({
       userId: bot.id,
       lastSeenAt: now,
@@ -153,6 +163,7 @@ function loadDb(): DemoDb {
           lastSeenAt: Date.now(),
           lastActiveAt: Date.now(),
         }));
+      db.conversationSettings ??= [];
       db.users.forEach((user) => {
         user.statusPreference ??= "online";
         user.customStatus ??= "";
@@ -597,31 +608,48 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
 
   const previews = useMemo<ChatPreview[]>(() => {
     if (!me) return [];
-    const latest = new Map<string, ChatPreview>();
-    for (const m of db.messages) {
-      if (m.hiddenFor?.includes(me.id)) continue;
-      const friendId = m.senderId === me.id ? m.receiverId : m.senderId === me.id ? undefined : m.receiverId === me.id ? m.senderId : undefined;
-      if (!friendId) continue;
-      const prev = latest.get(friendId);
-      if (!prev || m.createdAt > prev.createdAt)
-        latest.set(friendId, {
-          friendId,
-          body: m.unsentAt ? "This message was unsent" : m.body || "📎 Attachment",
-          createdAt: m.createdAt,
-          senderId: m.senderId,
-        });
-    }
-    return [...latest.values()];
-  }, [db, me]);
+    return friends.map((friend) => {
+      const settings = db.conversationSettings.find(
+        (entry) => entry.userId === me.id && entry.friendId === friend.id,
+      );
+      const latest = db.messages
+        .filter(
+          (message) =>
+            !message.hiddenFor?.includes(me.id) &&
+            (message.senderId === me.id
+              ? message.receiverId === friend.id
+              : message.senderId === friend.id && message.receiverId === me.id) &&
+            (settings?.deletedAt === undefined ||
+              message.createdAt > settings.deletedAt),
+        )
+        .sort((a, b) => b.createdAt - a.createdAt)[0];
+      return {
+        friendId: friend.id,
+        body: latest
+          ? latest.unsentAt
+            ? "This message was unsent"
+            : latest.body || "📎 Attachment"
+          : "",
+        createdAt: latest?.createdAt ?? 0,
+        senderId: latest?.senderId ?? me.id,
+        isArchived: settings?.isArchived ?? false,
+        isMuted: settings?.isMuted ?? false,
+      };
+    });
+  }, [db, friends, me]);
 
   const activeMessages = useMemo<ChatMessage[]>(() => {
     if (!me || !activeChatId) return [];
+    const deletedAt = db.conversationSettings.find(
+      (entry) => entry.userId === me.id && entry.friendId === activeChatId,
+    )?.deletedAt;
     return db.messages
       .filter(
         (m) =>
           !m.hiddenFor?.includes(me.id) &&
           ((m.senderId === me.id && m.receiverId === activeChatId) ||
-            (m.senderId === activeChatId && m.receiverId === me.id)),
+            (m.senderId === activeChatId && m.receiverId === me.id)) &&
+          (deletedAt === undefined || m.createdAt > deletedAt),
       )
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((message) => {
@@ -825,6 +853,78 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     [me, transact],
   );
 
+  const setConversationArchived = useCallback<JaTextStore["setConversationArchived"]>(
+    async (friendId, archived) => {
+      if (!me) throw new Error("Please sign in to change chat settings.");
+      if (!friends.some((friend) => friend.id === friendId))
+        throw new Error("This conversation is unavailable.");
+      transact((draft) => {
+        let settings = draft.conversationSettings.find(
+          (entry) => entry.userId === me.id && entry.friendId === friendId,
+        );
+        if (!settings) {
+          settings = {
+            userId: me.id,
+            friendId,
+            isArchived: false,
+            isMuted: false,
+          };
+          draft.conversationSettings.push(settings);
+        }
+        settings.isArchived = archived;
+      });
+    },
+    [friends, me, transact],
+  );
+
+  const setConversationMuted = useCallback<JaTextStore["setConversationMuted"]>(
+    async (friendId, muted) => {
+      if (!me) throw new Error("Please sign in to change chat settings.");
+      if (!friends.some((friend) => friend.id === friendId))
+        throw new Error("This conversation is unavailable.");
+      transact((draft) => {
+        let settings = draft.conversationSettings.find(
+          (entry) => entry.userId === me.id && entry.friendId === friendId,
+        );
+        if (!settings) {
+          settings = {
+            userId: me.id,
+            friendId,
+            isArchived: false,
+            isMuted: false,
+          };
+          draft.conversationSettings.push(settings);
+        }
+        settings.isMuted = muted;
+      });
+    },
+    [friends, me, transact],
+  );
+
+  const deleteConversationForMe = useCallback<JaTextStore["deleteConversationForMe"]>(
+    async (friendId) => {
+      if (!me) throw new Error("Please sign in to delete this chat.");
+      if (!friends.some((friend) => friend.id === friendId))
+        throw new Error("This conversation is unavailable.");
+      transact((draft) => {
+        let settings = draft.conversationSettings.find(
+          (entry) => entry.userId === me.id && entry.friendId === friendId,
+        );
+        if (!settings) {
+          settings = {
+            userId: me.id,
+            friendId,
+            isArchived: false,
+            isMuted: false,
+          };
+          draft.conversationSettings.push(settings);
+        }
+        settings.deletedAt = Date.now();
+      });
+    },
+    [friends, me, transact],
+  );
+
   const setActivity = useCallback<JaTextStore["setActivity"]>(
     async (status, customStatus) => {
       if (!me) throw new Error("Not signed in.");
@@ -901,6 +1001,9 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     toggleMessageReaction,
     deleteMessageForMe,
     unsendMessage,
+    setConversationArchived,
+    setConversationMuted,
+    deleteConversationForMe,
     setActivity,
     setTyping,
     setNotificationsEnabled,

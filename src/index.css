@@ -322,7 +322,24 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .friend-row.active { background: var(--panel-2); outline: 1px solid var(--border); }
 .friend-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .friend-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.friend-row-badges { display: inline-flex; align-items: center; gap: 5px; flex: none; }
 .friend-preview { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.archive-toggle {
+  flex: none;
+  padding: 7px 10px;
+  color: var(--muted);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.archive-toggle:hover, .archive-toggle.active {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+.sidebar-error { flex: none; padding: 8px 10px; font-size: 13px; }
 .sidebar-footer { text-align: center; flex: none; padding-top: 4px; }
 
 .add-panel { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; flex: 1; padding-bottom: 8px; }
@@ -467,16 +484,20 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 }
 .reply-composer-preview span { color: var(--muted); font-size: 13px; }
 
-.message-menu-backdrop, .forward-backdrop {
+.context-menu-backdrop, .forward-backdrop {
   position: fixed;
   inset: 0;
   z-index: 100;
 }
-.message-menu-backdrop { background: transparent; }
+.context-menu-backdrop { background: transparent; }
 .message-context-menu {
   position: fixed;
   z-index: 101;
   width: 220px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -484,6 +505,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
   animation: pop-in 160ms var(--ease-out) both;
 }
+.conversation-context-menu { min-width: 190px; }
 .message-context-menu > button {
   display: flex;
   align-items: center;
