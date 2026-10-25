@@ -21,6 +21,10 @@ profiles, and real-time chat with attachments — powered by **Convex**
   **accept** → then you can chat
 - **Real-time texting + photo/file attachments** through Convex queries,
   mutations, and Convex file storage
+- **Typing indicators and presence** — online, automatic away, Do Not Disturb,
+  or persistent offline, with an optional custom status
+- **Message alerts and sounds** — in-app and browser notifications plus
+  configurable send/receive sounds
 - Click anyone's pfp to see their **profile card** (banner, bio, pronouns,
   avatar color)
 

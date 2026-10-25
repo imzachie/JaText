@@ -122,3 +122,47 @@ export const listFriends = query({
     return profiles.filter((p) => p !== null);
   },
 });
+
+/** Online/activity state for accepted friends, with typing scoped to me. */
+export const activity = query({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireUser(ctx);
+    const ids = await friendIds(ctx, me._id);
+    const now = Date.now();
+
+    return Promise.all(
+      ids.map(async (userId) => {
+        const [user, presence] = await Promise.all([
+          ctx.db.get(userId),
+          ctx.db
+            .query("presence")
+            .withIndex("by_user", (q) => q.eq("userId", userId))
+            .unique(),
+        ]);
+        if (!user) return null;
+
+        const connected = !!presence && now - presence.lastSeenAt <= 90_000;
+        const preference = user.statusPreference ?? "online";
+        const status =
+          preference === "offline" || !connected
+            ? "offline"
+            : preference === "dnd"
+              ? "dnd"
+              : now - presence.lastActiveAt >= 5 * 60_000
+                ? "away"
+                : "online";
+
+        return {
+          userId: userId as string,
+          status,
+          customStatus: user.customStatus ?? "",
+          isTyping:
+            presence?.typingToId === me._id &&
+            !!presence.typingAt &&
+            now - presence.typingAt <= 5_000,
+        };
+      }),
+    ).then((rows) => rows.filter((row) => row !== null));
+  },
+});

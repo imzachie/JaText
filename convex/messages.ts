@@ -18,6 +18,35 @@ export const generateUploadUrl = mutation({
   },
 });
 
+/** Publish or clear a short-lived typing indicator to an accepted friend. */
+export const setTyping = mutation({
+  args: { receiverId: v.id("users"), isTyping: v.boolean() },
+  handler: async (ctx, { receiverId, isTyping }) => {
+    const me = await requireUser(ctx);
+    if (!(await areFriends(ctx, me._id, receiverId)))
+      throw new Error("You can only type to accepted friends.");
+
+    const presence = await ctx.db
+      .query("presence")
+      .withIndex("by_user", (q) => q.eq("userId", me._id))
+      .unique();
+    if (!presence) {
+      const now = Date.now();
+      await ctx.db.insert("presence", {
+        userId: me._id,
+        lastSeenAt: now,
+        lastActiveAt: now,
+        ...(isTyping ? { typingToId: receiverId, typingAt: now } : {}),
+      });
+    } else {
+      await ctx.db.patch(presence._id, {
+        typingToId: isTyping ? receiverId : undefined,
+        typingAt: isTyping ? Date.now() : undefined,
+      });
+    }
+  },
+});
+
 async function withAttachmentUrl(ctx: QueryCtx, m: Doc<"messages">) {
   return {
     id: m._id as string,

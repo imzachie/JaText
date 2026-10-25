@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useConvex, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 // Works with both the checked-in stub and the real generated API
@@ -6,13 +6,16 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { JaTextContext } from "./store";
+import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
 import type {
   ChatMessage,
   ChatPreview,
+  FriendActivity,
   FriendRequest,
   JaTextStore,
   JaUser,
   ProfileInput,
+  StatusPreference,
 } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -27,6 +30,11 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { signIn, signOut: convexSignOut } = useAuthActions();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [notificationPreferences, setNotificationPreferences] = useState(loadNotificationPreferences);
+  const previewsQuery = useQuery(
+    api.messages.previews,
+    isAuthenticated ? {} : "skip",
+  ) as ChatPreview[] | undefined;
 
   const me = useQuery(api.users.current, isAuthenticated ? {} : "skip") as
     | JaUser
@@ -44,10 +52,11 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     api.friends.listOutgoing,
     isAuthenticated ? {} : "skip",
   ) ?? []) as FriendRequest[];
-  const previews = (useQuery(
-    api.messages.previews,
+  const previews = previewsQuery ?? [];
+  const friendActivities = (useQuery(
+    api.friends.activity,
     isAuthenticated ? {} : "skip",
-  ) ?? []) as ChatPreview[];
+  ) ?? []) as FriendActivity[];
   const activeMessages = (useQuery(
     api.messages.list,
     isAuthenticated && activeChatId
@@ -59,7 +68,34 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const sendRequestMut = useMutation(api.friends.sendRequest);
   const respondMut = useMutation(api.friends.respond);
   const sendMessageMut = useMutation(api.messages.send);
+  const setTypingMut = useMutation(api.messages.setTyping);
+  const setActivityMut = useMutation(api.users.setActivity);
+  const heartbeatMut = useMutation(api.users.heartbeat);
+  const disconnectMut = useMutation(api.users.disconnect);
   const generateUploadUrl = useMutation(api.messages.generateUploadUrl);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let lastActivityAt = Date.now();
+    const markActive = () => {
+      lastActivityAt = Date.now();
+    };
+    const heartbeat = () => {
+      void heartbeatMut({
+        active:
+          document.visibilityState === "visible" &&
+          Date.now() - lastActivityAt < 5 * 60_000,
+      });
+    };
+    const events: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "touchstart", "mousemove"];
+    events.forEach((event) => window.addEventListener(event, markActive, { passive: true }));
+    heartbeat();
+    const interval = window.setInterval(heartbeat, 30_000);
+    return () => {
+      window.clearInterval(interval);
+      events.forEach((event) => window.removeEventListener(event, markActive));
+    };
+  }, [heartbeatMut, isAuthenticated]);
 
   /** Upload a file to Convex storage, returns its storage id. */
   const upload = useCallback(
@@ -100,8 +136,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     setActiveChatId(null);
-    await convexSignOut();
-  }, [convexSignOut]);
+    try {
+      if (isAuthenticated) await disconnectMut();
+    } finally {
+      await convexSignOut();
+    }
+  }, [convexSignOut, disconnectMut, isAuthenticated]);
 
   const checkUsername = useCallback<JaTextStore["checkUsername"]>(
     async (username) =>
@@ -169,6 +209,40 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [sendMessageMut, upload],
   );
 
+  const setActivity = useCallback<JaTextStore["setActivity"]>(
+    async (status: StatusPreference, customStatus: string) => {
+      await setActivityMut({ status, customStatus });
+    },
+    [setActivityMut],
+  );
+
+  const setTyping = useCallback<JaTextStore["setTyping"]>(
+    async (receiverId, isTyping) => {
+      if (!isAuthenticated) return;
+      await setTypingMut({
+        receiverId: receiverId as Id<"users">,
+        isTyping,
+      });
+    },
+    [isAuthenticated, setTypingMut],
+  );
+
+  const setNotificationsEnabled = useCallback((enabled: boolean) => {
+    setNotificationPreferences((current) => {
+      const next = { ...current, notificationsEnabled: enabled };
+      saveNotificationPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setSoundsEnabled = useCallback((enabled: boolean) => {
+    setNotificationPreferences((current) => {
+      const next = { ...current, soundsEnabled: enabled };
+      saveNotificationPreferences(next);
+      return next;
+    });
+  }, []);
+
   const value: JaTextStore = {
     mode: "convex",
     loading: authLoading || (isAuthenticated && me === undefined),
@@ -177,6 +251,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     incoming,
     outgoing,
     previews,
+    previewsReady: !isAuthenticated || previewsQuery !== undefined,
+    friendActivities,
+    notificationsEnabled: notificationPreferences.notificationsEnabled,
+    soundsEnabled: notificationPreferences.soundsEnabled,
     activeChatId,
     setActiveChatId,
     activeMessages,
@@ -189,6 +267,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     sendFriendRequest,
     respondRequest,
     sendMessage,
+    setActivity,
+    setTyping,
+    setNotificationsEnabled,
+    setSoundsEnabled,
   };
 
   return <JaTextContext.Provider value={value}>{children}</JaTextContext.Provider>;

@@ -33,6 +33,8 @@ export async function profileOf(ctx: Ctx, user: Doc<"users">) {
       : undefined,
     onboardingComplete: user.onboardingComplete ?? false,
     usernameChangedAt: user.usernameChangedAt,
+    statusPreference: user.statusPreference ?? "online",
+    customStatus: user.customStatus ?? "",
   };
 }
 

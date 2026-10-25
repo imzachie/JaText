@@ -12,6 +12,18 @@ export interface JaUser {
   bannerUrl?: string;
   onboardingComplete: boolean;
   usernameChangedAt?: number;
+  statusPreference?: StatusPreference;
+  customStatus?: string;
+}
+
+export type StatusPreference = "online" | "dnd" | "offline";
+export type ActivityStatus = StatusPreference | "away";
+
+export interface FriendActivity {
+  userId: string;
+  status: ActivityStatus;
+  customStatus: string;
+  isTyping: boolean;
 }
 
 export interface FriendRequest {
@@ -60,6 +72,10 @@ export interface JaTextStore {
   incoming: FriendRequest[];
   outgoing: FriendRequest[];
   previews: ChatPreview[];
+  previewsReady: boolean;
+  friendActivities: FriendActivity[];
+  notificationsEnabled: boolean;
+  soundsEnabled: boolean;
   activeChatId: string | null;
   setActiveChatId: (id: string | null) => void;
   activeMessages: ChatMessage[];
@@ -76,6 +92,10 @@ export interface JaTextStore {
   respondRequest: (requestId: string, accept: boolean) => Promise<void>;
 
   sendMessage: (receiverId: string, body: string, file?: File) => Promise<void>;
+  setActivity: (status: StatusPreference, customStatus: string) => Promise<void>;
+  setTyping: (receiverId: string, isTyping: boolean) => Promise<void>;
+  setNotificationsEnabled: (enabled: boolean) => void;
+  setSoundsEnabled: (enabled: boolean) => void;
 }
 
 export const USERNAME_REGEX = /^[a-z0-9._]{3,20}$/;

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { playMessageSound } from "../lib/alerts";
 import { useJaText } from "../lib/store";
 import type { JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
@@ -22,17 +23,43 @@ export function ChatView({
   onOpenProfile: (user: JaUser) => void;
   onBack: () => void;
 }) {
-  const { me, activeMessages, sendMessage } = useJaText();
+  const { me, activeMessages, friendActivities, sendMessage, setTyping, soundsEnabled } =
+    useJaText();
   const [draft, setDraft] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const typingTimer = useRef<number | null>(null);
+  const typingActive = useRef(false);
+  const lastTypingUpdate = useRef(0);
+  const setTypingRef = useRef(setTyping);
+  const friendActivity = friendActivities.find((activity) => activity.userId === friend.id);
+  const friendStatusLabel =
+    friendActivity?.status === "dnd"
+      ? "Do Not Disturb"
+      : friendActivity?.status ?? "offline";
+
+  useEffect(() => {
+    setTypingRef.current = setTyping;
+  }, [setTyping]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeMessages.length, friend.id]);
+
+  useEffect(
+    () => () => {
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      if (typingActive.current) {
+        void setTypingRef.current(friend.id, false).catch((error: unknown) => {
+          console.error("Could not clear typing status.", error);
+        });
+      }
+    },
+    [friend.id],
+  );
 
   if (!me) return null;
 
@@ -41,8 +68,14 @@ export function ChatView({
     if ((!draft.trim() && !file) || sending) return;
     setSending(true);
     setError(null);
+    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+    typingActive.current = false;
+    void setTyping(friend.id, false).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : "Could not update typing status.");
+    });
     try {
       await sendMessage(friend.id, draft, file ?? undefined);
+      if (soundsEnabled) playMessageSound("sent");
       setDraft("");
       setFile(null);
     } catch (err) {
@@ -50,6 +83,34 @@ export function ChatView({
     } finally {
       setSending(false);
     }
+  }
+
+  function publishTyping(isTyping: boolean) {
+    void setTyping(friend.id, isTyping).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : "Could not update typing status.");
+    });
+  }
+
+  function onDraftChange(value: string) {
+    setDraft(value);
+    if (!value.trim()) {
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      typingActive.current = false;
+      publishTyping(false);
+      return;
+    }
+
+    const now = Date.now();
+    if (!typingActive.current || now - lastTypingUpdate.current >= 2_000) {
+      typingActive.current = true;
+      lastTypingUpdate.current = now;
+      publishTyping(true);
+    }
+    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+    typingTimer.current = window.setTimeout(() => {
+      typingActive.current = false;
+      publishTyping(false);
+    }, 2_500);
   }
 
   let lastDay = "";
@@ -60,10 +121,18 @@ export function ChatView({
         <button className="icon-btn back-btn" onClick={onBack} aria-label="Back">
           ←
         </button>
-        <Avatar user={friend} size={44} onClick={() => onOpenProfile(friend)} />
+        <Avatar
+          user={friend}
+          size={44}
+          status={friendActivity?.status ?? "offline"}
+          onClick={() => onOpenProfile(friend)}
+        />
         <button className="chat-title" onClick={() => onOpenProfile(friend)}>
           <strong>{friend.displayName}</strong>
-          <span className="muted small">@{friend.username} · tap to view profile</span>
+          <span className="muted small chat-presence">
+            @{friend.username} · {friendStatusLabel}
+            {friendActivity?.customStatus ? ` · ${friendActivity.customStatus}` : ""}
+          </span>
         </button>
       </header>
 
@@ -117,6 +186,14 @@ export function ChatView({
             </div>
           );
         })}
+        {friendActivity?.isTyping && (
+          <div className="msg-row theirs typing-row" aria-label={`${friend.displayName} is typing`}>
+            <Avatar user={friend} size={30} ringWidth={2} status={friendActivity.status} />
+            <div className="typing-bubble" aria-hidden="true">
+              <span>.</span><span>.</span><span>.</span>
+            </div>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 
@@ -148,7 +225,7 @@ export function ChatView({
         </button>
         <textarea
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => onDraftChange(e.target.value)}
           placeholder={`Message @${friend.username}…`}
           rows={1}
           onKeyDown={(e) => {

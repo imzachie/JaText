@@ -3,9 +3,61 @@ import { useJaText } from "../lib/store";
 import { ProfileForm } from "./ProfileForm";
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
-  const { me, signOut, mode } = useJaText();
+  const {
+    me,
+    signOut,
+    mode,
+    notificationsEnabled,
+    soundsEnabled,
+    setActivity,
+    setNotificationsEnabled,
+    setSoundsEnabled,
+  } = useJaText();
   const [saved, setSaved] = useState(false);
+  const [activityStatus, setActivityStatus] = useState(me?.statusPreference ?? "online");
+  const [customStatus, setCustomStatus] = useState(me?.customStatus ?? "");
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+
   if (!me) return null;
+
+  async function updateActivity(status: typeof activityStatus, message = customStatus) {
+    setActivityError(null);
+    try {
+      await setActivity(status, message);
+      setActivityStatus(status);
+      setCustomStatus(message);
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : "Could not update activity.");
+    }
+  }
+
+  async function toggleNotifications(enabled: boolean) {
+    setNotificationError(null);
+    if (!enabled) {
+      setNotificationsEnabled(false);
+      return;
+    }
+    if (!("Notification" in window)) {
+      setNotificationError("This browser does not support desktop notifications.");
+      return;
+    }
+    try {
+      const permission =
+        Notification.permission === "default"
+          ? await Notification.requestPermission()
+          : Notification.permission;
+      if (permission === "granted") {
+        setNotificationsEnabled(true);
+      } else {
+        setNotificationError("Allow notifications in your browser settings to enable them.");
+      }
+    } catch (error) {
+      setNotificationError(
+        error instanceof Error ? error.message : "Could not request notification permission.",
+      );
+    }
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -23,6 +75,59 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           can be changed any time. Username changes are limited to once every
           14 days.
         </p>
+
+        <section className="activity-settings">
+          <h3>Activity &amp; notifications</h3>
+          <label>
+            Activity status
+            <select
+              value={activityStatus}
+              onChange={(event) => void updateActivity(event.target.value as typeof activityStatus)}
+            >
+              <option value="online">Online — away after 5 minutes idle</option>
+              <option value="dnd">Do Not Disturb</option>
+              <option value="offline">Offline until I change it</option>
+            </select>
+          </label>
+          <p className="muted small">
+            Do Not Disturb still shows you as available, but silences JaText message alerts.
+            Offline stays enabled across sign-outs.
+          </p>
+          <label>
+            Custom status
+            <input
+              value={customStatus}
+              maxLength={60}
+              placeholder="What are you up to?"
+              onChange={(event) => setCustomStatus(event.target.value)}
+            />
+          </label>
+          <button
+            className="ghost-btn"
+            type="button"
+            onClick={() => void updateActivity(activityStatus, customStatus)}
+          >
+            Save custom status
+          </button>
+          {activityError && <div className="error-box">{activityError}</div>}
+          <label className="setting-toggle">
+            <input
+              type="checkbox"
+              checked={notificationsEnabled}
+              onChange={(event) => void toggleNotifications(event.target.checked)}
+            />
+            Desktop notifications for incoming messages
+          </label>
+          <label className="setting-toggle">
+            <input
+              type="checkbox"
+              checked={soundsEnabled}
+              onChange={(event) => setSoundsEnabled(event.target.checked)}
+            />
+            Message sounds (sent and received)
+          </label>
+          {notificationError && <div className="error-box">{notificationError}</div>}
+        </section>
 
         {saved && <div className="success-box">✅ Profile saved!</div>}
 

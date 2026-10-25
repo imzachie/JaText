@@ -33,6 +33,10 @@ export default defineSchema({
     onboardingComplete: v.optional(v.boolean()),
     /** epoch ms — usernames can only change once every 14 days */
     usernameChangedAt: v.optional(v.number()),
+    statusPreference: v.optional(
+      v.union(v.literal("online"), v.literal("dnd"), v.literal("offline")),
+    ),
+    customStatus: v.optional(v.string()),
   })
     .index("email", ["email"])
     .index("by_username", ["username"]),
@@ -60,4 +64,12 @@ export default defineSchema({
     attachmentName: v.optional(v.string()),
     attachmentType: v.optional(v.string()),
   }).index("by_pair", ["pairKey"]),
+
+  presence: defineTable({
+    userId: v.id("users"),
+    lastSeenAt: v.number(),
+    lastActiveAt: v.number(),
+    typingToId: v.optional(v.id("users")),
+    typingAt: v.optional(v.number()),
+  }).index("by_user", ["userId"]),
 });

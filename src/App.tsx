@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChatView } from "./components/ChatView";
 import { LoginPage } from "./components/LoginPage";
 import { Onboarding } from "./components/Onboarding";
@@ -6,12 +6,32 @@ import { ProfileModal } from "./components/ProfileCard";
 import { SettingsModal } from "./components/Settings";
 import { Sidebar } from "./components/Sidebar";
 import { useJaText } from "./lib/store";
+import { playMessageSound } from "./lib/alerts";
 import type { JaUser } from "./lib/types";
+
+interface MessageToast {
+  friendId: string;
+  name: string;
+  body: string;
+}
 
 export default function App() {
   const store = useJaText();
+  const {
+    activeChatId,
+    friends,
+    me,
+    notificationsEnabled,
+    previews,
+    previewsReady,
+    setActiveChatId,
+    soundsEnabled,
+  } = store;
   const [profileUser, setProfileUser] = useState<JaUser | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [messageToast, setMessageToast] = useState<MessageToast | null>(null);
+  const previousPreviews = useRef<Map<string, string> | null>(null);
+  const toastTimer = useRef<number | null>(null);
 
   const activeFriend = useMemo(
     () => store.friends.find((f) => f.id === store.activeChatId) ?? null,
@@ -29,6 +49,92 @@ export default function App() {
       profileUser
     );
   }, [profileUser, store.friends, store.incoming, store.me, store.outgoing]);
+
+  const profileStatus = useMemo(() => {
+    if (!freshProfileUser) return undefined;
+    const activity = store.friendActivities.find(
+      (entry) => entry.userId === freshProfileUser.id,
+    );
+    if (activity) return activity.status;
+    if (freshProfileUser.id !== store.me?.id) return undefined;
+    return freshProfileUser.statusPreference === "offline" ||
+      freshProfileUser.statusPreference === "dnd"
+      ? freshProfileUser.statusPreference
+      : "online";
+  }, [freshProfileUser, store.friendActivities, store.me?.id]);
+
+  useEffect(() => {
+    if (!me || !previewsReady) {
+      previousPreviews.current = null;
+      return;
+    }
+
+    const current = new Map(
+      previews.map((preview) => [
+        preview.friendId,
+        `${preview.createdAt}:${preview.senderId}`,
+      ]),
+    );
+    const previous = previousPreviews.current;
+    previousPreviews.current = current;
+    if (!previous) return;
+
+    for (const preview of previews) {
+      if (previous.get(preview.friendId) === `${preview.createdAt}:${preview.senderId}`) {
+        continue;
+      }
+      if (preview.senderId === me.id || me.statusPreference === "dnd") {
+        continue;
+      }
+
+      const friend = friends.find((user) => user.id === preview.friendId);
+      if (!friend) continue;
+      if (soundsEnabled) playMessageSound("received");
+
+      const focusedOnThisChat =
+        document.visibilityState === "visible" &&
+        document.hasFocus() &&
+        activeChatId === friend.id;
+      if (focusedOnThisChat) continue;
+
+      setMessageToast({ friendId: friend.id, name: friend.displayName, body: preview.body });
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+      toastTimer.current = window.setTimeout(() => setMessageToast(null), 4_500);
+
+      if (
+        notificationsEnabled &&
+        "Notification" in window &&
+        Notification.permission === "granted" &&
+        (document.visibilityState !== "visible" || !document.hasFocus())
+      ) {
+        const notification = new Notification(`Message from ${friend.displayName}`, {
+          body: preview.body,
+          tag: `jatext-${friend.id}`,
+        });
+        notification.onclick = () => {
+          window.focus();
+          setActiveChatId(friend.id);
+          notification.close();
+        };
+      }
+    }
+  }, [
+    activeChatId,
+    friends,
+    me,
+    notificationsEnabled,
+    previews,
+    previewsReady,
+    setActiveChatId,
+    soundsEnabled,
+  ]);
+
+  useEffect(
+    () => () => {
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    },
+    [],
+  );
 
   if (store.loading) {
     return (
@@ -70,9 +176,27 @@ export default function App() {
       </main>
 
       {freshProfileUser && (
-        <ProfileModal user={freshProfileUser} onClose={() => setProfileUser(null)} />
+        <ProfileModal
+          user={freshProfileUser}
+          status={profileStatus}
+          onClose={() => setProfileUser(null)}
+        />
       )}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {messageToast && (
+        <button
+          className="message-toast"
+          type="button"
+          aria-live="polite"
+          onClick={() => {
+            store.setActiveChatId(messageToast.friendId);
+            setMessageToast(null);
+          }}
+        >
+          <strong>New message from {messageToast.name}</strong>
+          <span>{messageToast.body}</span>
+        </button>
+      )}
     </div>
   );
 }

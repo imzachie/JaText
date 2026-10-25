@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { FOURTEEN_DAYS, USERNAME_REGEX, profileOf, requireUser } from "./lib";
 
 /** The signed-in user's full profile (or null when signed out). */
@@ -115,5 +116,89 @@ export const saveProfile = mutation({
         ? { bannerId: args.bannerId ?? undefined }
         : {}),
     });
+  },
+});
+
+/** Save the user's persistent activity preference and optional custom status. */
+export const setActivity = mutation({
+  args: {
+    status: v.union(v.literal("online"), v.literal("dnd"), v.literal("offline")),
+    customStatus: v.string(),
+  },
+  handler: async (ctx, { status, customStatus }) => {
+    const me = await requireUser(ctx);
+    await ctx.db.patch(me._id, {
+      statusPreference: status,
+      customStatus: customStatus.trim().slice(0, 60),
+    });
+  },
+});
+
+/** Refresh ephemeral presence; only active interactions refresh lastActiveAt. */
+export const heartbeat = mutation({
+  args: { active: v.boolean() },
+  handler: async (ctx, { active }) => {
+    const me = await requireUser(ctx);
+    const now = Date.now();
+    const presence = await ctx.db
+      .query("presence")
+      .withIndex("by_user", (q) => q.eq("userId", me._id))
+      .unique();
+
+    if (presence) {
+      await ctx.db.patch(presence._id, {
+        lastSeenAt: now,
+        ...(active ? { lastActiveAt: now } : {}),
+      });
+    } else {
+      await ctx.db.insert("presence", {
+        userId: me._id,
+        lastSeenAt: now,
+        lastActiveAt: now,
+      });
+    }
+    await ctx.scheduler.runAfter(90_001, internal.users.expirePresence, {
+      userId: me._id,
+      expectedLastSeenAt: now,
+    });
+  },
+});
+
+/** Expire disconnected sessions only if no newer heartbeat has arrived. */
+export const expirePresence = internalMutation({
+  args: {
+    userId: v.id("users"),
+    expectedLastSeenAt: v.number(),
+  },
+  handler: async (ctx, { userId, expectedLastSeenAt }) => {
+    const presence = await ctx.db
+      .query("presence")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+    if (!presence || presence.lastSeenAt !== expectedLastSeenAt) return;
+    await ctx.db.patch(presence._id, {
+      lastSeenAt: 0,
+      typingToId: undefined,
+      typingAt: undefined,
+    });
+  },
+});
+
+/** Mark the current session disconnected immediately on an explicit sign-out. */
+export const disconnect = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireUser(ctx);
+    const presence = await ctx.db
+      .query("presence")
+      .withIndex("by_user", (q) => q.eq("userId", me._id))
+      .unique();
+    if (presence) {
+      await ctx.db.patch(presence._id, {
+        lastSeenAt: 0,
+        typingToId: undefined,
+        typingAt: undefined,
+      });
+    }
   },
 });

@@ -11,6 +11,7 @@ import {
 import {
   FOURTEEN_DAYS,
   USERNAME_REGEX,
+  type ActivityStatus,
   type ChatMessage,
   type ChatPreview,
   type FriendRequest,
@@ -18,6 +19,7 @@ import {
   type JaUser,
   type ProfileInput,
 } from "./types";
+import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
 
 export const JaTextContext = createContext<JaTextStore | null>(null);
 
@@ -51,6 +53,15 @@ interface DemoDb {
   users: DemoUser[];
   requests: { id: string; fromId: string; toId: string; status: FriendRequest["status"]; createdAt: number }[];
   messages: ChatMessage[];
+  presence: DemoPresence[];
+}
+
+interface DemoPresence {
+  userId: string;
+  lastSeenAt: number;
+  lastActiveAt: number;
+  typingToId?: string;
+  typingAt?: number;
 }
 
 const uid = () =>
@@ -111,13 +122,37 @@ function seedDb(): DemoDb {
       usernameChangedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
     },
   ];
-  return { users: bots, requests: [], messages: [] };
+  const now = Date.now();
+  return {
+    users: bots,
+    requests: [],
+    messages: [],
+    presence: bots.map((bot) => ({
+      userId: bot.id,
+      lastSeenAt: now,
+      lastActiveAt: now,
+    })),
+  };
 }
 
 function loadDb(): DemoDb {
   try {
     const raw = localStorage.getItem(DB_KEY);
-    if (raw) return JSON.parse(raw) as DemoDb;
+    if (raw) {
+      const db = JSON.parse(raw) as DemoDb;
+      db.presence ??= db.users
+        .filter((user) => user.provider === "bot")
+        .map((user) => ({
+          userId: user.id,
+          lastSeenAt: Date.now(),
+          lastActiveAt: Date.now(),
+        }));
+      db.users.forEach((user) => {
+        user.statusPreference ??= "online";
+        user.customStatus ??= "";
+      });
+      return db;
+    }
   } catch {
     /* fall through to seed */
   }
@@ -162,6 +197,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     localStorage.getItem(SESSION_KEY),
   );
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [notificationPreferences, setNotificationPreferences] = useState(loadNotificationPreferences);
   const timers = useRef<number[]>([]);
 
   const persist = useCallback((next: DemoDb) => {
@@ -183,7 +219,9 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
   // live updates across tabs, like Convex subscriptions
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key === DB_KEY && e.newValue) setDb(JSON.parse(e.newValue));
+      if (e.key === DB_KEY && e.newValue) {
+        setDb(loadDb());
+      }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -199,6 +237,38 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     () => db.users.find((u) => u.id === sessionId) ?? null,
     [db, sessionId],
   );
+  const currentUserId = me?.id;
+
+  useEffect(() => {
+    if (!currentUserId) return;
+    let lastActivityAt = Date.now();
+    const markActive = () => {
+      lastActivityAt = Date.now();
+    };
+    const heartbeat = () => {
+      const now = Date.now();
+      const active =
+        document.visibilityState === "visible" &&
+        now - lastActivityAt < 5 * 60_000;
+      transact((draft) => {
+        let presence = draft.presence.find((entry) => entry.userId === currentUserId);
+        if (!presence) {
+          presence = { userId: currentUserId, lastSeenAt: now, lastActiveAt: now };
+          draft.presence.push(presence);
+        }
+        presence.lastSeenAt = now;
+        if (active) presence.lastActiveAt = now;
+      });
+    };
+    const events: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "touchstart", "mousemove"];
+    events.forEach((event) => window.addEventListener(event, markActive, { passive: true }));
+    heartbeat();
+    const interval = window.setInterval(heartbeat, 30_000);
+    return () => {
+      window.clearInterval(interval);
+      events.forEach((event) => window.removeEventListener(event, markActive));
+    };
+  }, [currentUserId, transact]);
 
   const startSession = useCallback((userId: string) => {
     localStorage.setItem(SESSION_KEY, userId);
@@ -230,10 +300,22 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
 
   const botReply = useCallback(
     (botId: string, userId: string) => {
+      transact((draft) => {
+        const presence = draft.presence.find((entry) => entry.userId === botId);
+        if (presence) {
+          presence.typingToId = userId;
+          presence.typingAt = Date.now();
+        }
+      });
       schedule(() => {
         transact((draft) => {
           const bot = draft.users.find((u) => u.id === botId);
           if (!bot) return;
+          const presence = draft.presence.find((entry) => entry.userId === botId);
+          if (presence) {
+            presence.typingToId = undefined;
+            presence.typingAt = undefined;
+          }
           const idx = (bot.botReplyCount ?? 0) % BOT_REPLIES.length;
           bot.botReplyCount = (bot.botReplyCount ?? 0) + 1;
           draft.messages.push({
@@ -344,10 +426,20 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
+    if (sessionId) {
+      transact((draft) => {
+        const presence = draft.presence.find((entry) => entry.userId === sessionId);
+        if (presence) {
+          presence.lastSeenAt = 0;
+          presence.typingToId = undefined;
+          presence.typingAt = undefined;
+        }
+      });
+    }
     localStorage.removeItem(SESSION_KEY);
     setSessionId(null);
     setActiveChatId(null);
-  }, []);
+  }, [sessionId, transact]);
 
   /* ---------------- profile ---------------- */
 
@@ -521,6 +613,39 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       .sort((a, b) => a.createdAt - b.createdAt);
   }, [activeChatId, db, me]);
 
+  const friendActivities = useMemo(
+    () =>
+      friends.map((friend) => {
+        const presence = db.presence.find((entry) => entry.userId === friend.id);
+        const isBot = db.users.some(
+          (user) => user.id === friend.id && user.provider === "bot",
+        );
+        const now = Date.now();
+        const connected =
+          isBot || (!!presence && now - presence.lastSeenAt <= 90_000);
+        const preference = friend.statusPreference ?? "online";
+        const status: ActivityStatus =
+          preference === "offline" || !connected
+            ? "offline"
+            : preference === "dnd"
+              ? "dnd"
+              : !isBot && now - (presence?.lastActiveAt ?? 0) >= 5 * 60_000
+                ? "away"
+                : "online";
+        const typingAt = presence?.typingAt;
+        return {
+          userId: friend.id,
+          status,
+          customStatus: friend.customStatus ?? "",
+          isTyping:
+            presence?.typingToId === me?.id &&
+            typingAt !== undefined &&
+            now - typingAt <= 5_000,
+        };
+      }),
+    [db.presence, db.users, friends, me?.id],
+  );
+
   const sendMessage = useCallback<JaTextStore["sendMessage"]>(
     async (receiverId, body, file) => {
       if (!me) throw new Error("Not signed in.");
@@ -543,6 +668,54 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     [botReply, me, transact],
   );
 
+  const setActivity = useCallback<JaTextStore["setActivity"]>(
+    async (status, customStatus) => {
+      if (!me) throw new Error("Not signed in.");
+      transact((draft) => {
+        const user = draft.users.find((entry) => entry.id === me.id);
+        if (!user) throw new Error("Account not found.");
+        user.statusPreference = status;
+        user.customStatus = customStatus.trim().slice(0, 60);
+      });
+    },
+    [me, transact],
+  );
+
+  const setTyping = useCallback<JaTextStore["setTyping"]>(
+    async (receiverId, isTyping) => {
+      if (!me) throw new Error("Not signed in.");
+      if (!friends.some((friend) => friend.id === receiverId))
+        throw new Error("You can only type to accepted friends.");
+      const now = Date.now();
+      transact((draft) => {
+        let presence = draft.presence.find((entry) => entry.userId === me.id);
+        if (!presence) {
+          presence = { userId: me.id, lastSeenAt: now, lastActiveAt: now };
+          draft.presence.push(presence);
+        }
+        presence.typingToId = isTyping ? receiverId : undefined;
+        presence.typingAt = isTyping ? now : undefined;
+      });
+    },
+    [friends, me, transact],
+  );
+
+  const setNotificationsEnabled = useCallback((enabled: boolean) => {
+    setNotificationPreferences((current) => {
+      const next = { ...current, notificationsEnabled: enabled };
+      saveNotificationPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setSoundsEnabled = useCallback((enabled: boolean) => {
+    setNotificationPreferences((current) => {
+      const next = { ...current, soundsEnabled: enabled };
+      saveNotificationPreferences(next);
+      return next;
+    });
+  }, []);
+
   const value: JaTextStore = {
     mode: "demo",
     loading: false,
@@ -551,6 +724,10 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     incoming,
     outgoing,
     previews,
+    previewsReady: true,
+    friendActivities,
+    notificationsEnabled: notificationPreferences.notificationsEnabled,
+    soundsEnabled: notificationPreferences.soundsEnabled,
     activeChatId,
     setActiveChatId,
     activeMessages,
@@ -563,6 +740,10 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     sendFriendRequest,
     respondRequest,
     sendMessage,
+    setActivity,
+    setTyping,
+    setNotificationsEnabled,
+    setSoundsEnabled,
   };
 
   return <JaTextContext.Provider value={value}>{children}</JaTextContext.Provider>;

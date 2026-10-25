@@ -93,7 +93,12 @@ export function Sidebar({
       </header>
 
       <div className="greeting">
-        <Avatar user={me} size={52} onClick={() => onOpenProfile(me)} />
+        <Avatar
+          user={me}
+          size={52}
+          status={me.statusPreference === "offline" ? "offline" : me.statusPreference === "dnd" ? "dnd" : "online"}
+          onClick={() => onOpenProfile(me)}
+        />
         <div className="greeting-text">
           <span className="greeting-title">
             Good {dayPart(now)}, {me.displayName}!
@@ -144,6 +149,7 @@ export function Sidebar({
                   <Avatar
                     user={friend}
                     size={48}
+                    status={store.friendActivities.find((activity) => activity.userId === friend.id)?.status}
                     onClick={(e) => {
                       e.stopPropagation();
                       onOpenProfile(friend);

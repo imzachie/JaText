@@ -1,5 +1,5 @@
 import { colorById } from "../lib/colors";
-import type { JaUser } from "../lib/types";
+import type { ActivityStatus, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 
 /**
@@ -7,7 +7,13 @@ import { Avatar } from "./Avatar";
  * Their avatar color drives the outline around the pfp and the
  * background color behind it.
  */
-export function ProfileCard({ user }: { user: JaUser }) {
+export function ProfileCard({
+  user,
+  status,
+}: {
+  user: JaUser;
+  status?: ActivityStatus;
+}) {
   const color = colorById(user.avatarColor);
   return (
     <div className="profile-card">
@@ -24,7 +30,7 @@ export function ProfileCard({ user }: { user: JaUser }) {
           className="profile-avatar-wrap"
           style={{ background: color.soft, boxShadow: `0 0 0 4px var(--panel)` }}
         >
-          <Avatar user={user} size={84} ringWidth={4} />
+          <Avatar user={user} size={84} ringWidth={4} status={status} />
         </div>
         <div className="profile-names">
           <div className="profile-display">{user.displayName || "Unnamed"}</div>
@@ -46,9 +52,11 @@ export function ProfileCard({ user }: { user: JaUser }) {
 
 export function ProfileModal({
   user,
+  status,
   onClose,
 }: {
   user: JaUser;
+  status?: ActivityStatus;
   onClose: () => void;
 }) {
   return (
@@ -57,7 +65,7 @@ export function ProfileModal({
         <button className="modal-close" onClick={onClose} aria-label="Close profile">
           ✕
         </button>
-        <ProfileCard user={user} />
+        <ProfileCard user={user} status={status} />
       </div>
     </div>
   );
