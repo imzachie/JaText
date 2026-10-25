@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -340,7 +341,8 @@ export function ChatView({
     () => getConversationMessages(pendingMessages, conversationMessages, friend.id),
     [conversationMessages, friend.id, pendingMessages],
   );
-  const lastMessageId = displayedMessages.at(-1)?.id;
+  const lastMessage = displayedMessages.at(-1);
+  const lastMessageKey = lastMessage?.renderKey ?? lastMessage?.id;
   const scrollToBottom = useCallback(() => {
     const container = messagesRef.current;
     if (container) {
@@ -405,31 +407,15 @@ export function ChatView({
     setTypingRef.current = setTyping;
   }, [setTyping]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (previousChatIdRef.current !== friend.id) {
       previousChatIdRef.current = friend.id;
       pinnedToBottomRef.current = true;
     }
     if (!pinnedToBottomRef.current && !forceScrollToBottomRef.current) return;
     forceScrollToBottomRef.current = false;
-    const frame = window.requestAnimationFrame(() => {
-      scrollToBottom();
-      window.requestAnimationFrame(scrollToBottom);
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [lastMessageId, friend.id, scrollToBottom]);
-
-  useEffect(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return;
-    const keepComposerVisible = () => {
-      if (document.activeElement !== composerRef.current) return;
-      pinnedToBottomRef.current = true;
-      window.requestAnimationFrame(scrollToBottom);
-    };
-    viewport.addEventListener("resize", keepComposerVisible);
-    return () => viewport.removeEventListener("resize", keepComposerVisible);
-  }, [scrollToBottom]);
+    scrollToBottom();
+  }, [lastMessageKey, friend.id, scrollToBottom]);
 
   const removePendingMessage = useCallback((id: string) => {
     const attachmentUrl = pendingAttachmentUrlsRef.current.get(id);
@@ -715,6 +701,40 @@ export function ChatView({
             {friendActivity?.customStatus ? ` · ${friendActivity.customStatus}` : ""}
           </span>
         </button>
+        <div className="chat-header-actions" aria-label="Chat actions">
+          <button
+            type="button"
+            className="icon-btn chat-action-placeholder"
+            title="Voice call coming soon"
+            aria-label="Voice call coming soon"
+            disabled
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.4 19.4 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="icon-btn chat-action-placeholder"
+            title="Video call coming soon"
+            aria-label="Video call coming soon"
+            disabled
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="6" width="13" height="12" rx="2" />
+              <path d="m16 10 5-3v10l-5-3" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="icon-btn chat-action-placeholder"
+            title="More chat options coming soon"
+            aria-label="More chat options coming soon"
+            disabled
+          >
+            ⋮
+          </button>
+        </div>
       </header>
 
       {showUnsendWarning && (
@@ -794,13 +814,21 @@ export function ChatView({
           📎
         </button>
         <StickerPicker friendId={friend.id} disabled={isFriendBlocked} />
+        <button
+          type="button"
+          className="icon-btn voice-note-placeholder"
+          title="Voice notes coming soon"
+          aria-label="Voice notes coming soon"
+          disabled
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="12" rx="3" />
+            <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+          </svg>
+        </button>
         <textarea
           ref={composerRef}
           value={draft}
-          onFocus={() => {
-            pinnedToBottomRef.current = true;
-            window.requestAnimationFrame(scrollToBottom);
-          }}
           onChange={(e) => onDraftChange(e.target.value)}
           placeholder={isFriendBlocked ? "Unblock to message" : "Message…"}
           aria-label={`Message @${friend.username}`}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { ChatView } from "./components/ChatView";
@@ -156,7 +156,7 @@ export default function App() {
     [],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     navigationStateRef.current = {
       activeChatId,
       hasProfile: Boolean(profileUser),
