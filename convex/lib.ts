@@ -1,0 +1,81 @@
+import { getAuthUserId } from "@convex-dev/auth/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+
+export type Ctx = QueryCtx | MutationCtx;
+
+export const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
+export const USERNAME_REGEX = /^[a-z0-9._]{3,20}$/;
+
+export async function requireUser(ctx: Ctx) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) throw new Error("You must be signed in.");
+  const user = await ctx.db.get(userId);
+  if (!user) throw new Error("You must be signed in.");
+  return user;
+}
+
+/** Resolve a user document into the public profile the app renders. */
+export async function profileOf(ctx: Ctx, user: Doc<"users">) {
+  return {
+    id: user._id as string,
+    email: user.email,
+    displayName: user.displayName ?? user.name ?? "",
+    username: user.username ?? "",
+    bio: user.bio ?? "",
+    pronouns: user.pronouns ?? "",
+    avatarColor: user.avatarColor ?? "black",
+    avatarUrl: user.avatarId
+      ? ((await ctx.storage.getUrl(user.avatarId)) ?? undefined)
+      : user.image,
+    bannerUrl: user.bannerId
+      ? ((await ctx.storage.getUrl(user.bannerId)) ?? undefined)
+      : undefined,
+    onboardingComplete: user.onboardingComplete ?? false,
+    usernameChangedAt: user.usernameChangedAt,
+  };
+}
+
+export function pairKey(a: Id<"users">, b: Id<"users">) {
+  return [a, b].sort().join("|");
+}
+
+/** Are these two users accepted friends? */
+export async function areFriends(
+  ctx: Ctx,
+  a: Id<"users">,
+  b: Id<"users">,
+): Promise<boolean> {
+  const forward = await ctx.db
+    .query("friendRequests")
+    .withIndex("by_from_to", (q) => q.eq("fromId", a).eq("toId", b))
+    .collect();
+  const backward = await ctx.db
+    .query("friendRequests")
+    .withIndex("by_from_to", (q) => q.eq("fromId", b).eq("toId", a))
+    .collect();
+  return [...forward, ...backward].some((r) => r.status === "accepted");
+}
+
+/** All friend user-ids for `userId` (accepted in either direction). */
+export async function friendIds(
+  ctx: Ctx,
+  userId: Id<"users">,
+): Promise<Id<"users">[]> {
+  const sent = await ctx.db
+    .query("friendRequests")
+    .withIndex("by_from_status", (q) =>
+      q.eq("fromId", userId).eq("status", "accepted"),
+    )
+    .collect();
+  const received = await ctx.db
+    .query("friendRequests")
+    .withIndex("by_to_status", (q) =>
+      q.eq("toId", userId).eq("status", "accepted"),
+    )
+    .collect();
+  return [
+    ...sent.map((r) => r.toId),
+    ...received.map((r) => r.fromId),
+  ];
+}
