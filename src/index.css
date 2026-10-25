@@ -843,8 +843,11 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   max-width: min(100%, 1200px);
   max-height: 100%;
   object-fit: contain;
-  transition: transform 120ms ease-out;
-  cursor: zoom-in;
+  transform-origin: center;
+  transition: none;
+  will-change: transform;
+  cursor: grab;
+  touch-action: none;
 }
 .media-lightbox-close {
   position: absolute;

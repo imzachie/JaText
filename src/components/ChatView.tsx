@@ -320,7 +320,8 @@ export function ChatView({
   const [forwardClosing, setForwardClosing] = useState(false);
   const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imageScale, setImageScale] = useState(1);
+  const imageElementRef = useRef<HTMLImageElement>(null);
+  const imageTransformRef = useRef({ scale: 1, x: 0, y: 0 });
   const [imageClosing, setImageClosing] = useState(false);
   const [chatClosing, setChatClosing] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -329,7 +330,11 @@ export function ChatView({
   const initialScrollAllowedRef = useRef(true);
   const hasScrolledOnOpenRef = useRef(false);
   const scrollTargetChatRef = useRef<string | null>(null);
-  const imagePinchStartRef = useRef<{ distance: number; scale: number } | null>(null);
+  const imageGestureRef = useRef<
+    | { mode: "pinch"; distance: number; scale: number; x: number; y: number; centerX: number; centerY: number }
+    | { mode: "pan"; touchX: number; touchY: number; x: number; y: number }
+    | null
+  >(null);
   const lastPendingMessageAtRef = useRef(0);
   const typingTimer = useRef<number | null>(null);
   const pendingAttachmentUrlsRef = useRef(new Map<string, string>());
@@ -370,7 +375,8 @@ export function ChatView({
       window.clearTimeout(imageCloseTimerRef.current);
       imageCloseTimerRef.current = null;
     }
-    setImageScale(1);
+    imageTransformRef.current = { scale: 1, x: 0, y: 0 };
+    imageGestureRef.current = null;
     setImageClosing(false);
     setImagePreview(url);
   }, []);
@@ -432,20 +438,101 @@ export function ChatView({
     });
   }, [conversationReady, friend.id, scrollToBottom]);
 
-  function zoomImageWithPinch(event: React.TouchEvent<HTMLImageElement>) {
-    if (event.touches.length < 2) {
-      imagePinchStartRef.current = null;
+  function applyImageTransform(scale: number, x: number, y: number) {
+    const image = imageElementRef.current;
+    if (!image) return;
+    const viewport = image.parentElement;
+    const maxX = Math.max(0, ((image.offsetWidth * scale) - (viewport?.clientWidth ?? 0)) / 2);
+    const maxY = Math.max(0, ((image.offsetHeight * scale) - (viewport?.clientHeight ?? 0)) / 2);
+    const boundedX = Math.max(-maxX, Math.min(maxX, x));
+    const boundedY = Math.max(-maxY, Math.min(maxY, y));
+    imageTransformRef.current = { scale, x: boundedX, y: boundedY };
+    image.style.transform = `translate3d(${boundedX}px, ${boundedY}px, 0) scale(${scale})`;
+  }
+
+  function startImageGesture(event: React.TouchEvent<HTMLImageElement>) {
+    const transform = imageTransformRef.current;
+    if (event.touches.length >= 2) {
+      const [first, second] = Array.from(event.touches);
+      imageGestureRef.current = {
+        mode: "pinch",
+        distance: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+        scale: transform.scale,
+        x: transform.x,
+        y: transform.y,
+        centerX: (first.clientX + second.clientX) / 2,
+        centerY: (first.clientY + second.clientY) / 2,
+      };
+    } else if (transform.scale > 1) {
+      const touch = event.touches[0];
+      imageGestureRef.current = {
+        mode: "pan",
+        touchX: touch.clientX,
+        touchY: touch.clientY,
+        x: transform.x,
+        y: transform.y,
+      };
+    } else {
+      imageGestureRef.current = null;
+    }
+  }
+
+  function moveImageGesture(event: React.TouchEvent<HTMLImageElement>) {
+    const gesture = imageGestureRef.current;
+    const image = event.currentTarget;
+    if (event.touches.length >= 2) {
+      event.preventDefault();
+      const [first, second] = Array.from(event.touches);
+      const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      const centerX = (first.clientX + second.clientX) / 2;
+      const centerY = (first.clientY + second.clientY) / 2;
+      const base = gesture?.mode === "pinch"
+        ? gesture
+        : {
+            mode: "pinch" as const,
+            distance,
+            scale: imageTransformRef.current.scale,
+            x: imageTransformRef.current.x,
+            y: imageTransformRef.current.y,
+            centerX,
+            centerY,
+          };
+      if (gesture?.mode !== "pinch") imageGestureRef.current = base;
+      const scale = Math.min(4, Math.max(1, base.scale * distance / Math.max(base.distance, 1)));
+      const ratio = scale / base.scale;
+      const bounds = image.parentElement?.getBoundingClientRect();
+      const imageCenterX = (bounds?.left ?? 0) + (bounds?.width ?? window.innerWidth) / 2 + base.x;
+      const imageCenterY = (bounds?.top ?? 0) + (bounds?.height ?? window.innerHeight) / 2 + base.y;
+      const x = base.x + centerX - base.centerX + (base.centerX - imageCenterX) * (1 - ratio);
+      const y = base.y + centerY - base.centerY + (base.centerY - imageCenterY) * (1 - ratio);
+      applyImageTransform(scale, x, y);
       return;
     }
-    event.preventDefault();
-    const [first, second] = Array.from(event.touches);
-    const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
-    const pinchStart = imagePinchStartRef.current;
-    if (!pinchStart) {
-      imagePinchStartRef.current = { distance, scale: imageScale };
+
+    if (gesture?.mode === "pan" && event.touches.length === 1) {
+      event.preventDefault();
+      const touch = event.touches[0];
+      applyImageTransform(
+        imageTransformRef.current.scale,
+        gesture.x + touch.clientX - gesture.touchX,
+        gesture.y + touch.clientY - gesture.touchY,
+      );
+    }
+  }
+
+  function endImageGesture(event: React.TouchEvent<HTMLImageElement>) {
+    if (event.touches.length === 1 && imageTransformRef.current.scale > 1) {
+      const touch = event.touches[0];
+      imageGestureRef.current = {
+        mode: "pan",
+        touchX: touch.clientX,
+        touchY: touch.clientY,
+        x: imageTransformRef.current.x,
+        y: imageTransformRef.current.y,
+      };
       return;
     }
-    setImageScale(Math.min(4, Math.max(0.5, pinchStart.scale * distance / pinchStart.distance)));
+    imageGestureRef.current = null;
   }
 
   const removePendingMessage = useCallback((id: string) => {
@@ -1045,35 +1132,27 @@ export function ChatView({
             ×
           </button>
           <img
+            ref={imageElementRef}
             src={imagePreview}
             alt="Full-size attachment"
-            style={{ transform: `scale(${imageScale})` }}
+            style={{ transform: "translate3d(0, 0, 0) scale(1)" }}
             onClick={(event) => event.stopPropagation()}
-            onTouchStart={(event) => {
-              if (event.touches.length === 2) {
-                const [first, second] = Array.from(event.touches);
-                imagePinchStartRef.current = {
-                  distance: Math.hypot(
-                    second.clientX - first.clientX,
-                    second.clientY - first.clientY,
-                  ),
-                  scale: imageScale,
-                };
-              }
-            }}
-            onTouchMove={zoomImageWithPinch}
-            onTouchEnd={() => {
-              imagePinchStartRef.current = null;
-            }}
+            onTouchStart={startImageGesture}
+            onTouchMove={moveImageGesture}
+            onTouchEnd={endImageGesture}
+            onTouchCancel={endImageGesture}
             onWheel={(event) => {
               event.preventDefault();
-              setImageScale((scale) =>
-                Math.min(4, Math.max(0.5, scale + (event.deltaY < 0 ? 0.15 : -0.15))),
+              const { scale, x, y } = imageTransformRef.current;
+              applyImageTransform(
+                Math.min(4, Math.max(1, scale + (event.deltaY < 0 ? 0.2 : -0.2))),
+                x,
+                y,
               );
             }}
           />
           <span className="media-lightbox-hint">
-            Pinch or scroll to zoom · Click outside or press Esc to close
+            Pinch to zoom · Drag to move · Click outside or press Esc to close
           </span>
         </div>
       )}
