@@ -1,5 +1,5 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { action, env } from "./_generated/server";
 
 interface KlipyResult {
@@ -44,7 +44,21 @@ export const search = action({
     const endpoint = query.trim() ? "search" : "featured";
     const response = await fetch(`https://api.klipy.com/v2/${endpoint}?${params}`);
     if (!response.ok) {
-      console.error("Klipy search failed:", response.status);
+      const body = (await response.text()).slice(0, 500);
+      const encodedApiKey = encodeURIComponent(apiKey);
+      const safeBody = body
+        .replaceAll(apiKey, "[redacted]")
+        .replaceAll(encodedApiKey, "[redacted]");
+      console.error(
+        "Klipy search failed:",
+        endpoint,
+        response.status,
+        response.statusText,
+        safeBody,
+      );
+      if (/provided API key is invalid/i.test(safeBody)) {
+        throw new ConvexError("Klipy rejected the API key. Replace KLIPY_API_KEY in Convex.");
+      }
       throw new Error("GIF search is temporarily unavailable. Please try again.");
     }
     const payload: unknown = await response.json();
