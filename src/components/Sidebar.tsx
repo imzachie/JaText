@@ -142,7 +142,7 @@ export function Sidebar({
     <aside className="sidebar">
       <header className="sidebar-header">
         <div className="brand">
-          <div className="logo-badge small">J</div>
+          <img className="logo-icon" src="/jatext-logo-icon.png" alt="" />
           <span>JaText</span>
         </div>
         <button className="icon-btn" onClick={onOpenSettings} title="Settings" aria-label="Settings">
@@ -331,9 +331,11 @@ export function Sidebar({
         </div>
       )}
 
-      <footer className="sidebar-footer muted small">
-        {store.mode === "convex" ? "⚡ Powered by Convex" : "🧪 Demo mode — connect Convex to go live"}
-      </footer>
+      {store.mode === "demo" && (
+        <footer className="sidebar-footer muted small">
+          🧪 Demo mode — connect Convex to go live
+        </footer>
+      )}
       {chatMenu && (
         <ContextMenu
           x={chatMenu.x}

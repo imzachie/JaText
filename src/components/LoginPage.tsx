@@ -55,14 +55,17 @@ export function LoginPage() {
   return (
     <div className="login-page">
       <section className="login-hero">
-        <div className="logo-badge">J</div>
-        <h1>JaText</h1>
+        <img
+          className="logo-full"
+          src="/jatext-logo-full.png"
+          alt="JaText — JAMusic Coding and Research Corp"
+        />
         <p className="hero-tagline">
           Text your people. Add friends by username, make your profile yours,
           and chat in real time.
         </p>
         <ul className="hero-points">
-          <li>💬 Real-time chats &amp; attachments, powered by Convex</li>
+          <li>💬 Real-time chats &amp; attachments</li>
           <li>🎨 Profile picture, banner &amp; your own avatar color</li>
           <li>👥 Friend requests — you only chat with people you accept</li>
         </ul>
@@ -144,9 +147,7 @@ export function LoginPage() {
             Running in <strong>demo mode</strong> (no Convex URL set yet) — your data
             lives in this browser. Add <code>VITE_CONVEX_URL</code> to go live on Convex.
           </p>
-        ) : (
-          <p className="muted small center">Connected to your Convex deployment ⚡</p>
-        )}
+        ) : null}
       </section>
     </div>
   );

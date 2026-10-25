@@ -6,8 +6,8 @@
   --border: #262633;
   --text: #f2f2f7;
   --muted: #9a9aad;
-  --accent: #ffc61a;
-  --accent-dark: #111111;
+  --accent: #9b6cff;
+  --accent-dark: #170d2b;
   --danger: #ef4444;
   --ok: #22c55e;
   --radius: 18px;
@@ -140,14 +140,19 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   width: 72px; height: 72px;
   border-radius: 22px;
   background: var(--accent);
-  color: #111;
+  color: var(--accent-dark);
   font-size: 40px;
   font-weight: 900;
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 10px 30px rgba(255, 198, 26, 0.35);
+  box-shadow: 0 10px 30px rgba(155, 108, 255, 0.35);
 }
 .logo-badge.small { width: 36px; height: 36px; border-radius: 11px; font-size: 20px; }
 .logo-badge.pulse { animation: pulse 1.2s ease-in-out infinite; }
+.logo-icon { display: block; width: 36px; height: 36px; flex: none; object-fit: contain; }
+.logo-full { display: block; width: min(280px, 70vw); height: auto; object-fit: contain; }
+.splash-logo { width: 80px; height: 80px; animation: pulse 1.2s ease-in-out infinite; }
+.no-chat-logo { width: 120px; height: 120px; }
+.brand { align-items: center; }
 @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.1); } }
 
 .splash {
@@ -214,7 +219,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   border-radius: 999px; padding: 9px 10px; font-weight: 700; cursor: pointer; font-size: 14px;
   position: relative;
 }
-.tabs button.active { background: var(--accent); color: #111; }
+.tabs button.active { background: var(--accent); color: var(--accent-dark); }
 .badge {
   background: var(--danger); color: #fff;
   border-radius: 999px; font-size: 11px; padding: 1px 7px; margin-left: 6px;
@@ -282,7 +287,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   color: var(--text);
 }
-.color-choice.selected { border-color: var(--accent); background: rgba(255,198,26,.08); }
+.color-choice.selected { border-color: var(--accent); background: rgba(155,108,255,.08); }
 .color-swatch { width: 34px; height: 34px; border-radius: 50%; }
 .color-name { font-size: 13px; font-weight: 700; text-align: center; }
 .color-note { font-size: 11px; color: var(--muted); text-align: center; }
@@ -427,7 +432,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .msg-row.mine .msg-col { align-items: flex-end; }
 .bubble { border-radius: 20px; padding: 9px 13px; font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
 .bubble p { margin: 0; white-space: pre-wrap; }
-.bubble.mine { background: var(--accent); color: #171200; border-bottom-right-radius: 6px; font-weight: 500; }
+.bubble.mine { background: var(--accent); color: #fff; border-bottom-right-radius: 6px; font-weight: 500; }
 .bubble.theirs { background: var(--panel-2); border: 1px solid var(--border); border-bottom-left-radius: 6px; }
 .msg-image { max-width: 300px; max-height: 300px; width: 100%; border-radius: 14px; display: block; margin-bottom: 4px; }
 .file-chip {
@@ -451,7 +456,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .composer textarea { resize: none; max-height: 110px; border-radius: 18px; }
 .attach-btn { font-size: 18px; }
 .send-btn {
-  background: var(--accent); color: #111; border: none;
+  background: var(--accent); color: #fff; border: none;
   width: 44px; height: 44px; border-radius: 50%;
   font-size: 18px; font-weight: 900; cursor: pointer; flex: none;
 }
@@ -653,7 +658,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   cursor: pointer;
   font-size: 13px;
 }
-.reaction-chip.selected { background: rgba(255, 198, 26, 0.14); border-color: var(--accent); }
+.reaction-chip.selected { background: rgba(155, 108, 255, 0.14); border-color: var(--accent); }
 .reaction-chip span { color: var(--muted); font-size: 11px; }
 .reply-composer-preview {
   display: flex;
@@ -853,7 +858,7 @@ button:focus-visible, a:focus-visible {
   outline-offset: 3px;
 }
 input:focus, textarea:focus {
-  box-shadow: 0 0 0 3px rgba(255, 198, 26, 0.12);
+  box-shadow: 0 0 0 3px rgba(155, 108, 255, 0.12);
 }
 
 .login-page { animation: fade-up 650ms var(--ease-out) both; }
@@ -874,10 +879,10 @@ input:focus, textarea:focus {
 .friend-row:hover, .request-row:hover { transform: translateY(-2px); }
 .avatar:hover, .pf-avatar-click:hover { transform: scale(1.045); }
 .logo-badge:not(.pulse) { transition: transform 240ms var(--ease-spring), box-shadow 240ms var(--ease-out); }
-.logo-badge:not(.pulse):hover { transform: rotate(-5deg) scale(1.04); box-shadow: 0 14px 34px rgba(255, 198, 26, 0.4); }
+.logo-badge:not(.pulse):hover { transform: rotate(-5deg) scale(1.04); box-shadow: 0 14px 34px rgba(155, 108, 255, 0.4); }
 
 .tabs button { transition: color 180ms ease, background-color 220ms var(--ease-out), transform 180ms var(--ease-out); }
-.tabs button.active { box-shadow: 0 3px 12px rgba(255, 198, 26, 0.18); }
+.tabs button.active { box-shadow: 0 3px 12px rgba(155, 108, 255, 0.18); }
 .friend-row, .request-row, .empty-box, .add-panel > *, .success-box, .error-box, .hint-box {
   animation: fade-up 320ms var(--ease-out) both;
 }
@@ -902,7 +907,7 @@ input:focus, textarea:focus {
 .profile-card { animation: fade-in 300ms ease-out both; }
 .pf-preview { animation: fade-up 420ms var(--ease-out) both; }
 .pf-banner:hover { filter: brightness(1.08); }
-.color-choice:hover { border-color: rgba(255, 198, 26, 0.6); transform: translateY(-3px); }
+.color-choice:hover { border-color: rgba(155, 108, 255, 0.6); transform: translateY(-3px); }
 .color-swatch { transition: transform 220ms var(--ease-spring), box-shadow 220ms ease; }
 .color-choice:hover .color-swatch { transform: scale(1.12); }
 .profile-banner { transition: background-image 250ms ease, filter 220ms ease; }

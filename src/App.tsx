@@ -150,7 +150,7 @@ export default function App() {
   if (store.loading) {
     return (
       <div className="splash">
-        <div className="logo-badge pulse">J</div>
+        <img className="logo-icon splash-logo" src="/jatext-logo-icon.png" alt="" />
         <p>Loading JaText…</p>
       </div>
     );
@@ -172,7 +172,7 @@ export default function App() {
           />
         ) : (
           <div className="no-chat">
-            <div className="logo-badge">J</div>
+            <img className="logo-icon no-chat-logo" src="/jatext-logo-icon.png" alt="" />
             <h2>Pick a chat 💬</h2>
             <p className="muted">
               Choose a friend on the left to start texting, or add someone new

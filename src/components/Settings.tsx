@@ -67,8 +67,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         </button>
         <h2 className="settings-title">⚙️ Settings</h2>
         <p className="muted">
-          Signed in as <strong>{me.email ?? `@${me.username}`}</strong> ·{" "}
-          {mode === "convex" ? "Convex backend ⚡" : "Demo mode (browser storage)"}
+          Signed in as <strong>{me.email ?? `@${me.username}`}</strong>
+          {mode === "demo" ? " · Demo mode (browser storage)" : ""}
         </p>
         <p className="muted small">
           Profile picture, banner, display name, bio, pronouns and avatar color
