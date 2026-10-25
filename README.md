@@ -115,6 +115,65 @@ The frontend has one data interface (`src/lib/types.ts` → `JaTextStore`)
 with two implementations: `src/lib/convexStore.tsx` (real Convex) and
 `src/lib/store.tsx` (demo). Avatar colors live in `src/lib/colors.ts`.
 
+## Building the Android app
+
+JaText uses Capacitor to package the existing React/Vite app in an Android
+WebView. The screens, styles, and chat code stay in `src/`; there is no
+separate Android UI to copy or maintain.
+
+1. Install Android Studio, including its Android SDK, and install a compatible
+   JDK (JDK 21). Open Android Studio once and let it finish installing SDK
+   components.
+2. Make sure `.env.local` has the production `VITE_CONVEX_URL` before building
+   if you want the APK to use the live Convex backend. Vite embeds this value
+   into the app at build time.
+3. Build and open the native project:
+
+   ```bash
+   npm run android:sync
+   npm run android:open
+   ```
+
+   In Android Studio, wait for Gradle sync, then choose **Build → Build
+   Bundle(s) / APK(s) → Build APK(s)**. The debug APK is written to
+   `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+   On Windows, you can instead run `npm run android:apk` after Android Studio
+   has configured the SDK. It builds the web app, syncs it into Android, and
+   assembles the debug APK.
+
+The APK uses the same UI as the website, but it is a native WebView wrapper,
+not a fully native rewrite. To enable remote Android push notifications:
+
+1. Register an Android app with application ID `com.ahad00010.jatext` in your
+   Firebase project, enable Firebase Cloud Messaging, and put its
+   `google-services.json` at `android/app/google-services.json`. This local
+   file is git-ignored.
+2. In Firebase Console → **Project settings → Service accounts**, generate a
+   Firebase Admin SDK private key with permission to send Firebase Cloud
+   Messaging messages. Keep this private JSON file outside the repo.
+3. Set the service-account JSON as a secret on the Convex deployment used by
+   the APK. In PowerShell, replace the file path with the downloaded key:
+
+   ```powershell
+   $fcmCredentials = Get-Content -Raw "$env:USERPROFILE\Downloads\jatext-firebase-admin.json"
+   npx convex env set FCM_SERVICE_ACCOUNT_JSON $fcmCredentials
+   ```
+
+4. Deploy the Convex functions, then rebuild the APK:
+
+   ```bash
+   npx convex deploy
+   npm run android:apk
+   ```
+
+   Users can then enable **Push notifications when JaText is closed** in
+   Settings. FCM displays received messages while the app is backgrounded or
+   closed; tapping a push opens that sender's conversation.
+
+Native Google OAuth sign-in still needs separate Android OAuth/deep-link
+configuration.
+
 ## Deploying to production
 
 Set the Klipy API key as a Convex environment variable (never expose it in

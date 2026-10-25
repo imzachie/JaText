@@ -1,4 +1,5 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -70,6 +71,29 @@ export async function hasBlocked(
       q.eq("blockerId", blockerId).eq("blockedId", blockedId),
     )
     .unique());
+}
+
+export async function scheduleMessagePush(
+  ctx: MutationCtx,
+  sender: Doc<"users">,
+  receiverId: Id<"users">,
+  body: string,
+) {
+  const receiver = await ctx.db.get(receiverId);
+  if (
+    !receiver ||
+    receiver.statusPreference === "dnd" ||
+    (await hasBlocked(ctx, receiverId, sender._id))
+  ) {
+    return;
+  }
+
+  await ctx.scheduler.runAfter(0, internal.pushActions.sendMessageNotification, {
+    receiverId,
+    senderId: sender._id,
+    senderName: sender.displayName ?? sender.name ?? "Someone",
+    body,
+  });
 }
 
 /** All friend user-ids for `userId` (accepted in either direction). */

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useAction, useConvex, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { PushNotifications } from "@capacitor/push-notifications";
 // Works with both the checked-in stub and the real generated API
 // (run `npx convex dev` once to generate convex/_generated for real).
 import { api } from "../../convex/_generated/api";
@@ -18,6 +20,8 @@ import type {
   StickerMedia,
   StatusPreference,
 } from "./types";
+
+const PUSH_TOKEN_STORAGE_KEY = "jatext-push-token-v1";
 
 /* ------------------------------------------------------------------ */
 /* Real Convex store — active when VITE_CONVEX_URL is set.             */
@@ -94,6 +98,90 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const setStickerFavoriteMut = useMutation(api.stickers.setFavorite);
   const favoriteStickerFromMessageMut = useMutation(api.stickers.favoriteFromMessage);
   const sendStickerMut = useMutation(api.stickers.send);
+  const registerPushDeviceMut = useMutation(api.push.registerDevice);
+  const unregisterPushDeviceMut = useMutation(api.push.unregisterDevice);
+
+  useEffect(() => {
+    if (
+      !Capacitor.isNativePlatform() ||
+      !isAuthenticated ||
+      !notificationPreferences.notificationsEnabled
+    ) {
+      return;
+    }
+
+    let disposed = false;
+    const listeners: PluginListenerHandle[] = [];
+    const registerForPush = async () => {
+      const permission = await PushNotifications.checkPermissions();
+      if (permission.receive !== "granted" || disposed) return;
+
+      listeners.push(
+        await PushNotifications.addListener("registration", ({ value: token }) => {
+          const previousToken = localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
+          if (previousToken && previousToken !== token) {
+            void unregisterPushDeviceMut({ token: previousToken }).catch((error: unknown) => {
+              console.error("Could not remove the previous push token.", error);
+            });
+          }
+          localStorage.setItem(PUSH_TOKEN_STORAGE_KEY, token);
+          void registerPushDeviceMut({ token }).catch((error: unknown) => {
+            console.error("Could not register this device for push notifications.", error);
+          });
+        }),
+      );
+      listeners.push(
+        await PushNotifications.addListener("registrationError", (error) => {
+          console.error("Android push registration failed.", error);
+        }),
+      );
+      listeners.push(
+        await PushNotifications.addListener("pushNotificationActionPerformed", ({ notification }) => {
+          const senderId = notification.data?.senderId;
+          if (typeof senderId === "string") setActiveChatId(senderId);
+        }),
+      );
+
+      await PushNotifications.createChannel({
+        id: "messages",
+        name: "Messages",
+        description: "New JaText messages",
+        importance: 5,
+        sound: "default",
+      });
+      if (!disposed) await PushNotifications.register();
+    };
+
+    void registerForPush().catch((error: unknown) => {
+      console.error("Could not initialize Android push notifications.", error);
+    });
+    return () => {
+      disposed = true;
+      for (const listener of listeners) void listener.remove();
+    };
+  }, [
+    isAuthenticated,
+    notificationPreferences.notificationsEnabled,
+    registerPushDeviceMut,
+    unregisterPushDeviceMut,
+  ]);
+
+  useEffect(() => {
+    if (
+      !Capacitor.isNativePlatform() ||
+      !isAuthenticated ||
+      notificationPreferences.notificationsEnabled
+    ) {
+      return;
+    }
+    const token = localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
+    if (!token) return;
+    void unregisterPushDeviceMut({ token })
+      .then(() => localStorage.removeItem(PUSH_TOKEN_STORAGE_KEY))
+      .catch((error: unknown) => {
+        console.error("Could not disable push notifications for this device.", error);
+      });
+  }, [isAuthenticated, notificationPreferences.notificationsEnabled, unregisterPushDeviceMut]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -158,11 +246,18 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     setActiveChatId(null);
     try {
+      const pushToken = localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
+      if (isAuthenticated && pushToken) {
+        await unregisterPushDeviceMut({ token: pushToken });
+        localStorage.removeItem(PUSH_TOKEN_STORAGE_KEY);
+      }
       if (isAuthenticated) await disconnectMut();
+    } catch (error) {
+      console.error("Could not clean up this device before signing out.", error);
     } finally {
       await convexSignOut();
     }
-  }, [convexSignOut, disconnectMut, isAuthenticated]);
+  }, [convexSignOut, disconnectMut, isAuthenticated, unregisterPushDeviceMut]);
 
   const checkUsername = useCallback<JaTextStore["checkUsername"]>(
     async (username) =>

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Capacitor } from "@capacitor/core";
+import { PushNotifications } from "@capacitor/push-notifications";
 import { useJaText } from "../lib/store";
 import { ProfileForm } from "./ProfileForm";
 
@@ -36,6 +38,25 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     setNotificationError(null);
     if (!enabled) {
       setNotificationsEnabled(false);
+      return;
+    }
+    if (Capacitor.isNativePlatform()) {
+      if (mode !== "convex") {
+        setNotificationError("Push notifications need the live Convex backend. Configure VITE_CONVEX_URL and rebuild the APK.");
+        return;
+      }
+      try {
+        const permission = await PushNotifications.requestPermissions();
+        if (permission.receive === "granted") {
+          setNotificationsEnabled(true);
+        } else {
+          setNotificationError("Allow notifications in Android settings to enable push notifications.");
+        }
+      } catch (error) {
+        setNotificationError(
+          error instanceof Error ? error.message : "Could not request Android notification permission.",
+        );
+      }
       return;
     }
     if (!("Notification" in window)) {
@@ -116,7 +137,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               checked={notificationsEnabled}
               onChange={(event) => void toggleNotifications(event.target.checked)}
             />
-            Desktop notifications for incoming messages
+            {Capacitor.isNativePlatform()
+              ? "Push notifications when JaText is closed"
+              : "Desktop notifications for incoming messages"}
           </label>
           <label className="setting-toggle">
             <input

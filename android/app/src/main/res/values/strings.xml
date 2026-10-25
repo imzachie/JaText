@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">JaText</string>
+    <string name="title_activity_main">JaText</string>
+    <string name="package_name">com.ahad00010.jatext</string>
+    <string name="custom_url_scheme">com.ahad00010.jatext</string>
+</resources>

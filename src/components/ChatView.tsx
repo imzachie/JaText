@@ -18,6 +18,7 @@ import { Avatar } from "./Avatar";
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
+const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
 
 interface MessageMenuState {
   x: number;
@@ -34,6 +35,26 @@ function fmtDay(ts: number) {
   const today = new Date();
   if (d.toDateString() === today.toDateString()) return "Today";
   return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
+
+function getUnconfirmedPendingMessages(
+  pendingMessages: ChatMessage[],
+  activeMessages: ChatMessage[],
+) {
+  const unmatchedActiveMessages = [...activeMessages];
+  return pendingMessages.filter((pendingMessage) => {
+    const matchIndex = unmatchedActiveMessages.findIndex(
+      (message) =>
+        message.senderId === pendingMessage.senderId &&
+        message.createdAt >= pendingMessage.createdAt - 1_000 &&
+        message.createdAt <= pendingMessage.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
+        message.body === pendingMessage.body &&
+        message.attachmentName === pendingMessage.attachmentName,
+    );
+    if (matchIndex === -1) return true;
+    unmatchedActiveMessages.splice(matchIndex, 1);
+    return false;
+  });
 }
 
 const ChatHistory = memo(function ChatHistory({
@@ -264,7 +285,6 @@ export function ChatView({
   } = store;
   const [draft, setDraft] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showUnsendWarning, setShowUnsendWarning] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
@@ -273,7 +293,7 @@ export function ChatView({
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
   const [forwardClosing, setForwardClosing] = useState(false);
-  const [pendingMessage, setPendingMessage] = useState<ChatMessage | null>(null);
+  const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageScale, setImageScale] = useState(1);
   const [imageClosing, setImageClosing] = useState(false);
@@ -283,8 +303,10 @@ export function ChatView({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const pinnedToBottomRef = useRef(true);
   const previousChatIdRef = useRef(friend.id);
+  const lastPendingMessageAtRef = useRef(0);
   const typingTimer = useRef<number | null>(null);
-  const pendingAttachmentUrlRef = useRef<string | null>(null);
+  const pendingAttachmentUrlsRef = useRef(new Map<string, string>());
+  const pendingMessageTimersRef = useRef(new Map<string, number>());
   const imageCloseTimerRef = useRef<number | null>(null);
   const messageMenuCloseTimerRef = useRef<number | null>(null);
   const forwardCloseTimerRef = useRef<number | null>(null);
@@ -298,19 +320,14 @@ export function ChatView({
     () => activeMessages.filter((message) => message.senderId === friend.id).length,
     [activeMessages, friend.id],
   );
-  const displayedMessages = useMemo(() => {
-    if (!pendingMessage) return activeMessages;
-    const isConfirmed = activeMessages.some(
-      (message) =>
-        message.senderId === pendingMessage.senderId &&
-        message.createdAt >= pendingMessage.createdAt - 1_000 &&
-        message.body === pendingMessage.body &&
-        message.attachmentName === pendingMessage.attachmentName,
-    );
-    return isConfirmed
-      ? activeMessages
-      : [...activeMessages, pendingMessage].sort((a, b) => a.createdAt - b.createdAt);
-  }, [activeMessages, pendingMessage]);
+  const visiblePendingMessages = useMemo(
+    () => getUnconfirmedPendingMessages(pendingMessages, activeMessages),
+    [activeMessages, pendingMessages],
+  );
+  const displayedMessages = useMemo(
+    () => [...activeMessages, ...visiblePendingMessages].sort((a, b) => a.createdAt - b.createdAt),
+    [activeMessages, visiblePendingMessages],
+  );
   const lastMessageId = displayedMessages.at(-1)?.id;
   const friendStatusLabel =
     friendActivity?.status === "dnd"
@@ -385,33 +402,30 @@ export function ChatView({
     return () => window.cancelAnimationFrame(frame);
   }, [lastMessageId, friend.id]);
 
-  useEffect(() => {
-    if (!pendingMessage) return;
-    const isConfirmed = activeMessages.some(
-      (message) =>
-        message.senderId === pendingMessage.senderId &&
-        message.createdAt >= pendingMessage.createdAt - 1_000 &&
-        message.body === pendingMessage.body &&
-        message.attachmentName === pendingMessage.attachmentName,
-    );
-    const timeout = window.setTimeout(
-      () => setPendingMessage((current) => (current?.id === pendingMessage.id ? null : current)),
-      isConfirmed ? 100 : 15_000,
-    );
-    return () => window.clearTimeout(timeout);
-  }, [activeMessages, pendingMessage]);
-
-  useEffect(() => {
-    if (pendingMessage || !pendingAttachmentUrlRef.current) return;
-    URL.revokeObjectURL(pendingAttachmentUrlRef.current);
-    pendingAttachmentUrlRef.current = null;
-  }, [pendingMessage]);
+  const removePendingMessage = useCallback((id: string) => {
+    const timer = pendingMessageTimersRef.current.get(id);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      pendingMessageTimersRef.current.delete(id);
+    }
+    const attachmentUrl = pendingAttachmentUrlsRef.current.get(id);
+    if (attachmentUrl) {
+      URL.revokeObjectURL(attachmentUrl);
+      pendingAttachmentUrlsRef.current.delete(id);
+    }
+    setPendingMessages((current) => current.filter((message) => message.id !== id));
+  }, []);
 
   useEffect(
     () => () => {
-      if (pendingAttachmentUrlRef.current) {
-        URL.revokeObjectURL(pendingAttachmentUrlRef.current);
+      for (const timer of pendingMessageTimersRef.current.values()) {
+        window.clearTimeout(timer);
       }
+      for (const attachmentUrl of pendingAttachmentUrlsRef.current.values()) {
+        URL.revokeObjectURL(attachmentUrl);
+      }
+      pendingMessageTimersRef.current.clear();
+      pendingAttachmentUrlsRef.current.clear();
     },
     [],
   );
@@ -459,15 +473,17 @@ export function ChatView({
 
   async function onSend(e?: FormEvent) {
     e?.preventDefault();
-    if ((!draft.trim() && !file) || sending) return;
+    if ((!draft.trim() && !file) || isFriendBlocked) return;
     const sentBody = draft.trim();
     const sentFile = file;
     const sentReply = replyTo;
-    const sentAt = Date.now();
+    const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
+    lastPendingMessageAtRef.current = sentAt;
+    const pendingId = `pending-${sentAt}`;
     const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
-    pendingAttachmentUrlRef.current = attachmentUrl ?? null;
-    setPendingMessage({
-      id: `pending-${sentAt}`,
+    if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
+    setPendingMessages((current) => [...current, {
+      id: pendingId,
       senderId: me?.id ?? "",
       receiverId: friend.id,
       body: sentBody,
@@ -476,12 +492,16 @@ export function ChatView({
       attachmentType: sentFile?.type,
       createdAt: sentAt,
       deliveryStatus: "delivered",
-    });
+    }]);
+    pendingMessageTimersRef.current.set(
+      pendingId,
+      window.setTimeout(() => removePendingMessage(pendingId), 15_000),
+    );
     setDraft("");
     setFile(null);
     setReplyTo(null);
-    setSending(true);
     setError(null);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
     if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
     typingActive.current = false;
     void setTyping(friend.id, false).catch((err: unknown) => {
@@ -490,17 +510,11 @@ export function ChatView({
     try {
       await sendMessage(friend.id, sentBody, sentFile ?? undefined, sentReply?.id);
       if (soundsEnabled) playMessageSound("sent");
-      setDraft("");
-      setFile(null);
-      setReplyTo(null);
     } catch (err) {
-      setPendingMessage(null);
-      setDraft(sentBody);
-      setFile(sentFile);
-      setReplyTo(sentReply);
+      removePendingMessage(pendingId);
+      setDraft((current) => current.trim() ? current : sentBody);
+      if (sentFile) setFile((current) => current ?? sentFile);
       setError(friendlyError(err, "Couldn't send the message. Please try again."));
-    } finally {
-      setSending(false);
     }
   }
 
@@ -744,19 +758,19 @@ export function ChatView({
           type="button"
           className="icon-btn attach-btn"
           title="Attach a photo or file"
-          disabled={isFriendBlocked || sending}
+          disabled={isFriendBlocked}
           onClick={() => fileInput.current?.click()}
         >
           📎
         </button>
-        <StickerPicker friendId={friend.id} disabled={isFriendBlocked || sending} />
+        <StickerPicker friendId={friend.id} disabled={isFriendBlocked} />
         <textarea
           ref={composerRef}
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
           placeholder={isFriendBlocked ? "Unblock to message" : "Message…"}
           aria-label={`Message @${friend.username}`}
-          disabled={isFriendBlocked || sending}
+          disabled={isFriendBlocked}
           rows={1}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -765,8 +779,8 @@ export function ChatView({
             }
           }}
         />
-        <button className="send-btn" type="submit" disabled={isFriendBlocked || sending || (!draft.trim() && !file)}>
-          {sending ? "…" : "➤"}
+        <button className="send-btn" type="submit" disabled={isFriendBlocked || (!draft.trim() && !file)}>
+          ➤
         </button>
       </form>
 

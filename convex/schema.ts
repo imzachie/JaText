@@ -127,4 +127,12 @@ export default defineSchema({
     typingToId: v.optional(v.id("users")),
     typingAt: v.optional(v.number()),
   }).index("by_user", ["userId"]),
+
+  pushDevices: defineTable({
+    userId: v.id("users"),
+    token: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_user", ["userId"]),
 });

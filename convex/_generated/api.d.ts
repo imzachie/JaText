@@ -15,6 +15,8 @@ import type * as http from "../http.js";
 import type * as klipy from "../klipy.js";
 import type * as lib from "../lib.js";
 import type * as messages from "../messages.js";
+import type * as push from "../push.js";
+import type * as pushActions from "../pushActions.js";
 import type * as stickers from "../stickers.js";
 import type * as users from "../users.js";
 
@@ -32,6 +34,8 @@ declare const fullApi: ApiFromModules<{
   klipy: typeof klipy;
   lib: typeof lib;
   messages: typeof messages;
+  push: typeof push;
+  pushActions: typeof pushActions;
   stickers: typeof stickers;
   users: typeof users;
 }>;

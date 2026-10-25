@@ -30,6 +30,7 @@ import type { DataModel } from "./dataModel.js";
 type Env = {
   readonly CONVEX_CLOUD_URL: string;
   readonly CONVEX_SITE_URL: string;
+  readonly FCM_SERVICE_ACCOUNT_JSON: string | undefined;
   readonly KLIPY_API_KEY: string | undefined;
 };
 

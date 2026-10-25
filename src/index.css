@@ -890,8 +890,8 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   .msg-col { max-width: 80%; }
   .composer { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .composer textarea { font-size: 16px; }
-  .app-shell.chat-open ~ .message-toast {
-    top: calc(env(safe-area-inset-top) + 68px);
+  .app-shell.chat-open .message-toast {
+    top: calc(env(safe-area-inset-top) + 116px);
     right: 10px;
     bottom: auto;
     width: min(360px, calc(100vw - 20px));

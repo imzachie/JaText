@@ -1,7 +1,14 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { areFriends, friendIds, hasBlocked, pairKey, requireUser } from "./lib";
+import {
+  areFriends,
+  friendIds,
+  hasBlocked,
+  pairKey,
+  requireUser,
+  scheduleMessagePush,
+} from "./lib";
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
@@ -175,6 +182,14 @@ export const send = mutation({
       replyToId: args.replyToId,
       deliveryStatus: "delivered",
     });
+
+    await scheduleMessagePush(
+      ctx,
+      me,
+      args.receiverId,
+      args.body.trim() ||
+        (args.attachmentName ? `Sent ${args.attachmentName}` : "Sent you an attachment"),
+    );
   },
 });
 
@@ -213,6 +228,7 @@ export const forward = mutation({
       forwardedFromId: source.senderId,
       deliveryStatus: "delivered",
     });
+    await scheduleMessagePush(ctx, me, receiverId, source.body || "Forwarded you a message");
   },
 });
 

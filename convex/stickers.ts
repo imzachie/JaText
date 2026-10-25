@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { areFriends, hasBlocked, pairKey, requireUser } from "./lib";
+import { areFriends, hasBlocked, pairKey, requireUser, scheduleMessagePush } from "./lib";
 
 const mediaType = v.union(
   v.literal("gif"),
@@ -296,6 +296,7 @@ export const send = mutation({
       stickerKey: args.mediaKey,
       deliveryStatus: "delivered",
     });
+    await scheduleMessagePush(ctx, me, args.receiverId, "Sent you a GIF or sticker");
 
     const recent = await ctx.db
       .query("stickerLibrary")
