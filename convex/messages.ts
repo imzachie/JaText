@@ -241,14 +241,22 @@ export const unsend = mutation({
     if (Date.now() - message._creationTime >= UNSEND_WINDOW_MS)
       throw new Error("Messages can only be unsent within one hour.");
 
+    const now = Date.now();
+    const showWarning =
+      me.unsendWarningShownAt === undefined ||
+      now - me.unsendWarningShownAt >= 3 * 60 * 60 * 1000;
+    if (showWarning) {
+      await ctx.db.patch(me._id, { unsendWarningShownAt: now });
+    }
     await ctx.db.patch(messageId, {
       body: "",
       attachmentId: undefined,
       attachmentName: undefined,
       attachmentType: undefined,
       reactions: [],
-      unsentAt: Date.now(),
+      unsentAt: now,
     });
+    return showWarning;
   },
 });
 

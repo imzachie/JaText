@@ -33,6 +33,8 @@ export default defineSchema({
     onboardingComplete: v.optional(v.boolean()),
     /** epoch ms — usernames can only change once every 14 days */
     usernameChangedAt: v.optional(v.number()),
+    /** epoch ms — last time an unsend-awareness banner was shown */
+    unsendWarningShownAt: v.optional(v.number()),
     statusPreference: v.optional(
       v.union(v.literal("online"), v.literal("dnd"), v.literal("offline")),
     ),

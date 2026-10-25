@@ -106,7 +106,7 @@ export interface JaTextStore {
   forwardMessage: (messageId: string, receiverId: string) => Promise<void>;
   toggleMessageReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteMessageForMe: (messageId: string) => Promise<void>;
-  unsendMessage: (messageId: string) => Promise<void>;
+  unsendMessage: (messageId: string) => Promise<boolean>;
   setConversationArchived: (friendId: string, archived: boolean) => Promise<void>;
   setConversationMuted: (friendId: string, muted: boolean) => Promise<void>;
   deleteConversationForMe: (friendId: string) => Promise<void>;

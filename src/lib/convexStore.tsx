@@ -240,9 +240,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
 
   const unsendMessage = useCallback<JaTextStore["unsendMessage"]>(
-    async (messageId) => {
-      await unsendMut({ messageId: messageId as Id<"messages"> });
-    },
+    async (messageId) =>
+      (await unsendMut({ messageId: messageId as Id<"messages"> })) as boolean,
     [unsendMut],
   );
 

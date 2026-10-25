@@ -47,6 +47,7 @@ interface DemoUser extends JaUser {
   provider: "email" | "google" | "bot";
   novaPinged?: boolean;
   botReplyCount?: number;
+  unsendWarningShownAt?: number;
 }
 
 interface DemoDb {
@@ -835,6 +836,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
   const unsendMessage = useCallback<JaTextStore["unsendMessage"]>(
     async (messageId) => {
       if (!me) throw new Error("Not signed in.");
+      let showWarning = false;
       transact((draft) => {
         const message = draft.messages.find((entry) => entry.id === messageId);
         if (!message || message.senderId !== me.id)
@@ -842,13 +844,21 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
         if (message.unsentAt) throw new Error("This message was already unsent.");
         if (Date.now() - message.createdAt >= 60 * 60 * 1000)
           throw new Error("Messages can only be unsent within one hour.");
+        const user = draft.users.find((entry) => entry.id === me.id);
+        if (!user) throw new Error("Account not found.");
+        const now = Date.now();
+        showWarning =
+          user.unsendWarningShownAt === undefined ||
+          now - user.unsendWarningShownAt >= 3 * 60 * 60 * 1000;
+        if (showWarning) user.unsendWarningShownAt = now;
         message.body = "";
         message.attachmentUrl = undefined;
         message.attachmentName = undefined;
         message.attachmentType = undefined;
         message.reactions = [];
-        message.unsentAt = Date.now();
+        message.unsentAt = now;
       });
+      return showWarning;
     },
     [me, transact],
   );

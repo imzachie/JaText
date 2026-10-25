@@ -48,6 +48,7 @@ export function ChatView({
   const [file, setFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showUnsendWarning, setShowUnsendWarning] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
@@ -187,7 +188,8 @@ export function ChatView({
 
   async function unsend(message: ChatMessage) {
     try {
-      await store.unsendMessage(message.id);
+      const shouldShowWarning = await store.unsendMessage(message.id);
+      if (shouldShowWarning) setShowUnsendWarning(true);
       setMessageMenu(null);
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't unsend the message. Please try again."));
@@ -237,6 +239,23 @@ export function ChatView({
           </span>
         </button>
       </header>
+
+      {showUnsendWarning && (
+        <div className="unsend-warning-banner" role="status">
+          <span>
+            You unsent a message. In the meantime, they may have already seen it,
+            screenshotted it, or reported it.
+          </span>
+          <button
+            type="button"
+            className="unsend-warning-dismiss"
+            aria-label="Dismiss unsend notice"
+            onClick={() => setShowUnsendWarning(false)}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="messages">
         {activeMessages.length === 0 && (
