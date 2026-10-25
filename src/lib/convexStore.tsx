@@ -68,6 +68,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const sendRequestMut = useMutation(api.friends.sendRequest);
   const respondMut = useMutation(api.friends.respond);
   const sendMessageMut = useMutation(api.messages.send);
+  const forwardMessageMut = useMutation(api.messages.forward);
+  const toggleReactionMut = useMutation(api.messages.toggleReaction);
+  const deleteForMeMut = useMutation(api.messages.deleteForMe);
+  const unsendMut = useMutation(api.messages.unsend);
   const setTypingMut = useMutation(api.messages.setTyping);
   const setActivityMut = useMutation(api.users.setActivity);
   const heartbeatMut = useMutation(api.users.heartbeat);
@@ -196,7 +200,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
 
   const sendMessage = useCallback<JaTextStore["sendMessage"]>(
-    async (receiverId, body, file) => {
+    async (receiverId, body, file, replyToId) => {
       const attachmentId = file ? await upload(file) : undefined;
       await sendMessageMut({
         receiverId: receiverId as Id<"users">,
@@ -204,9 +208,41 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         ...(attachmentId
           ? { attachmentId, attachmentName: file!.name, attachmentType: file!.type }
           : {}),
+        ...(replyToId ? { replyToId: replyToId as Id<"messages"> } : {}),
       });
     },
     [sendMessageMut, upload],
+  );
+
+  const forwardMessage = useCallback<JaTextStore["forwardMessage"]>(
+    async (messageId, receiverId) => {
+      await forwardMessageMut({
+        messageId: messageId as Id<"messages">,
+        receiverId: receiverId as Id<"users">,
+      });
+    },
+    [forwardMessageMut],
+  );
+
+  const toggleMessageReaction = useCallback<JaTextStore["toggleMessageReaction"]>(
+    async (messageId, emoji) => {
+      await toggleReactionMut({ messageId: messageId as Id<"messages">, emoji });
+    },
+    [toggleReactionMut],
+  );
+
+  const deleteMessageForMe = useCallback<JaTextStore["deleteMessageForMe"]>(
+    async (messageId) => {
+      await deleteForMeMut({ messageId: messageId as Id<"messages"> });
+    },
+    [deleteForMeMut],
+  );
+
+  const unsendMessage = useCallback<JaTextStore["unsendMessage"]>(
+    async (messageId) => {
+      await unsendMut({ messageId: messageId as Id<"messages"> });
+    },
+    [unsendMut],
   );
 
   const setActivity = useCallback<JaTextStore["setActivity"]>(
@@ -267,6 +303,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     sendFriendRequest,
     respondRequest,
     sendMessage,
+    forwardMessage,
+    toggleMessageReaction,
+    deleteMessageForMe,
+    unsendMessage,
     setActivity,
     setTyping,
     setNotificationsEnabled,

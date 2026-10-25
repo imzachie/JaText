@@ -63,6 +63,18 @@ export default defineSchema({
     attachmentId: v.optional(v.id("_storage")),
     attachmentName: v.optional(v.string()),
     attachmentType: v.optional(v.string()),
+    replyToId: v.optional(v.id("messages")),
+    forwardedFromId: v.optional(v.id("users")),
+    unsentAt: v.optional(v.number()),
+    hiddenFor: v.optional(v.array(v.id("users"))),
+    reactions: v.optional(
+      v.array(
+        v.object({
+          userId: v.id("users"),
+          emoji: v.string(),
+        }),
+      ),
+    ),
   }).index("by_pair", ["pairKey"]),
 
   presence: defineTable({

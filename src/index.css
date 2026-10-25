@@ -401,6 +401,159 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 }
 .send-btn:disabled { opacity: .4; cursor: not-allowed; }
 
+.msg-col { position: relative; }
+.message-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0 8px 3px;
+}
+.forwarded-label { font-style: italic; }
+.bubble.unsent { color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); font-style: italic; }
+.bubble .unsent-copy { color: var(--muted); }
+.reply-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+  margin: 0 0 7px;
+  padding: 6px 9px;
+  overflow: hidden;
+  color: inherit;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.12);
+  border: 0;
+  border-left: 3px solid currentColor;
+  border-radius: 4px 8px 8px 4px;
+  cursor: pointer;
+}
+.reply-quote strong, .reply-quote span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reply-quote span { opacity: 0.78; font-size: 12px; }
+.message-reactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.reaction-chip.selected { background: rgba(255, 198, 26, 0.14); border-color: var(--accent); }
+.reaction-chip span { color: var(--muted); font-size: 11px; }
+.reply-composer-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 16px;
+  padding: 9px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+}
+.reply-composer-preview > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.reply-composer-preview strong, .reply-composer-preview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reply-composer-preview span { color: var(--muted); font-size: 13px; }
+
+.message-menu-backdrop, .forward-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+.message-menu-backdrop { background: transparent; }
+.message-context-menu {
+  position: fixed;
+  z-index: 101;
+  width: 220px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  animation: pop-in 160ms var(--ease-out) both;
+}
+.message-context-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.message-context-menu > button:hover { background: var(--panel-2); }
+.message-context-menu > button > span { width: 20px; text-align: center; }
+.message-context-menu .destructive-menu-item { color: #fca5a5; }
+.context-reactions {
+  display: flex;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 7px 4px;
+  border-block: 1px solid var(--border);
+}
+.context-reactions button {
+  width: 31px;
+  height: 31px;
+  background: var(--panel-2);
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 17px;
+}
+.forward-backdrop {
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.62);
+  animation: backdrop-in 160ms ease-out both;
+}
+.forward-dialog {
+  width: min(420px, 100%);
+  max-height: min(520px, 85vh);
+  overflow-y: auto;
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.5);
+  animation: modal-in 220ms var(--ease-spring) both;
+}
+.forward-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.forward-dialog h3 { margin: 0; }
+.forward-dialog p { margin: 4px 0 0; font-size: 13px; }
+.forward-friends { display: flex; flex-direction: column; gap: 5px; margin-top: 14px; }
+.forward-friend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.forward-friend:hover { background: var(--panel-2); }
+.forward-friend .muted { margin-left: auto; font-size: 12px; }
+
 /* ---------------- profile card / modals ---------------- */
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 50;

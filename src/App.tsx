@@ -136,6 +136,12 @@ export default function App() {
     [],
   );
 
+  useEffect(() => {
+    const preventNativeContextMenu = (event: MouseEvent) => event.preventDefault();
+    document.addEventListener("contextmenu", preventNativeContextMenu);
+    return () => document.removeEventListener("contextmenu", preventNativeContextMenu);
+  }, []);
+
   if (store.loading) {
     return (
       <div className="splash">

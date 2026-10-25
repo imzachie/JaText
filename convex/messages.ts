@@ -1,7 +1,10 @@
 import { v } from "convex/values";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { areFriends, friendIds, pairKey, requireUser } from "./lib";
+
+const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
+const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 
 /**
  * Texting + attachments, all via Convex:
@@ -47,18 +50,56 @@ export const setTyping = mutation({
   },
 });
 
-async function withAttachmentUrl(ctx: QueryCtx, m: Doc<"messages">) {
+async function withMessageDetails(
+  ctx: QueryCtx,
+  m: Doc<"messages">,
+  currentUserId: Id<"users">,
+): Promise<{
+  id: string;
+  senderId: string;
+  receiverId: string;
+  body: string;
+  attachmentUrl?: string;
+  attachmentName?: string;
+  attachmentType?: string;
+  createdAt: number;
+  replyTo?: { id: string; senderId: string; body: string };
+  forwardedFrom?: string;
+  unsentAt?: number;
+  reactions?: { userId: string; emoji: string }[];
+}> {
+  const [reply, forwarder] = await Promise.all([
+    m.replyToId ? ctx.db.get(m.replyToId) : null,
+    m.forwardedFromId ? ctx.db.get(m.forwardedFromId) : null,
+  ]);
   return {
     id: m._id as string,
     senderId: m.senderId as string,
     receiverId: m.receiverId as string,
-    body: m.body,
-    attachmentUrl: m.attachmentId
+    body: m.unsentAt ? "" : m.body,
+    attachmentUrl: !m.unsentAt && m.attachmentId
       ? ((await ctx.storage.getUrl(m.attachmentId)) ?? undefined)
       : undefined,
-    attachmentName: m.attachmentName,
-    attachmentType: m.attachmentType,
+    attachmentName: m.unsentAt ? undefined : m.attachmentName,
+    attachmentType: m.unsentAt ? undefined : m.attachmentType,
     createdAt: m._creationTime,
+    replyTo: reply
+      ? {
+          id: reply._id as string,
+          senderId: reply.senderId as string,
+          body: reply.hiddenFor?.includes(currentUserId)
+            ? "Message unavailable"
+            : reply.unsentAt
+              ? "This message was unsent"
+              : reply.body,
+        }
+      : undefined,
+    forwardedFrom: forwarder?.displayName ?? forwarder?.name ?? undefined,
+    unsentAt: m.unsentAt,
+    reactions: m.reactions?.map((reaction) => ({
+      userId: reaction.userId as string,
+      emoji: reaction.emoji,
+    })),
   };
 }
 
@@ -70,6 +111,7 @@ export const send = mutation({
     attachmentId: v.optional(v.id("_storage")),
     attachmentName: v.optional(v.string()),
     attachmentType: v.optional(v.string()),
+    replyToId: v.optional(v.id("messages")),
   },
   handler: async (ctx, args) => {
     const me = await requireUser(ctx);
@@ -77,6 +119,17 @@ export const send = mutation({
       throw new Error("You can only message people who accepted your friend request.");
     if (!args.body.trim() && !args.attachmentId)
       throw new Error("Message is empty.");
+
+    if (args.replyToId) {
+      const parent = await ctx.db.get(args.replyToId);
+      if (
+        !parent ||
+        parent.pairKey !== pairKey(me._id, args.receiverId) ||
+        parent.hiddenFor?.includes(me._id)
+      ) {
+        throw new Error("The message you are replying to is unavailable.");
+      }
+    }
 
     await ctx.db.insert("messages", {
       senderId: me._id,
@@ -86,6 +139,115 @@ export const send = mutation({
       attachmentId: args.attachmentId,
       attachmentName: args.attachmentName,
       attachmentType: args.attachmentType,
+      replyToId: args.replyToId,
+    });
+  },
+});
+
+/** Forward a visible message to another accepted friend. */
+export const forward = mutation({
+  args: {
+    messageId: v.id("messages"),
+    receiverId: v.id("users"),
+  },
+  handler: async (ctx, { messageId, receiverId }) => {
+    const me = await requireUser(ctx);
+    const source = await ctx.db.get(messageId);
+    if (
+      !source ||
+      (source.senderId !== me._id && source.receiverId !== me._id) ||
+      source.hiddenFor?.includes(me._id) ||
+      source.unsentAt
+    ) {
+      throw new Error("This message can no longer be forwarded.");
+    }
+    if (!(await areFriends(ctx, me._id, receiverId)))
+      throw new Error("You can only forward messages to accepted friends.");
+
+    await ctx.db.insert("messages", {
+      senderId: me._id,
+      receiverId,
+      pairKey: pairKey(me._id, receiverId),
+      body: source.body,
+      attachmentId: source.attachmentId,
+      attachmentName: source.attachmentName,
+      attachmentType: source.attachmentType,
+      forwardedFromId: source.senderId,
+    });
+  },
+});
+
+/** Add/remove the current user's one reaction on a message. */
+export const toggleReaction = mutation({
+  args: {
+    messageId: v.id("messages"),
+    emoji: v.string(),
+  },
+  handler: async (ctx, { messageId, emoji }) => {
+    const me = await requireUser(ctx);
+    if (!(REACTION_EMOJIS as readonly string[]).includes(emoji))
+      throw new Error("That reaction is not available.");
+    const message = await ctx.db.get(messageId);
+    if (
+      !message ||
+      (message.senderId !== me._id && message.receiverId !== me._id) ||
+      message.hiddenFor?.includes(me._id) ||
+      message.unsentAt
+    ) {
+      throw new Error("This message cannot be reacted to.");
+    }
+
+    const reactions = message.reactions ?? [];
+    const existing = reactions.find((reaction) => reaction.userId === me._id);
+    const updated = existing?.emoji === emoji
+      ? reactions.filter((reaction) => reaction.userId !== me._id)
+      : [
+          ...reactions.filter((reaction) => reaction.userId !== me._id),
+          { userId: me._id, emoji },
+        ];
+    await ctx.db.patch(messageId, { reactions: updated });
+  },
+});
+
+/** Hide a message only for the current participant. */
+export const deleteForMe = mutation({
+  args: { messageId: v.id("messages") },
+  handler: async (ctx, { messageId }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (
+      !message ||
+      (message.senderId !== me._id && message.receiverId !== me._id)
+    ) {
+      throw new Error("Message not found.");
+    }
+    if (!message.hiddenFor?.includes(me._id)) {
+      await ctx.db.patch(messageId, {
+        hiddenFor: [...(message.hiddenFor ?? []), me._id],
+      });
+    }
+  },
+});
+
+/** Retract an owned message only within one hour of sending. */
+export const unsend = mutation({
+  args: { messageId: v.id("messages") },
+  handler: async (ctx, { messageId }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (!message || message.senderId !== me._id)
+      throw new Error("You can only unsend your own messages.");
+    if (message.unsentAt) throw new Error("This message was already unsent.");
+    if (Date.now() - message._creationTime >= UNSEND_WINDOW_MS)
+      throw new Error("Messages can only be unsent within one hour.");
+
+    await ctx.db.patch(messageId, {
+      body: "",
+      attachmentId: undefined,
+      attachmentName: undefined,
+      attachmentType: undefined,
+      reactions: [],
+      unsentAt: Date.now(),
     });
   },
 });
@@ -101,7 +263,11 @@ export const list = query({
       .order("desc")
       .take(300);
     rows.reverse();
-    return Promise.all(rows.map((m) => withAttachmentUrl(ctx, m)));
+    return Promise.all(
+      rows
+        .filter((message) => !message.hiddenFor?.includes(me._id))
+        .map((message) => withMessageDetails(ctx, message, me._id)),
+    );
   },
 });
 
@@ -113,17 +279,20 @@ export const previews = query({
     const ids = await friendIds(ctx, me._id);
     const out = await Promise.all(
       ids.map(async (friendId) => {
-        const [last] = await ctx.db
+        const recent = await ctx.db
           .query("messages")
           .withIndex("by_pair", (q) =>
             q.eq("pairKey", pairKey(me._id, friendId)),
           )
           .order("desc")
-          .take(1);
+          .take(300);
+        const last = recent.find((message) => !message.hiddenFor?.includes(me._id));
         if (!last) return null;
         return {
           friendId: friendId as string,
-          body: last.body || "📎 Attachment",
+          body: last.unsentAt
+            ? "This message was unsent"
+            : last.body || "📎 Attachment",
           createdAt: last._creationTime,
           senderId: last.senderId as string,
         };

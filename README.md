@@ -21,6 +21,8 @@ profiles, and real-time chat with attachments — powered by **Convex**
   **accept** → then you can chat
 - **Real-time texting + photo/file attachments** through Convex queries,
   mutations, and Convex file storage
+- **Message actions** — right-click for replies, forwarding, emoji reactions,
+  copy, delete-for-me, and one-hour unsend for your own messages
 - **Typing indicators and presence** — online, automatic away, Do Not Disturb,
   or persistent offline, with an optional custom status
 - **Message alerts and sounds** — in-app and browser notifications plus

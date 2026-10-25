@@ -52,8 +52,14 @@ interface DemoUser extends JaUser {
 interface DemoDb {
   users: DemoUser[];
   requests: { id: string; fromId: string; toId: string; status: FriendRequest["status"]; createdAt: number }[];
-  messages: ChatMessage[];
+  messages: DemoMessage[];
   presence: DemoPresence[];
+}
+
+interface DemoMessage extends ChatMessage {
+  hiddenFor?: string[];
+  forwardedFromId?: string;
+  unsentAt?: number;
 }
 
 interface DemoPresence {
@@ -593,11 +599,17 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     if (!me) return [];
     const latest = new Map<string, ChatPreview>();
     for (const m of db.messages) {
+      if (m.hiddenFor?.includes(me.id)) continue;
       const friendId = m.senderId === me.id ? m.receiverId : m.senderId === me.id ? undefined : m.receiverId === me.id ? m.senderId : undefined;
       if (!friendId) continue;
       const prev = latest.get(friendId);
       if (!prev || m.createdAt > prev.createdAt)
-        latest.set(friendId, { friendId, body: m.body || "📎 Attachment", createdAt: m.createdAt, senderId: m.senderId });
+        latest.set(friendId, {
+          friendId,
+          body: m.unsentAt ? "This message was unsent" : m.body || "📎 Attachment",
+          createdAt: m.createdAt,
+          senderId: m.senderId,
+        });
     }
     return [...latest.values()];
   }, [db, me]);
@@ -607,10 +619,28 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     return db.messages
       .filter(
         (m) =>
-          (m.senderId === me.id && m.receiverId === activeChatId) ||
-          (m.senderId === activeChatId && m.receiverId === me.id),
+          !m.hiddenFor?.includes(me.id) &&
+          ((m.senderId === me.id && m.receiverId === activeChatId) ||
+            (m.senderId === activeChatId && m.receiverId === me.id)),
       )
-      .sort((a, b) => a.createdAt - b.createdAt);
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((message) => {
+        if (!message.replyTo) return message;
+        const source = db.messages.find((entry) => entry.id === message.replyTo?.id);
+        if (!source) return message;
+        return {
+          ...message,
+          replyTo: {
+            id: source.id,
+            senderId: source.senderId,
+            body: source.hiddenFor?.includes(me.id)
+              ? "Message unavailable"
+              : source.unsentAt
+                ? "This message was unsent"
+                : source.body || "📎 Attachment",
+          },
+        };
+      });
   }, [activeChatId, db, me]);
 
   const friendActivities = useMemo(
@@ -647,10 +677,23 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
   );
 
   const sendMessage = useCallback<JaTextStore["sendMessage"]>(
-    async (receiverId, body, file) => {
+    async (receiverId, body, file, replyToId) => {
       if (!me) throw new Error("Not signed in.");
       const attachmentUrl = file ? await fileToDataUrl(file) : undefined;
-      transact((draft) =>
+      transact((draft) => {
+        const reply = replyToId
+          ? draft.messages.find((message) => message.id === replyToId)
+          : undefined;
+        if (
+          replyToId &&
+          (!reply ||
+            reply.hiddenFor?.includes(me.id) ||
+            !(
+              (reply.senderId === me.id && reply.receiverId === receiverId) ||
+              (reply.senderId === receiverId && reply.receiverId === me.id)
+            ))
+        )
+          throw new Error("The message you are replying to is unavailable.");
         draft.messages.push({
           id: uid(),
           senderId: me.id,
@@ -660,12 +703,126 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
           attachmentName: file?.name,
           attachmentType: file?.type,
           createdAt: Date.now(),
-        }),
-      );
+          replyTo: reply
+            ? {
+                id: reply.id,
+                senderId: reply.senderId,
+                body: reply.unsentAt ? "This message was unsent" : reply.body,
+              }
+            : undefined,
+        });
+      });
       const target = loadDb().users.find((u) => u.id === receiverId);
       if (target?.provider === "bot") botReply(receiverId, me.id);
     },
     [botReply, me, transact],
+  );
+
+  const forwardMessage = useCallback<JaTextStore["forwardMessage"]>(
+    async (messageId, receiverId) => {
+      if (!me) throw new Error("Not signed in.");
+      const fresh = loadDb();
+      const source = fresh.messages.find((message) => message.id === messageId);
+      if (
+        !source ||
+        (source.senderId !== me.id && source.receiverId !== me.id) ||
+        source.hiddenFor?.includes(me.id) ||
+        source.unsentAt
+      ) {
+        throw new Error("This message can no longer be forwarded.");
+      }
+      if (!friends.some((friend) => friend.id === receiverId))
+        throw new Error("You can only forward messages to accepted friends.");
+
+      const forwardedFrom =
+        fresh.users.find((user) => user.id === source.senderId)?.displayName ?? "a friend";
+      transact((draft) =>
+        draft.messages.push({
+          ...source,
+          id: uid(),
+          senderId: me.id,
+          receiverId,
+          createdAt: Date.now(),
+          replyTo: undefined,
+          reactions: undefined,
+          hiddenFor: undefined,
+          forwardedFromId: source.senderId,
+          forwardedFrom,
+          unsentAt: undefined,
+        }),
+      );
+      const target = fresh.users.find((user) => user.id === receiverId);
+      if (target?.provider === "bot") botReply(receiverId, me.id);
+    },
+    [botReply, friends, me, transact],
+  );
+
+  const toggleMessageReaction = useCallback<JaTextStore["toggleMessageReaction"]>(
+    async (messageId, emoji) => {
+      const allowed = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+      if (!me) throw new Error("Not signed in.");
+      if (!allowed.includes(emoji)) throw new Error("That reaction is not available.");
+      transact((draft) => {
+        const message = draft.messages.find((entry) => entry.id === messageId);
+        if (
+          !message ||
+          (message.senderId !== me.id && message.receiverId !== me.id) ||
+          message.hiddenFor?.includes(me.id) ||
+          message.unsentAt
+        ) {
+          throw new Error("This message cannot be reacted to.");
+        }
+        const reactions = message.reactions ?? [];
+        const existing = reactions.find((reaction) => reaction.userId === me.id);
+        message.reactions =
+          existing?.emoji === emoji
+            ? reactions.filter((reaction) => reaction.userId !== me.id)
+            : [
+                ...reactions.filter((reaction) => reaction.userId !== me.id),
+                { userId: me.id, emoji },
+              ];
+      });
+    },
+    [me, transact],
+  );
+
+  const deleteMessageForMe = useCallback<JaTextStore["deleteMessageForMe"]>(
+    async (messageId) => {
+      if (!me) throw new Error("Not signed in.");
+      transact((draft) => {
+        const message = draft.messages.find((entry) => entry.id === messageId);
+        if (
+          !message ||
+          (message.senderId !== me.id && message.receiverId !== me.id)
+        ) {
+          throw new Error("Message not found.");
+        }
+        message.hiddenFor ??= [];
+        if (!message.hiddenFor.includes(me.id)) message.hiddenFor.push(me.id);
+      });
+    },
+    [me, transact],
+  );
+
+  const unsendMessage = useCallback<JaTextStore["unsendMessage"]>(
+    async (messageId) => {
+      if (!me) throw new Error("Not signed in.");
+      transact((draft) => {
+        const message = draft.messages.find((entry) => entry.id === messageId);
+        if (!message || message.senderId !== me.id)
+          throw new Error("You can only unsend your own messages.");
+        if (message.unsentAt) throw new Error("This message was already unsent.");
+        if (Date.now() - message.createdAt >= 60 * 60 * 1000)
+          throw new Error("Messages can only be unsent within one hour.");
+        message.body = "";
+        message.attachmentUrl = undefined;
+        message.attachmentName = undefined;
+        message.attachmentType = undefined;
+        message.reactions = [];
+        message.unsentAt = Date.now();
+      });
+    },
+    [me, transact],
   );
 
   const setActivity = useCallback<JaTextStore["setActivity"]>(
@@ -740,6 +897,10 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     sendFriendRequest,
     respondRequest,
     sendMessage,
+    forwardMessage,
+    toggleMessageReaction,
+    deleteMessageForMe,
+    unsendMessage,
     setActivity,
     setTyping,
     setNotificationsEnabled,

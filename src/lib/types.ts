@@ -43,6 +43,15 @@ export interface ChatMessage {
   attachmentName?: string;
   attachmentType?: string;
   createdAt: number;
+  replyTo?: { id: string; senderId: string; body: string };
+  forwardedFrom?: string;
+  unsentAt?: number;
+  reactions?: MessageReaction[];
+}
+
+export interface MessageReaction {
+  userId: string;
+  emoji: string;
 }
 
 export interface ChatPreview {
@@ -91,7 +100,11 @@ export interface JaTextStore {
   sendFriendRequest: (username: string) => Promise<void>;
   respondRequest: (requestId: string, accept: boolean) => Promise<void>;
 
-  sendMessage: (receiverId: string, body: string, file?: File) => Promise<void>;
+  sendMessage: (receiverId: string, body: string, file?: File, replyToId?: string) => Promise<void>;
+  forwardMessage: (messageId: string, receiverId: string) => Promise<void>;
+  toggleMessageReaction: (messageId: string, emoji: string) => Promise<void>;
+  deleteMessageForMe: (messageId: string) => Promise<void>;
+  unsendMessage: (messageId: string) => Promise<void>;
   setActivity: (status: StatusPreference, customStatus: string) => Promise<void>;
   setTyping: (receiverId: string, isTyping: boolean) => Promise<void>;
   setNotificationsEnabled: (enabled: boolean) => void;
