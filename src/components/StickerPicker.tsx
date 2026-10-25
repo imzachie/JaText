@@ -12,7 +12,13 @@ const tabs: { id: PickerTab; label: string }[] = [
   { id: "upload", label: "Upload your own!" },
 ];
 
-export function StickerPicker({ friendId }: { friendId: string }) {
+export function StickerPicker({
+  friendId,
+  disabled = false,
+}: {
+  friendId: string;
+  disabled?: boolean;
+}) {
   const store = useJaText();
   const searchKlipy = store.searchKlipy;
   const [open, setOpen] = useState(false);
@@ -150,6 +156,7 @@ export function StickerPicker({ friendId }: { friendId: string }) {
         title="GIFs and stickers"
         aria-label="Open GIF and sticker picker"
         aria-expanded={open}
+        disabled={disabled}
         onClick={() => {
           setOpen((current) => !current);
           setError(null);
@@ -198,6 +205,7 @@ export function StickerPicker({ friendId }: { friendId: string }) {
               value={search}
               onChange={(event) => {
                 setSearch(event.target.value);
+                setResults([]);
                 setSearching(true);
                 setError(null);
               }}
@@ -285,7 +293,7 @@ export function StickerPicker({ friendId }: { friendId: string }) {
                 <p className="sticker-empty">
                   {tab === "klipy"
                     ? search.trim()
-                      ? "No GIFs found. Try another search."
+                      ? `No GIFs found for "${search.trim()}". Try another search.`
                       : "No trending GIFs are available."
                     : tab === "favorites"
                       ? "Your favourites will show up here."

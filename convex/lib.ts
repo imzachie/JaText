@@ -59,6 +59,19 @@ export async function areFriends(
   return [...forward, ...backward].some((r) => r.status === "accepted");
 }
 
+export async function hasBlocked(
+  ctx: Ctx,
+  blockerId: Id<"users">,
+  blockedId: Id<"users">,
+): Promise<boolean> {
+  return !!(await ctx.db
+    .query("userBlocks")
+    .withIndex("by_blocker_blocked", (q) =>
+      q.eq("blockerId", blockerId).eq("blockedId", blockedId),
+    )
+    .unique());
+}
+
 /** All friend user-ids for `userId` (accepted in either direction). */
 export async function friendIds(
   ctx: Ctx,

@@ -67,6 +67,9 @@ export default defineSchema({
     attachmentType: v.optional(v.string()),
     attachmentUrl: v.optional(v.string()),
     stickerKey: v.optional(v.string()),
+    deliveryStatus: v.optional(
+      v.union(v.literal("delivered"), v.literal("sent"), v.literal("read")),
+    ),
     replyToId: v.optional(v.id("messages")),
     forwardedFromId: v.optional(v.id("users")),
     unsentAt: v.optional(v.number()),
@@ -88,6 +91,13 @@ export default defineSchema({
     isMuted: v.boolean(),
     deletedAt: v.optional(v.number()),
   }).index("by_user_friend", ["userId", "friendId"]),
+
+  userBlocks: defineTable({
+    blockerId: v.id("users"),
+    blockedId: v.id("users"),
+  })
+    .index("by_blocker_blocked", ["blockerId", "blockedId"])
+    .index("by_blocked_blocker", ["blockedId", "blockerId"]),
 
   stickerLibrary: defineTable({
     userId: v.id("users"),

@@ -9,6 +9,7 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as blocks from "../blocks.js";
 import type * as friends from "../friends.js";
 import type * as http from "../http.js";
 import type * as klipy from "../klipy.js";
@@ -25,6 +26,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  blocks: typeof blocks;
   friends: typeof friends;
   http: typeof http;
   klipy: typeof klipy;

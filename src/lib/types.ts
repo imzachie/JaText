@@ -44,12 +44,15 @@ export interface ChatMessage {
   attachmentType?: string;
   stickerKey?: string;
   isStickerFavorite?: boolean;
+  deliveryStatus?: MessageDeliveryStatus;
   createdAt: number;
   replyTo?: { id: string; senderId: string; body: string };
   forwardedFrom?: string;
   unsentAt?: number;
   reactions?: MessageReaction[];
 }
+
+export type MessageDeliveryStatus = "delivered" | "sent" | "read";
 
 export type StickerMediaType = "gif" | "sticker" | "image";
 export type StickerMediaSource = "klipy" | "upload";
@@ -108,6 +111,7 @@ export interface JaTextStore {
   activeChatId: string | null;
   setActiveChatId: (id: string | null) => void;
   activeMessages: ChatMessage[];
+  blockedUserIds: string[];
 
   signInEmail: (email: string, password: string) => Promise<void>;
   signUpEmail: (email: string, password: string) => Promise<void>;
@@ -128,6 +132,8 @@ export interface JaTextStore {
   setConversationArchived: (friendId: string, archived: boolean) => Promise<void>;
   setConversationMuted: (friendId: string, muted: boolean) => Promise<void>;
   deleteConversationForMe: (friendId: string) => Promise<void>;
+  setUserBlocked: (friendId: string, blocked: boolean) => Promise<void>;
+  markMessagesRead: (friendId: string) => Promise<void>;
   stickerFavorites: StickerMedia[];
   recentStickers: StickerMedia[];
   searchKlipy: (query: string) => Promise<StickerMedia[]>;

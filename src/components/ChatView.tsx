@@ -42,6 +42,7 @@ export function ChatView({
     activeMessages,
     friendActivities,
     sendMessage,
+    markMessagesRead,
     setTyping,
     soundsEnabled,
   } = store;
@@ -54,7 +55,7 @@ export function ChatView({
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const typingTimer = useRef<number | null>(null);
@@ -62,6 +63,9 @@ export function ChatView({
   const lastTypingUpdate = useRef(0);
   const setTypingRef = useRef(setTyping);
   const friendActivity = friendActivities.find((activity) => activity.userId === friend.id);
+  const isFriendBlocked = store.blockedUserIds.includes(friend.id);
+  const lastMessageId = activeMessages.at(-1)?.id;
+  const incomingMessageCount = activeMessages.filter((message) => message.senderId === friend.id).length;
   const friendStatusLabel =
     friendActivity?.status === "dnd"
       ? "Do Not Disturb"
@@ -72,8 +76,21 @@ export function ChatView({
   }, [setTyping]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeMessages.length, friend.id, friendActivity?.isTyping]);
+    const frame = window.requestAnimationFrame(() => {
+      const container = messagesRef.current;
+      if (container) {
+        container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [lastMessageId, friend.id, friendActivity?.isTyping]);
+
+  useEffect(() => {
+    if (incomingMessageCount === 0) return;
+    void markMessagesRead(friend.id).catch((cause: unknown) => {
+      setError(friendlyError(cause, "Couldn't update read status."));
+    });
+  }, [friend.id, incomingMessageCount, markMessagesRead]);
 
   useEffect(
     () => () => {
@@ -267,7 +284,13 @@ export function ChatView({
         </div>
       )}
 
-      <div className="messages">
+      {isFriendBlocked && (
+        <div className="blocked-chat-notice" role="status">
+          You blocked @{friend.username}. Unblock them from the chat list to send messages.
+        </div>
+      )}
+
+      <div className="messages" ref={messagesRef}>
         {activeMessages.length === 0 && (
           <div className="empty-box center">
             <Avatar user={friend} size={72} onClick={() => onOpenProfile(friend)} />
@@ -366,6 +389,15 @@ export function ChatView({
                     </div>
                   )}
                   <span className="msg-time">{fmtTime(m.createdAt)}</span>
+                  {mine && !m.unsentAt && m.deliveryStatus && (
+                    <span className="message-delivery-status">
+                      {m.deliveryStatus === "delivered"
+                        ? "Delivered"
+                        : m.deliveryStatus === "sent"
+                          ? "Sent"
+                          : "Read"}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -379,7 +411,6 @@ export function ChatView({
             </div>
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
 
       {error && <div className="error-box chat-error">{error}</div>}
@@ -416,16 +447,22 @@ export function ChatView({
           type="button"
           className="icon-btn attach-btn"
           title="Attach a photo or file"
+          disabled={isFriendBlocked}
           onClick={() => fileInput.current?.click()}
         >
           📎
         </button>
-        <StickerPicker friendId={friend.id} />
+        <StickerPicker friendId={friend.id} disabled={isFriendBlocked} />
         <textarea
           ref={composerRef}
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
-          placeholder={`Message @${friend.username}…`}
+          placeholder={
+            isFriendBlocked
+              ? `Unblock @${friend.username} to message`
+              : `Message @${friend.username}…`
+          }
+          disabled={isFriendBlocked}
           rows={1}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -434,7 +471,7 @@ export function ChatView({
             }
           }}
         />
-        <button className="send-btn" type="submit" disabled={sending || (!draft.trim() && !file)}>
+        <button className="send-btn" type="submit" disabled={isFriendBlocked || sending || (!draft.trim() && !file)}>
           {sending ? "…" : "➤"}
         </button>
       </form>

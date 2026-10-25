@@ -58,6 +58,7 @@ interface DemoDb {
   presence: DemoPresence[];
   conversationSettings: DemoConversationSetting[];
   stickerLibrary: DemoStickerMedia[];
+  blocks: { blockerId: string; blockedId: string }[];
 }
 
 interface DemoStickerMedia extends StickerMedia {
@@ -151,6 +152,7 @@ function seedDb(): DemoDb {
     messages: [],
     conversationSettings: [],
     stickerLibrary: [],
+    blocks: [],
     presence: bots.map((bot) => ({
       userId: bot.id,
       lastSeenAt: now,
@@ -173,6 +175,7 @@ function loadDb(): DemoDb {
         }));
       db.conversationSettings ??= [];
       db.stickerLibrary ??= [];
+      db.blocks ??= [];
       db.users.forEach((user) => {
         user.statusPreference ??= "online";
         user.customStatus ??= "";
@@ -618,6 +621,9 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
   const previews = useMemo<ChatPreview[]>(() => {
     if (!me) return [];
     return friends.map((friend) => {
+      const hasBlockedFriend = db.blocks.some(
+        (block) => block.blockerId === me.id && block.blockedId === friend.id,
+      );
       const settings = db.conversationSettings.find(
         (entry) => entry.userId === me.id && entry.friendId === friend.id,
       );
@@ -628,6 +634,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
             (message.senderId === me.id
               ? message.receiverId === friend.id
               : message.senderId === friend.id && message.receiverId === me.id) &&
+            !(hasBlockedFriend && message.senderId === friend.id) &&
             (settings?.deletedAt === undefined ||
               message.createdAt > settings.deletedAt),
         )
@@ -674,6 +681,13 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       .filter(
         (m) =>
           !m.hiddenFor?.includes(me.id) &&
+          !(
+            m.senderId === activeChatId &&
+            db.blocks.some(
+              (block) =>
+                block.blockerId === me.id && block.blockedId === activeChatId,
+            )
+          ) &&
           ((m.senderId === me.id && m.receiverId === activeChatId) ||
             (m.senderId === activeChatId && m.receiverId === me.id)) &&
           (deletedAt === undefined || m.createdAt > deletedAt),
@@ -707,6 +721,14 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       });
   }, [activeChatId, db, me]);
 
+  const blockedUserIds = useMemo(
+    () =>
+      db.blocks
+        .filter((block) => block.blockerId === me?.id)
+        .map((block) => block.blockedId),
+    [db.blocks, me?.id],
+  );
+
   const friendActivities = useMemo(
     () =>
       friends.map((friend) => {
@@ -732,17 +754,29 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
           status,
           customStatus: friend.customStatus ?? "",
           isTyping:
+            !db.blocks.some(
+              (block) =>
+                (block.blockerId === me?.id && block.blockedId === friend.id) ||
+                (block.blockerId === friend.id && block.blockedId === me?.id),
+            ) &&
             presence?.typingToId === me?.id &&
             typingAt !== undefined &&
             now - typingAt <= 5_000,
         };
       }),
-    [db.presence, db.users, friends, me?.id],
+    [db.blocks, db.presence, db.users, friends, me?.id],
   );
 
   const sendMessage = useCallback<JaTextStore["sendMessage"]>(
     async (receiverId, body, file, replyToId) => {
       if (!me) throw new Error("Not signed in.");
+      if (
+        loadDb().blocks.some(
+          (block) => block.blockerId === me.id && block.blockedId === receiverId,
+        )
+      ) {
+        throw new Error("You blocked this person. Unblock them to message.");
+      }
       const attachmentUrl = file ? await fileToDataUrl(file) : undefined;
       transact((draft) => {
         const reply = replyToId
@@ -766,6 +800,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
           attachmentUrl,
           attachmentName: file?.name,
           attachmentType: file?.type,
+          deliveryStatus: "delivered",
           createdAt: Date.now(),
           replyTo: reply
             ? {
@@ -776,6 +811,17 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
             : undefined,
         });
       });
+      const receiverHasBlockedSender = loadDb().blocks.some(
+        (block) => block.blockerId === receiverId && block.blockedId === me.id,
+      );
+      if (!receiverHasBlockedSender) {
+        transact((draft) => {
+          const message = draft.messages.at(-1);
+          if (message?.senderId === me.id && message.receiverId === receiverId) {
+            message.deliveryStatus = "sent";
+          }
+        });
+      }
       const target = loadDb().users.find((u) => u.id === receiverId);
       if (target?.provider === "bot") botReply(receiverId, me.id);
     },
@@ -874,6 +920,13 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       if (!me) throw new Error("Please sign in to send stickers.");
       if (!friends.some((friend) => friend.id === receiverId))
         throw new Error("You can only send stickers to accepted friends.");
+      if (
+        loadDb().blocks.some(
+          (block) => block.blockerId === me.id && block.blockedId === receiverId,
+        )
+      ) {
+        throw new Error("You blocked this person. Unblock them to send media.");
+      }
       const now = Date.now();
       transact((draft) => {
         const existing = draft.stickerLibrary.find(
@@ -900,9 +953,21 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
           attachmentName: sticker.name,
           attachmentType: sticker.mediaType === "gif" ? "image/gif" : "image/*",
           stickerKey: sticker.key,
+          deliveryStatus: "delivered",
           createdAt: now,
         });
       });
+      const receiverHasBlockedSender = loadDb().blocks.some(
+        (block) => block.blockerId === receiverId && block.blockedId === me.id,
+      );
+      if (!receiverHasBlockedSender) {
+        transact((draft) => {
+          const message = draft.messages.at(-1);
+          if (message?.senderId === me.id && message.receiverId === receiverId) {
+            message.deliveryStatus = "sent";
+          }
+        });
+      }
       const target = loadDb().users.find((user) => user.id === receiverId);
       if (target?.provider === "bot") botReply(receiverId, me.id);
     },
@@ -927,6 +992,13 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
 
       const forwardedFrom =
         fresh.users.find((user) => user.id === source.senderId)?.displayName ?? "a friend";
+      if (
+        fresh.blocks.some(
+          (block) => block.blockerId === me.id && block.blockedId === receiverId,
+        )
+      ) {
+        throw new Error("You blocked this person. Unblock them to forward messages.");
+      }
       transact((draft) =>
         draft.messages.push({
           ...source,
@@ -939,9 +1011,22 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
           hiddenFor: undefined,
           forwardedFromId: source.senderId,
           forwardedFrom,
+          deliveryStatus: "delivered",
           unsentAt: undefined,
         }),
       );
+      if (
+        !fresh.blocks.some(
+          (block) => block.blockerId === receiverId && block.blockedId === me.id,
+        )
+      ) {
+        transact((draft) => {
+          const message = draft.messages.at(-1);
+          if (message?.senderId === me.id && message.receiverId === receiverId) {
+            message.deliveryStatus = "sent";
+          }
+        });
+      }
       const target = fresh.users.find((user) => user.id === receiverId);
       if (target?.provider === "bot") botReply(receiverId, me.id);
     },
@@ -1097,6 +1182,52 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     [friends, me, transact],
   );
 
+  const setUserBlocked = useCallback<JaTextStore["setUserBlocked"]>(
+    async (friendId, blocked) => {
+      if (!me) throw new Error("Please sign in to block someone.");
+      if (!friends.some((friend) => friend.id === friendId))
+        throw new Error("You can only block someone in your friends list.");
+      transact((draft) => {
+        const existingIndex = draft.blocks.findIndex(
+          (entry) => entry.blockerId === me.id && entry.blockedId === friendId,
+        );
+        if (blocked && existingIndex === -1) {
+          draft.blocks.push({ blockerId: me.id, blockedId: friendId });
+        } else if (!blocked && existingIndex !== -1) {
+          draft.blocks.splice(existingIndex, 1);
+        }
+      });
+    },
+    [friends, me, transact],
+  );
+
+  const markMessagesRead = useCallback<JaTextStore["markMessagesRead"]>(
+    async (friendId) => {
+      if (!me) return;
+      const fresh = loadDb();
+      if (
+        fresh.blocks.some(
+          (block) => block.blockerId === me.id && block.blockedId === friendId,
+        )
+      ) {
+        return;
+      }
+      transact((draft) => {
+        draft.messages.forEach((message) => {
+          if (
+            message.senderId === friendId &&
+            message.receiverId === me.id &&
+            !message.hiddenFor?.includes(me.id) &&
+            !message.unsentAt
+          ) {
+            message.deliveryStatus = "read";
+          }
+        });
+      });
+    },
+    [me, transact],
+  );
+
   const setActivity = useCallback<JaTextStore["setActivity"]>(
     async (status, customStatus) => {
       if (!me) throw new Error("Not signed in.");
@@ -1115,6 +1246,15 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       if (!me) throw new Error("Not signed in.");
       if (!friends.some((friend) => friend.id === receiverId))
         throw new Error("You can only type to accepted friends.");
+      if (
+        loadDb().blocks.some(
+          (block) =>
+            (block.blockerId === me.id && block.blockedId === receiverId) ||
+            (block.blockerId === receiverId && block.blockedId === me.id),
+        )
+      ) {
+        return;
+      }
       const now = Date.now();
       transact((draft) => {
         let presence = draft.presence.find((entry) => entry.userId === me.id);
@@ -1160,6 +1300,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     activeChatId,
     setActiveChatId,
     activeMessages,
+    blockedUserIds,
     signInEmail,
     signUpEmail,
     signInGoogle,
@@ -1176,6 +1317,8 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     setConversationArchived,
     setConversationMuted,
     deleteConversationForMe,
+    setUserBlocked,
+    markMessagesRead,
     stickerFavorites,
     recentStickers,
     searchKlipy,

@@ -32,6 +32,9 @@ profiles, and real-time chat with attachments — powered by **Convex**
   or persistent offline, with an optional custom status
 - **Message alerts and sounds** — in-app and browser notifications plus
   configurable send/receive sounds
+- **Message delivery and blocking** — Delivered while waiting for a recipient,
+  Sent when their app receives it, Read when they open the chat; blocked
+  senders' messages stay Delivered and are hidden from the blocker
 - Click anyone's pfp to see their **profile card** (banner, bio, pronouns,
   avatar color)
 
@@ -105,7 +108,8 @@ API implemented in the browser so every feature works instantly. Demo users
 | Texting and chat actions | `convex/messages.ts` → `send`, `list`, `previews`, `updateConversation` |
 | Attachments & profile photos | `convex/messages.ts` → `generateUploadUrl` (Convex file storage) |
 | Klipy GIF search and sticker library | `convex/klipy.ts` and `convex/stickers.ts` |
-| Database tables | `convex/schema.ts` → `users`, `friendRequests`, `messages`, `conversationSettings`, `stickerLibrary` (+ auth tables) |
+| Blocking users | `convex/blocks.ts` |
+| Database tables | `convex/schema.ts` → `users`, `friendRequests`, `messages`, `conversationSettings`, `userBlocks`, `stickerLibrary` (+ auth tables) |
 
 The frontend has one data interface (`src/lib/types.ts` → `JaTextStore`)
 with two implementations: `src/lib/convexStore.tsx` (real Convex) and

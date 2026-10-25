@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { areFriends, pairKey, requireUser } from "./lib";
+import { areFriends, hasBlocked, pairKey, requireUser } from "./lib";
 
 const mediaType = v.union(
   v.literal("gif"),
@@ -242,6 +242,8 @@ export const send = mutation({
     const me = await requireUser(ctx);
     if (!(await areFriends(ctx, me._id, args.receiverId)))
       throw new Error("You can only send media to accepted friends.");
+    if (await hasBlocked(ctx, me._id, args.receiverId))
+      throw new Error("You blocked this person. Unblock them to send media.");
     if (args.source === "klipy") {
       if (!args.url) throw new Error("This GIF is unavailable.");
       validateMediaUrl(args.url, args.source);
@@ -287,6 +289,7 @@ export const send = mutation({
       attachmentType:
         args.mediaType === "gif" ? "image/gif" : "image/*",
       stickerKey: args.mediaKey,
+      deliveryStatus: "delivered",
     });
 
     const recent = await ctx.db

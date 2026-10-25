@@ -101,7 +101,9 @@ export function Sidebar({
     setChatMenu({ x: event.clientX, y: event.clientY, friend });
   }
 
-  async function updateChat(action: "archive" | "unarchive" | "mute" | "unmute" | "delete") {
+  async function updateChat(
+    action: "archive" | "unarchive" | "mute" | "unmute" | "delete" | "block" | "unblock",
+  ) {
     if (!chatMenu) return;
     const { friend } = chatMenu;
     try {
@@ -109,6 +111,14 @@ export function Sidebar({
         await store.setConversationArchived(friend.id, action === "archive");
       } else if (action === "mute" || action === "unmute") {
         await store.setConversationMuted(friend.id, action === "mute");
+      } else if (action === "block" || action === "unblock") {
+        if (action === "block" && !window.confirm(
+          `Block ${friend.displayName}? They can still send messages, but their messages won't appear to you and will stay marked Delivered.`,
+        )) {
+          setChatMenu(null);
+          return;
+        }
+        await store.setUserBlocked(friend.id, action === "block");
       } else {
         if (
           !window.confirm(
@@ -353,6 +363,19 @@ export function Sidebar({
           >
             <span>{previewByFriend.get(chatMenu.friend.id)?.isMuted ? "🔔" : "🔕"}</span>
             {previewByFriend.get(chatMenu.friend.id)?.isMuted ? "Unmute" : "Mute"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={store.blockedUserIds.includes(chatMenu.friend.id) ? "" : "destructive-menu-item"}
+            onClick={() =>
+              void updateChat(
+                store.blockedUserIds.includes(chatMenu.friend.id) ? "unblock" : "block",
+              )
+            }
+          >
+            <span>{store.blockedUserIds.includes(chatMenu.friend.id) ? "🔓" : "🚫"}</span>
+            {store.blockedUserIds.includes(chatMenu.friend.id) ? "Unblock" : "Block"}
           </button>
           <button
             type="button"

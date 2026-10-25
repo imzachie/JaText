@@ -2,7 +2,15 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { FOURTEEN_DAYS, USERNAME_REGEX, profileOf, requireUser } from "./lib";
+import {
+  FOURTEEN_DAYS,
+  USERNAME_REGEX,
+  friendIds,
+  hasBlocked,
+  pairKey,
+  profileOf,
+  requireUser,
+} from "./lib";
 
 /** The signed-in user's full profile (or null when signed out). */
 export const current = query({
@@ -157,6 +165,38 @@ export const heartbeat = mutation({
         lastActiveAt: now,
       });
     }
+    const friends = await friendIds(ctx, me._id);
+    await Promise.all(
+      friends.map(async (friendId) => {
+        if (
+          (await hasBlocked(ctx, me._id, friendId)) ||
+          (await hasBlocked(ctx, friendId, me._id))
+        ) {
+          return;
+        }
+        const messages = await ctx.db
+          .query("messages")
+          .withIndex("by_pair", (q) =>
+            q.eq("pairKey", pairKey(me._id, friendId)),
+          )
+          .order("desc")
+          .take(100);
+        await Promise.all(
+          messages
+            .filter(
+              (message) =>
+                message.senderId === friendId &&
+                message.receiverId === me._id &&
+                message.deliveryStatus === "delivered" &&
+                !message.hiddenFor?.includes(me._id) &&
+                !message.unsentAt,
+            )
+            .map((message) =>
+              ctx.db.patch(message._id, { deliveryStatus: "sent" }),
+            ),
+        );
+      }),
+    );
     await ctx.scheduler.runAfter(90_001, internal.users.expirePresence, {
       userId: me._id,
       expectedLastSeenAt: now,

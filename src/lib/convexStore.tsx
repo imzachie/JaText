@@ -68,6 +68,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     api.stickers.library,
     isAuthenticated ? {} : "skip",
   ) as { favorites: StickerMedia[]; recent: StickerMedia[] } | undefined;
+  const blockedUserIds = (useQuery(
+    api.blocks.listMine,
+    isAuthenticated ? {} : "skip",
+  ) ?? []) as string[];
 
   const saveProfileMut = useMutation(api.users.saveProfile);
   const sendRequestMut = useMutation(api.friends.sendRequest);
@@ -79,6 +83,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const unsendMut = useMutation(api.messages.unsend);
   const updateConversationMut = useMutation(api.messages.updateConversation);
   const setTypingMut = useMutation(api.messages.setTyping);
+  const markReadMut = useMutation(api.messages.markRead);
+  const setBlockMut = useMutation(api.blocks.set);
   const setActivityMut = useMutation(api.users.setActivity);
   const heartbeatMut = useMutation(api.users.heartbeat);
   const disconnectMut = useMutation(api.users.disconnect);
@@ -352,6 +358,20 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [updateConversationMut],
   );
 
+  const setUserBlocked = useCallback<JaTextStore["setUserBlocked"]>(
+    async (friendId, blocked) => {
+      await setBlockMut({ userId: friendId as Id<"users">, blocked });
+    },
+    [setBlockMut],
+  );
+
+  const markMessagesRead = useCallback<JaTextStore["markMessagesRead"]>(
+    async (friendId) => {
+      await markReadMut({ otherId: friendId as Id<"users"> });
+    },
+    [markReadMut],
+  );
+
   const setActivity = useCallback<JaTextStore["setActivity"]>(
     async (status: StatusPreference, customStatus: string) => {
       await setActivityMut({ status, customStatus });
@@ -401,6 +421,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     activeChatId,
     setActiveChatId,
     activeMessages,
+    blockedUserIds,
     signInEmail,
     signUpEmail,
     signInGoogle,
@@ -417,6 +438,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     setConversationArchived,
     setConversationMuted,
     deleteConversationForMe,
+    setUserBlocked,
+    markMessagesRead,
     stickerFavorites: stickerLibrary?.favorites ?? [],
     recentStickers: stickerLibrary?.recent ?? [],
     searchKlipy,

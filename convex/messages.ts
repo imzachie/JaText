@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { areFriends, friendIds, pairKey, requireUser } from "./lib";
+import { areFriends, friendIds, hasBlocked, pairKey, requireUser } from "./lib";
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
@@ -28,6 +28,12 @@ export const setTyping = mutation({
     const me = await requireUser(ctx);
     if (!(await areFriends(ctx, me._id, receiverId)))
       throw new Error("You can only type to accepted friends.");
+    if (
+      (await hasBlocked(ctx, me._id, receiverId)) ||
+      (await hasBlocked(ctx, receiverId, me._id))
+    ) {
+      return;
+    }
 
     const presence = await ctx.db
       .query("presence")
@@ -69,6 +75,7 @@ async function withMessageDetails(
   forwardedFrom?: string;
   unsentAt?: number;
   reactions?: { userId: string; emoji: string }[];
+  deliveryStatus?: "delivered" | "sent" | "read";
 }> {
   const [reply, forwarder] = await Promise.all([
     m.replyToId ? ctx.db.get(m.replyToId) : null,
@@ -104,6 +111,7 @@ async function withMessageDetails(
     attachmentType: m.unsentAt ? undefined : m.attachmentType,
     stickerKey,
     isStickerFavorite: favorite?.isFavorite ?? false,
+    deliveryStatus: m.deliveryStatus,
     createdAt: m._creationTime,
     replyTo: reply
       ? {
@@ -139,6 +147,8 @@ export const send = mutation({
     const me = await requireUser(ctx);
     if (!(await areFriends(ctx, me._id, args.receiverId)))
       throw new Error("You can only message people who accepted your friend request.");
+    if (await hasBlocked(ctx, me._id, args.receiverId))
+      throw new Error("You blocked this person. Unblock them to message.");
     if (!args.body.trim() && !args.attachmentId)
       throw new Error("Message is empty.");
 
@@ -162,6 +172,7 @@ export const send = mutation({
       attachmentName: args.attachmentName,
       attachmentType: args.attachmentType,
       replyToId: args.replyToId,
+      deliveryStatus: "delivered",
     });
   },
 });
@@ -185,6 +196,8 @@ export const forward = mutation({
     }
     if (!(await areFriends(ctx, me._id, receiverId)))
       throw new Error("You can only forward messages to accepted friends.");
+    if (await hasBlocked(ctx, me._id, receiverId))
+      throw new Error("You blocked this person. Unblock them to forward messages.");
 
     await ctx.db.insert("messages", {
       senderId: me._id,
@@ -197,6 +210,7 @@ export const forward = mutation({
       attachmentType: source.attachmentType,
       stickerKey: source.stickerKey,
       forwardedFromId: source.senderId,
+      deliveryStatus: "delivered",
     });
   },
 });
@@ -320,6 +334,41 @@ export const updateConversation = mutation({
   },
 });
 
+export const markRead = mutation({
+  args: { otherId: v.id("users") },
+  handler: async (ctx, { otherId }) => {
+    const me = await requireUser(ctx);
+    if (
+      !(await areFriends(ctx, me._id, otherId)) ||
+      (await hasBlocked(ctx, me._id, otherId))
+    ) {
+      return;
+    }
+
+    const rows = await ctx.db
+      .query("messages")
+      .withIndex("by_pair", (q) =>
+        q.eq("pairKey", pairKey(me._id, otherId)),
+      )
+      .order("desc")
+      .take(300);
+    await Promise.all(
+      rows
+        .filter(
+          (message) =>
+            message.senderId === otherId &&
+            message.receiverId === me._id &&
+            message.deliveryStatus !== "read" &&
+            !message.hiddenFor?.includes(me._id) &&
+            !message.unsentAt,
+        )
+        .map((message) =>
+          ctx.db.patch(message._id, { deliveryStatus: "read" }),
+        ),
+    );
+  },
+});
+
 /** The conversation with one friend, oldest → newest (last 300 messages). */
 export const list = query({
   args: { otherId: v.id("users") },
@@ -336,12 +385,14 @@ export const list = query({
         q.eq("userId", me._id).eq("friendId", otherId),
       )
       .unique();
+    const hasBlockedOther = await hasBlocked(ctx, me._id, otherId);
     rows.reverse();
     return Promise.all(
       rows
         .filter(
           (message) =>
             !message.hiddenFor?.includes(me._id) &&
+            !(hasBlockedOther && message.senderId === otherId) &&
             (settings?.deletedAt === undefined ||
               message._creationTime > settings.deletedAt),
         )
@@ -373,9 +424,11 @@ export const previews = query({
             )
             .unique(),
         ]);
+        const hasBlockedFriend = await hasBlocked(ctx, me._id, friendId);
         const last = recent.find(
           (message) =>
             !message.hiddenFor?.includes(me._id) &&
+            !(hasBlockedFriend && message.senderId === friendId) &&
             (settings?.deletedAt === undefined ||
               message._creationTime > settings.deletedAt),
         );

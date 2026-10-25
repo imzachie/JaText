@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { friendIds, profileOf, requireUser } from "./lib";
+import { friendIds, hasBlocked, profileOf, requireUser } from "./lib";
 
 /** Send a friend request by username. They must accept before you can chat. */
 export const sendRequest = mutation({
@@ -15,6 +15,12 @@ export const sendRequest = mutation({
       .unique();
     if (!target) throw new Error(`No JaText user with username @${username}.`);
     if (target._id === me._id) throw new Error("You can't add yourself 😅");
+    if (
+      (await hasBlocked(ctx, me._id, target._id)) ||
+      (await hasBlocked(ctx, target._id, me._id))
+    ) {
+      throw new Error("This friend request can't be sent.");
+    }
 
     const forward = await ctx.db
       .query("friendRequests")
@@ -133,12 +139,14 @@ export const activity = query({
 
     return Promise.all(
       ids.map(async (userId) => {
-        const [user, presence] = await Promise.all([
+        const [user, presence, blockedByMe, blockedMe] = await Promise.all([
           ctx.db.get(userId),
           ctx.db
             .query("presence")
             .withIndex("by_user", (q) => q.eq("userId", userId))
             .unique(),
+          hasBlocked(ctx, me._id, userId),
+          hasBlocked(ctx, userId, me._id),
         ]);
         if (!user) return null;
 
@@ -158,6 +166,8 @@ export const activity = query({
           status,
           customStatus: user.customStatus ?? "",
           isTyping:
+            !blockedByMe &&
+            !blockedMe &&
             presence?.typingToId === me._id &&
             !!presence.typingAt &&
             now - presence.typingAt <= 5_000,

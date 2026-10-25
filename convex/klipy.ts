@@ -34,8 +34,9 @@ export const search = action({
 
     const params = new URLSearchParams({
       key: apiKey,
+      client_key: "jatext",
       limit: "24",
-      media_filter: "tinygif,mediumgif",
+      media_filter: "gif,tinygif,mediumgif",
       locale: "en_US",
       contentfilter: "high",
     });
