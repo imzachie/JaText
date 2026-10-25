@@ -340,6 +340,12 @@ export function ChatView({
     [conversationMessages, friend.id, pendingMessages],
   );
   const lastMessageId = displayedMessages.at(-1)?.id;
+  const scrollToBottom = useCallback(() => {
+    const container = messagesRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
+    }
+  }, []);
   const friendStatusLabel =
     friendActivity?.status === "dnd"
       ? "Do Not Disturb"
@@ -405,13 +411,22 @@ export function ChatView({
     }
     if (!pinnedToBottomRef.current) return;
     const frame = window.requestAnimationFrame(() => {
-      const container = messagesRef.current;
-      if (container) {
-        container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
-      }
+      scrollToBottom();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [lastMessageId, friend.id]);
+  }, [lastMessageId, friend.id, scrollToBottom]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const keepComposerVisible = () => {
+      if (document.activeElement !== composerRef.current) return;
+      pinnedToBottomRef.current = true;
+      window.requestAnimationFrame(scrollToBottom);
+    };
+    viewport.addEventListener("resize", keepComposerVisible);
+    return () => viewport.removeEventListener("resize", keepComposerVisible);
+  }, [scrollToBottom]);
 
   const removePendingMessage = useCallback((id: string) => {
     const attachmentUrl = pendingAttachmentUrlsRef.current.get(id);
@@ -491,6 +506,7 @@ export function ChatView({
     const sentReply = replyTo;
     const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
     lastPendingMessageAtRef.current = sentAt;
+    pinnedToBottomRef.current = true;
     const pendingId = `pending-${sentAt}`;
     const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
     if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
@@ -778,6 +794,10 @@ export function ChatView({
         <textarea
           ref={composerRef}
           value={draft}
+          onFocus={() => {
+            pinnedToBottomRef.current = true;
+            window.requestAnimationFrame(scrollToBottom);
+          }}
           onChange={(e) => onDraftChange(e.target.value)}
           placeholder={isFriendBlocked ? "Unblock to message" : "Message…"}
           aria-label={`Message @${friend.username}`}
