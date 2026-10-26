@@ -9,9 +9,20 @@ import {
   type FormEvent,
   type MouseEvent,
 } from "react";
+import { Phone, Video } from "./CallIcons";
 import { playMessageSound } from "../lib/alerts";
+import {
+  formatPreviewMessageText,
+  isHiddenCallSignal,
+  parseCallInvite,
+  useCall,
+} from "../lib/calling";
+import { isVoiceNoteOrAudio, saveCachedVoiceTranscript, decodeVoiceNoteMime } from "../lib/voiceNotes";
+import { CallMessageCard } from "./CallMessageCard";
 import { ContextMenu } from "./ContextMenu";
 import { StickerPicker } from "./StickerPicker";
+import { VoiceNotePlayer } from "./VoiceNotePlayer";
+import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import type { ChatMessage, JaUser } from "../lib/types";
@@ -81,8 +92,11 @@ const ChatHistory = memo(function ChatHistory({
   messagesRef,
   initialScrollAllowedRef,
   messagesReady,
+  shownTranscriptIds,
+  onToggleTranscript,
   onOpenProfile,
   onOpenMessageMenu,
+  onOpenMessageMenuAt,
   onOpenImage,
   onReactToMessage,
 }: {
@@ -92,8 +106,11 @@ const ChatHistory = memo(function ChatHistory({
   messagesRef: { current: HTMLDivElement | null };
   initialScrollAllowedRef: { current: boolean };
   messagesReady: boolean;
+  shownTranscriptIds: Record<string, boolean>;
+  onToggleTranscript: (messageId: string, show: boolean) => void;
   onOpenProfile: (user: JaUser) => void;
   onOpenMessageMenu: (event: MouseEvent, message: ChatMessage) => void;
+  onOpenMessageMenuAt: (x: number, y: number, message: ChatMessage) => void;
   onOpenImage: (url: string) => void;
   onReactToMessage: (message: ChatMessage, emoji: string) => void;
 }) {
@@ -122,10 +139,15 @@ const ChatHistory = memo(function ChatHistory({
         const showDay =
           index === 0 || fmtDay(messages[index - 1].createdAt) !== day;
         const mine = message.senderId === me.id;
-        const isImage = message.attachmentType?.startsWith("image/");
+        const callInvite = parseCallInvite(message.body);
+        const isAudioNote =
+          !callInvite && isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
+        const isImage = !callInvite && message.attachmentType?.startsWith("image/");
         const isVideo =
-          message.attachmentType?.startsWith("video/") ||
-          /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? "");
+          !callInvite &&
+          !isAudioNote &&
+          (message.attachmentType?.startsWith("video/") ||
+            /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
         return (
           <div key={message.renderKey ?? message.id}>
             {showDay && <div className="day-divider">{day}</div>}
@@ -163,15 +185,33 @@ const ChatHistory = memo(function ChatHistory({
                       <strong>
                         {message.replyTo.senderId === me.id ? "You" : friend.displayName}
                       </strong>
-                      <span>{message.replyTo.body || "📎 Attachment"}</span>
+                      <span>
+                        {formatPreviewMessageText(message.replyTo.body) || "📎 Attachment"}
+                      </span>
                     </button>
                   )}
                   {message.unsentAt ? (
                     <p className="unsent-copy">This message was unsent</p>
+                  ) : callInvite ? (
+                    <CallMessageCard invite={callInvite} isMine={mine} peer={friend} />
                   ) : (
                     <>
                       {message.attachmentUrl &&
-                        (isImage ? (
+                        (isAudioNote ? (
+                          <VoiceNotePlayer
+                            messageId={message.id}
+                            audioUrl={message.attachmentUrl}
+                            attachmentType={message.attachmentType}
+                            mine={mine}
+                            showTranscript={Boolean(shownTranscriptIds[message.id])}
+                            onToggleTranscript={(show) => onToggleTranscript(message.id, show)}
+                            onOpenContextAt={
+                              message.id.startsWith("pending-")
+                                ? undefined
+                                : (x, y) => onOpenMessageMenuAt(x, y, message)
+                            }
+                          />
+                        ) : isImage ? (
                           <button
                             type="button"
                             className="image-message-button"
@@ -289,6 +329,7 @@ export function ChatView({
   onBack: () => void;
 }) {
   const store = useJaText();
+  const { startCall } = useCall();
   const {
     me,
     activeMessages,
@@ -302,6 +343,8 @@ export function ChatView({
   } = store;
   const [draft, setDraft] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
+  const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [showUnsendWarning, setShowUnsendWarning] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
@@ -340,8 +383,13 @@ export function ChatView({
   const setTypingRef = useRef(setTyping);
   const friendActivity = friendActivities.find((activity) => activity.userId === friend.id);
   const isFriendBlocked = store.blockedUserIds.includes(friend.id);
-  const conversationMessages =
-    store.activeChatId === friend.id ? activeMessages : EMPTY_MESSAGES;
+  const conversationMessages = useMemo(
+    () =>
+      (store.activeChatId === friend.id ? activeMessages : EMPTY_MESSAGES).filter(
+        (m) => !isHiddenCallSignal(m.body),
+      ),
+    [activeMessages, friend.id, store.activeChatId],
+  );
   const incomingMessageCount = useMemo(
     () => conversationMessages.filter((message) => message.senderId === friend.id).length,
     [conversationMessages, friend.id],
@@ -698,33 +746,85 @@ export function ChatView({
     }, 2_500);
   }
 
-  const openMessageMenu = useCallback((event: MouseEvent, message: ChatMessage) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (messageMenuCloseTimerRef.current !== null) {
-      window.clearTimeout(messageMenuCloseTimerRef.current);
-      messageMenuCloseTimerRef.current = null;
-    }
-    setMessageMenuClosing(false);
-    const eventTime =
-      event.timeStamp > 1_000_000_000_000
-        ? event.timeStamp
-        : performance.timeOrigin + event.timeStamp;
-    setMessageMenu({
-      x: event.clientX,
-      y: event.clientY,
-      message,
-      canUnsend:
-        message.senderId === me?.id &&
-        !message.unsentAt &&
-        eventTime - message.createdAt < UNSEND_WINDOW_MS,
-      canEdit:
-        message.senderId === me?.id &&
-        !message.unsentAt &&
-        !!message.body.trim(),
+  const openMessageMenuAt = useCallback(
+    (x: number, y: number, message: ChatMessage) => {
+      if (messageMenuCloseTimerRef.current !== null) {
+        window.clearTimeout(messageMenuCloseTimerRef.current);
+        messageMenuCloseTimerRef.current = null;
+      }
+      setMessageMenuClosing(false);
+      const now = Date.now();
+      const isCallCard = Boolean(parseCallInvite(message.body));
+      setMessageMenu({
+        x,
+        y,
+        message,
+        canUnsend:
+          message.senderId === me?.id &&
+          !message.unsentAt &&
+          !isCallCard &&
+          now - message.createdAt < UNSEND_WINDOW_MS,
+        canEdit:
+          message.senderId === me?.id &&
+          !message.unsentAt &&
+          !isCallCard &&
+          !!message.body.trim(),
+      });
+      setReactionPickerOpen(false);
+    },
+    [me?.id],
+  );
+
+  const openMessageMenu = useCallback(
+    (event: MouseEvent, message: ChatMessage) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openMessageMenuAt(event.clientX, event.clientY, message);
+    },
+    [openMessageMenuAt],
+  );
+
+  async function sendVoiceNoteFile(voiceFile: File) {
+    if (isFriendBlocked) return;
+    setRecordingVoiceNote(false);
+    const sentReply = replyTo;
+    const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
+    lastPendingMessageAtRef.current = sentAt;
+    const pendingId = `pending-${sentAt}`;
+    const cleanAudioBlob = new Blob([voiceFile], {
+      type: voiceFile.type.split(";")[0] || "audio/webm",
     });
-    setReactionPickerOpen(false);
-  }, [me?.id]);
+    const attachmentUrl = URL.createObjectURL(cleanAudioBlob);
+    pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
+    const meta = decodeVoiceNoteMime(voiceFile.type);
+    if (meta?.transcript) {
+      saveCachedVoiceTranscript(pendingId, meta.transcript);
+    }
+    setPendingMessages((current) => [
+      ...current.slice(-299),
+      {
+        id: pendingId,
+        senderId: me?.id ?? "",
+        receiverId: friend.id,
+        body: "",
+        attachmentUrl,
+        attachmentName: voiceFile.name,
+        attachmentType: voiceFile.type,
+        createdAt: sentAt,
+        deliveryStatus: "delivered",
+      },
+    ]);
+    window.requestAnimationFrame(scrollToBottom);
+    setReplyTo(null);
+    setError(null);
+    try {
+      await sendMessage(friend.id, "", voiceFile, sentReply?.id);
+      if (soundsEnabled) playMessageSound("sent");
+    } catch (err) {
+      removePendingMessage(pendingId);
+      setError(friendlyError(err, "Couldn't send the voice note. Please try again."));
+    }
+  }
 
   function replyToMessage(message: ChatMessage) {
     setReplyTo(message);
@@ -737,7 +837,10 @@ export function ChatView({
       await navigator.clipboard.writeText(
         message.unsentAt
           ? "This message was unsent"
-          : message.body || message.attachmentName || message.attachmentUrl || "",
+          : formatPreviewMessageText(message.body) ||
+              message.attachmentName ||
+              message.attachmentUrl ||
+              "",
       );
       closeMessageMenu();
     } catch (copyError) {
@@ -858,35 +961,23 @@ export function ChatView({
         <div className="chat-header-actions" aria-label="Chat actions">
           <button
             type="button"
-            className="icon-btn chat-action-placeholder"
-            title="Voice call coming soon"
-            aria-label="Voice call coming soon"
-            disabled
+            className="icon-btn chat-call-btn"
+            title={`Voice call ${friend.displayName}`}
+            aria-label={`Voice call ${friend.displayName}`}
+            disabled={isFriendBlocked}
+            onClick={() => void startCall(friend, "voice")}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.4 19.4 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z" />
-            </svg>
+            <Phone size={18} />
           </button>
           <button
             type="button"
-            className="icon-btn chat-action-placeholder"
-            title="Video call coming soon"
-            aria-label="Video call coming soon"
-            disabled
+            className="icon-btn chat-call-btn"
+            title={`Video call ${friend.displayName}`}
+            aria-label={`Video call ${friend.displayName}`}
+            disabled={isFriendBlocked}
+            onClick={() => void startCall(friend, "video")}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="3" y="6" width="13" height="12" rx="2" />
-              <path d="m16 10 5-3v10l-5-3" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="icon-btn chat-action-placeholder"
-            title="More chat options coming soon"
-            aria-label="More chat options coming soon"
-            disabled
-          >
-            ⋮
+            <Video size={18} />
           </button>
         </div>
       </header>
@@ -921,8 +1012,13 @@ export function ChatView({
         messagesRef={messagesRef}
         initialScrollAllowedRef={initialScrollAllowedRef}
         messagesReady={conversationReady}
+        shownTranscriptIds={shownTranscriptIds}
+        onToggleTranscript={(id, show) =>
+          setShownTranscriptIds((prev) => ({ ...prev, [id]: show }))
+        }
         onOpenProfile={onOpenProfile}
         onOpenMessageMenu={openMessageMenu}
+        onOpenMessageMenuAt={openMessageMenuAt}
         onOpenImage={openImagePreview}
         onReactToMessage={reactToMessage}
       />
@@ -966,71 +1062,82 @@ export function ChatView({
         </div>
       )}
 
-      <form className="composer" onSubmit={onSend}>
-        <input
-          ref={fileInput}
-          type="file"
-          hidden
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        />
-        <button
-          type="button"
-          className="icon-btn attach-btn"
-          title="Attach a photo or file"
-          disabled={isFriendBlocked || !!editingMessage}
-          onClick={() => fileInput.current?.click()}
-        >
-          📎
-        </button>
-        <StickerPicker friendId={friend.id} disabled={isFriendBlocked || !!editingMessage} />
-        <button
-          type="button"
-          className="icon-btn voice-note-placeholder"
-          title="Voice notes coming soon"
-          aria-label="Voice notes coming soon"
-          disabled
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="9" y="2" width="6" height="12" rx="3" />
-            <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
-          </svg>
-        </button>
-        <textarea
-          ref={composerRef}
-          value={draft}
-          onChange={(e) =>
-            editingMessage ? setDraft(e.target.value) : onDraftChange(e.target.value)
-          }
-          placeholder={
-            isFriendBlocked
-              ? "Unblock to message"
-              : editingMessage
-                ? "Edit message…"
-                : "Message…"
-          }
-          aria-label={`Message @${friend.username}`}
-          disabled={isFriendBlocked}
-          rows={1}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void onSend();
+      {recordingVoiceNote ? (
+        <div className="composer voice-composer-active">
+          <VoiceNoteRecorder
+            onCancel={() => setRecordingVoiceNote(false)}
+            onSendVoiceNote={(voiceFile) => sendVoiceNoteFile(voiceFile)}
+            onError={(msg) => setError(msg)}
+          />
+        </div>
+      ) : (
+        <form className="composer" onSubmit={onSend}>
+          <input
+            ref={fileInput}
+            type="file"
+            hidden
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+          <button
+            type="button"
+            className="icon-btn attach-btn"
+            title="Attach a photo or file"
+            disabled={isFriendBlocked || !!editingMessage}
+            onClick={() => fileInput.current?.click()}
+          >
+            📎
+          </button>
+          <StickerPicker friendId={friend.id} disabled={isFriendBlocked || !!editingMessage} />
+          <button
+            type="button"
+            className="icon-btn voice-note-btn"
+            title="Record voice note"
+            aria-label="Record voice note"
+            disabled={isFriendBlocked || !!editingMessage}
+            onClick={() => setRecordingVoiceNote(true)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="2" width="6" height="12" rx="3" />
+              <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+            </svg>
+          </button>
+          <textarea
+            ref={composerRef}
+            value={draft}
+            onChange={(e) =>
+              editingMessage ? setDraft(e.target.value) : onDraftChange(e.target.value)
             }
-          }}
-        />
-        <button
-          className="send-btn"
-          type="submit"
-          disabled={
-            isFriendBlocked ||
-            (editingMessage ? !draft.trim() : !draft.trim() && !file)
-          }
-          onPointerDown={(event) => event.preventDefault()}
-          onMouseDown={(event) => event.preventDefault()}
-        >
-          {editingMessage ? "✓" : "➤"}
-        </button>
-      </form>
+            placeholder={
+              isFriendBlocked
+                ? "Unblock to message"
+                : editingMessage
+                  ? "Edit message…"
+                  : "Message…"
+            }
+            aria-label={`Message @${friend.username}`}
+            disabled={isFriendBlocked}
+            rows={1}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void onSend();
+              }
+            }}
+          />
+          <button
+            className="send-btn"
+            type="submit"
+            disabled={
+              isFriendBlocked ||
+              (editingMessage ? !draft.trim() : !draft.trim() && !file)
+            }
+            onPointerDown={(event) => event.preventDefault()}
+            onMouseDown={(event) => event.preventDefault()}
+          >
+            {editingMessage ? "✓" : "➤"}
+          </button>
+        </form>
+      )}
 
       {messageMenu && (
         <ContextMenu
@@ -1043,6 +1150,26 @@ export function ChatView({
           <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}>
             <span>↩️</span> Reply
           </button>
+          {!messageMenu.message.unsentAt &&
+            isVoiceNoteOrAudio(
+              messageMenu.message.attachmentType,
+              messageMenu.message.attachmentName,
+            ) && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const id = messageMenu.message.id;
+                  setShownTranscriptIds((prev) => ({ ...prev, [id]: !prev[id] }));
+                  closeMessageMenu();
+                }}
+              >
+                <span>📝</span>{" "}
+                {shownTranscriptIds[messageMenu.message.id]
+                  ? "Hide transcription"
+                  : "Show transcription"}
+              </button>
+            )}
           {!messageMenu.message.unsentAt && (
             <>
               {messageMenu.canEdit && (

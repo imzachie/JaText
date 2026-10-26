@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { ChatView } from "./components/ChatView";
+import { CallOverlay } from "./components/CallOverlay";
 import { CommunityChatView } from "./components/CommunityChatView";
 import { GroupChatView } from "./components/GroupChatView";
 import { LoginPage } from "./components/LoginPage";
@@ -10,6 +11,13 @@ import { NotificationWelcome } from "./components/NotificationWelcome";
 import { ProfileModal } from "./components/ProfileCard";
 import { SettingsModal } from "./components/Settings";
 import { Sidebar } from "./components/Sidebar";
+import {
+  CallProvider,
+  formatPreviewMessageText,
+  isHiddenCallSignal,
+  parseCallInvite,
+  useCall,
+} from "./lib/calling";
 import { useJaText } from "./lib/store";
 import { playMessageSound } from "./lib/alerts";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
@@ -24,7 +32,17 @@ interface MessageToast {
 const NOTIFICATION_WELCOME_KEY = "jatext-notification-welcome-seen-v1";
 
 export default function App() {
+  return (
+    <CallProvider>
+      <AppContent />
+    </CallProvider>
+  );
+}
+
+function AppContent() {
   const store = useJaText();
+  const { session: callSession, minimized: callMinimized, setMinimized: setCallMinimized } =
+    useCall();
   const {
     activeChatId,
     activeGroupId,
@@ -53,6 +71,7 @@ export default function App() {
     activeGroupId,
     hasProfile: Boolean(profileUser),
     settingsOpen,
+    callFullScreen: false,
   });
 
   const activeFriend = useMemo(
@@ -112,7 +131,9 @@ export default function App() {
         preview.createdAt === 0 ||
         preview.senderId === me.id ||
         preview.isMuted ||
-        me.statusPreference === "dnd"
+        me.statusPreference === "dnd" ||
+        isHiddenCallSignal(preview.body) ||
+        Boolean(parseCallInvite(preview.body))
       ) {
         continue;
       }
@@ -127,11 +148,12 @@ export default function App() {
         activeChatId === friend.id;
       if (focusedOnThisChat) continue;
 
+      const formattedBody = formatPreviewMessageText(preview.body);
       setToastClosing(false);
       setMessageToast({
         friendId: friend.id,
         title: `New message from ${friend.displayName}`,
-        body: preview.body,
+        body: formattedBody,
       });
       if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
       toastTimer.current = window.setTimeout(() => {
@@ -274,14 +296,19 @@ export default function App() {
       activeGroupId,
       hasProfile: Boolean(profileUser),
       settingsOpen,
+      callFullScreen: Boolean(
+        callSession && !callMinimized && callSession.phase !== "incoming",
+      ),
     };
-  }, [activeChatId, activeGroupId, profileUser, settingsOpen]);
+  }, [activeChatId, activeGroupId, callMinimized, callSession, profileUser, settingsOpen]);
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     const listener = CapacitorApp.addListener("backButton", ({ canGoBack }) => {
       const navigation = navigationStateRef.current;
-      if (navigation.settingsOpen) {
+      if (navigation.callFullScreen) {
+        setCallMinimized(true);
+      } else if (navigation.settingsOpen) {
         setSettingsOpen(false);
       } else if (navigation.hasProfile) {
         setProfileUser(null);
@@ -298,7 +325,7 @@ export default function App() {
     return () => {
       void listener.then((handle) => handle.remove());
     };
-  }, [setActiveChatId, setActiveGroupId]);
+  }, [setActiveChatId, setActiveGroupId, setCallMinimized]);
 
   useEffect(() => {
     const preventNativeContextMenu = (event: MouseEvent) => event.preventDefault();
@@ -373,6 +400,7 @@ export default function App() {
         />
       )}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      <CallOverlay />
       {messageToast && (
         <button
           className={`message-toast ${toastClosing ? "closing" : ""}`}

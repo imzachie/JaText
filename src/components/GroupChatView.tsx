@@ -14,9 +14,12 @@ import {
   type UIEvent,
 } from "react";
 import { playMessageSound } from "../lib/alerts";
+import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { ContextMenu } from "./ContextMenu";
 import { Avatar } from "./Avatar";
 import { StickerPicker } from "./StickerPicker";
+import { VoiceNotePlayer } from "./VoiceNotePlayer";
+import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import type { FriendActivity, GroupMember, GroupMessage, JaUser } from "../lib/types";
@@ -159,10 +162,13 @@ const GroupChatHistory = memo(function GroupChatHistory({
   messagesRef,
   initialScrollAllowedRef,
   wasPinnedRef,
+  shownTranscriptIds,
+  onToggleTranscript,
   onScroll,
   onOpenProfile,
   onOpenImage,
   onOpenMessageMenu,
+  onOpenMessageMenuAt,
   onReactToMessage,
 }: {
   messages: GroupMessage[];
@@ -172,10 +178,13 @@ const GroupChatHistory = memo(function GroupChatHistory({
   messagesRef: { current: HTMLDivElement | null };
   initialScrollAllowedRef: { current: boolean };
   wasPinnedRef: { current: boolean };
+  shownTranscriptIds: Record<string, boolean>;
+  onToggleTranscript: (messageId: string, show: boolean) => void;
   onScroll: (event: UIEvent<HTMLDivElement>) => void;
   onOpenProfile: (user: JaUser) => void;
   onOpenImage: (url: string) => void;
   onOpenMessageMenu: (event: MouseEvent, message: GroupMessage) => void;
+  onOpenMessageMenuAt: (x: number, y: number, message: GroupMessage) => void;
   onReactToMessage: (message: GroupMessage, emoji: string) => void;
 }) {
   const memberById = useMemo(
@@ -218,14 +227,18 @@ const GroupChatHistory = memo(function GroupChatHistory({
         const day = fmtDay(message.createdAt);
         const showDay = index === 0 || fmtDay(messages[index - 1].createdAt) !== day;
         const mine = message.senderId === me.id;
-        const isImage = isImageAttachment(
-          message.attachmentType,
-          message.attachmentName,
-          message.attachmentUrl,
-        );
+        const isAudioNote = isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
+        const isImage =
+          !isAudioNote &&
+          isImageAttachment(
+            message.attachmentType,
+            message.attachmentName,
+            message.attachmentUrl,
+          );
         const isVideo =
-          message.attachmentType?.startsWith("video/") ||
-          /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? "");
+          !isAudioNote &&
+          (message.attachmentType?.startsWith("video/") ||
+            /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
         const senderMember = memberById.get(message.senderId);
         const senderUser: JaUser = senderMember ?? {
           id: message.senderId,
@@ -314,7 +327,21 @@ const GroupChatHistory = memo(function GroupChatHistory({
                     ) : (
                       <>
                         {message.attachmentUrl &&
-                          (isImage ? (
+                          (isAudioNote ? (
+                            <VoiceNotePlayer
+                              messageId={message.id}
+                              audioUrl={message.attachmentUrl}
+                              attachmentType={message.attachmentType}
+                              mine={mine}
+                              showTranscript={Boolean(shownTranscriptIds[message.id])}
+                              onToggleTranscript={(show) => onToggleTranscript(message.id, show)}
+                              onOpenContextAt={
+                                message.id.startsWith("pending-")
+                                  ? undefined
+                                  : (x, y) => onOpenMessageMenuAt(x, y, message)
+                              }
+                            />
+                          ) : isImage ? (
                             <button
                               type="button"
                               className="image-message-button"
@@ -452,6 +479,8 @@ export function GroupChatView({
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionDismissedAt, setMentionDismissedAt] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
+  const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
   const [replyTo, setReplyTo] = useState<GroupMessage | null>(null);
   const [editingMessage, setEditingMessage] = useState<GroupMessage | null>(null);
   const [forwardedMessage, setForwardedMessage] = useState<GroupMessage | null>(null);
@@ -993,33 +1022,90 @@ export function GroupChatView({
     }
   }
 
-  const openMessageMenu = useCallback(
-    (event: MouseEvent, message: GroupMessage) => {
-      event.preventDefault();
-      event.stopPropagation();
+  const openMessageMenuAt = useCallback(
+    (x: number, y: number, message: GroupMessage) => {
       if (messageMenuCloseTimerRef.current !== null) {
         window.clearTimeout(messageMenuCloseTimerRef.current);
         messageMenuCloseTimerRef.current = null;
       }
       setMessageMenuClosing(false);
-      const eventTime =
-        event.timeStamp > 1_000_000_000_000
-          ? event.timeStamp
-          : performance.timeOrigin + event.timeStamp;
+      const now = Date.now();
       setMessageMenu({
-        x: event.clientX,
-        y: event.clientY,
+        x,
+        y,
         message,
         canUnsend:
           message.senderId === store.me?.id &&
           !message.unsentAt &&
-          eventTime - message.createdAt < UNSEND_WINDOW_MS,
-        canEdit: message.senderId === store.me?.id && !message.unsentAt,
+          now - message.createdAt < UNSEND_WINDOW_MS,
+        canEdit:
+          message.senderId === store.me?.id &&
+          !message.unsentAt &&
+          Boolean(message.body.trim()),
       });
       setReactionPickerOpen(false);
     },
     [store.me?.id],
   );
+
+  const openMessageMenu = useCallback(
+    (event: MouseEvent, message: GroupMessage) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openMessageMenuAt(event.clientX, event.clientY, message);
+    },
+    [openMessageMenuAt],
+  );
+
+  async function sendGroupVoiceNote(voiceFile: File) {
+    if (!groupId || isMuted) return;
+    setRecordingVoiceNote(false);
+    const sentReply = replyTo;
+    const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
+    lastPendingMessageAtRef.current = sentAt;
+    const pendingId = `pending-${sentAt}`;
+    const cleanAudioBlob = new Blob([voiceFile], {
+      type: voiceFile.type.split(";")[0] || "audio/webm",
+    });
+    const attachmentUrl = URL.createObjectURL(cleanAudioBlob);
+    pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
+    const meta = decodeVoiceNoteMime(voiceFile.type);
+    if (meta?.transcript) {
+      saveCachedVoiceTranscript(pendingId, meta.transcript);
+    }
+    wasPinnedRef.current = true;
+    setPendingMessages((current) => [
+      ...current.slice(-299),
+      {
+        id: pendingId,
+        senderId: store.me?.id ?? "",
+        senderName: store.me?.displayName ?? "",
+        senderUsername: store.me?.username ?? "",
+        senderAvatarUrl: store.me?.avatarUrl,
+        senderAvatarColor: store.me?.avatarColor ?? "black",
+        body: "",
+        attachmentUrl,
+        attachmentName: voiceFile.name,
+        attachmentType: voiceFile.type,
+        createdAt: sentAt,
+      } as GroupMessage,
+    ]);
+    window.requestAnimationFrame(scrollToBottom);
+    setReplyTo(null);
+    setError(null);
+    try {
+      await store.sendGroupMessage(groupId, "", voiceFile, sentReply?.id);
+      if (store.soundsEnabled) playMessageSound("sent");
+    } catch (err) {
+      const url = pendingAttachmentUrlsRef.current.get(pendingId);
+      if (url) {
+        URL.revokeObjectURL(url);
+        pendingAttachmentUrlsRef.current.delete(pendingId);
+      }
+      setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
+      setError(friendlyError(err, "Couldn't send the voice note."));
+    }
+  }
 
   function replyToMessage(message: GroupMessage) {
     setEditingMessage(null);
@@ -1301,10 +1387,15 @@ export function GroupChatView({
         messagesRef={messagesRef}
         initialScrollAllowedRef={initialScrollAllowedRef}
         wasPinnedRef={wasPinnedRef}
+        shownTranscriptIds={shownTranscriptIds}
+        onToggleTranscript={(id, show) =>
+          setShownTranscriptIds((prev) => ({ ...prev, [id]: show }))
+        }
         onScroll={handleMessagesScroll}
         onOpenProfile={onOpenProfile}
         onOpenImage={openImagePreview}
         onOpenMessageMenu={openMessageMenu}
+        onOpenMessageMenuAt={openMessageMenuAt}
         onReactToMessage={reactToMessage}
       />
 
@@ -1439,122 +1530,133 @@ export function GroupChatView({
             </div>
           )}
 
-          <form className="composer" onSubmit={(event) => void onSend(event)}>
-            <input
-              ref={fileInput}
-              type="file"
-              hidden
-              onChange={(event) => {
-                const selected = event.target.files?.[0] ?? null;
-                setFile(selected);
-                event.currentTarget.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="icon-btn attach-btn"
-              title="Attach a photo or file"
-              aria-label="Attach a photo or file"
-              disabled={!!editingMessage}
-              onClick={() => fileInput.current?.click()}
-            >
-              📎
-            </button>
-            <StickerPicker
-              friendId=""
-              disabled={busy || !!editingMessage}
-              onSelect={async (sticker) => {
-                if (!groupId) return;
-                try {
-                  if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-                  typingRef.current = false;
-                  await setGroupTyping(groupId, false);
-                  wasPinnedRef.current = true;
-                  await store.sendGroupSticker(groupId, sticker, replyTo?.id);
-                  setReplyTo(null);
-                  if (store.soundsEnabled) playMessageSound("sent");
-                } catch (cause) {
-                  setError(friendlyError(cause, "Could not send the sticker."));
-                }
-              }}
-            />
-            <button
-              type="button"
-              className="icon-btn voice-note-placeholder"
-              title="Voice notes coming soon"
-              aria-label="Voice notes coming soon"
-              disabled
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="9" y="2" width="6" height="12" rx="3" />
-                <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
-              </svg>
-            </button>
-            <textarea
-              ref={composerRef}
-              value={draft}
-              maxLength={4000}
-              onChange={(event) =>
-                onDraftChange(event.target.value, event.currentTarget.selectionStart)
-              }
-              onClick={(event) => setCursorPos(event.currentTarget.selectionStart ?? 0)}
-              onKeyUp={(event) => {
-                if (
-                  event.key !== "ArrowDown" &&
-                  event.key !== "ArrowUp" &&
-                  event.key !== "Enter" &&
-                  event.key !== "Escape"
-                ) {
-                  setCursorPos(event.currentTarget.selectionStart ?? 0);
-                }
-              }}
-              onPaste={onComposerPaste}
-              rows={1}
-              placeholder={editingMessage ? "Edit message…" : "Message…"}
-              aria-label="Group message"
-              onKeyDown={(event) => {
-                if (mentionCandidates.length > 0) {
-                  if (event.key === "ArrowDown") {
-                    event.preventDefault();
-                    setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
-                    return;
+          {recordingVoiceNote ? (
+            <div className="composer voice-composer-active">
+              <VoiceNoteRecorder
+                onCancel={() => setRecordingVoiceNote(false)}
+                onSendVoiceNote={(voiceFile) => sendGroupVoiceNote(voiceFile)}
+                onError={(msg) => setError(msg)}
+              />
+            </div>
+          ) : (
+            <form className="composer" onSubmit={(event) => void onSend(event)}>
+              <input
+                ref={fileInput}
+                type="file"
+                hidden
+                onChange={(event) => {
+                  const selected = event.target.files?.[0] ?? null;
+                  setFile(selected);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <button
+                type="button"
+                className="icon-btn attach-btn"
+                title="Attach a photo or file"
+                aria-label="Attach a photo or file"
+                disabled={!!editingMessage}
+                onClick={() => fileInput.current?.click()}
+              >
+                📎
+              </button>
+              <StickerPicker
+                friendId=""
+                disabled={busy || !!editingMessage}
+                onSelect={async (sticker) => {
+                  if (!groupId) return;
+                  try {
+                    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+                    typingRef.current = false;
+                    await setGroupTyping(groupId, false);
+                    wasPinnedRef.current = true;
+                    await store.sendGroupSticker(groupId, sticker, replyTo?.id);
+                    setReplyTo(null);
+                    if (store.soundsEnabled) playMessageSound("sent");
+                  } catch (cause) {
+                    setError(friendlyError(cause, "Could not send the sticker."));
                   }
-                  if (event.key === "ArrowUp") {
-                    event.preventDefault();
-                    setMentionIndex(
-                      (prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length,
-                    );
-                    return;
-                  }
-                  if (event.key === "Enter" || event.key === "Tab") {
-                    event.preventDefault();
-                    const picked = mentionCandidates[safeMentionIndex];
-                    if (picked) applyMention(picked.handle);
-                    return;
-                  }
-                  if (event.key === "Escape" && activeMentionMatch) {
-                    event.preventDefault();
-                    setMentionDismissedAt(activeMentionMatch.start);
-                    return;
-                  }
+                }}
+              />
+              <button
+                type="button"
+                className="icon-btn voice-note-btn"
+                title="Record voice note"
+                aria-label="Record voice note"
+                disabled={busy || !!editingMessage}
+                onClick={() => setRecordingVoiceNote(true)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="9" y="2" width="6" height="12" rx="3" />
+                  <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+                </svg>
+              </button>
+              <textarea
+                ref={composerRef}
+                value={draft}
+                maxLength={4000}
+                onChange={(event) =>
+                  onDraftChange(event.target.value, event.currentTarget.selectionStart)
                 }
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void onSend();
-                }
-              }}
-            />
-            <button
-              type="submit"
-              className="send-btn"
-              disabled={editingMessage ? !draft.trim() : !draft.trim() && !file && !forwardedMessage}
-              onPointerDown={(event) => event.preventDefault()}
-              onMouseDown={(event) => event.preventDefault()}
-              aria-label={editingMessage ? "Save edit" : "Send message"}
-            >
-              {editingMessage ? "✓" : "➤"}
-            </button>
-          </form>
+                onClick={(event) => setCursorPos(event.currentTarget.selectionStart ?? 0)}
+                onKeyUp={(event) => {
+                  if (
+                    event.key !== "ArrowDown" &&
+                    event.key !== "ArrowUp" &&
+                    event.key !== "Enter" &&
+                    event.key !== "Escape"
+                  ) {
+                    setCursorPos(event.currentTarget.selectionStart ?? 0);
+                  }
+                }}
+                onPaste={onComposerPaste}
+                rows={1}
+                placeholder={editingMessage ? "Edit message…" : "Message…"}
+                aria-label="Group message"
+                onKeyDown={(event) => {
+                  if (mentionCandidates.length > 0) {
+                    if (event.key === "ArrowDown") {
+                      event.preventDefault();
+                      setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
+                      return;
+                    }
+                    if (event.key === "ArrowUp") {
+                      event.preventDefault();
+                      setMentionIndex(
+                        (prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length,
+                      );
+                      return;
+                    }
+                    if (event.key === "Enter" || event.key === "Tab") {
+                      event.preventDefault();
+                      const picked = mentionCandidates[safeMentionIndex];
+                      if (picked) applyMention(picked.handle);
+                      return;
+                    }
+                    if (event.key === "Escape" && activeMentionMatch) {
+                      event.preventDefault();
+                      setMentionDismissedAt(activeMentionMatch.start);
+                      return;
+                    }
+                  }
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void onSend();
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                className="send-btn"
+                disabled={editingMessage ? !draft.trim() : !draft.trim() && !file && !forwardedMessage}
+                onPointerDown={(event) => event.preventDefault()}
+                onMouseDown={(event) => event.preventDefault()}
+                aria-label={editingMessage ? "Save edit" : "Send message"}
+              >
+                {editingMessage ? "✓" : "➤"}
+              </button>
+            </form>
+          )}
         </div>
       )}
 
@@ -1569,6 +1671,26 @@ export function GroupChatView({
           <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}>
             <span>↩️</span> Reply
           </button>
+          {!messageMenu.message.unsentAt &&
+            isVoiceNoteOrAudio(
+              messageMenu.message.attachmentType,
+              messageMenu.message.attachmentName,
+            ) && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const id = messageMenu.message.id;
+                  setShownTranscriptIds((prev) => ({ ...prev, [id]: !prev[id] }));
+                  closeMessageMenu();
+                }}
+              >
+                <span>📝</span>{" "}
+                {shownTranscriptIds[messageMenu.message.id]
+                  ? "Hide transcription"
+                  : "Show transcription"}
+              </button>
+            )}
           {!messageMenu.message.unsentAt && (
             <>
               {messageMenu.canEdit && (

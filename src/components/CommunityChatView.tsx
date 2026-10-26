@@ -4,10 +4,13 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
 import { playMessageSound } from "../lib/alerts";
+import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { friendlyError } from "../lib/errors";
 import { Avatar } from "./Avatar";
 import { StickerPicker } from "./StickerPicker";
 import { ContextMenu } from "./ContextMenu";
+import { VoiceNotePlayer } from "./VoiceNotePlayer";
+import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import type { CommunityMessage, JaUser } from "../lib/types";
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
@@ -179,6 +182,8 @@ export function CommunityChatView({
   const setCommunityTyping = store.setCommunityTyping;
   const [draft, setDraft] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
+  const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [showPoll, setShowPoll] = useState(false);
@@ -603,27 +608,94 @@ export function CommunityChatView({
     }
   }
 
-  const openMessageMenu = useCallback(
-    (event: MouseEvent, message: CommunityMessage) => {
-      event.preventDefault();
-      event.stopPropagation();
+  const openMessageMenuAt = useCallback(
+    (x: number, y: number, message: CommunityMessage) => {
       if (messageMenuCloseTimerRef.current !== null) {
         window.clearTimeout(messageMenuCloseTimerRef.current);
         messageMenuCloseTimerRef.current = null;
       }
       setMessageMenuClosing(false);
-      const eventTime = event.timeStamp > 1_000_000_000_000 ? event.timeStamp : performance.timeOrigin + event.timeStamp;
+      const now = Date.now();
       setMessageMenu({
-        x: event.clientX,
-        y: event.clientY,
+        x,
+        y,
         message,
-        canUnsend: message.senderId === store.me?.id && !message.unsentAt && eventTime - message.createdAt < UNSEND_WINDOW_MS,
-        canEdit: message.senderId === store.me?.id && !message.unsentAt && message.type === "text" && !!message.body.trim(),
+        canUnsend:
+          message.senderId === store.me?.id &&
+          !message.unsentAt &&
+          now - message.createdAt < UNSEND_WINDOW_MS,
+        canEdit:
+          message.senderId === store.me?.id &&
+          !message.unsentAt &&
+          message.type === "text" &&
+          !!message.body.trim(),
       });
       setReactionPickerOpen(false);
     },
     [store.me?.id],
   );
+
+  const openMessageMenu = useCallback(
+    (event: MouseEvent, message: CommunityMessage) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openMessageMenuAt(event.clientX, event.clientY, message);
+    },
+    [openMessageMenuAt],
+  );
+
+  async function sendCommunityVoiceNote(voiceFile: File) {
+    setRecordingVoiceNote(false);
+    const sentReply = replyTo;
+    const sentAt = Math.max(Date.now(), lastPendingAtRef.current + 1);
+    lastPendingAtRef.current = sentAt;
+    const pendingId = `pending-${sentAt}`;
+    const cleanAudioBlob = new Blob([voiceFile], {
+      type: voiceFile.type.split(";")[0] || "audio/webm",
+    });
+    const attachmentUrl = URL.createObjectURL(cleanAudioBlob);
+    pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
+    const meta = decodeVoiceNoteMime(voiceFile.type);
+    if (meta?.transcript) {
+      saveCachedVoiceTranscript(pendingId, meta.transcript);
+    }
+    wasPinnedRef.current = true;
+    setPendingMessages((cur) => [
+      ...cur.slice(-299),
+      {
+        id: pendingId,
+        senderId: store.me?.id ?? "",
+        senderName: store.me?.displayName ?? "",
+        senderUsername: store.me?.username ?? "",
+        senderAvatarUrl: store.me?.avatarUrl,
+        senderAvatarColor: store.me?.avatarColor ?? "black",
+        body: "",
+        type: "text" as const,
+        pollOptions: [],
+        votes: [],
+        createdAt: sentAt,
+        canModerate: true,
+        isOwner: false,
+        attachmentUrl,
+        attachmentName: voiceFile.name,
+        attachmentType: voiceFile.type,
+      },
+    ]);
+    setReplyTo(null);
+    setError(null);
+    try {
+      await store.sendCommunityText("", voiceFile, sentReply?.id, undefined);
+      if (store.soundsEnabled) playMessageSound("sent");
+    } catch (cause) {
+      const url = pendingAttachmentUrlsRef.current.get(pendingId);
+      if (url) {
+        URL.revokeObjectURL(url);
+        pendingAttachmentUrlsRef.current.delete(pendingId);
+      }
+      setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
+      setError(friendlyError(cause, "Could not post voice note."));
+    }
+  }
   function replyToMessage(message: CommunityMessage) {
     setReplyTo(message);
     closeMessageMenu();
@@ -793,12 +865,17 @@ export function CommunityChatView({
             store.communityPermissions.canModerate &&
             (store.communityPermissions.isOwner || message.senderId === store.me?.id);
           const showResults = !!message.pollEndedAt || message.myVote !== undefined;
+          const isAudioNote = isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
           const isImage =
-            Boolean(message.attachmentType?.startsWith("image/")) ||
-            /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$|\s)/i.test(
-              `${message.attachmentName ?? ""} ${message.attachmentUrl ?? ""}`,
-            );
-          const isVideo = message.attachmentType?.startsWith("video/") || /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? "");
+            !isAudioNote &&
+            (Boolean(message.attachmentType?.startsWith("image/")) ||
+              /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$|\s)/i.test(
+                `${message.attachmentName ?? ""} ${message.attachmentUrl ?? ""}`,
+              ));
+          const isVideo =
+            !isAudioNote &&
+            (message.attachmentType?.startsWith("video/") ||
+              /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
           return (
             <article className="community-post" key={message.renderKey ?? message.id} id={`community-message-${message.id}`} onContextMenu={(e) => openMessageMenu(e, message)}>
               <div className="community-post-header">
@@ -875,7 +952,23 @@ export function CommunityChatView({
                   ) : (
                     <>
                       {message.attachmentUrl &&
-                        (isImage ? (
+                        (isAudioNote ? (
+                          <VoiceNotePlayer
+                            messageId={message.id}
+                            audioUrl={message.attachmentUrl}
+                            attachmentType={message.attachmentType}
+                            mine={message.senderId === store.me?.id}
+                            showTranscript={Boolean(shownTranscriptIds[message.id])}
+                            onToggleTranscript={(show) =>
+                              setShownTranscriptIds((prev) => ({ ...prev, [message.id]: show }))
+                            }
+                            onOpenContextAt={
+                              message.id.startsWith("pending-")
+                                ? undefined
+                                : (x, y) => openMessageMenuAt(x, y, message)
+                            }
+                          />
+                        ) : isImage ? (
                           <button type="button" className="image-message-button" onClick={() => openImagePreview(message.attachmentUrl!)} aria-label="Open image viewer">
                             <img className="msg-image" src={message.attachmentUrl} alt={message.attachmentName ?? "attachment"} />
                           </button>
@@ -1027,56 +1120,79 @@ export function CommunityChatView({
               </div>
             </form>
           )}
-          <form className="composer community-composer" onSubmit={(event) => void sendText(event)}>
-            <input
-              ref={fileInput}
-              type="file"
-              hidden
-              onChange={(e) => {
-                setFile(e.target.files?.[0] ?? null);
-                e.currentTarget.value = "";
-              }}
-            />
-            <button type="button" className="icon-btn attach-btn" disabled={!!editingMessage} onClick={() => fileInput.current?.click()} title="Attach a photo or file">📎</button>
-            <StickerPicker friendId="" disabled={!!editingMessage} onSelect={sendSticker} />
-            <button
-              type="button"
-              className={`icon-btn poll-toggle-btn ${showPoll ? "active" : ""}`}
-              title="Create poll"
-              aria-label="Create poll"
-              aria-expanded={showPoll}
-              disabled={!!editingMessage}
-              onClick={() => setShowPoll((open) => !open)}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 20V11M12 20V4M19 20v-7" />
-              </svg>
-            </button>
-            <textarea
-              ref={composerRef}
-              value={draft}
-              maxLength={4000}
-              onChange={(event) => updateDraft(event.target.value)}
-              rows={1}
-              placeholder={editingMessage ? "Edit message…" : "Message…"}
-              aria-label="Community message"
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void sendText();
-                }
-              }}
-            />
-            <button
-              type="submit"
-              className="send-btn"
-              disabled={editingMessage ? !draft.trim() : !draft.trim() && !file}
-              onPointerDown={(event) => event.preventDefault()}
-              onMouseDown={(event) => event.preventDefault()}
-            >
-              {editingMessage ? "✓" : "➤"}
-            </button>
-          </form>
+          {recordingVoiceNote ? (
+            <div className="composer community-composer voice-composer-active">
+              <VoiceNoteRecorder
+                onCancel={() => setRecordingVoiceNote(false)}
+                onSendVoiceNote={(voiceFile) => sendCommunityVoiceNote(voiceFile)}
+                onError={(msg) => setError(msg)}
+              />
+            </div>
+          ) : (
+            <form className="composer community-composer" onSubmit={(event) => void sendText(event)}>
+              <input
+                ref={fileInput}
+                type="file"
+                hidden
+                onChange={(e) => {
+                  setFile(e.target.files?.[0] ?? null);
+                  e.currentTarget.value = "";
+                }}
+              />
+              <button type="button" className="icon-btn attach-btn" disabled={!!editingMessage} onClick={() => fileInput.current?.click()} title="Attach a photo or file">📎</button>
+              <StickerPicker friendId="" disabled={!!editingMessage} onSelect={sendSticker} />
+              <button
+                type="button"
+                className="icon-btn voice-note-btn"
+                title="Record voice note"
+                aria-label="Record voice note"
+                disabled={!!editingMessage}
+                onClick={() => setRecordingVoiceNote(true)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="9" y="2" width="6" height="12" rx="3" />
+                  <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className={`icon-btn poll-toggle-btn ${showPoll ? "active" : ""}`}
+                title="Create poll"
+                aria-label="Create poll"
+                aria-expanded={showPoll}
+                disabled={!!editingMessage}
+                onClick={() => setShowPoll((open) => !open)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 20V11M12 20V4M19 20v-7" />
+                </svg>
+              </button>
+              <textarea
+                ref={composerRef}
+                value={draft}
+                maxLength={4000}
+                onChange={(event) => updateDraft(event.target.value)}
+                rows={1}
+                placeholder={editingMessage ? "Edit message…" : "Message…"}
+                aria-label="Community message"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void sendText();
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                className="send-btn"
+                disabled={editingMessage ? !draft.trim() : !draft.trim() && !file}
+                onPointerDown={(event) => event.preventDefault()}
+                onMouseDown={(event) => event.preventDefault()}
+              >
+                {editingMessage ? "✓" : "➤"}
+              </button>
+            </form>
+          )}
         </>
       ) : (
         <div className="community-readonly">Only JaText community moderators can post here.</div>
@@ -1116,6 +1232,26 @@ export function CommunityChatView({
       {messageMenu && (
         <ContextMenu x={messageMenu.x} y={messageMenu.y} label="Message actions" className={`message-context-menu ${messageMenuClosing ? "closing" : ""}`} onClose={closeMessageMenu}>
           <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}><span>↩️</span> Reply</button>
+          {!messageMenu.message.unsentAt &&
+            isVoiceNoteOrAudio(
+              messageMenu.message.attachmentType,
+              messageMenu.message.attachmentName,
+            ) && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const id = messageMenu.message.id;
+                  setShownTranscriptIds((prev) => ({ ...prev, [id]: !prev[id] }));
+                  closeMessageMenu();
+                }}
+              >
+                <span>📝</span>{" "}
+                {shownTranscriptIds[messageMenu.message.id]
+                  ? "Hide transcription"
+                  : "Show transcription"}
+              </button>
+            )}
           {!messageMenu.message.unsentAt && (
             <>
               {messageMenu.canEdit && <button type="button" role="menuitem" onClick={() => startEditingMessage(messageMenu.message)}><span>✏️</span> Edit message</button>}

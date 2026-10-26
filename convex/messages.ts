@@ -185,13 +185,20 @@ export const send = mutation({
       deliveryStatus: "delivered",
     });
 
-    await scheduleMessagePush(
-      ctx,
-      me,
-      args.receiverId,
-      args.body.trim() ||
-        (args.attachmentName ? `Sent ${args.attachmentName}` : "Sent you an attachment"),
-    );
+    const trimmedBody = args.body.trim();
+    if (!trimmedBody.startsWith("__JATEXT_CALL_SIG__:")) {
+      const pushSummary = trimmedBody.startsWith("__JATEXT_CALL__:")
+        ? trimmedBody.includes('"mode":"video"')
+          ? "📹 Incoming video call"
+          : "📞 Incoming voice call"
+        : trimmedBody ||
+          (args.attachmentType?.startsWith("audio/")
+            ? "🎤 Sent a voice note"
+            : args.attachmentName
+              ? `Sent ${args.attachmentName}`
+              : "Sent you an attachment");
+      await scheduleMessagePush(ctx, me, args.receiverId, pushSummary);
+    }
   },
 });
 
@@ -465,6 +472,7 @@ export const previews = query({
         const last = recent.find(
           (message) =>
             !message.hiddenFor?.includes(me._id) &&
+            !message.body.startsWith("__JATEXT_CALL_SIG__:") &&
             !(hasBlockedFriend && message.senderId === friendId) &&
             (settings?.deletedAt === undefined ||
               message._creationTime > settings.deletedAt),

@@ -1,0 +1,39 @@
+import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+
+export interface SpeechTranscriptEvent {
+  text: string;
+  isFinal: boolean;
+}
+
+export interface JaTextNativePlugin {
+  checkPushSupport(): Promise<{ firebaseConfigured: boolean }>;
+  requestMediaPermissions(options: { video: boolean }): Promise<{ granted: boolean }>;
+  setCallAudioRoute(options: { active: boolean; speaker: boolean }): Promise<{ speaker: boolean }>;
+  startSpeechCapture(): Promise<{ started: boolean }>;
+  stopSpeechCapture(): Promise<{ transcript: string }>;
+  addListener(
+    eventName: "speechTranscript",
+    listenerFunc: (event: SpeechTranscriptEvent) => void,
+  ): Promise<PluginListenerHandle>;
+}
+
+export const JaTextNative = registerPlugin<JaTextNativePlugin>("JaTextNative");
+
+export async function ensureNativeMediaPermissions(video: boolean): Promise<boolean> {
+  if (!Capacitor.isNativePlatform()) return true;
+  try {
+    const res = await JaTextNative.requestMediaPermissions({ video });
+    return res.granted !== false;
+  } catch {
+    return true;
+  }
+}
+
+export async function configureNativeCallAudio(active: boolean, speaker: boolean): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await JaTextNative.setCallAudioRoute({ active, speaker });
+  } catch {
+    // Ignore on platforms that don't support native audio routing.
+  }
+}

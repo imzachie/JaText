@@ -3,8 +3,9 @@ import { useAction, useConvex, useConvexAuth, useMutation, useQuery } from "conv
 import { useAuthActions } from "@convex-dev/auth/react";
 import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
-import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
+import { JaTextNative } from "./nativeBridge";
 // Works with both the checked-in stub and the real generated API
 // (run `npx convex dev` once to generate convex/_generated for real).
 import { api } from "../../convex/_generated/api";
@@ -32,12 +33,6 @@ import type {
 
 const PUSH_TOKEN_STORAGE_KEY = "jatext-push-token-v1";
 const ANDROID_AUTH_CALLBACK = "com.ahad00010.jatext://auth";
-
-interface JaTextNativePlugin {
-  checkPushSupport(): Promise<{ firebaseConfigured: boolean }>;
-}
-
-const JaTextNative = registerPlugin<JaTextNativePlugin>("JaTextNative");
 
 async function checkNativeFirebaseConfigured(): Promise<boolean> {
   if (!Capacitor.isNativePlatform()) return false;
@@ -395,9 +390,14 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const upload = useCallback(
     async (file: File): Promise<Id<"_storage">> => {
       const url = (await generateUploadUrl()) as string;
+      const baseMime = (file.type || "application/octet-stream").split(";")[0].trim();
+      const storageMime =
+        baseMime === "application/x-jatext-call+json"
+          ? "application/json"
+          : baseMime || "application/octet-stream";
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
+        headers: { "Content-Type": storageMime },
         body: file,
       });
       if (!res.ok) throw new Error("Upload failed. Please try again.");
@@ -991,6 +991,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const fetchMessagesWithUser = useCallback<JaTextStore["fetchMessagesWithUser"]>(
+    async (otherId) => {
+      if (!isAuthenticated || !otherId || otherId === OFFICIAL_COMMUNITY_ID) return [];
+      const rows = await convex.query(api.messages.list, {
+        otherId: otherId as Id<"users">,
+      });
+      return (rows ?? []) as ChatMessage[];
+    },
+    [convex, isAuthenticated],
+  );
+
   const value: JaTextStore = {
     mode: "convex",
     loading: authLoading || (isAuthenticated && me === undefined),
@@ -1034,6 +1045,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     sendFriendRequest,
     respondRequest,
     sendMessage,
+    fetchMessagesWithUser,
     forwardMessage,
     toggleMessageReaction,
     deleteMessageForMe,
