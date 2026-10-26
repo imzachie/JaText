@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "r
 import { ContextMenu } from "./ContextMenu";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
-import type { JaUser } from "../lib/types";
+import { OFFICIAL_COMMUNITY_ID, type JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 
 function fmtTime(ts: number) {
@@ -36,6 +36,11 @@ export function Sidebar({
   const [addName, setAddName] = useState("");
   const [addMsg, setAddMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [addBusy, setAddBusy] = useState(false);
+  const [showGroupDialog, setShowGroupDialog] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [groupError, setGroupError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [chatMenu, setChatMenu] = useState<{
     x: number;
@@ -194,6 +199,43 @@ export function Sidebar({
             <div className="error-box sidebar-error" role="alert">{chatActionError}</div>
           )}
           <div className="friend-list">
+            {!showArchived && (
+              <div
+                className={`friend-row official-community-row ${activeChatId === OFFICIAL_COMMUNITY_ID ? "active" : ""}`}
+                onClick={() => setActiveChatId(OFFICIAL_COMMUNITY_ID)}
+              >
+                <div className="community-mark" aria-hidden="true">J</div>
+                <div className="friend-row-text">
+                  <div className="friend-row-top">
+                    <strong>JaText Community</strong>
+                    <span className="friend-row-badges">
+                      <span className="verified-badge" title="Verified">✓</span>
+                      <span className="official-badge">Official</span>
+                    </span>
+                  </div>
+                  <span className="muted small friend-preview">Official JaText announcements</span>
+                </div>
+              </div>
+            )}
+            {!showArchived && store.groups.map((group) => (
+              <div
+                className={`friend-row group-list-row ${store.activeGroupId === group.id ? "active" : ""}`}
+                key={group.id}
+                onClick={() => store.setActiveGroupId(group.id)}
+              >
+                {group.avatarUrl ? (
+                  <img className="group-avatar sidebar-group-avatar" src={group.avatarUrl} alt="" />
+                ) : (
+                  <div className="group-avatar sidebar-group-avatar group-avatar-fallback" aria-hidden="true">👥</div>
+                )}
+                <div className="friend-row-text">
+                  <div className="friend-row-top"><strong>{group.name}</strong></div>
+                  <span className="muted small friend-preview">
+                    {group.lastMessage || `${group.memberCount} members`}
+                  </span>
+                </div>
+              </div>
+            ))}
             {sortedFriends.length === 0 && friends.length > 0 && (
               <div className="empty-box">
                 <p>{showArchived ? "No archived chats." : "No chats match your search."}</p>
@@ -273,12 +315,89 @@ export function Sidebar({
             <div className={addMsg.ok ? "success-box" : "error-box"}>{addMsg.text}</div>
           )}
 
+          <section className="groups-add-section">
+            <div className="groups-section-heading">
+              <h3>Groups</h3>
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => {
+                  setGroupName("");
+                  setGroupMemberIds([]);
+                  setGroupError(null);
+                  setShowGroupDialog(true);
+                }}
+              >Add group chat…</button>
+            </div>
+            {store.groups.length === 0 ? (
+              <p className="muted small">Create a group with people you’re already friends with.</p>
+            ) : store.groups.map((group) => (
+              <button
+                type="button"
+                className="group-add-row"
+                key={group.id}
+                onClick={() => store.setActiveGroupId(group.id)}
+              >
+                <span>{group.avatarUrl ? <img className="group-avatar sidebar-group-avatar" src={group.avatarUrl} alt="" /> : "👥"}</span>
+                <span><strong>{group.name}</strong><small className="muted">{group.memberCount} members</small></span>
+              </button>
+            ))}
+          </section>
+
           {store.mode === "demo" && (
             <div className="hint-box">
               🧪 <strong>Demo tip:</strong> try adding <code>@maya</code>,{" "}
               <code>@kai.codes</code> or <code>@Nova</code> — they accept after a
               couple of seconds and will text you back. You can also create a
               second real account (sign out, sign up) and add each other.
+            </div>
+          )}
+          {showGroupDialog && (
+            <div className="modal-backdrop" onClick={() => setShowGroupDialog(false)}>
+              <section className="modal-card create-group-dialog" onClick={(event) => event.stopPropagation()}>
+                <button className="modal-close" onClick={() => setShowGroupDialog(false)} aria-label="Close">×</button>
+                <h2>Create group chat</h2>
+                <p className="muted small">You can add people you’re already friends with.</p>
+                <label>
+                  Group name
+                  <input value={groupName} maxLength={60} onChange={(event) => setGroupName(event.target.value)} />
+                </label>
+                <div className="create-group-members">
+                  {friends.map((friend) => (
+                    <label className="community-directory-person" key={friend.id}>
+                      <input
+                        type="checkbox"
+                        checked={groupMemberIds.includes(friend.id)}
+                        onChange={(event) =>
+                          setGroupMemberIds((current) =>
+                            event.target.checked
+                              ? [...current, friend.id]
+                              : current.filter((id) => id !== friend.id),
+                          )
+                        }
+                      />
+                      <span><strong>{friend.displayName}</strong> @{friend.username}</span>
+                    </label>
+                  ))}
+                  {friends.length === 0 && <p className="muted small">Add and accept a friend before creating a group.</p>}
+                </div>
+                {groupError && <div className="error-box" role="alert">{groupError}</div>}
+                <button
+                  type="button"
+                  className="primary-btn"
+                  disabled={groupBusy || !groupName.trim() || groupMemberIds.length === 0}
+                  onClick={() => {
+                    setGroupBusy(true);
+                    setGroupError(null);
+                    void store.createGroup(groupName, groupMemberIds).then((id) => {
+                      setShowGroupDialog(false);
+                      store.setActiveGroupId(id);
+                    }).catch((error: unknown) => {
+                      setGroupError(friendlyError(error, "Could not create the group."));
+                    }).finally(() => setGroupBusy(false));
+                  }}
+                >{groupBusy ? "Creating…" : "Create group"}</button>
+              </section>
             </div>
           )}
 

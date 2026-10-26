@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { ChatView } from "./components/ChatView";
+import { CommunityChatView } from "./components/CommunityChatView";
+import { GroupChatView } from "./components/GroupChatView";
 import { LoginPage } from "./components/LoginPage";
 import { Onboarding } from "./components/Onboarding";
 import { NotificationWelcome } from "./components/NotificationWelcome";
@@ -10,7 +12,7 @@ import { SettingsModal } from "./components/Settings";
 import { Sidebar } from "./components/Sidebar";
 import { useJaText } from "./lib/store";
 import { playMessageSound } from "./lib/alerts";
-import type { JaUser } from "./lib/types";
+import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
 
 interface MessageToast {
   friendId: string;
@@ -24,12 +26,14 @@ export default function App() {
   const store = useJaText();
   const {
     activeChatId,
+    activeGroupId,
     friends,
     me,
     notificationsEnabled,
     previews,
     previewsReady,
     setActiveChatId,
+    setActiveGroupId,
     soundsEnabled,
   } = store;
   const [profileUser, setProfileUser] = useState<JaUser | null>(null);
@@ -43,6 +47,7 @@ export default function App() {
   const toastTimer = useRef<number | null>(null);
   const navigationStateRef = useRef({
     activeChatId,
+    activeGroupId,
     hasProfile: Boolean(profileUser),
     settingsOpen,
   });
@@ -51,6 +56,8 @@ export default function App() {
     () => store.friends.find((f) => f.id === store.activeChatId) ?? null,
     [store.activeChatId, store.friends],
   );
+  const activeCommunity = activeChatId === OFFICIAL_COMMUNITY_ID;
+  const activeGroup = !!store.activeGroupId;
 
   // keep the open profile card fresh if that user's data changes
   const freshProfileUser = useMemo(() => {
@@ -165,10 +172,11 @@ export default function App() {
   useLayoutEffect(() => {
     navigationStateRef.current = {
       activeChatId,
+      activeGroupId,
       hasProfile: Boolean(profileUser),
       settingsOpen,
     };
-  }, [activeChatId, profileUser, settingsOpen]);
+  }, [activeChatId, activeGroupId, profileUser, settingsOpen]);
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
@@ -178,6 +186,8 @@ export default function App() {
         setSettingsOpen(false);
       } else if (navigation.hasProfile) {
         setProfileUser(null);
+      } else if (navigation.activeGroupId) {
+        setActiveGroupId(null);
       } else if (navigation.activeChatId) {
         setActiveChatId(null);
       } else if (canGoBack) {
@@ -189,7 +199,7 @@ export default function App() {
     return () => {
       void listener.then((handle) => handle.remove());
     };
-  }, [setActiveChatId]);
+  }, [setActiveChatId, setActiveGroupId]);
 
   useEffect(() => {
     const preventNativeContextMenu = (event: MouseEvent) => event.preventDefault();
@@ -222,10 +232,14 @@ export default function App() {
   if (!store.me.onboardingComplete) return <Onboarding />;
 
   return (
-    <div className={`app-shell ${activeFriend ? "chat-open" : ""}`}>
+    <div className={`app-shell ${activeFriend || activeCommunity || activeGroup ? "chat-open" : ""}`}>
       <Sidebar onOpenProfile={setProfileUser} onOpenSettings={() => setSettingsOpen(true)} />
       <main className="main-pane">
-        {activeFriend ? (
+        {activeCommunity ? (
+          <CommunityChatView onBack={() => setActiveChatId(null)} />
+        ) : activeGroup ? (
+          <GroupChatView onBack={() => setActiveGroupId(null)} />
+        ) : activeFriend ? (
           <ChatView
             key={activeFriend.id}
             friend={activeFriend}

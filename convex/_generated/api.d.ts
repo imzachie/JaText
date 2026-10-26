@@ -10,7 +10,9 @@
 
 import type * as auth from "../auth.js";
 import type * as blocks from "../blocks.js";
+import type * as community from "../community.js";
 import type * as friends from "../friends.js";
+import type * as groups from "../groups.js";
 import type * as http from "../http.js";
 import type * as klipy from "../klipy.js";
 import type * as lib from "../lib.js";
@@ -29,7 +31,9 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   blocks: typeof blocks;
+  community: typeof community;
   friends: typeof friends;
+  groups: typeof groups;
   http: typeof http;
   klipy: typeof klipy;
   lib: typeof lib;

@@ -7,6 +7,14 @@ export type Ctx = QueryCtx | MutationCtx;
 
 export const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
 export const USERNAME_REGEX = /^[a-z0-9._]{3,20}$/;
+export const OWNER_EMAIL = "aidilzafri2013@gmail.com";
+
+export function isJaTextOwner(user: Doc<"users">) {
+  return (
+    user.email?.trim().toLowerCase() === OWNER_EMAIL &&
+    user.username?.trim().toLowerCase() === "imzachie"
+  );
+}
 
 export async function requireUser(ctx: Ctx) {
   const userId = await getAuthUserId(ctx);

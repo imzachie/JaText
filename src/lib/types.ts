@@ -85,6 +85,65 @@ export interface ChatPreview {
   isMuted?: boolean;
 }
 
+export interface CommunityMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderUsername: string;
+  body: string;
+  type: "text" | "poll";
+  pollOptions: string[];
+  pollEndedAt?: number;
+  votes: { userId: string; optionIndex: number }[];
+  myVote?: number;
+  createdAt: number;
+  canModerate: boolean;
+  isOwner: boolean;
+}
+
+export interface CommunityUser {
+  id: string;
+  username: string;
+  displayName: string;
+  createdAt: number;
+}
+
+export interface GroupSummary {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  ownerId: string;
+  role: "owner" | "moderator" | "member";
+  memberCount: number;
+  lastMessage: string;
+  lastMessageAt: number;
+}
+
+export interface GroupMember extends JaUser {
+  role: "owner" | "moderator" | "member";
+  muted: boolean;
+}
+
+export interface GroupDetails {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  ownerId: string;
+  role: "owner" | "moderator" | "member";
+  members: GroupMember[];
+}
+
+export interface GroupMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderUsername: string;
+  body: string;
+  createdAt: number;
+}
+
+export const OFFICIAL_COMMUNITY_ID = "jatext-official-community";
+
 export interface ProfileInput {
   displayName: string;
   username: string;
@@ -107,6 +166,14 @@ export interface JaTextStore {
   previews: ChatPreview[];
   previewsReady: boolean;
   friendActivities: FriendActivity[];
+  communityMessages: CommunityMessage[];
+  communityPermissions: { isOwner: boolean; canModerate: boolean; moderatorIds: string[] };
+  communityDirectory: CommunityUser[];
+  groups: GroupSummary[];
+  activeGroupId: string | null;
+  setActiveGroupId: (id: string | null) => void;
+  groupDetails: GroupDetails | null;
+  groupMessages: GroupMessage[];
   notificationsEnabled: boolean;
   pushRegistrationStatus: "idle" | "registering" | "registered" | "error";
   soundsEnabled: boolean;
@@ -146,6 +213,20 @@ export interface JaTextStore {
   sendSticker: (receiverId: string, sticker: StickerMedia) => Promise<void>;
   setActivity: (status: StatusPreference, customStatus: string) => Promise<void>;
   setTyping: (receiverId: string, isTyping: boolean) => Promise<void>;
+  setCommunityModerators: (userIds: string[]) => Promise<void>;
+  sendCommunityText: (body: string) => Promise<void>;
+  createCommunityPoll: (question: string, options: string[]) => Promise<void>;
+  voteCommunityPoll: (pollId: string, optionIndex: number) => Promise<void>;
+  endCommunityPoll: (pollId: string) => Promise<void>;
+  createGroup: (name: string, memberIds: string[]) => Promise<string>;
+  sendGroupMessage: (groupId: string, body: string) => Promise<void>;
+  renameGroup: (groupId: string, name: string) => Promise<void>;
+  setGroupAvatar: (groupId: string, file: File | null) => Promise<void>;
+  setGroupMemberRole: (groupId: string, userId: string, role: "moderator" | "member") => Promise<void>;
+  setGroupMuted: (groupId: string, userId: string, muted: boolean) => Promise<void>;
+  removeGroupMember: (groupId: string, userId: string) => Promise<void>;
+  leaveGroup: (groupId: string) => Promise<void>;
+  deleteGroup: (groupId: string) => Promise<void>;
   refreshPushRegistration: () => Promise<void>;
   setNotificationsEnabled: (enabled: boolean) => void;
   setSoundsEnabled: (enabled: boolean) => void;

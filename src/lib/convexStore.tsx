@@ -11,11 +11,17 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { JaTextContext } from "./store";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
+import { OFFICIAL_COMMUNITY_ID } from "./types";
 import type {
   ChatMessage,
   ChatPreview,
+  CommunityMessage,
+  CommunityUser,
   FriendActivity,
   FriendRequest,
+  GroupDetails,
+  GroupMessage,
+  GroupSummary,
   JaTextStore,
   JaUser,
   ProfileInput,
@@ -38,6 +44,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { signIn, signOut: convexSignOut } = useAuthActions();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [activeGroupId, setActiveGroupIdState] = useState<string | null>(null);
   const [notificationPreferences, setNotificationPreferences] = useState(loadNotificationPreferences);
   const [pushRegistrationStatus, setPushRegistrationStatus] =
     useState<JaTextStore["pushRegistrationStatus"]>("idle");
@@ -70,11 +77,48 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   ) ?? []) as FriendActivity[];
   const activeMessagesQuery = useQuery(
     api.messages.list,
-    isAuthenticated && activeChatId
+    isAuthenticated && activeChatId && activeChatId !== OFFICIAL_COMMUNITY_ID
       ? { otherId: activeChatId as Id<"users"> }
       : "skip",
   );
   const activeMessages = (activeMessagesQuery ?? []) as ChatMessage[];
+  const communityMessages = (useQuery(
+    api.community.list,
+    isAuthenticated ? {} : "skip",
+  ) ?? []) as CommunityMessage[];
+  const communityPermissions = (useQuery(
+    api.community.permissions,
+    isAuthenticated ? {} : "skip",
+  ) ?? { isOwner: false, canModerate: false }) as {
+    isOwner: boolean;
+    canModerate: boolean;
+    moderatorIds: string[];
+  };
+  const communityDirectory = (useQuery(
+    api.users.ownerDirectory,
+    isAuthenticated &&
+      me?.username.toLowerCase() === "imzachie" &&
+      me.email?.toLowerCase() === "aidilzafri2013@gmail.com"
+      ? {}
+      : "skip",
+  ) ?? []) as CommunityUser[];
+  const groups = (useQuery(
+    api.groups.listMine,
+    isAuthenticated ? {} : "skip",
+  ) ?? []) as GroupSummary[];
+  const groupDetailsQuery = useQuery(
+    api.groups.get,
+    isAuthenticated && activeGroupId
+      ? { groupId: activeGroupId as Id<"groups"> }
+      : "skip",
+  );
+  const groupDetails = (groupDetailsQuery ?? null) as GroupDetails | null;
+  const groupMessages = (useQuery(
+    api.groups.listMessages,
+    isAuthenticated && activeGroupId
+      ? { groupId: activeGroupId as Id<"groups"> }
+      : "skip",
+  ) ?? []) as GroupMessage[];
   const stickerLibrary = useQuery(
     api.stickers.library,
     isAuthenticated ? {} : "skip",
@@ -107,6 +151,29 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const sendStickerMut = useMutation(api.stickers.send);
   const registerPushDeviceMut = useMutation(api.push.registerDevice);
   const unregisterPushDeviceMut = useMutation(api.push.unregisterDevice);
+  const setCommunityModeratorsMut = useMutation(api.community.setModerators);
+  const sendCommunityTextMut = useMutation(api.community.sendText);
+  const createCommunityPollMut = useMutation(api.community.createPoll);
+  const voteCommunityPollMut = useMutation(api.community.vote);
+  const endCommunityPollMut = useMutation(api.community.endPoll);
+  const createGroupMut = useMutation(api.groups.create);
+  const sendGroupMessageMut = useMutation(api.groups.send);
+  const renameGroupMut = useMutation(api.groups.rename);
+  const setGroupAvatarMut = useMutation(api.groups.setAvatar);
+  const setGroupMemberRoleMut = useMutation(api.groups.setMemberRole);
+  const setGroupMutedMut = useMutation(api.groups.setMuted);
+  const removeGroupMemberMut = useMutation(api.groups.removeMember);
+  const leaveGroupMut = useMutation(api.groups.leave);
+  const deleteGroupMut = useMutation(api.groups.deleteGroup);
+
+  const setActiveChatIdForStore = useCallback((id: string | null) => {
+    setActiveChatId(id);
+    if (id) setActiveGroupIdState(null);
+  }, []);
+  const setActiveGroupId = useCallback((id: string | null) => {
+    setActiveGroupIdState(id);
+    if (id) setActiveChatId(null);
+  }, []);
 
   useEffect(() => {
     if (
@@ -168,7 +235,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       listeners.push(
         await PushNotifications.addListener("pushNotificationActionPerformed", ({ notification }) => {
           const senderId = notification.data?.senderId;
-          if (typeof senderId === "string") setActiveChatId(senderId);
+          if (typeof senderId === "string") setActiveChatIdForStore(senderId);
         }),
       );
       listeners.push(
@@ -196,6 +263,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     isAuthenticated,
     notificationPreferences.notificationsEnabled,
     registerPushDeviceMut,
+    setActiveChatIdForStore,
     unregisterPushDeviceMut,
   ]);
 
@@ -268,6 +336,105 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       return storageId as Id<"_storage">;
     },
     [generateUploadUrl],
+  );
+
+  const setCommunityModerators = useCallback<JaTextStore["setCommunityModerators"]>(
+    async (userIds) => {
+      await setCommunityModeratorsMut({ userIds: userIds as Id<"users">[] });
+    },
+    [setCommunityModeratorsMut],
+  );
+  const sendCommunityText = useCallback<JaTextStore["sendCommunityText"]>(
+    async (body) => {
+      await sendCommunityTextMut({ body });
+    },
+    [sendCommunityTextMut],
+  );
+  const createCommunityPoll = useCallback<JaTextStore["createCommunityPoll"]>(
+    async (question, options) => {
+      await createCommunityPollMut({ question, options });
+    },
+    [createCommunityPollMut],
+  );
+  const voteCommunityPoll = useCallback<JaTextStore["voteCommunityPoll"]>(
+    async (pollId, optionIndex) => {
+      await voteCommunityPollMut({ pollId: pollId as Id<"communityMessages">, optionIndex });
+    },
+    [voteCommunityPollMut],
+  );
+  const endCommunityPoll = useCallback<JaTextStore["endCommunityPoll"]>(
+    async (pollId) => {
+      await endCommunityPollMut({ pollId: pollId as Id<"communityMessages"> });
+    },
+    [endCommunityPollMut],
+  );
+  const createGroup = useCallback<JaTextStore["createGroup"]>(
+    async (name, memberIds) =>
+      (await createGroupMut({
+        name,
+        memberIds: memberIds as Id<"users">[],
+      })) as string,
+    [createGroupMut],
+  );
+  const sendGroupMessage = useCallback<JaTextStore["sendGroupMessage"]>(
+    async (groupId, body) => {
+      await sendGroupMessageMut({ groupId: groupId as Id<"groups">, body });
+    },
+    [sendGroupMessageMut],
+  );
+  const renameGroup = useCallback<JaTextStore["renameGroup"]>(
+    async (groupId, name) => {
+      await renameGroupMut({ groupId: groupId as Id<"groups">, name });
+    },
+    [renameGroupMut],
+  );
+  const setGroupAvatar = useCallback<JaTextStore["setGroupAvatar"]>(
+    async (groupId, file) => {
+      const avatarId = file ? await upload(file) : null;
+      await setGroupAvatarMut({ groupId: groupId as Id<"groups">, avatarId });
+    },
+    [setGroupAvatarMut, upload],
+  );
+  const setGroupMemberRole = useCallback<JaTextStore["setGroupMemberRole"]>(
+    async (groupId, userId, role) => {
+      await setGroupMemberRoleMut({
+        groupId: groupId as Id<"groups">,
+        userId: userId as Id<"users">,
+        role,
+      });
+    },
+    [setGroupMemberRoleMut],
+  );
+  const setGroupMuted = useCallback<JaTextStore["setGroupMuted"]>(
+    async (groupId, userId, muted) => {
+      await setGroupMutedMut({
+        groupId: groupId as Id<"groups">,
+        userId: userId as Id<"users">,
+        muted,
+      });
+    },
+    [setGroupMutedMut],
+  );
+  const removeGroupMember = useCallback<JaTextStore["removeGroupMember"]>(
+    async (groupId, userId) => {
+      await removeGroupMemberMut({
+        groupId: groupId as Id<"groups">,
+        userId: userId as Id<"users">,
+      });
+    },
+    [removeGroupMemberMut],
+  );
+  const leaveGroup = useCallback<JaTextStore["leaveGroup"]>(
+    async (groupId) => {
+      await leaveGroupMut({ groupId: groupId as Id<"groups"> });
+    },
+    [leaveGroupMut],
+  );
+  const deleteGroup = useCallback<JaTextStore["deleteGroup"]>(
+    async (groupId) => {
+      await deleteGroupMut({ groupId: groupId as Id<"groups"> });
+    },
+    [deleteGroupMut],
   );
 
   const signInEmail = useCallback<JaTextStore["signInEmail"]>(
@@ -344,7 +511,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   }, [signIn]);
 
   const signOut = useCallback(async () => {
-    setActiveChatId(null);
+    setActiveChatIdForStore(null);
+    setActiveGroupId(null);
     try {
       const pushToken = localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
       if (isAuthenticated && pushToken) {
@@ -357,7 +525,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     } finally {
       await convexSignOut();
     }
-  }, [convexSignOut, disconnectMut, isAuthenticated, unregisterPushDeviceMut]);
+  }, [convexSignOut, disconnectMut, isAuthenticated, setActiveChatIdForStore, setActiveGroupId, unregisterPushDeviceMut]);
 
   const checkUsername = useCallback<JaTextStore["checkUsername"]>(
     async (username) =>
@@ -615,10 +783,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     pushRegistrationStatus,
     soundsEnabled: notificationPreferences.soundsEnabled,
     activeChatId,
-    setActiveChatId,
+    setActiveChatId: setActiveChatIdForStore,
     activeMessages,
     activeMessagesReady:
-      !isAuthenticated || !activeChatId || activeMessagesQuery !== undefined,
+      !isAuthenticated ||
+      !activeChatId ||
+      activeChatId === OFFICIAL_COMMUNITY_ID ||
+      activeMessagesQuery !== undefined,
+    communityMessages,
+    communityPermissions,
+    communityDirectory,
+    groups,
+    activeGroupId,
+    setActiveGroupId,
+    groupDetails,
+    groupMessages,
     blockedUserIds,
     signInEmail,
     signUpEmail,
@@ -647,6 +826,20 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     sendSticker,
     setActivity,
     setTyping,
+    setCommunityModerators,
+    sendCommunityText,
+    createCommunityPoll,
+    voteCommunityPoll,
+    endCommunityPoll,
+    createGroup,
+    sendGroupMessage,
+    renameGroup,
+    setGroupAvatar,
+    setGroupMemberRole,
+    setGroupMuted,
+    removeGroupMember,
+    leaveGroup,
+    deleteGroup,
     refreshPushRegistration,
     setNotificationsEnabled,
     setSoundsEnabled,

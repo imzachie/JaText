@@ -7,6 +7,7 @@ import {
   USERNAME_REGEX,
   friendIds,
   hasBlocked,
+  isJaTextOwner,
   pairKey,
   profileOf,
   requireUser,
@@ -21,6 +22,25 @@ export const current = query({
     const user = await ctx.db.get(userId);
     if (!user) return null;
     return profileOf(ctx, user);
+  },
+});
+
+/** Full public-profile directory, restricted to the verified JaText owner. */
+export const ownerDirectory = query({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireUser(ctx);
+    if (!isJaTextOwner(me)) throw new Error("Only the JaText owner can view this directory.");
+    const users = await ctx.db.query("users").collect();
+    return users
+      .filter((user) => !!user.username)
+      .sort((a, b) => a._creationTime - b._creationTime)
+      .map((user) => ({
+        id: user._id as string,
+        username: user.username!,
+        displayName: user.displayName ?? user.name ?? "",
+        createdAt: user._creationTime,
+      }));
   },
 });
 

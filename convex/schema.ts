@@ -135,4 +135,47 @@ export default defineSchema({
   })
     .index("by_token", ["token"])
     .index("by_user", ["userId"]),
+
+  communityModerators: defineTable({
+    userId: v.id("users"),
+    electedBy: v.id("users"),
+  }).index("by_user", ["userId"]),
+
+  communityMessages: defineTable({
+    senderId: v.id("users"),
+    body: v.string(),
+    type: v.union(v.literal("text"), v.literal("poll")),
+    pollOptions: v.optional(v.array(v.string())),
+    pollEndedAt: v.optional(v.number()),
+  }),
+
+  communityPollVotes: defineTable({
+    pollId: v.id("communityMessages"),
+    userId: v.id("users"),
+    optionIndex: v.number(),
+  })
+    .index("by_poll", ["pollId"])
+    .index("by_poll_user", ["pollId", "userId"]),
+
+  groups: defineTable({
+    name: v.string(),
+    ownerId: v.id("users"),
+    avatarId: v.optional(v.id("_storage")),
+  }).index("by_owner", ["ownerId"]),
+
+  groupMembers: defineTable({
+    groupId: v.id("groups"),
+    userId: v.id("users"),
+    role: v.union(v.literal("owner"), v.literal("moderator"), v.literal("member")),
+    muted: v.boolean(),
+  })
+    .index("by_group", ["groupId"])
+    .index("by_group_user", ["groupId", "userId"])
+    .index("by_user", ["userId"]),
+
+  groupMessages: defineTable({
+    groupId: v.id("groups"),
+    senderId: v.id("users"),
+    body: v.string(),
+  }).index("by_group", ["groupId"]),
 });

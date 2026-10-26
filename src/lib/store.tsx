@@ -225,7 +225,16 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
   const [sessionId, setSessionId] = useState<string | null>(() =>
     localStorage.getItem(SESSION_KEY),
   );
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [activeChatId, setActiveChatIdState] = useState<string | null>(null);
+  const [activeGroupId, setActiveGroupIdState] = useState<string | null>(null);
+  const setActiveChatId = useCallback((id: string | null) => {
+    setActiveChatIdState(id);
+    if (id) setActiveGroupIdState(null);
+  }, []);
+  const setActiveGroupId = useCallback((id: string | null) => {
+    setActiveGroupIdState(id);
+    if (id) setActiveChatIdState(null);
+  }, []);
   const [notificationPreferences, setNotificationPreferences] = useState(loadNotificationPreferences);
   const timers = useRef<number[]>([]);
 
@@ -468,7 +477,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(SESSION_KEY);
     setSessionId(null);
     setActiveChatId(null);
-  }, [sessionId, transact]);
+  }, [sessionId, setActiveChatId, transact]);
 
   /* ---------------- profile ---------------- */
 
@@ -1301,6 +1310,14 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     previews,
     previewsReady: true,
     friendActivities,
+    communityMessages: [],
+    communityPermissions: { isOwner: false, canModerate: false, moderatorIds: [] },
+    communityDirectory: [],
+    groups: [],
+    activeGroupId,
+    setActiveGroupId,
+    groupDetails: null,
+    groupMessages: [],
     notificationsEnabled: notificationPreferences.notificationsEnabled,
     pushRegistrationStatus: "idle",
     soundsEnabled: notificationPreferences.soundsEnabled,
@@ -1336,6 +1353,48 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     sendSticker,
     setActivity,
     setTyping,
+    setCommunityModerators: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    sendCommunityText: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    createCommunityPoll: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    voteCommunityPoll: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    endCommunityPoll: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    createGroup: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    sendGroupMessage: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    renameGroup: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    setGroupAvatar: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    setGroupMemberRole: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    setGroupMuted: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    removeGroupMember: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    leaveGroup: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    deleteGroup: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
     refreshPushRegistration: async () => {
       throw new Error("Push registration is only available in the Android app with the live backend.");
     },
