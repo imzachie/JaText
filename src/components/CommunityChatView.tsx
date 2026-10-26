@@ -262,15 +262,6 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
     pendingAttachmentUrlsRef.current.clear();
   }, []);
 
-  useEffect(() => {
-    if (!imagePreview) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeImagePreview();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [imagePreview]);
-
   const openImagePreview = useCallback((url: string) => {
     if (imageCloseTimerRef.current !== null) {
       window.clearTimeout(imageCloseTimerRef.current);
@@ -290,6 +281,15 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
       imageCloseTimerRef.current = null;
     }, 160);
   }, []);
+
+  useEffect(() => {
+    if (!imagePreview) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeImagePreview();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [closeImagePreview, imagePreview]);
   const closeMessageMenu = useCallback(() => {
     if (messageMenuCloseTimerRef.current !== null) return;
     setMessageMenuClosing(true);
@@ -656,7 +656,7 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
         setError(friendlyError(err, "Couldn't add the reaction."));
       }
     },
-    [store],
+    [closeMessageMenu, store],
   );
   async function favoriteSticker(message: CommunityMessage) {
     try {

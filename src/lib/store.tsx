@@ -1411,7 +1411,6 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     },
     unsendCommunityMessage: async () => {
       throw new Error("The community is only available with the live JaText backend.");
-      return false;
     },
     forwardCommunityMessage: async () => {
       throw new Error("The community is only available with the live JaText backend.");
@@ -1430,7 +1429,6 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     },
     unsendGroupMessage: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");
-      return false;
     },
     editGroupMessage: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");

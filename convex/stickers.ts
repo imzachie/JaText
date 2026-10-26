@@ -155,6 +155,123 @@ export const favoriteFromMessage = mutation({
   },
 });
 
+export const favoriteFromGroupMessage = mutation({
+  args: { messageId: v.id("groupMessages") },
+  handler: async (ctx, { messageId }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (!message || message.hiddenFor?.includes(me._id) || message.unsentAt) {
+      throw new Error("This media is no longer available.");
+    }
+    const membership = await ctx.db
+      .query("groupMembers")
+      .withIndex("by_group_user", (q) => q.eq("groupId", message.groupId).eq("userId", me._id))
+      .unique();
+    if (!membership) throw new Error("You are not a member of this group.");
+
+    const storageId = message.attachmentId ?? message.stickerStorageId;
+    const url = message.attachmentUrl ?? message.stickerUrl;
+    const isImage =
+      message.attachmentType?.startsWith("image/") ||
+      !!message.stickerStorageId ||
+      !!message.stickerUrl;
+    if (!url && !storageId) {
+      throw new Error("This message does not contain a sticker or GIF.");
+    }
+    if (!message.stickerKey && !isImage) {
+      throw new Error("Only images, stickers, and GIFs can be favorited.");
+    }
+
+    const mediaKey =
+      message.stickerKey ??
+      (storageId ? `upload:${storageId}` : `klipy:${url}`);
+    const current = await getLibraryItem(ctx, me._id, mediaKey);
+    if (current) {
+      await ctx.db.patch(current._id, { isFavorite: !current.isFavorite });
+      return !current.isFavorite;
+    }
+
+    const source = !storageId && !!url && isKlipyUrl(url) ? "klipy" : "upload";
+    if (!storageId && source === "upload") {
+      throw new Error("This media cannot be saved to your collection.");
+    }
+    await ctx.db.insert("stickerLibrary", {
+      userId: me._id,
+      mediaKey,
+      url,
+      storageId,
+      previewUrl: url,
+      name: (message.attachmentName ?? message.stickerName ?? "Shared media").slice(0, 120),
+      mediaType:
+        message.attachmentType === "image/gif" || message.stickerKey?.startsWith("klipy:")
+          ? "gif"
+          : message.stickerUrl || message.stickerStorageId
+            ? "sticker"
+            : "image",
+      source,
+      isFavorite: true,
+      useCount: 0,
+    });
+    return true;
+  },
+});
+
+export const favoriteFromCommunityMessage = mutation({
+  args: { messageId: v.id("communityMessages") },
+  handler: async (ctx, { messageId }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (!message || message.hiddenFor?.includes(me._id) || message.unsentAt) {
+      throw new Error("This media is no longer available.");
+    }
+
+    const storageId = message.attachmentId ?? message.stickerStorageId;
+    const url = message.attachmentUrl ?? message.stickerUrl;
+    const isImage =
+      message.attachmentType?.startsWith("image/") ||
+      !!message.stickerStorageId ||
+      !!message.stickerUrl;
+    if (!url && !storageId) {
+      throw new Error("This message does not contain a sticker or GIF.");
+    }
+    if (!message.stickerKey && !isImage) {
+      throw new Error("Only images, stickers, and GIFs can be favorited.");
+    }
+
+    const mediaKey =
+      message.stickerKey ??
+      (storageId ? `upload:${storageId}` : `klipy:${url}`);
+    const current = await getLibraryItem(ctx, me._id, mediaKey);
+    if (current) {
+      await ctx.db.patch(current._id, { isFavorite: !current.isFavorite });
+      return !current.isFavorite;
+    }
+
+    const source = !storageId && !!url && isKlipyUrl(url) ? "klipy" : "upload";
+    if (!storageId && source === "upload") {
+      throw new Error("This media cannot be saved to your collection.");
+    }
+    await ctx.db.insert("stickerLibrary", {
+      userId: me._id,
+      mediaKey,
+      url,
+      storageId,
+      previewUrl: url,
+      name: (message.attachmentName ?? message.stickerName ?? "Shared media").slice(0, 120),
+      mediaType:
+        message.attachmentType === "image/gif" || message.stickerKey?.startsWith("klipy:")
+          ? "gif"
+          : message.stickerUrl || message.stickerStorageId
+            ? "sticker"
+            : "image",
+      source,
+      isFavorite: true,
+      useCount: 0,
+    });
+    return true;
+  },
+});
+
 export const setFavorite = mutation({
   args: {
     mediaKey: v.string(),

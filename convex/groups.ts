@@ -49,7 +49,9 @@ async function withGroupMessageDetails(
         ? `klipy:${m.attachmentUrl}`
         : m.stickerStorageId
           ? `upload:${m.stickerStorageId}`
-          : undefined);
+          : m.stickerUrl
+            ? `klipy:${m.stickerUrl}`
+            : undefined);
   const favorite = mediaKey
     ? await ctx.db
         .query("stickerLibrary")
@@ -252,7 +254,8 @@ export const send = mutation({
     const membership = await requireMembership(ctx, args.groupId, me._id);
     if (membership.muted) throw new Error("You are muted in this group.");
     const text = args.body.trim();
-    if (!text && !args.stickerUrl && !args.stickerStorageId && !args.attachmentId) throw new Error("Message is empty.");
+    if (!text && !args.stickerUrl && !args.stickerStorageId && !args.attachmentId && !args.forwardedFromId)
+      throw new Error("Message is empty.");
     if (args.replyToId) {
       const replied = await ctx.db.get(args.replyToId);
       if (!replied || replied.groupId !== args.groupId)
@@ -262,8 +265,8 @@ export const send = mutation({
     }
     let forwardedFromName: string | undefined;
     let forwardedFromId: Id<"users"> | undefined;
+    const forwardedMessage = args.forwardedFromId ? await ctx.db.get(args.forwardedFromId) : null;
     if (args.forwardedFromId) {
-      const forwardedMessage = await ctx.db.get(args.forwardedFromId);
       if (!forwardedMessage || forwardedMessage.groupId !== args.groupId)
         throw new Error("The forwarded message is unavailable.");
       if (forwardedMessage.hiddenFor?.includes(me._id) || forwardedMessage.unsentAt)
@@ -271,22 +274,21 @@ export const send = mutation({
       const forwardedSender = await ctx.db.get(forwardedMessage.senderId);
       forwardedFromName = forwardedSender?.displayName ?? forwardedSender?.name;
       forwardedFromId = forwardedMessage.senderId;
-      // If forwarding, copy attachment/sticker if not explicitly provided? Already handled by caller; but ensure body copying
     }
     await ctx.db.insert("groupMessages", {
       groupId: args.groupId,
       senderId: me._id,
-      body: text.slice(0, 4000),
+      body: (text || forwardedMessage?.body || "").slice(0, 4000),
       replyToId: args.replyToId,
       forwardedFromName,
       forwardedFromId,
-      stickerUrl: args.stickerUrl,
-      stickerStorageId: args.stickerStorageId,
-      stickerName: args.stickerName?.slice(0, 120),
-      stickerKey: args.stickerKey,
-      attachmentId: args.attachmentId,
-      attachmentName: args.attachmentName,
-      attachmentType: args.attachmentType,
+      stickerUrl: args.stickerUrl ?? forwardedMessage?.stickerUrl,
+      stickerStorageId: args.stickerStorageId ?? forwardedMessage?.stickerStorageId,
+      stickerName: args.stickerName?.slice(0, 120) ?? forwardedMessage?.stickerName,
+      stickerKey: args.stickerKey ?? forwardedMessage?.stickerKey,
+      attachmentId: args.attachmentId ?? forwardedMessage?.attachmentId,
+      attachmentName: args.attachmentName ?? forwardedMessage?.attachmentName,
+      attachmentType: args.attachmentType ?? forwardedMessage?.attachmentType,
     });
   },
 });
@@ -332,9 +334,11 @@ export const forward = mutation({
         receiverId: targetUserId,
         pairKey: pair,
         body: source.body,
-        attachmentId: source.attachmentId,
-        attachmentName: source.attachmentName,
-        attachmentType: source.attachmentType,
+        attachmentId: source.attachmentId ?? source.stickerStorageId,
+        attachmentName: source.attachmentName ?? source.stickerName,
+        attachmentType:
+          source.attachmentType ??
+          (source.stickerStorageId || source.stickerUrl ? "image/*" : undefined),
         attachmentUrl: source.attachmentUrl ?? source.stickerUrl,
         stickerKey: source.stickerKey,
         forwardedFromId: source.senderId,
