@@ -217,7 +217,9 @@ export function Sidebar({
                 </div>
               </div>
             )}
-            {!showArchived && store.groups.map((group) => (
+            {!showArchived && store.groups
+              .filter((group) => !search.trim() || group.name.toLowerCase().includes(search.toLowerCase()))
+              .map((group) => (
               <div
                 className={`friend-row group-list-row ${store.activeGroupId === group.id ? "active" : ""}`}
                 key={group.id}
@@ -229,9 +231,21 @@ export function Sidebar({
                   <div className="group-avatar sidebar-group-avatar group-avatar-fallback" aria-hidden="true">👥</div>
                 )}
                 <div className="friend-row-text">
-                  <div className="friend-row-top"><strong>{group.name}</strong></div>
+                  <div className="friend-row-top">
+                    <strong>{group.name}</strong>
+                    <span className="friend-row-badges">
+                      {group.lastMentionedMe && store.activeGroupId !== group.id && (
+                        <span className="badge mention-badge" title="You were mentioned">@</span>
+                      )}
+                      {group.lastMessageAt ? (
+                        <span className="muted small">{fmtTime(group.lastMessageAt)}</span>
+                      ) : null}
+                    </span>
+                  </div>
                   <span className="muted small friend-preview">
-                    {group.lastMessage || `${group.memberCount} members`}
+                    {group.lastMessage
+                      ? `${group.lastSenderId === me.id ? "You: " : group.lastSenderName ? `${group.lastSenderName}: ` : ""}${group.lastMessage}`
+                      : `${group.memberCount} members`}
                   </span>
                 </div>
               </div>
@@ -376,7 +390,8 @@ export function Sidebar({
                           )
                         }
                       />
-                      <span><strong>{friend.displayName}</strong> @{friend.username}</span>
+                      <Avatar user={friend} size={32} />
+                      <span><strong>{friend.displayName}</strong> <span className="muted small">@{friend.username}</span></span>
                     </label>
                   ))}
                   {friends.length === 0 && <p className="muted small">Add and accept a friend before creating a group.</p>}

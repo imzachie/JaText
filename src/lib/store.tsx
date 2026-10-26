@@ -1331,6 +1331,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     previewsReady: true,
     friendActivities,
     communityMessages: [],
+    communityMessagesReady: true,
     communityPermissions: { isOwner: false, canModerate: false, moderatorIds: [] },
     communityDirectory: [],
     groups: [],
@@ -1338,6 +1339,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     setActiveGroupId,
     groupDetails: null,
     groupMessages: [],
+    groupMessagesReady: true,
     groupTypingUsers: [],
     communityTypingUsers: [],
     notificationsEnabled: notificationPreferences.notificationsEnabled,
@@ -1419,6 +1421,9 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       throw new Error("The community is only available with the live JaText backend.");
     },
     createGroup: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    addGroupMembers: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
     toggleGroupReaction: async () => {

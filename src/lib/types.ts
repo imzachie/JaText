@@ -135,6 +135,9 @@ export interface GroupSummary {
   memberCount: number;
   lastMessage: string;
   lastMessageAt: number;
+  lastSenderId?: string;
+  lastSenderName?: string;
+  lastMentionedMe?: boolean;
 }
 
 export interface GroupMember extends JaUser {
@@ -172,6 +175,8 @@ export interface GroupMessage {
   createdAt: number;
   editedAt?: number;
   unsentAt?: number;
+  mentionsEveryone?: boolean;
+  mentionedUserIds?: string[];
   reactions?: MessageReaction[];
 }
 
@@ -206,6 +211,7 @@ export interface JaTextStore {
   previewsReady: boolean;
   friendActivities: FriendActivity[];
   communityMessages: CommunityMessage[];
+  communityMessagesReady: boolean;
   communityPermissions: { isOwner: boolean; canModerate: boolean; moderatorIds: string[] };
   communityDirectory: CommunityUser[];
   groups: GroupSummary[];
@@ -213,6 +219,7 @@ export interface JaTextStore {
   setActiveGroupId: (id: string | null) => void;
   groupDetails: GroupDetails | null;
   groupMessages: GroupMessage[];
+  groupMessagesReady: boolean;
   groupTypingUsers: ChatTypingUser[];
   communityTypingUsers: ChatTypingUser[];
   notificationsEnabled: boolean;
@@ -270,6 +277,7 @@ export interface JaTextStore {
   forwardCommunityMessage: (messageId: string, target: { groupId?: string; userId?: string; community?: boolean }) => Promise<void>;
   favoriteCommunityStickerFromMessage: (messageId: string) => Promise<void>;
   createGroup: (name: string, memberIds: string[]) => Promise<string>;
+  addGroupMembers: (groupId: string, memberIds: string[]) => Promise<void>;
   sendGroupMessage: (groupId: string, body: string, file?: File, replyToId?: string, forwardedFromId?: string) => Promise<void>;
   sendGroupSticker: (groupId: string, sticker: StickerMedia, replyToId?: string) => Promise<void>;
   setGroupTyping: (groupId: string, isTyping: boolean) => Promise<void>;

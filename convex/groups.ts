@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { areFriends, pairKey, profileOf, requireUser, scheduleMessagePush, type Ctx } from "./lib";
+import { areFriends, pairKey, profileOf, requireUser, scheduleGroupMentionPush, scheduleMessagePush, type Ctx } from "./lib";
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
@@ -98,6 +98,8 @@ async function withGroupMessageDetails(
     createdAt: m._creationTime,
     editedAt: m.editedAt,
     unsentAt: m.unsentAt,
+    mentionsEveryone: m.mentionsEveryone ?? false,
+    mentionedUserIds: m.mentionedUserIds?.map((id) => id as string) ?? [],
     reactions: m.reactions?.map((reaction) => ({
       userId: reaction.userId as string,
       emoji: reaction.emoji,
@@ -126,12 +128,19 @@ export const listMine = query({
           .withIndex("by_group", (q) => q.eq("groupId", group._id))
           .order("desc")
           .first();
-        // filter hidden for last message preview if needed, but keep simple
+        const lastSender = lastMessage ? await ctx.db.get(lastMessage.senderId) : null;
         const previewBody = lastMessage?.hiddenFor?.includes(me._id) || lastMessage?.unsentAt
           ? lastMessage?.unsentAt
             ? "This message was unsent"
             : ""
           : lastMessage?.body || (lastMessage?.attachmentUrl || lastMessage?.attachmentId || lastMessage?.stickerUrl ? "📎 Attachment" : "");
+        const lastMentionedMe = Boolean(
+          lastMessage &&
+            !lastMessage.unsentAt &&
+            !lastMessage.hiddenFor?.includes(me._id) &&
+            lastMessage.senderId !== me._id &&
+            (lastMessage.mentionsEveryone || lastMessage.mentionedUserIds?.includes(me._id)),
+        );
         return {
           id: group._id as string,
           name: group.name,
@@ -143,6 +152,9 @@ export const listMine = query({
           memberCount: members.length,
           lastMessage: previewBody ?? "",
           lastMessageAt: lastMessage?._creationTime ?? group._creationTime,
+          lastSenderId: lastMessage ? (lastMessage.senderId as string) : undefined,
+          lastSenderName: lastSender?.displayName ?? lastSender?.name ?? undefined,
+          lastMentionedMe,
         };
       }),
     ).then((groups) => groups.filter((group) => group !== null).sort(
@@ -275,10 +287,45 @@ export const send = mutation({
       forwardedFromName = forwardedSender?.displayName ?? forwardedSender?.name;
       forwardedFromId = forwardedMessage.senderId;
     }
+    const finalBody = (text || forwardedMessage?.body || "").slice(0, 4000);
+    const mentionsEveryone = /(?:^|[\s(])@everyone\b/i.test(finalBody);
+    const rawHandles = new Set<string>();
+    const mentionRegex = /(?:^|[\s(])@([a-z0-9._]{3,20})\b/gi;
+    let match: RegExpExecArray | null;
+    while ((match = mentionRegex.exec(finalBody)) !== null) {
+      const handle = match[1].toLowerCase();
+      if (handle !== "everyone") rawHandles.add(handle);
+    }
+
+    let mentionedUserIds: Id<"users">[] = [];
+    if (mentionsEveryone || rawHandles.size > 0) {
+      const groupMembers = await ctx.db
+        .query("groupMembers")
+        .withIndex("by_group", (q) => q.eq("groupId", args.groupId))
+        .collect();
+      if (mentionsEveryone) {
+        mentionedUserIds = groupMembers
+          .map((member) => member.userId)
+          .filter((userId) => userId !== me._id);
+      } else {
+        const memberDocs = await Promise.all(
+          groupMembers
+            .filter((member) => member.userId !== me._id)
+            .map((member) => ctx.db.get(member.userId)),
+        );
+        mentionedUserIds = memberDocs
+          .filter(
+            (user): user is Doc<"users"> =>
+              user !== null && !!user.username && rawHandles.has(user.username.toLowerCase()),
+          )
+          .map((user) => user._id);
+      }
+    }
+
     await ctx.db.insert("groupMessages", {
       groupId: args.groupId,
       senderId: me._id,
-      body: (text || forwardedMessage?.body || "").slice(0, 4000),
+      body: finalBody,
       replyToId: args.replyToId,
       forwardedFromName,
       forwardedFromId,
@@ -289,7 +336,58 @@ export const send = mutation({
       attachmentId: args.attachmentId ?? forwardedMessage?.attachmentId,
       attachmentName: args.attachmentName ?? forwardedMessage?.attachmentName,
       attachmentType: args.attachmentType ?? forwardedMessage?.attachmentType,
+      ...(mentionsEveryone ? { mentionsEveryone: true } : {}),
+      ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
     });
+
+    if (mentionedUserIds.length > 0) {
+      const group = await ctx.db.get(args.groupId);
+      const groupName = group?.name ?? "Group chat";
+      const pushBody = finalBody || "Mentioned you in an attachment";
+      await Promise.all(
+        mentionedUserIds.map((targetUserId) =>
+          scheduleGroupMentionPush(
+            ctx,
+            me,
+            args.groupId,
+            groupName,
+            targetUserId,
+            pushBody,
+            mentionsEveryone,
+          ),
+        ),
+      );
+    }
+  },
+});
+
+export const addMembers = mutation({
+  args: { groupId: v.id("groups"), memberIds: v.array(v.id("users")) },
+  handler: async (ctx, { groupId, memberIds }) => {
+    const me = await requireUser(ctx);
+    await requireGroupModerator(ctx, groupId, me._id);
+    const uniqueIds = [...new Set(memberIds)].filter((id) => id !== me._id);
+    if (uniqueIds.length === 0) return;
+    const existing = await ctx.db
+      .query("groupMembers")
+      .withIndex("by_group", (q) => q.eq("groupId", groupId))
+      .collect();
+    if (existing.length + uniqueIds.length > 100) {
+      throw new Error("Groups can have up to 100 members.");
+    }
+    const existingSet = new Set(existing.map((member) => member.userId));
+    for (const userId of uniqueIds) {
+      if (existingSet.has(userId)) continue;
+      if (!(await areFriends(ctx, me._id, userId))) {
+        throw new Error("You can only add your accepted friends to a group.");
+      }
+      await ctx.db.insert("groupMembers", {
+        groupId,
+        userId,
+        role: "member",
+        muted: false,
+      });
+    }
   },
 });
 
