@@ -104,6 +104,37 @@ export async function scheduleMessagePush(
   });
 }
 
+export async function scheduleGroupMentionPush(
+  ctx: MutationCtx,
+  sender: Doc<"users">,
+  groupId: Id<"groups">,
+  groupName: string,
+  receiverId: Id<"users">,
+  body: string,
+  mentionsEveryone: boolean,
+) {
+  const receiver = await ctx.db.get(receiverId);
+  if (
+    !receiver ||
+    receiver.statusPreference === "dnd" ||
+    (await hasBlocked(ctx, receiverId, sender._id))
+  ) {
+    return;
+  }
+
+  const senderName = sender.displayName ?? sender.name ?? "Someone";
+  await ctx.scheduler.runAfter(0, internal.pushActions.sendMessageNotification, {
+    receiverId,
+    senderId: sender._id,
+    senderName,
+    title: mentionsEveryone
+      ? `${senderName} mentioned @everyone in ${groupName}`
+      : `${senderName} mentioned you in ${groupName}`,
+    groupId,
+    body,
+  });
+}
+
 /** All friend user-ids for `userId` (accepted in either direction). */
 export async function friendIds(
   ctx: Ctx,

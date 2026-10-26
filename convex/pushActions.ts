@@ -12,8 +12,10 @@ export const sendMessageNotification = internalAction({
     senderId: v.id("users"),
     senderName: v.string(),
     body: v.string(),
+    title: v.optional(v.string()),
+    groupId: v.optional(v.id("groups")),
   },
-  handler: async (ctx, { receiverId, senderId, senderName, body }) => {
+  handler: async (ctx, { receiverId, senderId, senderName, body, title, groupId }) => {
     if (!env.FCM_SERVICE_ACCOUNT_JSON) {
       throw new Error("FCM push is not configured. Set FCM_SERVICE_ACCOUNT_JSON in Convex.");
     }
@@ -55,10 +57,13 @@ export const sendMessageNotification = internalAction({
       response = await getMessaging(app).sendEachForMulticast({
         tokens: devices.map((device) => device.token),
         notification: {
-          title: `New message from ${senderName}`,
+          title: title ?? `New message from ${senderName}`,
           body: body.trim().slice(0, 160) || "Sent you an attachment",
         },
-        data: { senderId, type: "message" },
+        data: {
+          senderId,
+          ...(groupId ? { groupId, type: "group_mention" } : { type: "message" }),
+        },
         android: {
           priority: "high",
           notification: { channelId: "messages", sound: "default" },

@@ -15,8 +15,9 @@ import { playMessageSound } from "./lib/alerts";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
 
 interface MessageToast {
-  friendId: string;
-  name: string;
+  friendId?: string;
+  groupId?: string;
+  title: string;
   body: string;
 }
 
@@ -28,6 +29,7 @@ export default function App() {
     activeChatId,
     activeGroupId,
     friends,
+    groups,
     me,
     notificationsEnabled,
     previews,
@@ -44,6 +46,7 @@ export default function App() {
     () => localStorage.getItem(NOTIFICATION_WELCOME_KEY) === "true",
   );
   const previousPreviews = useRef<Map<string, string> | null>(null);
+  const previousGroups = useRef<Map<string, string> | null>(null);
   const toastTimer = useRef<number | null>(null);
   const navigationStateRef = useRef({
     activeChatId,
@@ -65,11 +68,12 @@ export default function App() {
     if (store.me?.id === profileUser.id) return store.me;
     return (
       store.friends.find((f) => f.id === profileUser.id) ??
+      store.groupDetails?.members.find((m) => m.id === profileUser.id) ??
       store.incoming.find((r) => r.from.id === profileUser.id)?.from ??
       store.outgoing.find((r) => r.to.id === profileUser.id)?.to ??
       profileUser
     );
-  }, [profileUser, store.friends, store.incoming, store.me, store.outgoing]);
+  }, [profileUser, store.friends, store.groupDetails, store.incoming, store.me, store.outgoing]);
 
   const profileStatus = useMemo(() => {
     if (!freshProfileUser) return undefined;
@@ -124,7 +128,11 @@ export default function App() {
       if (focusedOnThisChat) continue;
 
       setToastClosing(false);
-      setMessageToast({ friendId: friend.id, name: friend.displayName, body: preview.body });
+      setMessageToast({
+        friendId: friend.id,
+        title: `New message from ${friend.displayName}`,
+        body: preview.body,
+      });
       if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
       toastTimer.current = window.setTimeout(() => {
         setToastClosing(true);
@@ -159,6 +167,87 @@ export default function App() {
     previews,
     previewsReady,
     setActiveChatId,
+    soundsEnabled,
+  ]);
+
+  useEffect(() => {
+    if (!me || !previewsReady) {
+      previousGroups.current = null;
+      return;
+    }
+
+    const current = new Map(
+      groups.map((group) => [
+        group.id,
+        `${group.lastMessageAt}:${group.lastSenderId ?? ""}`,
+      ]),
+    );
+    const previous = previousGroups.current;
+    previousGroups.current = current;
+    if (!previous) return;
+
+    for (const group of groups) {
+      const signature = `${group.lastMessageAt}:${group.lastSenderId ?? ""}`;
+      if (previous.get(group.id) === signature) continue;
+      if (
+        !group.lastMentionedMe ||
+        group.lastSenderId === me.id ||
+        me.statusPreference === "dnd"
+      ) {
+        continue;
+      }
+
+      if (soundsEnabled) playMessageSound("received");
+
+      const focusedOnThisGroup =
+        document.visibilityState === "visible" &&
+        document.hasFocus() &&
+        activeGroupId === group.id;
+      if (focusedOnThisGroup) continue;
+
+      const senderLabel = group.lastSenderName || "Someone";
+      const title = `${senderLabel} mentioned you in ${group.name}`;
+      window.setTimeout(() => {
+        setToastClosing(false);
+        setMessageToast({
+          groupId: group.id,
+          title,
+          body: group.lastMessage || "Tap to open group chat",
+        });
+      }, 0);
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+      toastTimer.current = window.setTimeout(() => {
+        setToastClosing(true);
+        toastTimer.current = window.setTimeout(() => {
+          setMessageToast(null);
+          setToastClosing(false);
+        }, 180);
+      }, 5_000);
+
+      if (
+        notificationsEnabled &&
+        "Notification" in window &&
+        Notification.permission === "granted" &&
+        (document.visibilityState !== "visible" || !document.hasFocus())
+      ) {
+        const notification = new Notification(title, {
+          body: group.lastMessage || "Open group chat",
+          tag: `jatext-group-${group.id}`,
+        });
+        notification.onclick = () => {
+          window.focus();
+          setActiveGroupId(group.id);
+          notification.close();
+        };
+      }
+    }
+  }, [
+    activeGroupId,
+    groups,
+    me,
+    notificationsEnabled,
+    previewsReady,
+    setActiveGroupId,
     soundsEnabled,
   ]);
 
@@ -236,9 +325,13 @@ export default function App() {
       <Sidebar onOpenProfile={setProfileUser} onOpenSettings={() => setSettingsOpen(true)} />
       <main className="main-pane">
         {activeCommunity ? (
-          <CommunityChatView onBack={() => setActiveChatId(null)} />
+          <CommunityChatView onOpenProfile={setProfileUser} onBack={() => setActiveChatId(null)} />
         ) : activeGroup ? (
-          <GroupChatView onBack={() => setActiveGroupId(null)} />
+          <GroupChatView
+            key={store.activeGroupId}
+            onOpenProfile={setProfileUser}
+            onBack={() => setActiveGroupId(null)}
+          />
         ) : activeFriend ? (
           <ChatView
             key={activeFriend.id}
@@ -276,7 +369,8 @@ export default function App() {
           type="button"
           aria-live="polite"
           onClick={() => {
-            store.setActiveChatId(messageToast.friendId);
+            if (messageToast.groupId) store.setActiveGroupId(messageToast.groupId);
+            else if (messageToast.friendId) store.setActiveChatId(messageToast.friendId);
             setToastClosing(true);
             if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
             toastTimer.current = window.setTimeout(() => {
@@ -285,7 +379,7 @@ export default function App() {
             }, 180);
           }}
         >
-          <strong>New message from {messageToast.name}</strong>
+          <strong>{messageToast.title}</strong>
           <span>{messageToast.body}</span>
         </button>
       )}

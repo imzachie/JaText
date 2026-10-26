@@ -211,6 +211,8 @@ export default defineSchema({
     attachmentName: v.optional(v.string()),
     attachmentType: v.optional(v.string()),
     attachmentUrl: v.optional(v.string()),
+    mentionsEveryone: v.optional(v.boolean()),
+    mentionedUserIds: v.optional(v.array(v.id("users"))),
     unsentAt: v.optional(v.number()),
     editedAt: v.optional(v.number()),
     hiddenFor: v.optional(v.array(v.id("users"))),

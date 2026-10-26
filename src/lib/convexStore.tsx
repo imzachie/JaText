@@ -83,10 +83,11 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       : "skip",
   );
   const activeMessages = (activeMessagesQuery ?? []) as ChatMessage[];
-  const communityMessages = (useQuery(
+  const communityMessagesQuery = useQuery(
     api.community.list,
     isAuthenticated ? {} : "skip",
-  ) ?? []) as CommunityMessage[];
+  );
+  const communityMessages = (communityMessagesQuery ?? []) as CommunityMessage[];
   const communityTypingUsers = (useQuery(
     api.community.typingUsers,
     isAuthenticated ? {} : "skip",
@@ -118,12 +119,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       : "skip",
   );
   const groupDetails = (groupDetailsQuery ?? null) as GroupDetails | null;
-  const groupMessages = (useQuery(
+  const groupMessagesQuery = useQuery(
     api.groups.listMessages,
     isAuthenticated && activeGroupId
       ? { groupId: activeGroupId as Id<"groups"> }
       : "skip",
-  ) ?? []) as GroupMessage[];
+  );
+  const groupMessages = (groupMessagesQuery ?? []) as GroupMessage[];
   const groupTypingUsers = (useQuery(
     api.groups.typingUsers,
     isAuthenticated && activeGroupId ? { groupId: activeGroupId as Id<"groups"> } : "skip",
@@ -177,6 +179,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const deleteCommunityForMeMut = useMutation(api.community.deleteForMe);
   const unsendCommunityMut = useMutation(api.community.unsend);
   const createGroupMut = useMutation(api.groups.create);
+  const addGroupMembersMut = useMutation(api.groups.addMembers);
   const sendGroupMessageMut = useMutation(api.groups.send);
   const forwardGroupMut = useMutation(api.groups.forward);
   const setGroupTypingMut = useMutation(api.groups.setTyping);
@@ -260,8 +263,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       );
       listeners.push(
         await PushNotifications.addListener("pushNotificationActionPerformed", ({ notification }) => {
+          const groupId = notification.data?.groupId;
           const senderId = notification.data?.senderId;
-          if (typeof senderId === "string") setActiveChatIdForStore(senderId);
+          if (typeof groupId === "string" && groupId) setActiveGroupId(groupId);
+          else if (typeof senderId === "string") setActiveChatIdForStore(senderId);
         }),
       );
       listeners.push(
@@ -290,6 +295,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     notificationPreferences.notificationsEnabled,
     registerPushDeviceMut,
     setActiveChatIdForStore,
+    setActiveGroupId,
     unregisterPushDeviceMut,
   ]);
 
@@ -474,6 +480,15 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         memberIds: memberIds as Id<"users">[],
       })) as string,
     [createGroupMut],
+  );
+  const addGroupMembers = useCallback<JaTextStore["addGroupMembers"]>(
+    async (groupId, memberIds) => {
+      await addGroupMembersMut({
+        groupId: groupId as Id<"groups">,
+        memberIds: memberIds as Id<"users">[],
+      });
+    },
+    [addGroupMembersMut],
   );
   const sendGroupMessage = useCallback<JaTextStore["sendGroupMessage"]>(
     async (groupId, body, file, replyToId, forwardedFromId) => {
@@ -961,6 +976,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       activeChatId === OFFICIAL_COMMUNITY_ID ||
       activeMessagesQuery !== undefined,
     communityMessages,
+    communityMessagesReady: !isAuthenticated || communityMessagesQuery !== undefined,
     communityPermissions,
     communityDirectory,
     groups,
@@ -968,6 +984,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     setActiveGroupId,
     groupDetails,
     groupMessages,
+    groupMessagesReady: !isAuthenticated || !activeGroupId || groupMessagesQuery !== undefined,
     groupTypingUsers,
     communityTypingUsers,
     blockedUserIds,
@@ -1014,6 +1031,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     forwardCommunityMessage,
     favoriteCommunityStickerFromMessage,
     createGroup,
+    addGroupMembers,
     sendGroupMessage,
     sendGroupSticker,
     setGroupTyping,

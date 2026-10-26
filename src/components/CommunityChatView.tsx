@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { useQuery } from "convex/react";
 import type { Id } from "../../convex/_generated/dataModel";
 import { api } from "../../convex/_generated/api";
@@ -7,7 +7,7 @@ import { friendlyError } from "../lib/errors";
 import { Avatar } from "./Avatar";
 import { StickerPicker } from "./StickerPicker";
 import { ContextMenu } from "./ContextMenu";
-import type { CommunityMessage } from "../lib/types";
+import type { CommunityMessage, JaUser } from "../lib/types";
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
@@ -167,7 +167,13 @@ function getCommunityPendingMessages(pending: CommunityMessage[], real: Communit
   return { messages: [...confirmed, ...pendingCopy].sort((a, b) => a.createdAt - b.createdAt), matchedIds };
 }
 
-export function CommunityChatView({ onBack }: { onBack: () => void }) {
+export function CommunityChatView({
+  onOpenProfile,
+  onBack,
+}: {
+  onOpenProfile?: (user: JaUser) => void;
+  onBack: () => void;
+}) {
   const store = useJaText();
   const setCommunityTyping = store.setCommunityTyping;
   const [draft, setDraft] = useState("");
@@ -236,10 +242,23 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
     setCommunityTypingRef.current = setCommunityTyping;
   }, [setCommunityTyping]);
 
-  useEffect(() => {
+  const hasScrolledOnOpenRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!store.communityMessagesReady) return;
     const element = messagesElement.current;
-    if (element && wasPinnedRef.current) element.scrollTop = element.scrollHeight;
-  }, [lastMessageId, displayedMessages.length]);
+    if (!element) return;
+    if (!hasScrolledOnOpenRef.current) {
+      hasScrolledOnOpenRef.current = true;
+      element.scrollTop = element.scrollHeight;
+      window.requestAnimationFrame(() => {
+        if (messagesElement.current) {
+          messagesElement.current.scrollTop = messagesElement.current.scrollHeight;
+        }
+      });
+      return;
+    }
+    if (wasPinnedRef.current) element.scrollTop = element.scrollHeight;
+  }, [store.communityMessagesReady, lastMessageId, displayedMessages.length]);
 
   useEffect(() => {
     for (const id of matchedPendingIds) {
@@ -742,7 +761,11 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
             store.communityPermissions.canModerate &&
             (store.communityPermissions.isOwner || message.senderId === store.me?.id);
           const showResults = !!message.pollEndedAt || message.myVote !== undefined;
-          const isImage = message.attachmentType?.startsWith("image/");
+          const isImage =
+            Boolean(message.attachmentType?.startsWith("image/")) ||
+            /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$|\s)/i.test(
+              `${message.attachmentName ?? ""} ${message.attachmentUrl ?? ""}`,
+            );
           const isVideo = message.attachmentType?.startsWith("video/") || /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? "");
           return (
             <article className="community-post" key={message.renderKey ?? message.id} id={`community-message-${message.id}`} onContextMenu={(e) => openMessageMenu(e, message)}>
@@ -755,6 +778,21 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
                     avatarUrl: message.senderAvatarUrl,
                   }}
                   size={32}
+                  onClick={
+                    onOpenProfile
+                      ? () =>
+                          onOpenProfile({
+                            id: message.senderId,
+                            displayName: message.senderName || "JaText",
+                            username: message.senderUsername || "jatext",
+                            bio: "",
+                            pronouns: "",
+                            avatarColor: message.senderAvatarColor || "black",
+                            avatarUrl: message.senderAvatarUrl,
+                            onboardingComplete: true,
+                          })
+                      : undefined
+                  }
                 />
                 <strong>{message.senderName || "JaText"}</strong>
                 <span className="verified-badge" title="Verified">✓</span>
@@ -820,11 +858,22 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
                             📎 {message.attachmentName ?? "Attachment"}
                           </a>
                         ))}
-                      {message.stickerUrl ? (
-                        <img className="group-message-sticker" src={message.stickerUrl} alt={message.stickerName ?? "Sticker"} style={{ maxWidth: 220, maxHeight: 220 }} />
-                      ) : (
-                        message.body && <p className="community-post-body">{message.body}</p>
+                      {message.stickerUrl && (
+                        <button
+                          type="button"
+                          className="image-message-button sticker-message-button"
+                          onClick={() => openImagePreview(message.stickerUrl!)}
+                          aria-label="Open sticker viewer"
+                        >
+                          <img
+                            className="group-message-sticker"
+                            src={message.stickerUrl}
+                            alt={message.stickerName ?? "Sticker"}
+                            style={{ maxWidth: 220, maxHeight: 220 }}
+                          />
+                        </button>
                       )}
+                      {message.body && <p className="community-post-body">{message.body}</p>}
                     </>
                   )}
                   {!!message.reactions?.length && (
@@ -934,7 +983,15 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
             </form>
           )}
           <form className="composer community-composer" onSubmit={(event) => void sendText(event)}>
-            <input ref={fileInput} type="file" hidden onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <input
+              ref={fileInput}
+              type="file"
+              hidden
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                e.currentTarget.value = "";
+              }}
+            />
             <button type="button" className="icon-btn attach-btn" disabled={!!editingMessage} onClick={() => fileInput.current?.click()} title="Attach a photo or file">📎</button>
             <StickerPicker friendId="" disabled={busy} onSelect={sendSticker} />
             <button type="button" className="icon-btn voice-note-placeholder" title="Voice notes coming soon" aria-label="Voice notes coming soon" disabled>
