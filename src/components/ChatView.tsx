@@ -17,7 +17,16 @@ import {
   parseCallInvite,
   useCall,
 } from "../lib/calling";
+import {
+  getCachedWallpaper,
+  getSavedOutgoingBubbleStyle,
+  parseWallpaperSignal,
+  saveCachedWallpaper,
+  useIsMobileWallpaperSupported,
+} from "../lib/chatCustomization";
 import { isVoiceNoteOrAudio, saveCachedVoiceTranscript, decodeVoiceNoteMime } from "../lib/voiceNotes";
+import { BubbleStyleModal } from "./BubbleStyleModal";
+import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { CallMessageCard } from "./CallMessageCard";
 import { ContextMenu } from "./ContextMenu";
 import { StickerPicker } from "./StickerPicker";
@@ -114,6 +123,43 @@ const ChatHistory = memo(function ChatHistory({
   onOpenImage: (url: string) => void;
   onReactToMessage: (message: ChatMessage, emoji: string) => void;
 }) {
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+
+  function cancelBubbleTouchHold() {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressOriginRef.current = null;
+  }
+
+  function startBubbleTouchHold(
+    event: React.TouchEvent<HTMLDivElement>,
+    message: ChatMessage,
+  ) {
+    if (message.id.startsWith("pending-")) return;
+    if (event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    longPressOriginRef.current = { x: touch.clientX, y: touch.clientY };
+    if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+    const { clientX, clientY } = touch;
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTimerRef.current = null;
+      onOpenMessageMenuAt(clientX, clientY, message);
+    }, 450);
+  }
+
+  function moveBubbleTouchHold(event: React.TouchEvent<HTMLDivElement>) {
+    if (!longPressOriginRef.current || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const dist = Math.hypot(
+      touch.clientX - longPressOriginRef.current.x,
+      touch.clientY - longPressOriginRef.current.y,
+    );
+    if (dist > 12) cancelBubbleTouchHold();
+  }
+
   return (
     <div
       className="messages"
@@ -139,6 +185,23 @@ const ChatHistory = memo(function ChatHistory({
         const showDay =
           index === 0 || fmtDay(messages[index - 1].createdAt) !== day;
         const mine = message.senderId === me.id;
+        const wpSignal = !message.unsentAt
+          ? parseWallpaperSignal(message.body, message.attachmentUrl)
+          : null;
+        if (wpSignal) {
+          const actor = mine ? "You" : friend.displayName;
+          return (
+            <div key={message.renderKey ?? message.id}>
+              {showDay && <div className="day-divider">{day}</div>}
+              <div className="wallpaper-event-pill" id={`message-${message.id}`}>
+                🖼️ {actor}{" "}
+                {wpSignal.kind === "none"
+                  ? "reset the chat wallpaper"
+                  : "changed the chat wallpaper"}
+              </div>
+            </div>
+          );
+        }
         const callInvite = parseCallInvite(message.body);
         const isAudioNote =
           !callInvite && isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
@@ -164,13 +227,20 @@ const ChatHistory = memo(function ChatHistory({
                     ↗ Forwarded from {message.forwardedFrom}
                   </span>
                 )}
-                <div
-                  className={`bubble ${mine ? "mine" : "theirs"} ${message.unsentAt ? "unsent" : ""}`}
+                <DecoratedMessageBubble
+                  styleId={callInvite ? "default" : (message.bubbleStyle ?? "default")}
+                  mine={mine}
+                  unsent={Boolean(message.unsentAt)}
+                  className={mine ? "mine" : "theirs"}
                   onContextMenu={
                     message.id.startsWith("pending-")
                       ? undefined
                       : (event) => onOpenMessageMenu(event, message)
                   }
+                  onTouchStart={(event) => startBubbleTouchHold(event, message)}
+                  onTouchMove={moveBubbleTouchHold}
+                  onTouchEnd={cancelBubbleTouchHold}
+                  onTouchCancel={cancelBubbleTouchHold}
                 >
                   {message.replyTo && (
                     <button
@@ -276,7 +346,7 @@ const ChatHistory = memo(function ChatHistory({
                       {message.body && <p>{message.body}</p>}
                     </>
                   )}
-                </div>
+                </DecoratedMessageBubble>
                 {!!message.reactions?.length && (
                   <div className="message-reactions">
                     {Array.from(new Set(message.reactions.map((reaction) => reaction.emoji))).map(
@@ -352,6 +422,8 @@ export function ChatView({
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [messageMenuClosing, setMessageMenuClosing] = useState(false);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
+  const isMobileWallpaper = useIsMobileWallpaperSupported();
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
   const [forwardClosing, setForwardClosing] = useState(false);
   const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
@@ -398,6 +470,29 @@ export function ChatView({
     () => getConversationMessages(pendingMessages, conversationMessages, friend.id),
     [conversationMessages, friend.id, pendingMessages],
   );
+  const activeWallpaperUrl = useMemo(() => {
+    for (let i = displayedMessages.length - 1; i >= 0; i--) {
+      const msg = displayedMessages[i];
+      if (msg.unsentAt) continue;
+      const wp = parseWallpaperSignal(msg.body, msg.attachmentUrl);
+      if (wp) return wp.url;
+    }
+    return getCachedWallpaper(`dm:${friend.id}`) ?? null;
+  }, [displayedMessages, friend.id]);
+
+  useEffect(() => {
+    for (let i = displayedMessages.length - 1; i >= 0; i--) {
+      const msg = displayedMessages[i];
+      if (msg.unsentAt) continue;
+      const wp = parseWallpaperSignal(msg.body, msg.attachmentUrl);
+      if (wp) {
+        saveCachedWallpaper(`dm:${friend.id}`, wp.url);
+        break;
+      }
+    }
+  }, [displayedMessages, friend.id]);
+
+  const showMobileWallpaper = isMobileWallpaper && Boolean(activeWallpaperUrl);
   const scrollToBottom = useCallback(() => {
     const container = messagesRef.current;
     if (container) {
@@ -688,6 +783,7 @@ export function ChatView({
         senderId: me?.id ?? "",
         receiverId: friend.id,
         body: sentBody,
+        bubbleStyle: getSavedOutgoingBubbleStyle(),
         attachmentUrl,
         attachmentName: sentFile?.name,
         attachmentType: sentFile?.type,
@@ -807,6 +903,7 @@ export function ChatView({
         senderId: me?.id ?? "",
         receiverId: friend.id,
         body: "",
+        bubbleStyle: getSavedOutgoingBubbleStyle(),
         attachmentUrl,
         attachmentName: voiceFile.name,
         attachmentType: voiceFile.type,
@@ -940,7 +1037,20 @@ export function ChatView({
   }
 
   return (
-    <section className={`chat ${chatClosing ? "closing" : ""}`}>
+    <section
+      className={`chat ${chatClosing ? "closing" : ""} ${
+        showMobileWallpaper ? "has-wallpaper" : ""
+      }`}
+    >
+      {showMobileWallpaper && activeWallpaperUrl ? (
+        <div className="chat-wallpaper-layer" aria-hidden="true">
+          <img
+            src={activeWallpaperUrl}
+            alt=""
+            referrerPolicy="no-referrer"
+          />
+        </div>
+      ) : null}
       <header className="chat-header">
         <button className="icon-btn back-btn" onClick={closeChat} aria-label="Back">
           ←
@@ -978,6 +1088,15 @@ export function ChatView({
             onClick={() => void startCall(friend, "video")}
           >
             <Video size={18} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn chat-more-btn"
+            title="Contact info & options"
+            aria-label="Contact info and options"
+            onClick={() => onOpenProfile(friend)}
+          >
+            ⋮
           </button>
         </div>
       </header>
@@ -1151,6 +1270,19 @@ export function ChatView({
             <span>↩️</span> Reply
           </button>
           {!messageMenu.message.unsentAt &&
+            messageMenu.message.senderId === me.id && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMessageMenu();
+                  setBubbleStyleOpen(true);
+                }}
+              >
+                <span>💬</span> Bubble style
+              </button>
+            )}
+          {!messageMenu.message.unsentAt &&
             isVoiceNoteOrAudio(
               messageMenu.message.attachmentType,
               messageMenu.message.attachmentName,
@@ -1312,6 +1444,9 @@ export function ChatView({
             </div>
           </section>
         </div>
+      )}
+      {bubbleStyleOpen && (
+        <BubbleStyleModal onClose={() => setBubbleStyleOpen(false)} />
       )}
       {imagePreview && (
         <div

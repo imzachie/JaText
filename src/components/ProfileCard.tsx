@@ -1,12 +1,21 @@
+import { useMemo, useState } from "react";
 import { Phone, Video } from "./CallIcons";
 import { useCall } from "../lib/calling";
+import {
+  getCachedWallpaper,
+  parseWallpaperSignal,
+  saveCachedWallpaper,
+  serializeWallpaperSignal,
+  useIsMobileWallpaperSupported,
+} from "../lib/chatCustomization";
 import { colorById } from "../lib/colors";
 import { useJaText } from "../lib/store";
 import type { ActivityStatus, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
+import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 
 /**
- * The card shown when you click someone's pfp.
+ * The card shown when you click someone's pfp or the 3-dots header menu.
  * Their avatar color drives the outline around the pfp and the
  * background color behind it.
  */
@@ -28,7 +37,9 @@ export function ProfileCard({
             : { background: color.gradient }
         }
       />
-      <div className="profile-body">
+      <div
+        className="profile-body"
+      >
         <div
           className="profile-avatar-wrap"
           style={{ background: color.soft, boxShadow: `0 0 0 4px var(--panel)` }}
@@ -62,9 +73,89 @@ export function ProfileModal({
   status?: ActivityStatus;
   onClose: () => void;
 }) {
-  const { me, friends, setActiveChatId } = useJaText();
+  const store = useJaText();
+  const { me, friends, activeChatId, activeMessages, blockedUserIds, setActiveChatId } = store;
   const { startCall } = useCall();
-  const isFriend = Boolean(me && me.id !== user.id && friends.some((f) => f.id === user.id));
+  const isMobileWallpaper = useIsMobileWallpaperSupported();
+  const [wallpaperOpen, setWallpaperOpen] = useState(false);
+  const [blockBusy, setBlockBusy] = useState(false);
+
+  const isNotMe = Boolean(me && me.id !== user.id);
+  const isFriend = Boolean(isNotMe && friends.some((f) => f.id === user.id));
+  const isBlocked = Boolean(isNotMe && blockedUserIds.includes(user.id));
+
+  const currentDmWallpaperUrl = useMemo(() => {
+    if (activeChatId === user.id) {
+      for (let i = activeMessages.length - 1; i >= 0; i--) {
+        const msg = activeMessages[i];
+        if (msg.unsentAt) continue;
+        const wp = parseWallpaperSignal(msg.body, msg.attachmentUrl);
+        if (wp) return wp.url;
+      }
+    }
+    return getCachedWallpaper(`dm:${user.id}`) ?? null;
+  }, [activeChatId, activeMessages, user.id]);
+
+  async function handleApplyDmWallpaper(choice: WallpaperChoice) {
+    const scopeKey = `dm:${user.id}`;
+    if (choice.kind === "none") {
+      await store.sendMessage(
+        user.id,
+        serializeWallpaperSignal({
+          v: 1,
+          kind: "none",
+          actorName: me?.displayName,
+        }),
+      );
+      saveCachedWallpaper(scopeKey, null);
+    } else if (choice.kind === "preset" && choice.url) {
+      await store.sendMessage(
+        user.id,
+        serializeWallpaperSignal({
+          v: 1,
+          kind: "preset",
+          presetId: choice.presetId,
+          url: choice.url,
+          actorName: me?.displayName,
+        }),
+      );
+      saveCachedWallpaper(scopeKey, choice.url);
+    } else if (choice.kind === "custom" && choice.file) {
+      await store.sendMessage(
+        user.id,
+        serializeWallpaperSignal({
+          v: 1,
+          kind: "custom",
+          actorName: me?.displayName,
+        }),
+        choice.file,
+      );
+    }
+    setActiveChatId(user.id);
+  }
+
+  async function handleToggleBlock() {
+    if (!isNotMe || blockBusy) return;
+    setBlockBusy(true);
+    try {
+      await store.setUserBlocked(user.id, !isBlocked);
+    } finally {
+      setBlockBusy(false);
+    }
+  }
+
+  if (wallpaperOpen) {
+    return (
+      <WallpaperModal
+        currentWallpaperUrl={currentDmWallpaperUrl}
+        onApply={handleApplyDmWallpaper}
+        onClose={() => {
+          setWallpaperOpen(false);
+          onClose();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -73,37 +164,58 @@ export function ProfileModal({
           ✕
         </button>
         <ProfileCard user={user} status={status} />
-        {isFriend && (
+        {isNotMe && (
           <div className="profile-call-actions">
+            {isFriend && (
+              <>
+                <button
+                  type="button"
+                  className="ghost-btn profile-action-pill"
+                  onClick={() => {
+                    setActiveChatId(user.id);
+                    onClose();
+                  }}
+                >
+                  💬 Message
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn profile-action-pill"
+                  onClick={() => {
+                    onClose();
+                    void startCall(user, "voice");
+                  }}
+                >
+                  <Phone size={15} /> Voice call
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn profile-action-pill"
+                  onClick={() => {
+                    onClose();
+                    void startCall(user, "video");
+                  }}
+                >
+                  <Video size={15} /> Video call
+                </button>
+                {isMobileWallpaper && !isBlocked && (
+                  <button
+                    type="button"
+                    className="ghost-btn profile-action-pill"
+                    onClick={() => setWallpaperOpen(true)}
+                  >
+                    🖼️ Chat wallpaper
+                  </button>
+                )}
+              </>
+            )}
             <button
               type="button"
-              className="ghost-btn profile-action-pill"
-              onClick={() => {
-                setActiveChatId(user.id);
-                onClose();
-              }}
+              className="ghost-btn danger profile-action-pill"
+              disabled={blockBusy}
+              onClick={() => void handleToggleBlock()}
             >
-              💬 Message
-            </button>
-            <button
-              type="button"
-              className="ghost-btn profile-action-pill"
-              onClick={() => {
-                onClose();
-                void startCall(user, "voice");
-              }}
-            >
-              <Phone size={15} /> Voice call
-            </button>
-            <button
-              type="button"
-              className="primary-btn profile-action-pill"
-              onClick={() => {
-                onClose();
-                void startCall(user, "video");
-              }}
-            >
-              <Video size={15} /> Video call
+              {isBlocked ? "Unblock" : "🚫 Block"}
             </button>
           </div>
         )}

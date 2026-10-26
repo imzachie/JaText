@@ -14,7 +14,19 @@ import {
   type UIEvent,
 } from "react";
 import { playMessageSound } from "../lib/alerts";
+import { formatPreviewMessageText } from "../lib/calling";
+import {
+  getCachedWallpaper,
+  getSavedOutgoingBubbleStyle,
+  parseWallpaperSignal,
+  saveCachedWallpaper,
+  serializeWallpaperSignal,
+  useIsMobileWallpaperSupported,
+} from "../lib/chatCustomization";
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
+import { BubbleStyleModal } from "./BubbleStyleModal";
+import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
+import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { ContextMenu } from "./ContextMenu";
 import { Avatar } from "./Avatar";
 import { StickerPicker } from "./StickerPicker";
@@ -195,6 +207,42 @@ const GroupChatHistory = memo(function GroupChatHistory({
     () => new Map(members.map((member) => [member.username.toLowerCase(), member])),
     [members],
   );
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+
+  function cancelBubbleTouchHold() {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressOriginRef.current = null;
+  }
+
+  function startBubbleTouchHold(
+    event: React.TouchEvent<HTMLDivElement>,
+    message: GroupMessage,
+  ) {
+    if (message.id.startsWith("pending-")) return;
+    if (event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    longPressOriginRef.current = { x: touch.clientX, y: touch.clientY };
+    if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+    const { clientX, clientY } = touch;
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTimerRef.current = null;
+      onOpenMessageMenuAt(clientX, clientY, message);
+    }, 450);
+  }
+
+  function moveBubbleTouchHold(event: React.TouchEvent<HTMLDivElement>) {
+    if (!longPressOriginRef.current || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const dist = Math.hypot(
+      touch.clientX - longPressOriginRef.current.x,
+      touch.clientY - longPressOriginRef.current.y,
+    );
+    if (dist > 12) cancelBubbleTouchHold();
+  }
 
   const handleMediaLoad = () => {
     if (initialScrollAllowedRef.current || wasPinnedRef.current) {
@@ -227,6 +275,25 @@ const GroupChatHistory = memo(function GroupChatHistory({
         const day = fmtDay(message.createdAt);
         const showDay = index === 0 || fmtDay(messages[index - 1].createdAt) !== day;
         const mine = message.senderId === me.id;
+        const wpSignal = !message.unsentAt
+          ? parseWallpaperSignal(message.body, message.attachmentUrl)
+          : null;
+        if (wpSignal) {
+          const actor = mine
+            ? "You"
+            : message.senderName || wpSignal.actorName || "A moderator";
+          return (
+            <Fragment key={message.renderKey ?? message.id}>
+              {showDay && <div className="day-divider">{day}</div>}
+              <div className="wallpaper-event-pill" id={`group-message-${message.id}`}>
+                🖼️ {actor}{" "}
+                {wpSignal.kind === "none"
+                  ? "reset the group wallpaper"
+                  : "changed the group wallpaper"}
+              </div>
+            </Fragment>
+          );
+        }
         const isAudioNote = isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
         const isImage =
           !isAudioNote &&
@@ -298,13 +365,20 @@ const GroupChatHistory = memo(function GroupChatHistory({
                       onClick={() => onOpenProfile(senderUser)}
                     />
                   )}
-                  <div
-                    className={`bubble ${mine ? "mine" : "theirs"} ${message.unsentAt ? "unsent" : ""} ${mentionedMe ? "bubble-mentioned" : ""}`}
+                  <DecoratedMessageBubble
+                    styleId={message.bubbleStyle ?? "default"}
+                    mine={mine}
+                    unsent={Boolean(message.unsentAt)}
+                    className={`${mine ? "mine" : "theirs"} ${mentionedMe ? "bubble-mentioned" : ""}`}
                     onContextMenu={
                       message.id.startsWith("pending-")
                         ? undefined
                         : (event) => onOpenMessageMenu(event, message)
                     }
+                    onTouchStart={(event) => startBubbleTouchHold(event, message)}
+                    onTouchMove={moveBubbleTouchHold}
+                    onTouchEnd={cancelBubbleTouchHold}
+                    onTouchCancel={cancelBubbleTouchHold}
                   >
                     {message.replyTo && (
                       <button
@@ -319,7 +393,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                         <strong>
                           {message.replyTo.senderId === me.id ? "You" : message.replyTo.senderName}
                         </strong>
-                        <span>{message.replyTo.body || "📎 Attachment"}</span>
+                        <span>{formatPreviewMessageText(message.replyTo.body) || "📎 Attachment"}</span>
                       </button>
                     )}
                     {message.unsentAt ? (
@@ -426,7 +500,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                         )}
                       </>
                     )}
-                  </div>
+                  </DecoratedMessageBubble>
                 </div>
                 <div className={`group-message-sub ${mine ? "mine" : "theirs"}`}>
                   {!!message.reactions?.length && (
@@ -477,6 +551,9 @@ export function GroupChatView({
   const [draft, setDraft] = useState("");
   const [cursorPos, setCursorPos] = useState(0);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
+  const [wallpaperOpen, setWallpaperOpen] = useState(false);
+  const isMobileWallpaper = useIsMobileWallpaperSupported();
   const [mentionDismissedAt, setMentionDismissedAt] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
@@ -978,6 +1055,7 @@ export function GroupChatView({
         senderAvatarUrl: store.me?.avatarUrl,
         senderAvatarColor: store.me?.avatarColor ?? "black",
         body: sentBody || sentForwarded?.body || "",
+        bubbleStyle: getSavedOutgoingBubbleStyle(),
         attachmentUrl,
         attachmentName: sentFile?.name ?? sentForwarded?.attachmentName,
         attachmentType: sentFile?.type ?? sentForwarded?.attachmentType,
@@ -1084,6 +1162,7 @@ export function GroupChatView({
         senderAvatarUrl: store.me?.avatarUrl,
         senderAvatarColor: store.me?.avatarColor ?? "black",
         body: "",
+        bubbleStyle: getSavedOutgoingBubbleStyle(),
         attachmentUrl,
         attachmentName: voiceFile.name,
         attachmentType: voiceFile.type,
@@ -1327,8 +1406,93 @@ export function GroupChatView({
     ? store.friends.filter((friend) => !group.members.some((m) => m.id === friend.id))
     : [];
 
+  const isPrivilegedWallpaperSender = (senderId: string): boolean => {
+    if (group) {
+      if (senderId === group.ownerId) return true;
+      const m = group.members.find((item) => item.id === senderId);
+      if (m) return m.role === "owner" || m.role === "moderator";
+    }
+    if (summary && senderId === summary.ownerId) return true;
+    // Before full group details finish hydrating, allow cached/known signals.
+    return !group;
+  };
+
+  let resolvedGroupWallpaperUrl: string | null | undefined = undefined;
+  for (let i = displayedMessages.length - 1; i >= 0; i--) {
+    const msg = displayedMessages[i];
+    if (msg.unsentAt) continue;
+    const wp = parseWallpaperSignal(msg.body, msg.attachmentUrl);
+    if (wp && isPrivilegedWallpaperSender(msg.senderId)) {
+      resolvedGroupWallpaperUrl = wp.url;
+      break;
+    }
+  }
+  const activeWallpaperUrl =
+    resolvedGroupWallpaperUrl !== undefined
+      ? resolvedGroupWallpaperUrl
+      : (getCachedWallpaper(`group:${groupId}`) ?? null);
+
+  if (resolvedGroupWallpaperUrl !== undefined) {
+    saveCachedWallpaper(`group:${groupId}`, resolvedGroupWallpaperUrl);
+  }
+
+  const showMobileWallpaper = isMobileWallpaper && Boolean(activeWallpaperUrl);
+
+  async function handleApplyGroupWallpaper(choice: WallpaperChoice) {
+    if (!groupId || !canManageGroup) {
+      throw new Error("Only the group owner or a moderator can change the group wallpaper.");
+    }
+    const scopeKey = `group:${groupId}`;
+    if (choice.kind === "none") {
+      await store.sendGroupMessage(
+        groupId,
+        serializeWallpaperSignal({
+          v: 1,
+          kind: "none",
+          actorName: store.me?.displayName,
+        }),
+      );
+      saveCachedWallpaper(scopeKey, null);
+    } else if (choice.kind === "preset" && choice.url) {
+      await store.sendGroupMessage(
+        groupId,
+        serializeWallpaperSignal({
+          v: 1,
+          kind: "preset",
+          presetId: choice.presetId,
+          url: choice.url,
+          actorName: store.me?.displayName,
+        }),
+      );
+      saveCachedWallpaper(scopeKey, choice.url);
+    } else if (choice.kind === "custom" && choice.file) {
+      await store.sendGroupMessage(
+        groupId,
+        serializeWallpaperSignal({
+          v: 1,
+          kind: "custom",
+          actorName: store.me?.displayName,
+        }),
+        choice.file,
+      );
+    }
+  }
+
   return (
-    <section className={`chat group-chat ${chatClosing ? "closing" : ""}`}>
+    <section
+      className={`chat group-chat ${chatClosing ? "closing" : ""} ${
+        showMobileWallpaper ? "has-wallpaper" : ""
+      }`}
+    >
+      {showMobileWallpaper && activeWallpaperUrl ? (
+        <div className="chat-wallpaper-layer" aria-hidden="true">
+          <img
+            src={activeWallpaperUrl}
+            alt=""
+            referrerPolicy="no-referrer"
+          />
+        </div>
+      ) : null}
       <header className="chat-header">
         <button className="icon-btn back-btn" onClick={closeChat} aria-label="Back">
           ←
@@ -1357,9 +1521,20 @@ export function GroupChatView({
             {group?.members.length ?? summary?.memberCount ?? 0} members · Tap for group settings
           </span>
         </button>
-        <button type="button" className="ghost-btn" onClick={openManageModal}>
-          Manage
-        </button>
+        <div className="chat-header-actions">
+          <button type="button" className="ghost-btn" onClick={openManageModal}>
+            Manage
+          </button>
+          <button
+            type="button"
+            className="icon-btn chat-more-btn"
+            title="Group options"
+            aria-label="Group options"
+            onClick={openManageModal}
+          >
+            ⋮
+          </button>
+        </div>
       </header>
 
       {showUnsendWarning && (
@@ -1672,6 +1847,19 @@ export function GroupChatView({
             <span>↩️</span> Reply
           </button>
           {!messageMenu.message.unsentAt &&
+            messageMenu.message.senderId === store.me?.id && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMessageMenu();
+                  setBubbleStyleOpen(true);
+                }}
+              >
+                <span>💬</span> Bubble style
+              </button>
+            )}
+          {!messageMenu.message.unsentAt &&
             isVoiceNoteOrAudio(
               messageMenu.message.attachmentType,
               messageMenu.message.attachmentName,
@@ -1887,6 +2075,17 @@ export function GroupChatView({
         </div>
       )}
 
+      {bubbleStyleOpen && (
+        <BubbleStyleModal onClose={() => setBubbleStyleOpen(false)} />
+      )}
+      {wallpaperOpen && canManageGroup && (
+        <WallpaperModal
+          isGroup
+          currentWallpaperUrl={activeWallpaperUrl}
+          onApply={handleApplyGroupWallpaper}
+          onClose={() => setWallpaperOpen(false)}
+        />
+      )}
       {imagePreview && (
         <div
           className={`media-lightbox ${imageClosing ? "closing" : ""}`}
@@ -1983,6 +2182,18 @@ export function GroupChatView({
                       >
                         📷 Choose photo
                       </button>
+                      {isMobileWallpaper && (
+                        <button
+                          type="button"
+                          className="mini-btn"
+                          onClick={() => {
+                            closeManageModal();
+                            setWallpaperOpen(true);
+                          }}
+                        >
+                          🖼️ Chat wallpaper
+                        </button>
+                      )}
                       {groupAvatarPreview && (
                         <button
                           type="button"

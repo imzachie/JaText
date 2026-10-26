@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { parseWallpaperSignal, stripBubbleStyleFromText } from "./chatCustomization";
 import { JaTextNative, configureNativeCallAudio, ensureNativeMediaPermissions } from "./nativeBridge";
 import { useJaText } from "./store";
 import type { ChatMessage, JaUser } from "./types";
@@ -185,8 +186,13 @@ export function formatCallDuration(seconds: number): string {
 }
 
 export function formatPreviewMessageText(body: string): string {
-  if (isHiddenCallSignal(body)) return "";
-  const invite = parseCallInvite(body);
+  const clean = stripBubbleStyleFromText(body);
+  if (isHiddenCallSignal(clean)) return "";
+  const wp = parseWallpaperSignal(clean);
+  if (wp) {
+    return wp.kind === "none" ? "🖼️ Reset the chat wallpaper" : "🖼️ Changed the chat wallpaper";
+  }
+  const invite = parseCallInvite(clean);
   if (invite) {
     const icon = invite.mode === "video" ? "📹" : "📞";
     const kind = invite.mode === "video" ? "Video call" : "Voice call";
@@ -199,7 +205,7 @@ export function formatPreviewMessageText(body: string): string {
     }
     return `${icon} ${kind} ended`;
   }
-  return body;
+  return clean;
 }
 
 function waitForIceGathering(pc: RTCPeerConnection, maxWaitMs = 950): Promise<void> {

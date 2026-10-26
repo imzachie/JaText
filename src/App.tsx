@@ -239,7 +239,7 @@ function AppContent() {
         setMessageToast({
           groupId: group.id,
           title,
-          body: group.lastMessage || "Tap to open group chat",
+          body: formatPreviewMessageText(group.lastMessage) || "Tap to open group chat",
         });
       }, 0);
       if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
@@ -260,7 +260,7 @@ function AppContent() {
       ) {
         try {
           const notification = new Notification(title, {
-            body: group.lastMessage || "Open group chat",
+            body: formatPreviewMessageText(group.lastMessage) || "Open group chat",
             tag: `jatext-group-${group.id}`,
           });
           notification.onclick = () => {

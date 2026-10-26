@@ -20,6 +20,7 @@ import {
   type ProfileInput,
   type StickerMedia,
 } from "./types";
+import { WALLPAPER_PREFIX, getSavedOutgoingBubbleStyle } from "./chatCustomization";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
 
 export const JaTextContext = createContext<JaTextStore | null>(null);
@@ -812,11 +813,16 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
             ))
         )
           throw new Error("The message you are replying to is unavailable.");
+        const trimmedBody = body.trim();
+        const isCtrl =
+          trimmedBody.startsWith("__JATEXT_CALL") || trimmedBody.startsWith(WALLPAPER_PREFIX);
+        const bubbleStyle = isCtrl ? "default" : getSavedOutgoingBubbleStyle();
         draft.messages.push({
           id: uid(),
           senderId: me.id,
           receiverId,
-          body: body.trim(),
+          body: trimmedBody,
+          bubbleStyle,
           attachmentUrl,
           attachmentName: file?.name,
           attachmentType: file?.type,
