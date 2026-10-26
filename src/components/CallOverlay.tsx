@@ -1,0 +1,650 @@
+import { useEffect, useRef, useState } from "react";
+import { Capacitor } from "@capacitor/core";
+import {
+  Activity,
+  Captions,
+  LayoutGrid,
+  Maximize2,
+  Mic,
+  MicOff,
+  Minimize2,
+  MonitorUp,
+  Music2,
+  Phone,
+  PhoneOff,
+  RefreshCw,
+  Smile,
+  Sparkles,
+  SwitchCamera,
+  Video,
+  VideoOff,
+  Volume2,
+  VolumeX,
+  X,
+} from "./CallIcons";
+import {
+  formatCallDuration,
+  useCall,
+  type SoundboardEffectId,
+} from "../lib/calling";
+import { useJaText } from "../lib/store";
+import { Avatar } from "./Avatar";
+
+const CALL_REACTIONS = ["❤️", "😂", "🔥", "👏", "🎉", "👍"];
+const SOUNDBOARD_ITEMS: Array<{ id: SoundboardEffectId; emoji: string; label: string }> = [
+  { id: "tada", emoji: "🎉", label: "Fanfare" },
+  { id: "rimshot", emoji: "🥁", label: "Rimshot" },
+  { id: "chime", emoji: "🔔", label: "Sparkle" },
+  { id: "laser", emoji: "🚀", label: "Laser" },
+  { id: "cheer", emoji: "👏", label: "Applause" },
+];
+
+function StreamVideo({
+  stream,
+  muted,
+  mirrored,
+  className,
+}: {
+  stream: MediaStream | null;
+  muted?: boolean;
+  mirrored?: boolean;
+  className?: string;
+}) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.srcObject !== stream) {
+      el.srcObject = stream;
+    }
+    if (stream) {
+      void el.play().catch(() => undefined);
+    }
+  }, [stream]);
+
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      playsInline
+      muted={muted}
+      className={`${className ?? ""} ${mirrored ? "mirrored" : ""}`}
+    />
+  );
+}
+
+export function CallOverlay() {
+  const { me } = useJaText();
+  const {
+    session,
+    localStream,
+    remoteStream,
+    isMuted,
+    isDeafened,
+    isCameraOff,
+    isScreenSharing,
+    isSpeakerphone,
+    studioAudioEnabled,
+    captionsEnabled,
+    minimized,
+    layoutMode,
+    facingMode,
+    meSpeaking,
+    peerMuted,
+    peerCameraOff,
+    peerScreenSharing,
+    peerSpeaking,
+    reactions,
+    captions,
+    stats,
+    callError,
+    canScreenShare,
+    acceptIncomingCall,
+    declineIncomingCall,
+    endCall,
+    toggleMute,
+    toggleDeafen,
+    toggleCamera,
+    flipCamera,
+    toggleScreenShare,
+    toggleSpeakerphone,
+    toggleStudioAudio,
+    toggleCaptions,
+    sendCallReaction,
+    playSoundboard,
+    reconnectIce,
+    setMinimized,
+    setLayoutMode,
+    dismissCallError,
+  } = useCall();
+
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [openDrawer, setOpenDrawer] = useState<"none" | "reactions" | "soundboard" | "stats">(
+    "none",
+  );
+  const [pipOffset, setPipOffset] = useState({ x: 0, y: 0 });
+  const dragStartRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!session?.startedAt) {
+      setElapsedSec(0);
+      return;
+    }
+    const update = () => {
+      setElapsedSec(Math.max(0, Math.floor((Date.now() - (session.startedAt ?? Date.now())) / 1000)));
+    };
+    update();
+    const id = window.setInterval(update, 1000);
+    return () => window.clearInterval(id);
+  }, [session?.startedAt]);
+
+  useEffect(() => {
+    if (!session) {
+      setOpenDrawer("none");
+      setPipOffset({ x: 0, y: 0 });
+    }
+  }, [session]);
+
+  if (!session && !callError) return null;
+
+  if (!session && callError) {
+    return (
+      <div className="call-error-banner" role="alert">
+        <span>{callError}</span>
+        <button type="button" className="icon-btn" onClick={dismissCallError} aria-label="Dismiss">
+          <X size={16} />
+        </button>
+      </div>
+    );
+  }
+
+  if (!session) return null;
+
+  const hasRemoteVideo =
+    !peerCameraOff && Boolean(remoteStream && remoteStream.getVideoTracks().length > 0);
+  const hasLocalVideo =
+    !isCameraOff && Boolean(localStream && localStream.getVideoTracks().length > 0);
+  const isNative = Capacitor.isNativePlatform();
+
+  // Incoming Call Modal
+  if (session.phase === "incoming") {
+    return (
+      <div className="call-incoming-backdrop">
+        <div className="call-incoming-sheet">
+          <div className="call-incoming-badge">
+            {session.mode === "video" ? "📹 Incoming Video Call" : "📞 Incoming Voice Call"}
+          </div>
+          <div className="call-incoming-avatar-pulse">
+            <Avatar user={session.peer} size={92} ringWidth={4} />
+          </div>
+          <h2 className="call-incoming-name">{session.peer.displayName}</h2>
+          <p className="call-incoming-handle">@{session.peer.username}</p>
+
+          <div className="call-incoming-actions">
+            <button
+              type="button"
+              className="call-round-btn decline"
+              onClick={() => void declineIncomingCall()}
+              title="Decline call"
+            >
+              <PhoneOff size={24} />
+              <span>Decline</span>
+            </button>
+
+            <button
+              type="button"
+              className="call-round-btn accept-voice"
+              onClick={() => void acceptIncomingCall(false)}
+              title="Answer with voice"
+            >
+              <Phone size={24} />
+              <span>{session.mode === "video" ? "Voice Only" : "Accept"}</span>
+            </button>
+
+            {session.mode === "video" && (
+              <button
+                type="button"
+                className="call-round-btn accept-video"
+                onClick={() => void acceptIncomingCall(true)}
+                title="Answer with video"
+              >
+                <Video size={24} />
+                <span>Video</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Minimized Draggable Floating PiP Window
+  if (minimized) {
+    return (
+      <div
+        className={`call-pip-card ${peerSpeaking ? "speaking" : ""}`}
+        style={{
+          transform: `translate(${pipOffset.x}px, ${pipOffset.y}px)`,
+        }}
+        onPointerDown={(e) => {
+          if ((e.target as HTMLElement).closest("button")) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          dragStartRef.current = {
+            startX: e.clientX,
+            startY: e.clientY,
+            baseX: pipOffset.x,
+            baseY: pipOffset.y,
+          };
+        }}
+        onPointerMove={(e) => {
+          const drag = dragStartRef.current;
+          if (!drag) return;
+          setPipOffset({
+            x: drag.baseX + (e.clientX - drag.startX),
+            y: drag.baseY + (e.clientY - drag.startY),
+          });
+        }}
+        onPointerUp={() => {
+          dragStartRef.current = null;
+        }}
+      >
+        {hasRemoteVideo ? (
+          <StreamVideo stream={remoteStream} muted className="call-pip-video" />
+        ) : (
+          <div className="call-pip-avatar">
+            <Avatar user={session.peer} size={46} ringWidth={3} />
+          </div>
+        )}
+        <div className="call-pip-meta">
+          <div className="call-pip-name">{session.peer.displayName}</div>
+          <div className="call-pip-timer">
+            {session.phase === "connected" ? formatCallDuration(elapsedSec) : "Connecting…"}
+          </div>
+        </div>
+        <div className="call-pip-btns">
+          <button
+            type="button"
+            className={`call-pip-icon ${isMuted ? "off" : ""}`}
+            onClick={toggleMute}
+            title={isMuted ? "Unmute" : "Mute"}
+          >
+            {isMuted ? <MicOff size={15} /> : <Mic size={15} />}
+          </button>
+          <button
+            type="button"
+            className="call-pip-icon"
+            onClick={() => setMinimized(false)}
+            title="Expand call"
+          >
+            <Maximize2 size={15} />
+          </button>
+          <button
+            type="button"
+            className="call-pip-icon hangup"
+            onClick={() => void endCall()}
+            title="End call"
+          >
+            <PhoneOff size={15} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const statusText =
+    session.phase === "outgoing"
+      ? "Ringing…"
+      : session.phase === "connecting"
+        ? "Connecting secure P2P…"
+        : formatCallDuration(elapsedSec);
+
+  return (
+    <div className="call-studio-overlay">
+      {/* Top Bar */}
+      <header className="call-studio-topbar">
+        <div className="call-studio-peer">
+          <span className={`call-live-dot ${session.phase === "connected" ? "live" : "pulse"}`} />
+          <div>
+            <div className="call-studio-title">
+              {session.peer.displayName}
+              {peerScreenSharing && <span className="call-tag-chip">Screen</span>}
+              {studioAudioEnabled && <span className="call-tag-chip accent">HD Voice</span>}
+            </div>
+            <div className="call-studio-sub">
+              <span>{statusText}</span>
+              {stats.rttMs !== null && session.phase === "connected" && (
+                <span className="call-rtt-pill">{stats.rttMs} ms</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="call-studio-top-actions">
+          {(hasRemoteVideo || hasLocalVideo) && (
+            <button
+              type="button"
+              className={`call-top-btn ${layoutMode === "grid" ? "active" : ""}`}
+              onClick={() => setLayoutMode(layoutMode === "spotlight" ? "grid" : "spotlight")}
+              title={layoutMode === "spotlight" ? "Switch to side-by-side grid" : "Switch to spotlight"}
+            >
+              <LayoutGrid size={17} />
+            </button>
+          )}
+          <button
+            type="button"
+            className={`call-top-btn ${openDrawer === "stats" ? "active" : ""}`}
+            onClick={() => setOpenDrawer(openDrawer === "stats" ? "none" : "stats")}
+            title="Connection quality & stats"
+          >
+            <Activity size={17} />
+          </button>
+          <button
+            type="button"
+            className="call-top-btn"
+            onClick={() => setMinimized(true)}
+            title="Minimize call to browse chats"
+          >
+            <Minimize2 size={17} />
+          </button>
+        </div>
+      </header>
+
+      {callError && (
+        <div className="call-inline-alert">
+          <span>{callError}</span>
+          <button type="button" onClick={dismissCallError}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Connection Diagnostics Popover */}
+      {openDrawer === "stats" && (
+        <div className="call-stats-popover">
+          <div className="call-stats-head">
+            <strong>WebRTC Diagnostics</strong>
+            <button
+              type="button"
+              className="call-mini-action"
+              onClick={() => void reconnectIce()}
+              title="Refresh ICE route"
+            >
+              <RefreshCw size={12} /> Re-sync
+            </button>
+          </div>
+          <div className="call-stats-grid">
+            <div>
+              <span>State</span>
+              <strong>{stats.connectionState}</strong>
+            </div>
+            <div>
+              <span>Route</span>
+              <strong>{stats.routeType}</strong>
+            </div>
+            <div>
+              <span>Latency</span>
+              <strong>{stats.rttMs !== null ? `${stats.rttMs} ms` : "—"}</strong>
+            </div>
+            <div>
+              <span>Bitrate</span>
+              <strong>{stats.bitrateKbps !== null ? `${stats.bitrateKbps} kbps` : "—"}</strong>
+            </div>
+            {stats.resolution && (
+              <div>
+                <span>Video</span>
+                <strong>{stats.resolution}</strong>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Stage Area */}
+      <div className={`call-stage ${layoutMode === "grid" ? "grid-mode" : "spotlight-mode"}`}>
+        {/* Remote Tile */}
+        <div className={`call-tile remote-tile ${peerSpeaking ? "speaking-ring" : ""}`}>
+          {hasRemoteVideo ? (
+            <StreamVideo stream={remoteStream} muted className="call-tile-video" />
+          ) : (
+            <div className="call-avatar-stage">
+              <div className={`call-avatar-halo ${peerSpeaking ? "active" : ""}`}>
+                <Avatar user={session.peer} size={112} ringWidth={4} />
+              </div>
+              <div className="call-stage-name">{session.peer.displayName}</div>
+              <div className="call-stage-state">
+                {session.phase !== "connected"
+                  ? statusText
+                  : peerMuted
+                    ? "🔇 Microphone muted"
+                    : peerSpeaking
+                      ? "Speaking…"
+                      : "Connected"}
+              </div>
+            </div>
+          )}
+
+          {hasRemoteVideo && (
+            <div className="call-tile-badge">
+              <span>{session.peer.displayName}</span>
+              {peerMuted && <MicOff size={13} />}
+            </div>
+          )}
+        </div>
+
+        {/* Local Tile (PiP in spotlight mode, second tile in grid mode) */}
+        {(hasLocalVideo || layoutMode === "grid") && me && (
+          <div
+            className={`call-tile local-tile ${
+              layoutMode === "spotlight" ? "pip-corner" : ""
+            } ${meSpeaking ? "speaking-ring" : ""}`}
+          >
+            {hasLocalVideo ? (
+              <StreamVideo
+                stream={localStream}
+                muted
+                mirrored={!isScreenSharing && facingMode === "user"}
+                className="call-tile-video"
+              />
+            ) : (
+              <div className="call-avatar-stage compact">
+                <Avatar user={me} size={68} ringWidth={3} />
+                <div className="call-stage-name">You</div>
+              </div>
+            )}
+            <div className="call-tile-badge">
+              <span>{isScreenSharing ? "Your screen" : "You"}</span>
+              {isMuted && <MicOff size={12} />}
+            </div>
+          </div>
+        )}
+
+        {/* Floating Reactions Layer */}
+        <div className="call-reactions-layer" aria-hidden="true">
+          {reactions.map((r) => (
+            <span
+              key={r.id}
+              className="call-floating-emoji"
+              style={{ left: `${r.leftPct}%` }}
+            >
+              {r.emoji}
+            </span>
+          ))}
+        </div>
+
+        {/* Live Closed Captions Overlay */}
+        {(captionsEnabled || captions.length > 0) && (
+          <div className="call-captions-box">
+            {captions.length === 0 ? (
+              <span className="call-caption-placeholder">
+                Live captions on — start speaking…
+              </span>
+            ) : (
+              captions.slice(-2).map((line) => (
+                <div key={line.speakerName} className="call-caption-line">
+                  <strong>{line.speakerName}:</strong> {line.text}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Expandable Reactions or Soundboard Tray */}
+      {openDrawer === "reactions" && (
+        <div className="call-Floating-tray">
+          {CALL_REACTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              className="call-emoji-pill"
+              onClick={() => sendCallReaction(emoji)}
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {openDrawer === "soundboard" && (
+        <div className="call-Floating-tray soundboard">
+          {SOUNDBOARD_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="call-sound-pill"
+              onClick={() => playSoundboard(item.id)}
+            >
+              <span>{item.emoji}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Secondary Feature Strip */}
+      <div className="call-secondary-bar">
+        <button
+          type="button"
+          className={`call-chip-btn ${studioAudioEnabled ? "active" : ""}`}
+          onClick={toggleStudioAudio}
+          title="Crisp Voice EQ & compressor"
+        >
+          <Sparkles size={14} />
+          <span>HD Voice</span>
+        </button>
+
+        <button
+          type="button"
+          className={`call-chip-btn ${captionsEnabled ? "active" : ""}`}
+          onClick={toggleCaptions}
+          title="Toggle live closed captions"
+        >
+          <Captions size={14} />
+          <span>Captions</span>
+        </button>
+
+        <button
+          type="button"
+          className={`call-chip-btn ${openDrawer === "reactions" ? "active" : ""}`}
+          onClick={() => setOpenDrawer(openDrawer === "reactions" ? "none" : "reactions")}
+          title="Send floating reaction"
+        >
+          <Smile size={14} />
+          <span>React</span>
+        </button>
+
+        <button
+          type="button"
+          className={`call-chip-btn ${openDrawer === "soundboard" ? "active" : ""}`}
+          onClick={() => setOpenDrawer(openDrawer === "soundboard" ? "none" : "soundboard")}
+          title="Play shared soundboard effect"
+        >
+          <Music2 size={14} />
+          <span>Sounds</span>
+        </button>
+
+        {!isCameraOff && !isScreenSharing && (
+          <button
+            type="button"
+            className="call-chip-btn"
+            onClick={() => void flipCamera()}
+            title="Switch front/back camera"
+          >
+            <SwitchCamera size={14} />
+            <span>Flip</span>
+          </button>
+        )}
+
+        {canScreenShare && (
+          <button
+            type="button"
+            className={`call-chip-btn ${isScreenSharing ? "active" : ""}`}
+            onClick={() => void toggleScreenShare()}
+            title={isScreenSharing ? "Stop sharing screen" : "Share screen"}
+          >
+            <MonitorUp size={14} />
+            <span>{isScreenSharing ? "Stop Share" : "Share Screen"}</span>
+          </button>
+        )}
+      </div>
+
+      {/* Primary Call Control Dock */}
+      <footer className="call-primary-dock">
+        <button
+          type="button"
+          className={`call-dock-btn ${isMuted ? "off" : ""}`}
+          onClick={toggleMute}
+          title={isMuted ? "Unmute microphone" : "Mute microphone"}
+        >
+          {isMuted ? <MicOff size={21} /> : <Mic size={21} />}
+          <span>{isMuted ? "Unmute" : "Mute"}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`call-dock-btn ${!isCameraOff ? "active" : ""}`}
+          onClick={() => void toggleCamera()}
+          title={isCameraOff ? "Turn camera on" : "Turn camera off"}
+        >
+          {isCameraOff ? <VideoOff size={21} /> : <Video size={21} />}
+          <span>{isCameraOff ? "Cam Off" : "Camera"}</span>
+        </button>
+
+        {isNative ? (
+          <button
+            type="button"
+            className={`call-dock-btn ${isSpeakerphone ? "active" : ""}`}
+            onClick={() => void toggleSpeakerphone()}
+            title={isSpeakerphone ? "Switch to earpiece" : "Switch to speakerphone"}
+          >
+            <Volume2 size={21} />
+            <span>{isSpeakerphone ? "Speaker" : "Earpiece"}</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={`call-dock-btn ${isDeafened ? "off" : ""}`}
+            onClick={toggleDeafen}
+            title={isDeafened ? "Undeafen call audio" : "Mute incoming call audio"}
+          >
+            {isDeafened ? <VolumeX size={21} /> : <Volume2 size={21} />}
+            <span>{isDeafened ? "Deafened" : "Audio"}</span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          className="call-dock-btn end-call"
+          onClick={() => void endCall()}
+          title="End call"
+        >
+          <PhoneOff size={22} />
+          <span>End</span>
+        </button>
+      </footer>
+    </div>
+  );
+}

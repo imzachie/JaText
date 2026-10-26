@@ -16,6 +16,9 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         if (getBridge() != null) {
             getBridge().registerPlugin(SafePushNotificationsPlugin.class);
+            if (getBridge().getWebView() != null) {
+                getBridge().getWebView().getSettings().setMediaPlaybackRequiresUserGesture(false);
+            }
         }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         applyStatusBarAppearance();

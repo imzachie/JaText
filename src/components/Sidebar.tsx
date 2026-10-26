@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
 import { ContextMenu } from "./ContextMenu";
+import { formatPreviewMessageText } from "../lib/calling";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "../lib/types";
@@ -298,7 +299,7 @@ export function Sidebar({
                     </div>
                     <span className="muted small friend-preview">
                       {preview?.createdAt
-                        ? `${preview.senderId === me.id ? "You: " : ""}${preview.body}`
+                        ? `${preview.senderId === me.id ? "You: " : ""}${formatPreviewMessageText(preview.body)}`
                         : `@${friend.username} — say hi! 👋`}
                     </span>
                   </div>

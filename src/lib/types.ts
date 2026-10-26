@@ -243,6 +243,7 @@ export interface JaTextStore {
   respondRequest: (requestId: string, accept: boolean) => Promise<void>;
 
   sendMessage: (receiverId: string, body: string, file?: File, replyToId?: string) => Promise<void>;
+  fetchMessagesWithUser: (otherId: string) => Promise<ChatMessage[]>;
   forwardMessage: (messageId: string, receiverId: string) => Promise<void>;
   toggleMessageReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteMessageForMe: (messageId: string) => Promise<void>;

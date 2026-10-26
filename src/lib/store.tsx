@@ -792,7 +792,12 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       ) {
         throw new Error("You blocked this person. Unblock them to message.");
       }
-      const attachmentUrl = file ? await fileToDataUrl(file) : undefined;
+      const cleanBlobForUrl = file
+        ? new Blob([file], { type: file.type.split(";")[0] || "application/octet-stream" })
+        : undefined;
+      const attachmentUrl = cleanBlobForUrl
+        ? await fileToDataUrl(cleanBlobForUrl as File)
+        : undefined;
       transact((draft) => {
         const reply = replyToId
           ? draft.messages.find((message) => message.id === replyToId)
@@ -1359,6 +1364,8 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     sendFriendRequest,
     respondRequest,
     sendMessage,
+    fetchMessagesWithUser: async (otherId) =>
+      otherId === activeChatId ? activeMessages : [],
     forwardMessage,
     toggleMessageReaction,
     deleteMessageForMe,

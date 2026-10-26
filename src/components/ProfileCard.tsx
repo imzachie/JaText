@@ -1,4 +1,7 @@
+import { Phone, Video } from "./CallIcons";
+import { useCall } from "../lib/calling";
 import { colorById } from "../lib/colors";
+import { useJaText } from "../lib/store";
 import type { ActivityStatus, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 
@@ -59,6 +62,10 @@ export function ProfileModal({
   status?: ActivityStatus;
   onClose: () => void;
 }) {
+  const { me, friends, setActiveChatId } = useJaText();
+  const { startCall } = useCall();
+  const isFriend = Boolean(me && me.id !== user.id && friends.some((f) => f.id === user.id));
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
@@ -66,6 +73,40 @@ export function ProfileModal({
           ✕
         </button>
         <ProfileCard user={user} status={status} />
+        {isFriend && (
+          <div className="profile-call-actions">
+            <button
+              type="button"
+              className="ghost-btn profile-action-pill"
+              onClick={() => {
+                setActiveChatId(user.id);
+                onClose();
+              }}
+            >
+              💬 Message
+            </button>
+            <button
+              type="button"
+              className="ghost-btn profile-action-pill"
+              onClick={() => {
+                onClose();
+                void startCall(user, "voice");
+              }}
+            >
+              <Phone size={15} /> Voice call
+            </button>
+            <button
+              type="button"
+              className="primary-btn profile-action-pill"
+              onClick={() => {
+                onClose();
+                void startCall(user, "video");
+              }}
+            >
+              <Video size={15} /> Video call
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
