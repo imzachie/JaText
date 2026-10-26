@@ -1,7 +1,125 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useQuery } from "convex/react";
+import type { Id } from "../../convex/_generated/dataModel";
+import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import { Avatar } from "./Avatar";
+import type { CommunityMessage } from "../lib/types";
+
+function PollOption({
+  message,
+  option,
+  index,
+  count,
+  totalVotes,
+  percentage,
+  showResults,
+  onVote,
+}: {
+  message: CommunityMessage;
+  option: string;
+  index: number;
+  count: number;
+  totalVotes: number;
+  percentage: number;
+  showResults: boolean;
+  onVote: (pollId: string, optionIndex: number) => void;
+}) {
+  const [animatedPercent, setAnimatedPercent] = useState(0);
+  useEffect(() => {
+    if (!showResults) return;
+    const frame = window.requestAnimationFrame(() => setAnimatedPercent(percentage));
+    return () => window.cancelAnimationFrame(frame);
+  }, [showResults, percentage]);
+
+  return (
+    <button
+      type="button"
+      className={`community-poll-option ${message.myVote === index ? "selected" : ""} ${showResults ? "show-results" : ""}`}
+      disabled={!!message.pollEndedAt}
+      onClick={() => onVote(message.id, index)}
+    >
+      {showResults && (
+        <span
+          className="community-poll-option-fill"
+          aria-hidden="true"
+          style={{ width: `${showResults ? animatedPercent : 0}%` }}
+        />
+      )}
+      <span className="community-poll-option-label">{option}</span>
+      {showResults && (
+        <span className="community-poll-option-result">
+          {percentage}% · {count} vote{count === 1 ? "" : "s"}
+        </span>
+      )}
+      {!showResults && totalVotes > 0 && (
+        <span className="community-poll-option-result muted">{count} vote{count === 1 ? "" : "s"}</span>
+      )}
+    </button>
+  );
+}
+
+function CommunityVoterDialog({
+  poll,
+  onClose,
+}: {
+  poll: CommunityMessage;
+  onClose: () => void;
+}) {
+  const voterQuery = useQuery(api.community.voters, {
+    pollId: poll.id as Id<"communityMessages">,
+  });
+  const voters = voterQuery ?? [];
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <section
+        className="modal-card community-voters-dialog"
+        aria-label={`Voters for ${poll.body}`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button className="modal-close" type="button" onClick={onClose} aria-label="Close voter list">×</button>
+        <h2>Who voted</h2>
+        <p className="muted small">{poll.body}</p>
+        <div className="community-voter-options">
+          {poll.pollOptions.map((option, optionIndex) => {
+            const optionVoters = voters.filter((vote) => vote.optionIndex === optionIndex);
+            return (
+              <section className="community-voter-option" key={`${poll.id}-voters-${optionIndex}`}>
+                <h3>Option {optionIndex + 1}: {option} <span className="muted">({optionVoters.length})</span></h3>
+                {voterQuery === undefined ? (
+                  <p className="muted small">Loading voters…</p>
+                ) : optionVoters.length > 0 ? (
+                  <div className="community-voter-list">
+                    {optionVoters.map((voter) => (
+                      <div className="community-voter" key={voter.userId}>
+                        <Avatar
+                          user={{
+                            displayName: voter.displayName,
+                            username: voter.username,
+                            avatarColor: voter.avatarColor,
+                            avatarUrl: voter.avatarUrl,
+                          }}
+                          size={36}
+                        />
+                        <span>
+                          <strong>{voter.displayName || voter.username}</strong>
+                          <small className="muted">@{voter.username}</small>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted small">No votes yet.</p>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
 
 export function CommunityChatView({ onBack }: { onBack: () => void }) {
   const store = useJaText();
@@ -14,12 +132,14 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
   const [directorySearchOpen, setDirectorySearchOpen] = useState(false);
   const [directorySearch, setDirectorySearch] = useState("");
   const [editingMessage, setEditingMessage] = useState<{ id: string; body: string } | null>(null);
+  const [voterPollId, setVoterPollId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesElement = useRef<HTMLDivElement>(null);
   const directorySearchInput = useRef<HTMLInputElement>(null);
   const wasPinnedRef = useRef(true);
   const lastMessageId = store.communityMessages.at(-1)?.id;
+  const voterPoll = store.communityMessages.find((message) => message.id === voterPollId);
   const filteredDirectory = store.communityDirectory
     .map((person, index) => ({ person, index }))
     .filter(({ person }) => {
@@ -170,6 +290,7 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
           const canManagePost =
             store.communityPermissions.canModerate &&
             (store.communityPermissions.isOwner || message.senderId === store.me?.id);
+          const showResults = !!message.pollEndedAt || message.myVote !== undefined;
           return (
             <article className="community-post" key={message.id}>
               <div className="community-post-header">
@@ -213,7 +334,7 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
               ) : (
                 <p className="community-post-body">{message.body}</p>
               )}
-              {canManagePost && (
+              {(canManagePost || message.type === "poll") && (
                 <div className="community-post-actions">
                   {message.type === "text" && editingMessage?.id !== message.id && (
                     <button
@@ -224,13 +345,22 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
                       Edit announcement
                     </button>
                   )}
-                  <button
-                    type="button"
-                    className="ghost-btn destructive-menu-item"
-                    onClick={() => void deleteAnnouncement(message.id)}
-                  >
-                    Delete
-                  </button>
+                  {message.type === "poll" && (
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => setVoterPollId(message.id)}
+                    >View who voted</button>
+                  )}
+                  {canManagePost && (
+                    <button
+                      type="button"
+                      className="ghost-btn destructive-menu-item"
+                      onClick={() => void deleteAnnouncement(message.id)}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </div>
               )}
               {message.type === "poll" && (
@@ -240,23 +370,26 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
                       ? Math.round((counts[index] / totalVotes) * 100)
                       : 0;
                     return (
-                      <button
-                        type="button"
+                      <PollOption
                         key={`${message.id}-${index}`}
-                        className={`community-poll-option ${message.myVote === index ? "selected" : ""}`}
-                        disabled={!!message.pollEndedAt}
-                        onClick={() => void vote(message.id, index)}
-                      >
-                        <span>{option}</span>
-                        {message.pollEndedAt && (
-                          <span>{percentage}% · {counts[index]} vote{counts[index] === 1 ? "" : "s"}</span>
-                        )}
-                      </button>
+                        message={message}
+                        option={option}
+                        index={index}
+                        count={counts[index]}
+                        totalVotes={totalVotes}
+                        percentage={percentage}
+                        showResults={showResults}
+                        onVote={(pollId, optionIndex) => void vote(pollId, optionIndex)}
+                      />
                     );
                   })}
                   <div className="muted small">
                     {totalVotes} vote{totalVotes === 1 ? "" : "s"}
-                    {message.pollEndedAt ? " · Poll ended" : " · Select an option to vote"}
+                    {message.pollEndedAt
+                      ? " · Poll ended"
+                      : message.myVote !== undefined
+                        ? " · Your vote is counted"
+                        : " · Select an option to vote"}
                   </div>
                   {store.communityPermissions.isOwner && !message.pollEndedAt && (
                     <button className="ghost-btn" type="button" onClick={() => void endPoll(message.id)}>
@@ -417,6 +550,9 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
             </button>
           </section>
         </div>
+      )}
+      {voterPoll && store.mode === "convex" && (
+        <CommunityVoterDialog poll={voterPoll} onClose={() => setVoterPollId(null)} />
       )}
     </section>
   );

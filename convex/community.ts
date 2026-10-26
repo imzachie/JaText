@@ -72,6 +72,35 @@ export const list = query({
   },
 });
 
+export const voters = query({
+  args: { pollId: v.id("communityMessages") },
+  handler: async (ctx, { pollId }) => {
+    await requireUser(ctx);
+    const poll = await ctx.db.get(pollId);
+    if (!poll || poll.type !== "poll") throw new Error("Poll not found.");
+    const votes = await ctx.db
+      .query("communityPollVotes")
+      .withIndex("by_poll", (q) => q.eq("pollId", pollId))
+      .collect();
+    const voters = await Promise.all(
+      votes.map(async (vote) => {
+        const user = await ctx.db.get(vote.userId);
+        if (!user) return null;
+        const profile = await profileOf(ctx, user);
+        return {
+          userId: vote.userId as string,
+          optionIndex: vote.optionIndex,
+          username: profile.username,
+          displayName: profile.displayName,
+          avatarColor: profile.avatarColor,
+          avatarUrl: profile.avatarUrl,
+        };
+      }),
+    );
+    return voters.filter((voter) => voter !== null);
+  },
+});
+
 export const setModerators = mutation({
   args: { userIds: v.array(v.id("users")) },
   handler: async (ctx, { userIds }) => {

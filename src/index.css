@@ -593,7 +593,10 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .community-announcement-edit > div { display: flex; gap: 8px; justify-content: flex-end; }
 .community-poll { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .community-poll-option {
+  position: relative;
+  overflow: hidden;
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   width: 100%;
@@ -605,8 +608,51 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   text-align: left;
   cursor: pointer;
 }
+.community-poll-option-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(34, 197, 94, .3), rgba(74, 222, 128, .18));
+  transition: width 650ms cubic-bezier(.2, .75, .25, 1);
+  pointer-events: none;
+}
+.community-poll-option-label,
+.community-poll-option-result {
+  position: relative;
+  z-index: 1;
+}
+.community-poll-option-result { flex: none; font-size: 12px; font-weight: 700; }
 .community-poll-option.selected { border-color: var(--accent); }
+.community-poll-option.selected .community-poll-option-fill {
+  background: linear-gradient(90deg, rgba(34, 197, 94, .42), rgba(74, 222, 128, .25));
+}
 .community-poll-option:disabled { cursor: default; }
+.community-voters-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(82vh, 720px);
+  padding: 24px;
+}
+.community-voters-dialog h2,
+.community-voters-dialog p { margin: 0; }
+.community-voter-options { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.community-voter-option { display: flex; flex-direction: column; gap: 8px; }
+.community-voter-option h3 { margin: 0; font-size: 14px; }
+.community-voter-list { display: flex; flex-direction: column; gap: 6px; }
+.community-voter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 11px;
+  background: var(--panel-2);
+}
+.community-voter > span:last-child { display: flex; min-width: 0; flex-direction: column; }
+@media (prefers-reduced-motion: reduce) {
+  .community-poll-option-fill { transition: none; }
+}
 .community-poll-form {
   display: flex;
   flex-direction: column;
