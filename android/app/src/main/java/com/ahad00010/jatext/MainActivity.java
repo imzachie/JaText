@@ -1,5 +1,7 @@
 package com.ahad00010.jatext;
 
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -14,6 +16,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(JaTextNativePlugin.class);
         this.initialPlugins.add(SafePushNotificationsPlugin.class);
         super.onCreate(savedInstanceState);
+        ensureMessagesNotificationChannel();
         if (getBridge() != null) {
             getBridge().registerPlugin(SafePushNotificationsPlugin.class);
             if (getBridge().getWebView() != null) {
@@ -42,5 +45,23 @@ public class MainActivity extends BridgeActivity {
         WindowInsetsControllerCompat insetsController =
             WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         insetsController.setAppearanceLightStatusBars(false);
+    }
+
+    private void ensureMessagesNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                NotificationManager nm = getSystemService(NotificationManager.class);
+                if (nm != null) {
+                    NotificationChannel channel = new NotificationChannel(
+                        "messages",
+                        "Messages",
+                        NotificationManager.IMPORTANCE_HIGH
+                    );
+                    channel.setDescription("New JaText messages and call alerts");
+                    channel.enableVibration(true);
+                    nm.createNotificationChannel(channel);
+                }
+            } catch (Throwable ignored) {}
+        }
     }
 }
