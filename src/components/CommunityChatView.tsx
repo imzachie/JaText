@@ -4,6 +4,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
 import { playMessageSound } from "../lib/alerts";
+import { copyImageUrlToClipboard } from "../lib/clipboard";
 import { getSavedOutgoingBubbleStyle } from "../lib/chatCustomization";
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { friendlyError } from "../lib/errors";
@@ -164,7 +165,9 @@ function getCommunityPendingMessages(pending: CommunityMessage[], real: Communit
         p.senderId === message.senderId &&
         message.createdAt >= p.createdAt - 1000 &&
         message.createdAt <= p.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
-        (message.unsentAt || (message.body === p.body && message.attachmentName === p.attachmentName)),
+        (message.unsentAt ||
+          Boolean(message.editedAt) ||
+          (message.body === p.body && message.attachmentName === p.attachmentName)),
     );
     if (idx === -1) return message;
     const [pm] = pendingCopy.splice(idx, 1);
@@ -530,6 +533,14 @@ export function CommunityChatView({
     try {
       await store.sendCommunityText(sentBody, sentFile ?? undefined, sentReply?.id, undefined);
       if (store.soundsEnabled) playMessageSound("sent");
+      window.setTimeout(() => {
+        const url = pendingAttachmentUrlsRef.current.get(pendingId);
+        if (url) {
+          URL.revokeObjectURL(url);
+          pendingAttachmentUrlsRef.current.delete(pendingId);
+        }
+        setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
+      }, 1500);
     } catch (cause) {
       const url = pendingAttachmentUrlsRef.current.get(pendingId);
       if (url) {
@@ -745,6 +756,7 @@ export function CommunityChatView({
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }
   function startEditingMessage(message: CommunityMessage) {
+    setPendingMessages([]);
     setEditingMessage({ id: message.id, body: message.body });
     setReplyTo(null);
     setFile(null);
@@ -774,11 +786,7 @@ export function CommunityChatView({
     const url = message.attachmentUrl ?? message.stickerUrl;
     if (!url) return;
     try {
-      if (!navigator.clipboard.write || typeof ClipboardItem === "undefined") throw new Error("Copying images isn't supported by this browser.");
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("Couldn't load the image.");
-      const image = await response.blob();
-      await navigator.clipboard.write([new ClipboardItem({ [image.type]: image })]);
+      await copyImageUrlToClipboard(url);
       closeMessageMenu();
     } catch (err) {
       setError(friendlyError(err, "Couldn't copy the image."));

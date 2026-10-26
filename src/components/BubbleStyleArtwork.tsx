@@ -62,9 +62,9 @@ const BUBBLE_SPECS: Record<Exclude<BubbleStyleId, "default">, BubbleVisualSpec> 
   },
 
   "pumpkin-limited": {
-    bg: "linear-gradient(180deg, #ff8524 0%, #eb5c0c 100%)",
+    bg: "linear-gradient(180deg, #ff9638 0%, #f56d16 100%)",
     border: "2px solid #9c3400",
-    textColor: "#ffffff",
+    textColor: "#140800",
     radius: "21px",
     padExtra: { top: 4 },
     shadow: "0 4px 12px rgba(235, 92, 12, 0.32)",
@@ -183,9 +183,9 @@ const BUBBLE_SPECS: Record<Exclude<BubbleStyleId, "default">, BubbleVisualSpec> 
   },
 
   "chill-croc": {
-    bg: "linear-gradient(180deg, #5fd04f 0%, #3ca632 100%)",
+    bg: "linear-gradient(180deg, #7be068 0%, #55c447 100%)",
     border: "2px solid #1f6319",
-    textColor: "#ffffff",
+    textColor: "#0e1f0b",
     radius: "20px",
     padExtra: { top: 8 },
     shadow: "0 4px 12px rgba(48, 148, 39, 0.3)",
@@ -322,9 +322,9 @@ const BUBBLE_SPECS: Record<Exclude<BubbleStyleId, "default">, BubbleVisualSpec> 
   },
 
   frog: {
-    bg: "linear-gradient(180deg, #62cf44 0%, #44ab29 100%)",
+    bg: "linear-gradient(180deg, #7ae05c 0%, #58c43b 100%)",
     border: "2px solid #236912",
-    textColor: "#ffffff",
+    textColor: "#0e200a",
     radius: "22px",
     padExtra: { top: 8 },
     shadow: "0 4px 12px rgba(68, 171, 41, 0.3)",
@@ -537,9 +537,9 @@ const BUBBLE_SPECS: Record<Exclude<BubbleStyleId, "default">, BubbleVisualSpec> 
   },
 
   "hungry-dog": {
-    bg: "linear-gradient(180deg, #d97348 0%, #b8522a 100%)",
+    bg: "linear-gradient(180deg, #f5a076 0%, #e07c4f 100%)",
     border: "2px solid #6e290f",
-    textColor: "#ffffff",
+    textColor: "#1c0a03",
     radius: "22px",
     padExtra: { top: 8, bottom: 4 },
     shadow: "0 4px 12px rgba(184, 82, 42, 0.3)",
@@ -585,8 +585,8 @@ const BUBBLE_SPECS: Record<Exclude<BubbleStyleId, "default">, BubbleVisualSpec> 
   },
 
   dachshund: {
-    bg: "linear-gradient(90deg, #9c5733 0%, #7d4222 100%)",
-    border: "2px solid #4a2410",
+    bg: "linear-gradient(90deg, #6b381d 0%, #522812 100%)",
+    border: "2px solid #381a0a",
     textColor: "#ffffff",
     radius: "24px",
     padExtra: { left: 18, right: 10 },

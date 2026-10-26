@@ -15,6 +15,7 @@ import {
 } from "react";
 import { playMessageSound } from "../lib/alerts";
 import { formatPreviewMessageText } from "../lib/calling";
+import { copyImageUrlToClipboard } from "../lib/clipboard";
 import {
   getCachedWallpaper,
   getSavedOutgoingBubbleStyle,
@@ -150,6 +151,7 @@ function getConversationMessages(
         message.createdAt >= pendingMessage.createdAt - 1_000 &&
         message.createdAt <= pendingMessage.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
         (message.unsentAt ||
+          Boolean(message.editedAt) ||
           (message.body === pendingMessage.body &&
             message.attachmentName === pendingMessage.attachmentName)),
     );
@@ -1087,6 +1089,14 @@ export function GroupChatView({
         await store.sendGroupMessage(groupId, sentBody, sentFile ?? undefined, sentReply?.id);
       }
       if (store.soundsEnabled) playMessageSound("sent");
+      window.setTimeout(() => {
+        const url = pendingAttachmentUrlsRef.current.get(pendingId);
+        if (url) {
+          URL.revokeObjectURL(url);
+          pendingAttachmentUrlsRef.current.delete(pendingId);
+        }
+        setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
+      }, 1500);
     } catch (err) {
       const url = pendingAttachmentUrlsRef.current.get(pendingId);
       if (url) {
@@ -1175,6 +1185,14 @@ export function GroupChatView({
     try {
       await store.sendGroupMessage(groupId, "", voiceFile, sentReply?.id);
       if (store.soundsEnabled) playMessageSound("sent");
+      window.setTimeout(() => {
+        const url = pendingAttachmentUrlsRef.current.get(pendingId);
+        if (url) {
+          URL.revokeObjectURL(url);
+          pendingAttachmentUrlsRef.current.delete(pendingId);
+        }
+        setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
+      }, 1500);
     } catch (err) {
       const url = pendingAttachmentUrlsRef.current.get(pendingId);
       if (url) {
@@ -1222,13 +1240,7 @@ export function GroupChatView({
     const url = message.attachmentUrl ?? message.stickerUrl;
     if (!url) return;
     try {
-      if (!navigator.clipboard.write || typeof ClipboardItem === "undefined") {
-        throw new Error("Copying images isn't supported by this browser.");
-      }
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("Couldn't load the image.");
-      const image = await response.blob();
-      await navigator.clipboard.write([new ClipboardItem({ [image.type]: image })]);
+      await copyImageUrlToClipboard(url);
       closeMessageMenu();
     } catch (err) {
       setError(friendlyError(err, "Couldn't copy the image."));
@@ -1255,6 +1267,7 @@ export function GroupChatView({
   }
 
   function startEditingMessage(message: GroupMessage) {
+    setPendingMessages([]);
     setEditingMessage(message);
     setReplyTo(null);
     setFile(null);

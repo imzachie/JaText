@@ -17,6 +17,7 @@ import {
   parseCallInvite,
   useCall,
 } from "../lib/calling";
+import { copyImageUrlToClipboard } from "../lib/clipboard";
 import {
   getCachedWallpaper,
   getSavedOutgoingBubbleStyle,
@@ -77,6 +78,7 @@ function getConversationMessages(
         message.createdAt >= pendingMessage.createdAt - 1_000 &&
         message.createdAt <= pendingMessage.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
         (message.unsentAt ||
+          Boolean(message.editedAt) ||
           (message.body === pendingMessage.body &&
             message.attachmentName === pendingMessage.attachmentName)),
     );
@@ -805,6 +807,7 @@ export function ChatView({
     try {
       await sendMessage(friend.id, sentBody, sentFile ?? undefined, sentReply?.id);
       if (soundsEnabled) playMessageSound("sent");
+      window.setTimeout(() => removePendingMessage(pendingId), 1500);
     } catch (err) {
       removePendingMessage(pendingId);
       setDraft((current) => current.trim() ? current : sentBody);
@@ -917,6 +920,7 @@ export function ChatView({
     try {
       await sendMessage(friend.id, "", voiceFile, sentReply?.id);
       if (soundsEnabled) playMessageSound("sent");
+      window.setTimeout(() => removePendingMessage(pendingId), 1500);
     } catch (err) {
       removePendingMessage(pendingId);
       setError(friendlyError(err, "Couldn't send the voice note. Please try again."));
@@ -958,13 +962,7 @@ export function ChatView({
   async function copyImage(message: ChatMessage) {
     if (!message.attachmentUrl) return;
     try {
-      if (!navigator.clipboard.write || typeof ClipboardItem === "undefined") {
-        throw new Error("Copying images isn't supported by this browser.");
-      }
-      const response = await fetch(message.attachmentUrl);
-      if (!response.ok) throw new Error("Couldn't load the image.");
-      const image = await response.blob();
-      await navigator.clipboard.write([new ClipboardItem({ [image.type]: image })]);
+      await copyImageUrlToClipboard(message.attachmentUrl);
       closeMessageMenu();
     } catch (copyError) {
       setError(friendlyError(copyError, "Couldn't copy the image."));
@@ -991,6 +989,9 @@ export function ChatView({
   }
 
   function startEditingMessage(message: ChatMessage) {
+    setPendingMessages((current) =>
+      current.filter((m) => m.receiverId !== friend.id),
+    );
     setEditingMessage(message);
     setReplyTo(null);
     setFile(null);

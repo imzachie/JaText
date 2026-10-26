@@ -3394,37 +3394,67 @@ input:focus, textarea:focus {
 }
 
 /* Readable contrast inside light-background character bubbles */
+.bubble.styled-bubble-light-bg,
 .bubble.styled-bubble-light-bg p,
+.bubble.styled-bubble-light-bg strong,
+.bubble.styled-bubble-light-bg em,
 .bubble.styled-bubble-light-bg .community-post-body {
-  color: #161822;
+  color: #111318 !important;
 }
 
 .bubble.styled-bubble-light-bg a {
-  color: #0b5cab;
+  color: #0b5cab !important;
+}
+
+.bubble.styled-bubble-light-bg code {
+  color: #111318 !important;
+  background: rgba(17, 19, 24, 0.1) !important;
+}
+
+.bubble.styled-bubble-light-bg .mention-pill,
+.bubble.styled-bubble-light-bg .mention-pill.in-mine,
+.bubble.styled-bubble-light-bg .mention-pill.mention-everyone {
+  color: #111318 !important;
+  background: rgba(17, 19, 24, 0.13) !important;
+}
+
+.bubble.styled-bubble-light-bg .mention-pill.mention-me {
+  color: #111318 !important;
+  background: rgba(250, 204, 21, 0.48) !important;
 }
 
 .bubble.styled-bubble-light-bg .reply-quote {
-  background: rgba(18, 22, 36, 0.08);
-  border-left-color: rgba(18, 22, 36, 0.45);
-  color: #161822;
+  background: rgba(18, 22, 36, 0.09) !important;
+  border-left-color: rgba(18, 22, 36, 0.5) !important;
+  color: #111318 !important;
+}
+
+.bubble.styled-bubble-light-bg .reply-quote strong {
+  color: #111318 !important;
 }
 
 .bubble.styled-bubble-light-bg .reply-quote span {
-  color: rgba(22, 24, 34, 0.78);
+  color: rgba(17, 19, 24, 0.8) !important;
 }
 
 .bubble.styled-bubble-light-bg .file-chip {
-  background: rgba(18, 22, 36, 0.08);
-  color: #161822;
-  border-color: rgba(18, 22, 36, 0.18);
+  background: rgba(18, 22, 36, 0.09) !important;
+  color: #111318 !important;
+  border-color: rgba(18, 22, 36, 0.2) !important;
+}
+
+.bubble.styled-bubble-light-bg .video-speed-control {
+  color: #111318 !important;
 }
 
 .bubble.styled-bubble-light-bg .vn-play-btn {
-  background: #181a24;
-  color: #ffffff;
+  background: #181a24 !important;
+  color: #ffffff !important;
 }
 
 .bubble.styled-bubble-light-bg .vn-meta-row,
+.bubble.styled-bubble-light-bg .vn-speed-pill,
+.bubble.styled-bubble-light-bg .vn-transcript-btn,
 .bubble.styled-bubble-light-bg .vn-transcript-box {
-  color: #181a24;
+  color: #111318 !important;
 }

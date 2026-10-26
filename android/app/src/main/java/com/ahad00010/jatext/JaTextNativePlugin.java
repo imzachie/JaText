@@ -2,16 +2,21 @@ package com.ahad00010.jatext;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import android.util.Base64;
 import android.view.WindowManager;
+import androidx.core.content.FileProvider;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -20,6 +25,8 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -60,6 +67,45 @@ public class JaTextNativePlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("firebaseConfigured", isFirebaseConfigured(getContext()));
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void copyImageBase64(PluginCall call) {
+        String base64 = call.getString("base64");
+        if (base64 == null || base64.isEmpty()) {
+            call.reject("Missing image data.");
+            return;
+        }
+        try {
+            Context ctx = getContext();
+            if (ctx == null) {
+                call.reject("Context unavailable.");
+                return;
+            }
+            byte[] pngBytes = Base64.decode(base64, Base64.DEFAULT);
+            File outFile = new File(ctx.getCacheDir(), "jatext-clipboard.png");
+            try (FileOutputStream fos = new FileOutputStream(outFile, false)) {
+                fos.write(pngBytes);
+                fos.flush();
+            }
+            Uri contentUri = FileProvider.getUriForFile(
+                ctx,
+                ctx.getPackageName() + ".fileprovider",
+                outFile
+            );
+            ClipboardManager clipboard = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard == null) {
+                call.reject("Clipboard unavailable.");
+                return;
+            }
+            ClipData clip = ClipData.newUri(ctx.getContentResolver(), "JaText image", contentUri);
+            clipboard.setPrimaryClip(clip);
+            JSObject result = new JSObject();
+            result.put("copied", true);
+            call.resolve(result);
+        } catch (Throwable err) {
+            call.reject("Could not copy image to clipboard: " + err.getMessage());
+        }
     }
 
     @PluginMethod
