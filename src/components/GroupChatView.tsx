@@ -899,9 +899,19 @@ export function GroupChatView({
     }
   }
 
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, 120);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > 120 ? "auto" : "hidden";
+  }, [draft]);
+
   async function onSend(e?: FormEvent) {
     e?.preventDefault();
     if (!groupId) return;
+    const keepFocus = document.activeElement === composerRef.current;
     if (editingMessage) {
       const editedBody = draft.trim();
       if (!editedBody) return;
@@ -910,12 +920,13 @@ export function GroupChatView({
         await store.editGroupMessage(editingMessage.id, editedBody);
         setEditingMessage(null);
         setDraft("");
+        if (keepFocus) composerRef.current?.focus({ preventScroll: true });
       } catch (err) {
         setError(friendlyError(err, "Couldn't edit the message."));
       }
       return;
     }
-    if ((!draft.trim() && !file && !forwardedMessage) || busy) return;
+    if (!draft.trim() && !file && !forwardedMessage) return;
     const sentBody = draft.trim();
     const sentFile = file;
     const sentReply = replyTo;
@@ -953,6 +964,7 @@ export function GroupChatView({
     setReplyTo(null);
     setForwardedMessage(null);
     setError(null);
+    if (keepFocus) composerRef.current?.focus({ preventScroll: true });
     if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
     typingRef.current = false;
     void setGroupTyping(groupId, false).catch((err: unknown) =>
@@ -1498,7 +1510,7 @@ export function GroupChatView({
               }}
               onPaste={onComposerPaste}
               rows={1}
-              placeholder="Message the group… (type @ to mention)"
+              placeholder={editingMessage ? "Edit message…" : "Message…"}
               aria-label="Group message"
               onKeyDown={(event) => {
                 if (mentionCandidates.length > 0) {
@@ -1528,14 +1540,16 @@ export function GroupChatView({
                 }
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
+                  void onSend();
                 }
               }}
             />
             <button
               type="submit"
               className="send-btn"
-              disabled={busy || (!editingMessage && !draft.trim() && !file && !forwardedMessage)}
+              disabled={editingMessage ? !draft.trim() : !draft.trim() && !file && !forwardedMessage}
+              onPointerDown={(event) => event.preventDefault()}
+              onMouseDown={(event) => event.preventDefault()}
               aria-label={editingMessage ? "Save edit" : "Send message"}
             >
               {editingMessage ? "✓" : "➤"}

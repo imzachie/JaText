@@ -535,7 +535,8 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 }
 .chat-action-placeholder:hover { transform: none !important; }
 .chat-action-placeholder svg,
-.voice-note-placeholder svg {
+.voice-note-placeholder svg,
+.poll-toggle-btn svg {
   width: 17px;
   height: 17px;
   fill: none;
@@ -574,7 +575,13 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .messages { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 18px 16px; display: flex; flex-direction: column; gap: 6px; }
 .community-chat { background: var(--bg); }
 .community-title { cursor: default; }
-.community-title strong { display: flex; align-items: center; gap: 6px; }
+.community-title strong { display: block; line-height: 1.2; }
+.community-title-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
 .community-post {
   width: min(100%, 760px);
   align-self: center;
@@ -664,8 +671,17 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .community-poll-edit-option { display: flex; gap: 8px; }
 .community-poll-edit-option input { flex: 1; }
 .community-poll-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.community-composer { align-items: center; }
-.community-composer textarea { min-height: 42px; }
+.community-composer { align-items: flex-end; }
+.poll-toggle-btn.active,
+.poll-toggle-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.forward-search-input {
+  margin-top: 10px;
+  padding: 9px 12px;
+  font-size: 14px;
+}
 .community-readonly { padding: 14px; color: var(--muted); text-align: center; border-top: 1px solid var(--border); }
 .community-error { margin: 8px 16px; }
 .community-reply-quote { margin-top: 8px; color: var(--text); }
@@ -1095,12 +1111,23 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 }
 .chat-error { margin: 0 16px 8px; }
 .composer {
-  display: flex; gap: 10px; align-items: flex-end;
+  display: flex; gap: 8px; align-items: flex-end;
   padding: 12px 16px 16px; border-top: 1px solid var(--border);
   background: var(--panel);
 }
-.composer textarea { resize: none; max-height: 110px; border-radius: 18px; }
-.composer textarea { flex: 1 1 0; width: 0; min-width: 0; }
+.composer textarea {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  min-height: 42px;
+  max-height: 120px;
+  padding: 9px 14px;
+  line-height: 1.35;
+  resize: none;
+  overflow-y: hidden;
+  border-radius: 20px;
+}
+.composer textarea::-webkit-scrollbar { width: 4px; }
 .attach-btn { font-size: 18px; }
 .send-btn {
   background: var(--accent); color: #fff; border: none;
@@ -1585,21 +1612,27 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   }
   .composer {
     gap: 6px;
-    padding: 8px 10px max(8px, env(safe-area-inset-bottom));
+    padding: 8px 10px max(10px, env(safe-area-inset-bottom));
   }
   .composer .icon-btn,
-  .send-btn,
-  .voice-note-placeholder {
-    width: 40px;
-    height: 40px;
+  .voice-note-placeholder,
+  .poll-toggle-btn {
+    width: 36px;
+    height: 36px;
   }
   .sticker-trigger {
+    width: 38px;
+    height: 36px;
+    border-radius: 12px;
+  }
+  .send-btn {
     width: 40px;
     height: 40px;
   }
   .composer textarea {
     min-height: 40px;
-    padding: 9px 11px;
+    padding: 8px 12px;
+    line-height: 1.3;
   }
 }
 
