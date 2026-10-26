@@ -12,6 +12,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { JaTextContext } from "./store";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
+import { ensureValidFileMime, normalizeImageFileForUpload } from "./imageUtils";
 import {
   WALLPAPER_PREFIX,
   attachBubbleStyleToFile,
@@ -453,7 +454,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   /** Upload a file to Convex storage, returns its storage id. */
   const upload = useCallback(
-    async (file: File): Promise<Id<"_storage">> => {
+    async (rawFile: File): Promise<Id<"_storage">> => {
+      const file = await ensureValidFileMime(rawFile);
       const url = (await generateUploadUrl()) as string;
       const baseMime = (file.type || "application/octet-stream").split(";")[0].trim();
       const storageMime =
@@ -693,7 +695,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const setGroupAvatar = useCallback<JaTextStore["setGroupAvatar"]>(
     async (groupId, file) => {
-      const avatarId = file ? await upload(file) : null;
+      const normalized = file ? await normalizeImageFileForUpload(file, 512) : null;
+      const avatarId = normalized ? await upload(normalized) : null;
       await setGroupAvatarMut({ groupId: groupId as Id<"groups">, avatarId });
     },
     [setGroupAvatarMut, upload],
@@ -844,13 +847,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         input.avatarFile === null
           ? null
           : input.avatarFile
-            ? await upload(input.avatarFile)
+            ? await upload(await normalizeImageFileForUpload(input.avatarFile, 512))
             : undefined;
       const bannerId =
         input.bannerFile === null
           ? null
           : input.bannerFile
-            ? await upload(input.bannerFile)
+            ? await upload(await normalizeImageFileForUpload(input.bannerFile, 1280))
             : undefined;
       await saveProfileMut({
         displayName: input.displayName.trim(),

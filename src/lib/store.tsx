@@ -1061,9 +1061,9 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
 
   const toggleMessageReaction = useCallback<JaTextStore["toggleMessageReaction"]>(
     async (messageId, emoji) => {
-      const allowed = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+      const clean = emoji.trim();
       if (!me) throw new Error("Not signed in.");
-      if (!allowed.includes(emoji)) throw new Error("That reaction is not available.");
+      if (!clean || clean.length > 32) throw new Error("That reaction is not available.");
       transact((draft) => {
         const message = draft.messages.find((entry) => entry.id === messageId);
         if (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { AVATAR_COLORS, colorById } from "../lib/colors";
 import { useJaText } from "../lib/store";
 import { USERNAME_REGEX, usernameLockInfo, type JaUser } from "../lib/types";
@@ -131,7 +131,10 @@ export function ProfileForm({
   return (
     <form className="profile-form" onSubmit={onSubmit}>
       {/* ---------- live profile preview / uploads ---------- */}
-      <div className="pf-preview">
+      <div
+        className="pf-preview"
+        style={{ "--profile-outline": color.hex } as CSSProperties}
+      >
         <div
           className="pf-banner"
           style={
@@ -265,9 +268,10 @@ export function ProfileForm({
       <fieldset className="color-fieldset">
         <legend>Avatar color</legend>
         <p className="muted small">
-          Your avatar color becomes the <strong>outline</strong> and{" "}
-          <strong>background</strong> of your profile picture when someone views
-          your profile. Pick yellow and your pfp glows yellow 💛
+          Your avatar color outlines your <strong>profile card</strong>,{" "}
+          <strong>banner</strong>, and <strong>profile picture</strong> when
+          someone views your profile. Pick blue or yellow and your whole card
+          gets that outline ✨
         </p>
         <div className="color-grid">
           {AVATAR_COLORS.map((c) => (

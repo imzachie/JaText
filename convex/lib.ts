@@ -9,6 +9,14 @@ export const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
 export const USERNAME_REGEX = /^[a-z0-9._]{3,20}$/;
 export const OWNER_EMAIL = "aidilzafri2013@gmail.com";
 
+export function isValidReactionEmoji(raw: string): boolean {
+  const clean = raw.trim();
+  if (!clean || clean.length > 32) return false;
+  return /\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]\uFE0F?\u20E3|[\u2600-\u27BF]/u.test(
+    clean,
+  );
+}
+
 export function isJaTextOwner(user: Doc<"users">) {
   return (
     user.email?.trim().toLowerCase() === OWNER_EMAIL &&

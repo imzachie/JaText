@@ -1,9 +1,8 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { areFriends, pairKey, profileOf, requireUser, scheduleGroupMentionPush, scheduleMessagePush, type Ctx } from "./lib";
+import { areFriends, isValidReactionEmoji, pairKey, profileOf, requireUser, scheduleGroupMentionPush, scheduleMessagePush, type Ctx } from "./lib";
 
-const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 
 async function requireMembership(
@@ -460,17 +459,18 @@ export const toggleReaction = mutation({
   args: { messageId: v.id("groupMessages"), emoji: v.string() },
   handler: async (ctx, { messageId, emoji }) => {
     const me = await requireUser(ctx);
-    if (!(REACTION_EMOJIS as readonly string[]).includes(emoji)) throw new Error("That reaction is not available.");
+    const cleanEmoji = emoji.trim();
+    if (!isValidReactionEmoji(cleanEmoji)) throw new ConvexError("That reaction is not available.");
     const message = await ctx.db.get(messageId);
     if (!message || message.hiddenFor?.includes(me._id) || message.unsentAt)
-      throw new Error("This message cannot be reacted to.");
+      throw new ConvexError("This message cannot be reacted to.");
     await requireMembership(ctx, message.groupId, me._id);
     const reactions = message.reactions ?? [];
     const existing = reactions.find((reaction) => reaction.userId === me._id);
     const updated =
-      existing?.emoji === emoji
+      existing?.emoji === cleanEmoji
         ? reactions.filter((reaction) => reaction.userId !== me._id)
-        : [...reactions.filter((reaction) => reaction.userId !== me._id), { userId: me._id, emoji }];
+        : [...reactions.filter((reaction) => reaction.userId !== me._id), { userId: me._id, emoji: cleanEmoji }];
     await ctx.db.patch(messageId, { reactions: updated });
   },
 });
