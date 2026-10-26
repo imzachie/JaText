@@ -39,6 +39,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const { signIn, signOut: convexSignOut } = useAuthActions();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [notificationPreferences, setNotificationPreferences] = useState(loadNotificationPreferences);
+  const [pushRegistrationStatus, setPushRegistrationStatus] =
+    useState<JaTextStore["pushRegistrationStatus"]>("idle");
   const handledOAuthCodes = useRef(new Set<string>());
   const previewsQuery = useQuery(
     api.messages.previews,
@@ -117,26 +119,49 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
     let disposed = false;
     const listeners: PluginListenerHandle[] = [];
-    const registerForPush = async () => {
+    const requestRegistration = async () => {
       const permission = await PushNotifications.checkPermissions();
-      if (permission.receive !== "granted" || disposed) return;
-
+      if (permission.receive !== "granted") {
+        setPushRegistrationStatus("error");
+        throw new Error("Allow JaText notifications in Android settings, then try again.");
+      }
+      await PushNotifications.createChannel({
+        id: "messages",
+        name: "Messages",
+        description: "New JaText messages",
+        importance: 5,
+        sound: "default",
+      });
+      if (!disposed) {
+        setPushRegistrationStatus("registering");
+        await PushNotifications.register();
+      }
+    };
+    const registerForPush = async () => {
       listeners.push(
-        await PushNotifications.addListener("registration", ({ value: token }) => {
+        await PushNotifications.addListener("registration", async ({ value: token }) => {
+          if (disposed) return;
+          setPushRegistrationStatus("registering");
           const previousToken = localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
+          try {
+            await registerPushDeviceMut({ token });
+            localStorage.setItem(PUSH_TOKEN_STORAGE_KEY, token);
+            setPushRegistrationStatus("registered");
+          } catch (error: unknown) {
+            setPushRegistrationStatus("error");
+            console.error("Could not register this device for push notifications.", error);
+            return;
+          }
           if (previousToken && previousToken !== token) {
-            void unregisterPushDeviceMut({ token: previousToken }).catch((error: unknown) => {
+            await unregisterPushDeviceMut({ token: previousToken }).catch((error: unknown) => {
               console.error("Could not remove the previous push token.", error);
             });
           }
-          localStorage.setItem(PUSH_TOKEN_STORAGE_KEY, token);
-          void registerPushDeviceMut({ token }).catch((error: unknown) => {
-            console.error("Could not register this device for push notifications.", error);
-          });
         }),
       );
       listeners.push(
         await PushNotifications.addListener("registrationError", (error) => {
+          setPushRegistrationStatus("error");
           console.error("Android push registration failed.", error);
         }),
       );
@@ -146,18 +171,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           if (typeof senderId === "string") setActiveChatId(senderId);
         }),
       );
-
-      await PushNotifications.createChannel({
-        id: "messages",
-        name: "Messages",
-        description: "New JaText messages",
-        importance: 5,
-        sound: "default",
-      });
-      if (!disposed) await PushNotifications.register();
+      listeners.push(
+        await App.addListener("appStateChange", ({ isActive }) => {
+          if (isActive) {
+            void requestRegistration().catch((error: unknown) => {
+              setPushRegistrationStatus("error");
+              console.error("Could not refresh Android push registration.", error);
+            });
+          }
+        }),
+      );
+      await requestRegistration();
     };
 
     void registerForPush().catch((error: unknown) => {
+      setPushRegistrationStatus("error");
       console.error("Could not initialize Android push notifications.", error);
     });
     return () => {
@@ -170,6 +198,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     registerPushDeviceMut,
     unregisterPushDeviceMut,
   ]);
+
+  const refreshPushRegistration = useCallback(async () => {
+    if (!Capacitor.isNativePlatform() || !isAuthenticated) {
+      throw new Error("Sign in to JaText on the Android app before refreshing push registration.");
+    }
+    if (!notificationPreferences.notificationsEnabled) {
+      throw new Error("Turn on push notifications in Settings before refreshing registration.");
+    }
+    const permission = await PushNotifications.checkPermissions();
+    if (permission.receive !== "granted") {
+      throw new Error("Allow JaText notifications in Android settings, then try again.");
+    }
+    setPushRegistrationStatus("registering");
+    await PushNotifications.register();
+  }, [isAuthenticated, notificationPreferences.notificationsEnabled]);
 
   useEffect(() => {
     if (
@@ -569,6 +612,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     previewsReady: !isAuthenticated || previewsQuery !== undefined,
     friendActivities,
     notificationsEnabled: notificationPreferences.notificationsEnabled,
+    pushRegistrationStatus,
     soundsEnabled: notificationPreferences.soundsEnabled,
     activeChatId,
     setActiveChatId,
@@ -603,6 +647,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     sendSticker,
     setActivity,
     setTyping,
+    refreshPushRegistration,
     setNotificationsEnabled,
     setSoundsEnabled,
   };

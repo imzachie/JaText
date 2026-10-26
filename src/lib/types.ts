@@ -108,6 +108,7 @@ export interface JaTextStore {
   previewsReady: boolean;
   friendActivities: FriendActivity[];
   notificationsEnabled: boolean;
+  pushRegistrationStatus: "idle" | "registering" | "registered" | "error";
   soundsEnabled: boolean;
   activeChatId: string | null;
   setActiveChatId: (id: string | null) => void;
@@ -145,6 +146,7 @@ export interface JaTextStore {
   sendSticker: (receiverId: string, sticker: StickerMedia) => Promise<void>;
   setActivity: (status: StatusPreference, customStatus: string) => Promise<void>;
   setTyping: (receiverId: string, isTyping: boolean) => Promise<void>;
+  refreshPushRegistration: () => Promise<void>;
   setNotificationsEnabled: (enabled: boolean) => void;
   setSoundsEnabled: (enabled: boolean) => void;
 }

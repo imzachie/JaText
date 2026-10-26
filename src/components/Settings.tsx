@@ -10,9 +10,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     signOut,
     mode,
     notificationsEnabled,
+    pushRegistrationStatus,
     soundsEnabled,
     setActivity,
     setNotificationsEnabled,
+    refreshPushRegistration,
     setSoundsEnabled,
   } = useJaText();
   const [saved, setSaved] = useState(false);
@@ -150,6 +152,29 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             Message sounds (sent and received)
           </label>
           {notificationError && <div className="error-box">{notificationError}</div>}
+          {Capacitor.isNativePlatform() && mode === "convex" && notificationsEnabled && (
+            <>
+              <p className="muted small" role="status">
+                Push registration: {pushRegistrationStatus}
+              </p>
+              <button
+                className="ghost-btn"
+                type="button"
+                onClick={() => {
+                  setNotificationError(null);
+                  void refreshPushRegistration().catch((error: unknown) => {
+                    setNotificationError(
+                      error instanceof Error
+                        ? error.message
+                        : "Could not refresh push registration.",
+                    );
+                  });
+                }}
+              >
+                Repair push registration
+              </button>
+            </>
+          )}
         </section>
 
         {saved && <div className="success-box">✅ Profile saved!</div>}

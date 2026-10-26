@@ -1302,6 +1302,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     previewsReady: true,
     friendActivities,
     notificationsEnabled: notificationPreferences.notificationsEnabled,
+    pushRegistrationStatus: "idle",
     soundsEnabled: notificationPreferences.soundsEnabled,
     activeChatId,
     setActiveChatId,
@@ -1335,6 +1336,9 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     sendSticker,
     setActivity,
     setTyping,
+    refreshPushRegistration: async () => {
+      throw new Error("Push registration is only available in the Android app with the live backend.");
+    },
     setNotificationsEnabled,
     setSoundsEnabled,
   };

@@ -196,6 +196,10 @@ or connection error, and `FCM push skipped` means the recipient has no
 registered devices. These logs never include device tokens. The logged
 `projectId` must match the Firebase project configured in
 `android/app/google-services.json`.
+On Android, **Settings → Activity & notifications → Repair push registration**
+requests a fresh token for the currently signed-in account and shows whether the
+server accepted it. The app also refreshes registration when it returns to the
+foreground.
 
 Android Google sign-in opens the system browser and returns to JaText through
 the `com.ahad00010.jatext://auth` deep link. The Google OAuth web client must
