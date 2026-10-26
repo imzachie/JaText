@@ -1,0 +1,61 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - "arena/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Install dependencies and sync Capacitor Android
+        run: |
+          npm install
+          npm run android:sync
+
+      - name: Assemble Debug APK
+        working-directory: android
+        run: bash ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare APK artifact
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk JaText-debug.apk
+
+      - name: Upload APK build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JaText-debug-apk
+          path: JaText-debug.apk
+
+      - name: Publish latest APK release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          base64 -w 0 JaText-debug.apk > apk.b64
+          jq -Rs '{content: ., encoding: "base64"}' apk.b64 > blob_payload.json
+          BLOB_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --input blob_payload.json --jq .sha)
+          gh release delete apk-latest --cleanup-tag --yes || true
+          gh release create apk-latest JaText-debug.apk \
+            --title "JaText Android APK (${GITHUB_SHA::7})" \
+            --notes "Built from commit ${GITHUB_SHA}. Blob: ${BLOB_SHA}"
