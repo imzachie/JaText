@@ -27,6 +27,7 @@ interface MessageMenuState {
   y: number;
   message: ChatMessage;
   canUnsend: boolean;
+  canEdit: boolean;
 }
 
 function fmtTime(ts: number) {
@@ -55,8 +56,9 @@ function getConversationMessages(
         pendingMessage.receiverId === message.receiverId &&
         message.createdAt >= pendingMessage.createdAt - 1_000 &&
         message.createdAt <= pendingMessage.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
-        message.body === pendingMessage.body &&
-        message.attachmentName === pendingMessage.attachmentName,
+        (message.unsentAt ||
+          (message.body === pendingMessage.body &&
+            message.attachmentName === pendingMessage.attachmentName)),
     );
     if (pendingIndex === -1) return message;
 
@@ -260,7 +262,9 @@ const ChatHistory = memo(function ChatHistory({
                     )}
                   </div>
                 )}
-                <span className="msg-time">{fmtTime(message.createdAt)}</span>
+                <span className="msg-time">
+                  {fmtTime(message.createdAt)}{message.editedAt ? " · Edited" : ""}
+                </span>
                 {mine && !message.unsentAt && message.deliveryStatus && (
                   <span className="message-delivery-status">
                     {message.deliveryStatus === "delivered"
@@ -313,6 +317,7 @@ export function ChatView({
   const [error, setError] = useState<string | null>(null);
   const [showUnsendWarning, setShowUnsendWarning] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [messageMenuClosing, setMessageMenuClosing] = useState(false);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
@@ -607,6 +612,19 @@ export function ChatView({
 
   async function onSend(e?: FormEvent) {
     e?.preventDefault();
+    if (editingMessage) {
+      const editedBody = draft.trim();
+      if (!editedBody || isFriendBlocked) return;
+      setError(null);
+      try {
+        await store.editMessage(editingMessage.id, editedBody);
+        setEditingMessage(null);
+        setDraft("");
+      } catch (err) {
+        setError(friendlyError(err, "Couldn't edit the message. Please try again."));
+      }
+      return;
+    }
     if ((!draft.trim() && !file) || isFriendBlocked) return;
     const sentBody = draft.trim();
     const sentFile = file;
@@ -700,6 +718,10 @@ export function ChatView({
         message.senderId === me?.id &&
         !message.unsentAt &&
         eventTime - message.createdAt < UNSEND_WINDOW_MS,
+      canEdit:
+        message.senderId === me?.id &&
+        !message.unsentAt &&
+        !!message.body.trim(),
     });
     setReactionPickerOpen(false);
   }, [me?.id]);
@@ -766,6 +788,20 @@ export function ChatView({
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't unsend the message. Please try again."));
     }
+  }
+
+  function startEditingMessage(message: ChatMessage) {
+    setEditingMessage(message);
+    setReplyTo(null);
+    setFile(null);
+    setDraft(message.body);
+    closeMessageMenu();
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  }
+
+  function cancelEditingMessage() {
+    setEditingMessage(null);
+    setDraft("");
   }
 
   const reactToMessage = useCallback(async (message: ChatMessage, emoji: string) => {
@@ -915,6 +951,17 @@ export function ChatView({
           </button>
         </div>
       )}
+      {editingMessage && (
+        <div className="reply-composer-preview">
+          <div>
+            <strong>Editing your message</strong>
+            <span>{editingMessage.body}</span>
+          </div>
+          <button type="button" className="mini-btn" onClick={cancelEditingMessage}>
+            ✕
+          </button>
+        </div>
+      )}
 
       <form className="composer" onSubmit={onSend}>
         <input
@@ -927,12 +974,12 @@ export function ChatView({
           type="button"
           className="icon-btn attach-btn"
           title="Attach a photo or file"
-          disabled={isFriendBlocked}
+          disabled={isFriendBlocked || !!editingMessage}
           onClick={() => fileInput.current?.click()}
         >
           📎
         </button>
-        <StickerPicker friendId={friend.id} disabled={isFriendBlocked} />
+        <StickerPicker friendId={friend.id} disabled={isFriendBlocked || !!editingMessage} />
         <button
           type="button"
           className="icon-btn voice-note-placeholder"
@@ -948,8 +995,16 @@ export function ChatView({
         <textarea
           ref={composerRef}
           value={draft}
-          onChange={(e) => onDraftChange(e.target.value)}
-          placeholder={isFriendBlocked ? "Unblock to message" : "Message…"}
+          onChange={(e) =>
+            editingMessage ? setDraft(e.target.value) : onDraftChange(e.target.value)
+          }
+          placeholder={
+            isFriendBlocked
+              ? "Unblock to message"
+              : editingMessage
+                ? "Edit message…"
+                : "Message…"
+          }
           aria-label={`Message @${friend.username}`}
           disabled={isFriendBlocked}
           rows={1}
@@ -963,10 +1018,13 @@ export function ChatView({
         <button
           className="send-btn"
           type="submit"
-          disabled={isFriendBlocked || (!draft.trim() && !file)}
+          disabled={
+            isFriendBlocked ||
+            (editingMessage ? !draft.trim() : !draft.trim() && !file)
+          }
           onPointerDown={(event) => event.preventDefault()}
         >
-          ➤
+          {editingMessage ? "✓" : "➤"}
         </button>
       </form>
 
@@ -983,6 +1041,15 @@ export function ChatView({
           </button>
           {!messageMenu.message.unsentAt && (
             <>
+              {messageMenu.canEdit && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => startEditingMessage(messageMenu.message)}
+                >
+                  <span>✏️</span> Edit message
+                </button>
+              )}
               <button
                 type="button"
                 role="menuitem"

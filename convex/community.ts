@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { query, mutation } from "./_generated/server";
 import type { Ctx } from "./lib";
-import { isJaTextOwner, requireUser } from "./lib";
+import { isJaTextOwner, profileOf, requireUser } from "./lib";
 
 async function communityRole(ctx: Ctx, userId: Id<"users">) {
   const user = await ctx.db.get(userId);
@@ -37,6 +37,7 @@ export const list = query({
     return Promise.all(
       messages.reverse().map(async (message) => {
         const sender = await ctx.db.get(message.senderId);
+        const senderProfile = sender ? await profileOf(ctx, sender) : null;
         const votes =
           message.type === "poll"
             ? await ctx.db
@@ -50,6 +51,8 @@ export const list = query({
           senderId: message.senderId as string,
           senderName: sender?.displayName ?? sender?.name ?? "JaText",
           senderUsername: sender?.username ?? "",
+          senderAvatarUrl: senderProfile?.avatarUrl,
+          senderAvatarColor: senderProfile?.avatarColor ?? "black",
           body: message.body,
           type: message.type,
           pollOptions: message.pollOptions ?? [],
@@ -60,6 +63,7 @@ export const list = query({
           })),
           myVote: myVote?.optionIndex,
           createdAt: message._creationTime,
+          editedAt: message.editedAt,
           canModerate: role.canModerate,
           isOwner: role.isOwner,
         };
@@ -128,6 +132,43 @@ export const createPoll = mutation({
       type: "poll",
       pollOptions: cleanOptions.map((option) => option.slice(0, 120)),
     });
+  },
+});
+
+export const editMessage = mutation({
+  args: { messageId: v.id("communityMessages"), body: v.string() },
+  handler: async (ctx, { messageId, body }) => {
+    const me = await requireUser(ctx);
+    const role = await communityRole(ctx, me._id);
+    if (!role.canModerate) throw new Error("Only JaText community moderators can edit announcements.");
+    const message = await ctx.db.get(messageId);
+    if (!message || message.type !== "text") throw new Error("Announcement not found.");
+    if (!role.isOwner && message.senderId !== me._id)
+      throw new Error("You can only edit your own announcements.");
+    const text = body.trim();
+    if (!text) throw new Error("Announcements cannot be empty.");
+    await ctx.db.patch(messageId, { body: text.slice(0, 4000), editedAt: Date.now() });
+  },
+});
+
+export const deleteMessage = mutation({
+  args: { messageId: v.id("communityMessages") },
+  handler: async (ctx, { messageId }) => {
+    const me = await requireUser(ctx);
+    const role = await communityRole(ctx, me._id);
+    if (!role.canModerate) throw new Error("Only JaText community moderators can delete announcements.");
+    const message = await ctx.db.get(messageId);
+    if (!message) throw new Error("Announcement not found.");
+    if (!role.isOwner && message.senderId !== me._id)
+      throw new Error("You can only delete your own announcements.");
+    const votes = await ctx.db
+      .query("communityPollVotes")
+      .withIndex("by_poll", (q) => q.eq("pollId", messageId))
+      .collect();
+    await Promise.all([
+      ...votes.map((vote) => ctx.db.delete(vote._id)),
+      ctx.db.delete(messageId),
+    ]);
   },
 });
 

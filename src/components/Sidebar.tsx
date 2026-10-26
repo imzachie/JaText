@@ -204,7 +204,7 @@ export function Sidebar({
                 className={`friend-row official-community-row ${activeChatId === OFFICIAL_COMMUNITY_ID ? "active" : ""}`}
                 onClick={() => setActiveChatId(OFFICIAL_COMMUNITY_ID)}
               >
-                <div className="community-mark" aria-hidden="true">J</div>
+                <img className="community-mark" src="/jatext-logo-icon.png" alt="" />
                 <div className="friend-row-text">
                   <div className="friend-row-top">
                     <strong>JaText Community</strong>

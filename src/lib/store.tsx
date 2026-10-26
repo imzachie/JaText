@@ -1125,6 +1125,26 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     [me, transact],
   );
 
+  const editMessage = useCallback<JaTextStore["editMessage"]>(
+    async (messageId, body) => {
+      if (!me) throw new Error("Not signed in.");
+      const text = body.trim();
+      transact((draft) => {
+        const message = draft.messages.find((entry) => entry.id === messageId);
+        if (!message || message.senderId !== me.id)
+          throw new Error("You can only edit your own messages.");
+        if (message.unsentAt || message.hiddenFor?.includes(me.id))
+          throw new Error("This message is no longer available to edit.");
+        if (!text && !message.attachmentUrl && !message.stickerKey)
+          throw new Error("Message cannot be empty.");
+        if (text.length > 4000) throw new Error("Messages can be up to 4,000 characters.");
+        message.body = text;
+        message.editedAt = Date.now();
+      });
+    },
+    [me, transact],
+  );
+
   const setConversationArchived = useCallback<JaTextStore["setConversationArchived"]>(
     async (friendId, archived) => {
       if (!me) throw new Error("Please sign in to change chat settings.");
@@ -1339,6 +1359,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     toggleMessageReaction,
     deleteMessageForMe,
     unsendMessage,
+    editMessage,
     setConversationArchived,
     setConversationMuted,
     deleteConversationForMe,
@@ -1366,6 +1387,12 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       throw new Error("The community is only available with the live JaText backend.");
     },
     endCommunityPoll: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    editCommunityMessage: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    deleteCommunityMessage: async () => {
       throw new Error("The community is only available with the live JaText backend.");
     },
     createGroup: async () => {

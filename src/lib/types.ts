@@ -46,6 +46,7 @@ export interface ChatMessage {
   stickerKey?: string;
   isStickerFavorite?: boolean;
   deliveryStatus?: MessageDeliveryStatus;
+  editedAt?: number;
   createdAt: number;
   replyTo?: { id: string; senderId: string; body: string };
   forwardedFrom?: string;
@@ -90,6 +91,8 @@ export interface CommunityMessage {
   senderId: string;
   senderName: string;
   senderUsername: string;
+  senderAvatarUrl?: string;
+  senderAvatarColor: string;
   body: string;
   type: "text" | "poll";
   pollOptions: string[];
@@ -97,6 +100,7 @@ export interface CommunityMessage {
   votes: { userId: string; optionIndex: number }[];
   myVote?: number;
   createdAt: number;
+  editedAt?: number;
   canModerate: boolean;
   isOwner: boolean;
 }
@@ -105,6 +109,8 @@ export interface CommunityUser {
   id: string;
   username: string;
   displayName: string;
+  avatarColor: string;
+  avatarUrl?: string;
   createdAt: number;
 }
 
@@ -199,6 +205,7 @@ export interface JaTextStore {
   toggleMessageReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteMessageForMe: (messageId: string) => Promise<void>;
   unsendMessage: (messageId: string) => Promise<boolean>;
+  editMessage: (messageId: string, body: string) => Promise<void>;
   setConversationArchived: (friendId: string, archived: boolean) => Promise<void>;
   setConversationMuted: (friendId: string, muted: boolean) => Promise<void>;
   deleteConversationForMe: (friendId: string) => Promise<void>;
@@ -218,6 +225,8 @@ export interface JaTextStore {
   createCommunityPoll: (question: string, options: string[]) => Promise<void>;
   voteCommunityPoll: (pollId: string, optionIndex: number) => Promise<void>;
   endCommunityPoll: (pollId: string) => Promise<void>;
+  editCommunityMessage: (messageId: string, body: string) => Promise<void>;
+  deleteCommunityMessage: (messageId: string) => Promise<void>;
   createGroup: (name: string, memberIds: string[]) => Promise<string>;
   sendGroupMessage: (groupId: string, body: string) => Promise<void>;
   renameGroup: (groupId: string, name: string) => Promise<void>;

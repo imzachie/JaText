@@ -70,6 +70,7 @@ export default defineSchema({
     deliveryStatus: v.optional(
       v.union(v.literal("delivered"), v.literal("sent"), v.literal("read")),
     ),
+    editedAt: v.optional(v.number()),
     replyToId: v.optional(v.id("messages")),
     forwardedFromId: v.optional(v.id("users")),
     unsentAt: v.optional(v.number()),
@@ -147,6 +148,7 @@ export default defineSchema({
     type: v.union(v.literal("text"), v.literal("poll")),
     pollOptions: v.optional(v.array(v.string())),
     pollEndedAt: v.optional(v.number()),
+    editedAt: v.optional(v.number()),
   }),
 
   communityPollVotes: defineTable({

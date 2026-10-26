@@ -136,6 +136,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const toggleReactionMut = useMutation(api.messages.toggleReaction);
   const deleteForMeMut = useMutation(api.messages.deleteForMe);
   const unsendMut = useMutation(api.messages.unsend);
+  const editMessageMut = useMutation(api.messages.edit);
   const updateConversationMut = useMutation(api.messages.updateConversation);
   const setTypingMut = useMutation(api.messages.setTyping);
   const markReadMut = useMutation(api.messages.markRead);
@@ -156,6 +157,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const createCommunityPollMut = useMutation(api.community.createPoll);
   const voteCommunityPollMut = useMutation(api.community.vote);
   const endCommunityPollMut = useMutation(api.community.endPoll);
+  const editCommunityMessageMut = useMutation(api.community.editMessage);
+  const deleteCommunityMessageMut = useMutation(api.community.deleteMessage);
   const createGroupMut = useMutation(api.groups.create);
   const sendGroupMessageMut = useMutation(api.groups.send);
   const renameGroupMut = useMutation(api.groups.rename);
@@ -367,6 +370,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       await endCommunityPollMut({ pollId: pollId as Id<"communityMessages"> });
     },
     [endCommunityPollMut],
+  );
+  const editCommunityMessage = useCallback<JaTextStore["editCommunityMessage"]>(
+    async (messageId, body) => {
+      await editCommunityMessageMut({
+        messageId: messageId as Id<"communityMessages">,
+        body,
+      });
+    },
+    [editCommunityMessageMut],
+  );
+  const deleteCommunityMessage = useCallback<JaTextStore["deleteCommunityMessage"]>(
+    async (messageId) => {
+      await deleteCommunityMessageMut({ messageId: messageId as Id<"communityMessages"> });
+    },
+    [deleteCommunityMessageMut],
   );
   const createGroup = useCallback<JaTextStore["createGroup"]>(
     async (name, memberIds) =>
@@ -690,6 +708,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       (await unsendMut({ messageId: messageId as Id<"messages"> })) as boolean,
     [unsendMut],
   );
+  const editMessage = useCallback<JaTextStore["editMessage"]>(
+    async (messageId, body) => {
+      await editMessageMut({ messageId: messageId as Id<"messages">, body });
+    },
+    [editMessageMut],
+  );
 
   const setConversationArchived = useCallback<JaTextStore["setConversationArchived"]>(
     async (friendId, archived) => {
@@ -812,6 +836,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     toggleMessageReaction,
     deleteMessageForMe,
     unsendMessage,
+    editMessage,
     setConversationArchived,
     setConversationMuted,
     deleteConversationForMe,
@@ -831,6 +856,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     createCommunityPoll,
     voteCommunityPoll,
     endCommunityPoll,
+    editCommunityMessage,
+    deleteCommunityMessage,
     createGroup,
     sendGroupMessage,
     renameGroup,

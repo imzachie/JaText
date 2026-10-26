@@ -81,6 +81,7 @@ async function withMessageDetails(
   replyTo?: { id: string; senderId: string; body: string };
   forwardedFrom?: string;
   unsentAt?: number;
+  editedAt?: number;
   reactions?: { userId: string; emoji: string }[];
   deliveryStatus?: "delivered" | "sent" | "read";
 }> {
@@ -120,6 +121,7 @@ async function withMessageDetails(
       m.stickerKey ?? (favorite ? mediaKey : undefined),
     isStickerFavorite: favorite?.isFavorite ?? false,
     deliveryStatus: m.deliveryStatus,
+    editedAt: m.editedAt,
     createdAt: m._creationTime,
     replyTo: reply
       ? {
@@ -314,6 +316,24 @@ export const unsend = mutation({
       unsentAt: now,
     });
     return showWarning;
+  },
+});
+
+/** Edit the text of a message owned by the current user. */
+export const edit = mutation({
+  args: { messageId: v.id("messages"), body: v.string() },
+  handler: async (ctx, { messageId, body }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (!message || message.senderId !== me._id)
+      throw new Error("You can only edit your own messages.");
+    if (message.unsentAt || message.hiddenFor?.includes(me._id))
+      throw new Error("This message is no longer available to edit.");
+    const text = body.trim();
+    if (!text && !message.attachmentId && !message.attachmentUrl && !message.stickerKey)
+      throw new Error("Message cannot be empty.");
+    if (text.length > 4000) throw new Error("Messages can be up to 4,000 characters.");
+    await ctx.db.patch(messageId, { body: text, editedAt: Date.now() });
   },
 });
 

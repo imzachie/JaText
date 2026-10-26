@@ -357,14 +357,10 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .community-mark {
   width: 48px;
   height: 48px;
-  display: grid;
-  place-items: center;
+  display: block;
   flex: none;
   border-radius: 50%;
-  color: white;
-  background: linear-gradient(145deg, #8b5cf6, #2563eb);
-  font-size: 24px;
-  font-weight: 900;
+  object-fit: contain;
 }
 .verified-badge {
   display: inline-grid;
@@ -462,6 +458,10 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   background: var(--panel-2);
 }
 .community-directory-person input { width: 17px; height: 17px; flex: none; }
+.community-directory-search-row { display: flex; align-items: center; gap: 8px; }
+.community-directory-search { min-width: 0; }
+.community-directory-search-toggle { flex: none; }
+.community-directory-search-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; }
 .community-directory-person span,
 .group-manage-member > div { flex: 1; min-width: 0; }
 .community-directory-person time { flex: none; }
@@ -586,6 +586,11 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .community-post-header { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .community-post-header time { margin-left: auto; }
 .community-post-body { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.community-post-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.community-post-actions .ghost-btn { padding: 5px 8px; font-size: 12px; }
+.community-announcement-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.community-announcement-edit textarea { min-height: 90px; resize: vertical; }
+.community-announcement-edit > div { display: flex; gap: 8px; justify-content: flex-end; }
 .community-poll { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .community-poll-option {
   display: flex;

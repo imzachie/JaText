@@ -32,15 +32,17 @@ export const ownerDirectory = query({
     const me = await requireUser(ctx);
     if (!isJaTextOwner(me)) throw new Error("Only the JaText owner can view this directory.");
     const users = await ctx.db.query("users").collect();
-    return users
+    return Promise.all(users
       .filter((user) => !!user.username)
       .sort((a, b) => a._creationTime - b._creationTime)
-      .map((user) => ({
+      .map(async (user) => ({
         id: user._id as string,
         username: user.username!,
         displayName: user.displayName ?? user.name ?? "",
+        avatarColor: user.avatarColor ?? "black",
+        avatarUrl: (await profileOf(ctx, user)).avatarUrl,
         createdAt: user._creationTime,
-      }));
+      })));
   },
 });
 

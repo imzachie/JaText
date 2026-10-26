@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
+import { Avatar } from "./Avatar";
 
 export function CommunityChatView({ onBack }: { onBack: () => void }) {
   const store = useJaText();
@@ -10,11 +11,25 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
   const [showPoll, setShowPoll] = useState(false);
   const [showModerators, setShowModerators] = useState(false);
   const [selectedModerators, setSelectedModerators] = useState<string[]>([]);
+  const [directorySearchOpen, setDirectorySearchOpen] = useState(false);
+  const [directorySearch, setDirectorySearch] = useState("");
+  const [editingMessage, setEditingMessage] = useState<{ id: string; body: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesElement = useRef<HTMLDivElement>(null);
+  const directorySearchInput = useRef<HTMLInputElement>(null);
   const wasPinnedRef = useRef(true);
   const lastMessageId = store.communityMessages.at(-1)?.id;
+  const filteredDirectory = store.communityDirectory
+    .map((person, index) => ({ person, index }))
+    .filter(({ person }) => {
+      const search = directorySearch.trim().toLowerCase();
+      return (
+        !search ||
+        person.displayName.toLowerCase().includes(search) ||
+        person.username.toLowerCase().includes(search)
+      );
+    });
 
   useEffect(() => {
     const element = messagesElement.current;
@@ -82,11 +97,36 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
     }
   }
 
+  async function saveAnnouncement(event: FormEvent) {
+    event.preventDefault();
+    if (!editingMessage || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await store.editCommunityMessage(editingMessage.id, editingMessage.body);
+      setEditingMessage(null);
+    } catch (cause) {
+      setError(friendlyError(cause, "Could not edit the announcement."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteAnnouncement(messageId: string) {
+    if (!window.confirm("Delete this community announcement?")) return;
+    setError(null);
+    try {
+      await store.deleteCommunityMessage(messageId);
+    } catch (cause) {
+      setError(friendlyError(cause, "Could not delete the announcement."));
+    }
+  }
+
   return (
     <section className="chat community-chat">
       <header className="chat-header">
         <button className="icon-btn back-btn" onClick={onBack} aria-label="Back">←</button>
-        <div className="community-mark" aria-hidden="true">J</div>
+        <img className="community-mark" src="/jatext-logo-icon.png" alt="" />
         <div className="chat-title community-title">
           <strong>
             JaText Community <span className="verified-badge" title="Verified JaText account">✓</span>
@@ -127,15 +167,72 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
             (_, index) => message.votes.filter((vote) => vote.optionIndex === index).length,
           );
           const totalVotes = counts.reduce((total, count) => total + count, 0);
+          const canManagePost =
+            store.communityPermissions.canModerate &&
+            (store.communityPermissions.isOwner || message.senderId === store.me?.id);
           return (
             <article className="community-post" key={message.id}>
               <div className="community-post-header">
+                <Avatar
+                  user={{
+                    displayName: message.senderName || "JaText",
+                    username: message.senderUsername,
+                    avatarColor: message.senderAvatarColor,
+                    avatarUrl: message.senderAvatarUrl,
+                  }}
+                  size={32}
+                />
                 <strong>{message.senderName || "JaText"}</strong>
                 <span className="verified-badge" title="Verified">✓</span>
                 <span className="official-badge">Official</span>
                 <time className="muted small">{new Date(message.createdAt).toLocaleString()}</time>
+                {message.editedAt && <span className="muted small">Edited</span>}
               </div>
-              <p className="community-post-body">{message.body}</p>
+              {editingMessage?.id === message.id ? (
+                <form className="community-announcement-edit" onSubmit={(event) => void saveAnnouncement(event)}>
+                  <textarea
+                    value={editingMessage.body}
+                    maxLength={4000}
+                    onChange={(event) =>
+                      setEditingMessage((current) =>
+                        current ? { ...current, body: event.target.value } : current,
+                      )
+                    }
+                    aria-label="Edit announcement"
+                    autoFocus
+                  />
+                  <div>
+                    <button className="primary-btn" type="submit" disabled={busy || !editingMessage.body.trim()}>
+                      Save
+                    </button>
+                    <button className="ghost-btn" type="button" onClick={() => setEditingMessage(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <p className="community-post-body">{message.body}</p>
+              )}
+              {canManagePost && (
+                <div className="community-post-actions">
+                  {message.type === "text" && editingMessage?.id !== message.id && (
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => setEditingMessage({ id: message.id, body: message.body })}
+                    >
+                      Edit announcement
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="ghost-btn destructive-menu-item"
+                    onClick={() => void deleteAnnouncement(message.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
               {message.type === "poll" && (
                 <div className="community-poll">
                   {message.pollOptions.map((option, index) => {
@@ -248,8 +345,39 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
             <button className="modal-close" onClick={() => setShowModerators(false)} aria-label="Close">×</button>
             <h2>Elect People …</h2>
             <p className="muted small">Accounts are shown from oldest to newest. Selected people can post messages and polls.</p>
+            <div className="community-directory-search-row">
+              {directorySearchOpen && (
+                <input
+                  ref={directorySearchInput}
+                  className="search-input community-directory-search"
+                  value={directorySearch}
+                  onChange={(event) => setDirectorySearch(event.target.value)}
+                  placeholder="Search people…"
+                  aria-label="Search registered people"
+                  autoFocus
+                />
+              )}
+              <button
+                type="button"
+                className="icon-btn community-directory-search-toggle"
+                aria-label={directorySearchOpen ? "Close people search" : "Search registered people"}
+                title={directorySearchOpen ? "Close search" : "Search people"}
+                onClick={() => {
+                  setDirectorySearchOpen((open) => !open);
+                  if (directorySearchOpen) setDirectorySearch("");
+                  else window.setTimeout(() => directorySearchInput.current?.focus(), 0);
+                }}
+              >
+                {directorySearchOpen ? "×" : (
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="10.8" cy="10.8" r="6.8" />
+                    <path d="m16 16 5 5" />
+                  </svg>
+                )}
+              </button>
+            </div>
             <div className="community-directory">
-              {store.communityDirectory.map((person, index) => (
+              {filteredDirectory.map(({ person, index }) => (
                 <label className="community-directory-person" key={person.id}>
                   <input
                     type="checkbox"
@@ -263,12 +391,25 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
                       )
                     }
                   />
+                  <Avatar
+                    user={{
+                      displayName: person.displayName,
+                      username: person.username,
+                      avatarColor: person.avatarColor,
+                      avatarUrl: person.avatarUrl,
+                    }}
+                    size={34}
+                  />
                   <span>{index + 1}. <strong>{person.displayName}</strong> @{person.username}</span>
                   <time className="muted small">{new Date(person.createdAt).toLocaleDateString()}</time>
                 </label>
               ))}
-              {store.communityDirectory.length === 0 && (
-                <p className="muted">No registered usernames were found.</p>
+              {filteredDirectory.length === 0 && (
+                <p className="muted">
+                  {store.communityDirectory.length === 0
+                    ? "No registered usernames were found."
+                    : "No accounts match your search."}
+                </p>
               )}
             </div>
             <button className="primary-btn" disabled={busy} onClick={() => void saveModerators()}>
