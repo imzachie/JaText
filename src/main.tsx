@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { ConvexReactClient } from "convex/react";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import App from "./App";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { ConvexStoreProvider } from "./lib/convexStore";
 import { DemoStoreProvider } from "./lib/store";
 import "./index.css";
@@ -16,12 +17,12 @@ import "./index.css";
  * in the browser, so every feature works out of the box.
  */
 const convexUrl = import.meta.env.VITE_CONVEX_URL as string | undefined;
+const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : null;
 
-function Root() {
-  if (convexUrl) {
-    const client = new ConvexReactClient(convexUrl);
+export function Root() {
+  if (convexClient) {
     return (
-      <ConvexAuthProvider client={client}>
+      <ConvexAuthProvider client={convexClient}>
         <ConvexStoreProvider>
           <App />
         </ConvexStoreProvider>
@@ -37,6 +38,8 @@ function Root() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Root />
+    <AppErrorBoundary>
+      <Root />
+    </AppErrorBoundary>
   </StrictMode>,
 );

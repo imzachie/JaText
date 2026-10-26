@@ -11,7 +11,12 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(JaTextNativePlugin.class);
+        this.initialPlugins.add(SafePushNotificationsPlugin.class);
         super.onCreate(savedInstanceState);
+        if (getBridge() != null) {
+            getBridge().registerPlugin(SafePushNotificationsPlugin.class);
+        }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         applyStatusBarAppearance();
     }
