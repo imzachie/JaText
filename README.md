@@ -187,6 +187,16 @@ not a fully native rewrite. To enable remote Android push notifications:
    Settings. FCM displays received messages while the app is backgrounded or
    closed; tapping a push opens that sender's conversation.
 
+To troubleshoot delivery, open **Logs** for the same Convex deployment used by
+the APK and send a test message to the affected account. The
+`FCM push accepted for all registered devices` log means Firebase accepted the
+send; `FCM push delivery had failures` lists each failed device ID and Firebase
+error code. `FCM push request failed` indicates a request-level configuration
+or connection error, and `FCM push skipped` means the recipient has no
+registered devices. These logs never include device tokens. The logged
+`projectId` must match the Firebase project configured in
+`android/app/google-services.json`.
+
 Android Google sign-in opens the system browser and returns to JaText through
 the `com.ahad00010.jatext://auth` deep link. The Google OAuth web client must
 continue using the Convex callback URL documented below.

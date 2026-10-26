@@ -15,8 +15,7 @@ export const sendMessageNotification = internalAction({
   },
   handler: async (ctx, { receiverId, senderId, senderName, body }) => {
     if (!env.FCM_SERVICE_ACCOUNT_JSON) {
-      console.error("FCM push is not configured. Set FCM_SERVICE_ACCOUNT_JSON in Convex.");
-      return;
+      throw new Error("FCM push is not configured. Set FCM_SERVICE_ACCOUNT_JSON in Convex.");
     }
 
     const credentials: unknown = JSON.parse(env.FCM_SERVICE_ACCOUNT_JSON);
@@ -43,20 +42,66 @@ export const sendMessageNotification = internalAction({
       getApps().find((existingApp) => existingApp.name === appName) ??
       initializeApp({ credential: cert(serviceAccount) }, appName);
     const devices = await ctx.runQuery(internal.push.listUserDevices, { userId: receiverId });
-    if (devices.length === 0) return;
+    if (devices.length === 0) {
+      console.warn("FCM push skipped: recipient has no registered devices.", {
+        receiverId,
+        projectId: serviceAccount.projectId,
+      });
+      return;
+    }
 
-    const response = await getMessaging(app).sendEachForMulticast({
-      tokens: devices.map((device) => device.token),
-      notification: {
-        title: `New message from ${senderName}`,
-        body: body.trim().slice(0, 160) || "Sent you an attachment",
-      },
-      data: { senderId, type: "message" },
-      android: {
-        priority: "high",
-        notification: { channelId: "messages", sound: "default" },
-      },
-    });
+    let response;
+    try {
+      response = await getMessaging(app).sendEachForMulticast({
+        tokens: devices.map((device) => device.token),
+        notification: {
+          title: `New message from ${senderName}`,
+          body: body.trim().slice(0, 160) || "Sent you an attachment",
+        },
+        data: { senderId, type: "message" },
+        android: {
+          priority: "high",
+          notification: { channelId: "messages", sound: "default" },
+        },
+      });
+    } catch (error) {
+      const code =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof error.code === "string"
+          ? error.code
+          : "unknown";
+      console.error("FCM push request failed.", {
+        receiverId,
+        projectId: serviceAccount.projectId,
+        deviceCount: devices.length,
+        code,
+      });
+      throw error;
+    }
+
+    const failures = response.responses.flatMap((result, index) =>
+      result.success
+        ? []
+        : [{
+            deviceId: devices[index].id,
+            code: result.error?.code ?? "unknown",
+          }],
+    );
+    const summary = {
+      receiverId,
+      projectId: serviceAccount.projectId,
+      deviceCount: devices.length,
+      successCount: response.successCount,
+      failureCount: response.failureCount,
+      failures,
+    };
+    if (response.failureCount > 0) {
+      console.error("FCM push delivery had failures.", summary);
+    } else {
+      console.info("FCM push accepted for all registered devices.", summary);
+    }
 
     await Promise.all(
       response.responses.map((result, index) => {
