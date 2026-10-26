@@ -598,8 +598,18 @@ export function ChatView({
     [friend.id],
   );
 
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, 120);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > 120 ? "auto" : "hidden";
+  }, [draft]);
+
   async function onSend(e?: FormEvent) {
     e?.preventDefault();
+    const keepFocus = document.activeElement === composerRef.current;
     if (editingMessage) {
       const editedBody = draft.trim();
       if (!editedBody || isFriendBlocked) return;
@@ -608,6 +618,7 @@ export function ChatView({
         await store.editMessage(editingMessage.id, editedBody);
         setEditingMessage(null);
         setDraft("");
+        if (keepFocus) composerRef.current?.focus({ preventScroll: true });
       } catch (err) {
         setError(friendlyError(err, "Couldn't edit the message. Please try again."));
       }
@@ -641,6 +652,7 @@ export function ChatView({
     setFile(null);
     setReplyTo(null);
     setError(null);
+    if (keepFocus) composerRef.current?.focus({ preventScroll: true });
     if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
     typingActive.current = false;
     void setTyping(friend.id, false).catch((err: unknown) => {
@@ -1014,6 +1026,7 @@ export function ChatView({
             (editingMessage ? !draft.trim() : !draft.trim() && !file)
           }
           onPointerDown={(event) => event.preventDefault()}
+          onMouseDown={(event) => event.preventDefault()}
         >
           {editingMessage ? "✓" : "➤"}
         </button>

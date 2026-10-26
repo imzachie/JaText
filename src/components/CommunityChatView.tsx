@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import type { Id } from "../../convex/_generated/dataModel";
 import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
+import { playMessageSound } from "../lib/alerts";
 import { friendlyError } from "../lib/errors";
 import { Avatar } from "./Avatar";
 import { StickerPicker } from "./StickerPicker";
@@ -188,7 +189,6 @@ export function CommunityChatView({
   const [editingMessage, setEditingMessage] = useState<{ id: string; body: string } | null>(null);
   const [voterPollId, setVoterPollId] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<CommunityMessage | null>(null);
-  const [forwardedMessage, setForwardedMessage] = useState<CommunityMessage | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showUnsendWarning, setShowUnsendWarning] = useState(false);
@@ -196,12 +196,14 @@ export function CommunityChatView({
   const [messageMenuClosing, setMessageMenuClosing] = useState(false);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [forwardMessage, setForwardMessage] = useState<CommunityMessage | null>(null);
+  const [forwardSearch, setForwardSearch] = useState("");
   const [forwardClosing, setForwardClosing] = useState(false);
   const [pendingMessages, setPendingMessages] = useState<CommunityMessage[]>([]);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageClosing, setImageClosing] = useState(false);
 
   const messagesElement = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const directorySearchInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const typingTimer = useRef<number | null>(null);
@@ -395,35 +397,54 @@ export function CommunityChatView({
     imageGestureRef.current = null;
   }
 
-  async function sendText(event: FormEvent) {
-    event.preventDefault();
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, 120);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > 120 ? "auto" : "hidden";
+  }, [draft]);
+
+  function openForwardDialog(message: CommunityMessage) {
+    if (forwardCloseTimerRef.current !== null) {
+      window.clearTimeout(forwardCloseTimerRef.current);
+      forwardCloseTimerRef.current = null;
+    }
+    setForwardSearch("");
+    setForwardClosing(false);
+    setForwardMessage(message);
+    closeMessageMenu();
+  }
+
+  async function sendText(event?: FormEvent) {
+    event?.preventDefault();
+    const keepFocus = document.activeElement === composerRef.current;
     if (editingMessage) {
       const editedBody = draft.trim();
       if (!editedBody) return;
-      setBusy(true);
       setError(null);
       try {
         await store.editCommunityMessage(editingMessage.id, editedBody);
         setEditingMessage(null);
         setDraft("");
         setFile(null);
+        if (keepFocus) composerRef.current?.focus({ preventScroll: true });
       } catch (cause) {
         setError(friendlyError(cause, "Could not edit the announcement."));
-      } finally {
-        setBusy(false);
       }
       return;
     }
-    if ((!draft.trim() && !file) || busy) return;
+    if (!draft.trim() && !file) return;
     const sentBody = draft.trim();
     const sentFile = file;
     const sentReply = replyTo;
-    const sentForwarded = forwardedMessage;
     const sentAt = Math.max(Date.now(), lastPendingAtRef.current + 1);
     lastPendingAtRef.current = sentAt;
     const pendingId = `pending-${sentAt}`;
     const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
     if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
+    wasPinnedRef.current = true;
     setPendingMessages((cur) => [
       ...cur.slice(-299),
       {
@@ -433,7 +454,7 @@ export function CommunityChatView({
         senderUsername: store.me?.username ?? "",
         senderAvatarUrl: store.me?.avatarUrl,
         senderAvatarColor: store.me?.avatarColor ?? "black",
-        body: sentBody || sentForwarded?.body || "",
+        body: sentBody,
         type: "text" as const,
         pollOptions: [],
         votes: [],
@@ -445,22 +466,22 @@ export function CommunityChatView({
         attachmentType: sentFile?.type,
       },
     ]);
-    setBusy(true);
-    setError(null);
-    try {
-      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-      if (sentForwarded) {
-        await store.forwardCommunityMessage(sentForwarded.id, { community: true });
-        if (sentBody || sentFile) await store.sendCommunityText(sentBody, sentFile ?? undefined, sentReply?.id);
-      } else {
-        await store.sendCommunityText(sentBody, sentFile ?? undefined, sentReply?.id, undefined);
+    window.requestAnimationFrame(() => {
+      if (messagesElement.current) {
+        messagesElement.current.scrollTop = messagesElement.current.scrollHeight;
       }
-      setDraft("");
-      setFile(null);
-      setReplyTo(null);
-      setForwardedMessage(null);
-      typingRef.current = false;
-      await setCommunityTyping(false);
+    });
+    setDraft("");
+    setFile(null);
+    setReplyTo(null);
+    setError(null);
+    if (keepFocus) composerRef.current?.focus({ preventScroll: true });
+    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+    typingRef.current = false;
+    void setCommunityTyping(false).catch(() => undefined);
+    try {
+      await store.sendCommunityText(sentBody, sentFile ?? undefined, sentReply?.id, undefined);
+      if (store.soundsEnabled) playMessageSound("sent");
     } catch (cause) {
       const url = pendingAttachmentUrlsRef.current.get(pendingId);
       if (url) {
@@ -468,9 +489,9 @@ export function CommunityChatView({
         pendingAttachmentUrlsRef.current.delete(pendingId);
       }
       setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
+      setDraft((cur) => (cur.trim() ? cur : sentBody));
+      if (sentFile) setFile((cur) => cur ?? sentFile);
       setError(friendlyError(cause, "Could not post to the community."));
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -605,16 +626,16 @@ export function CommunityChatView({
   );
   function replyToMessage(message: CommunityMessage) {
     setReplyTo(message);
-    setForwardedMessage(null);
     closeMessageMenu();
+    window.setTimeout(() => composerRef.current?.focus(), 0);
   }
   function startEditingMessage(message: CommunityMessage) {
     setEditingMessage({ id: message.id, body: message.body });
     setReplyTo(null);
-    setForwardedMessage(null);
     setFile(null);
     setDraft(message.body);
     closeMessageMenu();
+    window.setTimeout(() => composerRef.current?.focus(), 0);
   }
   async function copyMessage(message: CommunityMessage) {
     try {
@@ -705,6 +726,16 @@ export function CommunityChatView({
       setError(friendlyError(err, "Couldn't forward the message."));
     }
   }
+  async function forwardToCommunity() {
+    if (!forwardMessage) return;
+    try {
+      await store.forwardCommunityMessage(forwardMessage.id, { community: true });
+      closeForwardDialog();
+      closeMessageMenu();
+    } catch (err) {
+      setError(friendlyError(err, "Couldn't forward the message."));
+    }
+  }
 
   return (
     <section className="chat community-chat">
@@ -712,10 +743,11 @@ export function CommunityChatView({
         <button className="icon-btn back-btn" onClick={onBack} aria-label="Back">←</button>
         <img className="community-mark" src="/jatext-logo-icon.png" alt="" />
         <div className="chat-title community-title">
-          <strong>
-            JaText Community <span className="verified-badge" title="Verified JaText account">✓</span>
-          </strong>
-          <span className="official-badge">Official</span>
+          <strong>JaText Community</strong>
+          <span className="community-title-badges">
+            <span className="verified-badge" title="Verified JaText account">✓</span>
+            <span className="official-badge">Official</span>
+          </span>
         </div>
         {store.communityPermissions.isOwner && (
           <button
@@ -891,10 +923,23 @@ export function CommunityChatView({
                   )}
                 </>
               )}
-              {message.type !== "poll" && store.communityPermissions.canModerate && !message.unsentAt && editingMessage?.id !== message.id && (
+              {message.type !== "poll" && !message.unsentAt && editingMessage?.id !== message.id && (
                 <div className="community-post-actions">
-                  <button type="button" className="mini-btn" onClick={() => { setReplyTo(message); setForwardedMessage(null); }}>Reply</button>
-                  <button type="button" className="mini-btn" onClick={() => { setReplyTo(null); setForwardedMessage(message); setDraft(message.body || (message.stickerUrl ? "Sticker" : "")); }}>Forward</button>
+                  {store.communityPermissions.canModerate && (
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      onClick={() => {
+                        setReplyTo(message);
+                        window.setTimeout(() => composerRef.current?.focus(), 0);
+                      }}
+                    >
+                      Reply
+                    </button>
+                  )}
+                  <button type="button" className="mini-btn" onClick={() => openForwardDialog(message)}>
+                    Forward
+                  </button>
                 </div>
               )}
               {(canManagePost || message.type === "poll") && !message.unsentAt && (
@@ -948,13 +993,13 @@ export function CommunityChatView({
       {file && (
         <div className="attach-preview">📎 {file.name} <button className="mini-btn" onClick={() => setFile(null)}>✕ Remove</button></div>
       )}
-      {(replyTo || forwardedMessage) && !editingMessage && (
+      {replyTo && !editingMessage && (
         <div className="reply-composer-preview">
           <div>
-            <strong>{replyTo ? `Replying to ${replyTo.senderName}` : `Forwarding from ${forwardedMessage?.senderName}`}</strong>
-            <span>{replyTo?.body ?? draft}</span>
+            <strong>Replying to {replyTo.senderName}</strong>
+            <span>{replyTo.body || replyTo.attachmentName || replyTo.stickerName || "Attachment"}</span>
           </div>
-          <button type="button" className="mini-btn" onClick={() => { setReplyTo(null); setForwardedMessage(null); if (forwardedMessage) setDraft(""); }}>×</button>
+          <button type="button" className="mini-btn" onClick={() => setReplyTo(null)}>×</button>
         </div>
       )}
       {editingMessage && (
@@ -993,13 +1038,44 @@ export function CommunityChatView({
               }}
             />
             <button type="button" className="icon-btn attach-btn" disabled={!!editingMessage} onClick={() => fileInput.current?.click()} title="Attach a photo or file">📎</button>
-            <StickerPicker friendId="" disabled={busy} onSelect={sendSticker} />
-            <button type="button" className="icon-btn voice-note-placeholder" title="Voice notes coming soon" aria-label="Voice notes coming soon" disabled>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" /></svg>
+            <StickerPicker friendId="" disabled={!!editingMessage} onSelect={sendSticker} />
+            <button
+              type="button"
+              className={`icon-btn poll-toggle-btn ${showPoll ? "active" : ""}`}
+              title="Create poll"
+              aria-label="Create poll"
+              aria-expanded={showPoll}
+              disabled={!!editingMessage}
+              onClick={() => setShowPoll((open) => !open)}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 20V11M12 20V4M19 20v-7" />
+              </svg>
             </button>
-            <textarea value={draft} maxLength={4000} onChange={(event) => updateDraft(event.target.value)} rows={1} placeholder={editingMessage ? "Edit message…" : "Post an official community message…"} aria-label="Community message" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }}} />
-            <button type="button" className="ghost-btn" onClick={() => setShowPoll((open) => !open)}>Create poll</button>
-            <button type="submit" className="send-btn" disabled={busy || (!draft.trim() && !file && !editingMessage)}>➤</button>
+            <textarea
+              ref={composerRef}
+              value={draft}
+              maxLength={4000}
+              onChange={(event) => updateDraft(event.target.value)}
+              rows={1}
+              placeholder={editingMessage ? "Edit message…" : "Message…"}
+              aria-label="Community message"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void sendText();
+                }
+              }}
+            />
+            <button
+              type="submit"
+              className="send-btn"
+              disabled={editingMessage ? !draft.trim() : !draft.trim() && !file}
+              onPointerDown={(event) => event.preventDefault()}
+              onMouseDown={(event) => event.preventDefault()}
+            >
+              {editingMessage ? "✓" : "➤"}
+            </button>
           </form>
         </>
       ) : (
@@ -1043,7 +1119,7 @@ export function CommunityChatView({
           {!messageMenu.message.unsentAt && (
             <>
               {messageMenu.canEdit && <button type="button" role="menuitem" onClick={() => startEditingMessage(messageMenu.message)}><span>✏️</span> Edit message</button>}
-              <button type="button" role="menuitem" onClick={() => { if (forwardCloseTimerRef.current !== null) { window.clearTimeout(forwardCloseTimerRef.current); forwardCloseTimerRef.current = null; } setForwardClosing(false); setForwardMessage(messageMenu.message); closeMessageMenu(); }}><span>↗️</span> Forward</button>
+              <button type="button" role="menuitem" onClick={() => openForwardDialog(messageMenu.message)}><span>↗️</span> Forward</button>
               <button type="button" role="menuitem" onClick={() => setReactionPickerOpen((open) => !open)} aria-expanded={reactionPickerOpen}><span>✨</span> Reaction</button>
               {reactionPickerOpen && (
                 <div className="context-reactions" aria-label="Choose reaction">
@@ -1078,22 +1154,61 @@ export function CommunityChatView({
         <div className={`forward-backdrop ${forwardClosing ? "closing" : ""}`} onClick={closeForwardDialog}>
           <section className="forward-dialog" aria-label="Forward message" onClick={(event) => event.stopPropagation()}>
             <header>
-              <div><h3>Forward message</h3><p>Choose a friend or group to send this to.</p></div>
+              <div>
+                <h3>Forward message</h3>
+                <p>Choose a friend or group to send this to.</p>
+              </div>
               <button type="button" className="icon-btn" aria-label="Close forward dialog" onClick={closeForwardDialog}>✕</button>
             </header>
+            {(store.friends.length + store.groups.length > 4) && (
+              <input
+                className="forward-search-input"
+                value={forwardSearch}
+                onChange={(event) => setForwardSearch(event.target.value)}
+                placeholder="Search friends or groups…"
+                aria-label="Search friends or groups"
+              />
+            )}
             <div className="forward-friends">
-              {store.friends.map((target) => (
-                <button type="button" key={target.id} className="forward-friend" onClick={() => void forwardToFriend(target.id)}>
-                  <Avatar user={target} size={38} /> <span>{target.displayName}</span> <span className="muted">@{target.username}</span>
-                </button>
-              ))}
-              {store.groups.map((target) => (
-                <button type="button" key={target.id} className="forward-friend" onClick={() => void forwardToGroup(target.id)}>
-                  {target.avatarUrl ? <img className="group-avatar" src={target.avatarUrl} alt="" style={{ width: 38, height: 38 }} /> : <span style={{ width: 38, textAlign: "center" }}>👥</span>}
-                  <span>{target.name}</span> <span className="muted">{target.memberCount} members</span>
-                </button>
-              ))}
-              {store.friends.length === 0 && store.groups.length === 0 && <p className="muted center">You do not have anyone to forward to yet.</p>}
+              {store.communityPermissions.canModerate &&
+                (!forwardSearch.trim() || "jatext community official".includes(forwardSearch.trim().toLowerCase())) && (
+                  <button type="button" className="forward-friend" onClick={() => void forwardToCommunity()}>
+                    <img className="community-mark" src="/jatext-logo-icon.png" alt="" style={{ width: 38, height: 38 }} />
+                    <span>JaText Community</span>
+                    <span className="muted">Official</span>
+                  </button>
+                )}
+              {store.friends
+                .filter((target) => {
+                  const q = forwardSearch.trim().toLowerCase();
+                  return !q || target.displayName.toLowerCase().includes(q) || target.username.toLowerCase().includes(q);
+                })
+                .map((target) => (
+                  <button type="button" key={target.id} className="forward-friend" onClick={() => void forwardToFriend(target.id)}>
+                    <Avatar user={target} size={38} />
+                    <span>{target.displayName}</span>
+                    <span className="muted">@{target.username}</span>
+                  </button>
+                ))}
+              {store.groups
+                .filter((target) => {
+                  const q = forwardSearch.trim().toLowerCase();
+                  return !q || target.name.toLowerCase().includes(q);
+                })
+                .map((target) => (
+                  <button type="button" key={target.id} className="forward-friend" onClick={() => void forwardToGroup(target.id)}>
+                    {target.avatarUrl ? (
+                      <img className="group-avatar" src={target.avatarUrl} alt="" style={{ width: 38, height: 38 }} />
+                    ) : (
+                      <span className="group-avatar group-avatar-fallback" style={{ width: 38, height: 38, fontSize: 18 }}>👥</span>
+                    )}
+                    <span>{target.name}</span>
+                    <span className="muted">{target.memberCount} members</span>
+                  </button>
+                ))}
+              {store.friends.length === 0 && store.groups.length === 0 && !store.communityPermissions.canModerate && (
+                <p className="muted center">You do not have anyone to forward to yet.</p>
+              )}
             </div>
           </section>
         </div>
