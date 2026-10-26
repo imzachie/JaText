@@ -5,12 +5,12 @@ import {
   areFriends,
   friendIds,
   hasBlocked,
+  isValidReactionEmoji,
   pairKey,
   requireUser,
   scheduleMessagePush,
 } from "./lib";
 
-const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 
 /**
@@ -249,7 +249,8 @@ export const toggleReaction = mutation({
   },
   handler: async (ctx, { messageId, emoji }) => {
     const me = await requireUser(ctx);
-    if (!(REACTION_EMOJIS as readonly string[]).includes(emoji))
+    const cleanEmoji = emoji.trim();
+    if (!isValidReactionEmoji(cleanEmoji))
       throw new Error("That reaction is not available.");
     const message = await ctx.db.get(messageId);
     if (
@@ -263,11 +264,11 @@ export const toggleReaction = mutation({
 
     const reactions = message.reactions ?? [];
     const existing = reactions.find((reaction) => reaction.userId === me._id);
-    const updated = existing?.emoji === emoji
+    const updated = existing?.emoji === cleanEmoji
       ? reactions.filter((reaction) => reaction.userId !== me._id)
       : [
           ...reactions.filter((reaction) => reaction.userId !== me._id),
-          { userId: me._id, emoji },
+          { userId: me._id, emoji: cleanEmoji },
         ];
     await ctx.db.patch(messageId, { reactions: updated });
   },

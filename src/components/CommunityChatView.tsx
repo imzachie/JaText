@@ -1,23 +1,24 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from "react";
 import { useQuery } from "convex/react";
 import type { Id } from "../../convex/_generated/dataModel";
 import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
 import { playMessageSound } from "../lib/alerts";
 import { copyImageUrlToClipboard } from "../lib/clipboard";
+import { syncComposerTextareaHeight } from "../lib/composerUtils";
 import { getSavedOutgoingBubbleStyle } from "../lib/chatCustomization";
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { friendlyError } from "../lib/errors";
 import { Avatar } from "./Avatar";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
+import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { StickerPicker } from "./StickerPicker";
 import { ContextMenu } from "./ContextMenu";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
-import type { CommunityMessage, JaUser } from "../lib/types";
+import type { CommunityMessage, JaUser, StickerMedia } from "../lib/types";
 
-const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
 
@@ -177,6 +178,140 @@ function getCommunityPendingMessages(pending: CommunityMessage[], real: Communit
   return { messages: [...confirmed, ...pendingCopy].sort((a, b) => a.createdAt - b.createdAt), matchedIds };
 }
 
+const CommunityChatComposer = memo(function CommunityChatComposer({
+  initialDraft,
+  hasFile,
+  isEditing,
+  showPoll,
+  composerRef,
+  fileInputRef,
+  onSelectFile,
+  onSelectSticker,
+  onStartVoiceNote,
+  onTogglePoll,
+  onTypingSignal,
+  onSubmitDraft,
+}: {
+  initialDraft: string;
+  hasFile: boolean;
+  isEditing: boolean;
+  showPoll: boolean;
+  composerRef: RefObject<HTMLTextAreaElement | null>;
+  fileInputRef: RefObject<HTMLInputElement | null>;
+  onSelectFile: (file: File | null) => void;
+  onSelectSticker: (sticker: StickerMedia) => Promise<void>;
+  onStartVoiceNote: () => void;
+  onTogglePoll: () => void;
+  onTypingSignal: (hasText: boolean) => void;
+  onSubmitDraft: (body: string) => void;
+}) {
+  const [draft, setDraft] = useState(initialDraft);
+  const prevLenRef = useRef(initialDraft.length);
+
+  useLayoutEffect(() => {
+    syncComposerTextareaHeight(composerRef.current, 0, initialDraft);
+    prevLenRef.current = initialDraft.length;
+  }, [composerRef, initialDraft]);
+
+  function handleChange(next: string) {
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = next.length;
+    setDraft(next);
+    syncComposerTextareaHeight(composerRef.current, prevLen, next);
+    if (!isEditing) {
+      onTypingSignal(Boolean(next.trim()));
+    }
+  }
+
+  function handleSubmit(event?: FormEvent) {
+    event?.preventDefault();
+    const trimmed = draft.trim();
+    if (isEditing ? !trimmed : !trimmed && !hasFile) return;
+    const keepFocus = document.activeElement === composerRef.current;
+    prevLenRef.current = 0;
+    setDraft("");
+    syncComposerTextareaHeight(composerRef.current, trimmed.length, "");
+    onSubmitDraft(trimmed);
+    if (keepFocus) {
+      composerRef.current?.focus({ preventScroll: true });
+    }
+  }
+
+  return (
+    <form className="composer community-composer" onSubmit={handleSubmit}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        hidden
+        onChange={(e) => {
+          onSelectFile(e.target.files?.[0] ?? null);
+          e.currentTarget.value = "";
+        }}
+      />
+      <button
+        type="button"
+        className="icon-btn attach-btn"
+        disabled={isEditing}
+        onClick={() => fileInputRef.current?.click()}
+        title="Attach a photo or file"
+      >
+        📎
+      </button>
+      <StickerPicker friendId="" disabled={isEditing} onSelect={onSelectSticker} />
+      <button
+        type="button"
+        className="icon-btn voice-note-btn"
+        title="Record voice note"
+        aria-label="Record voice note"
+        disabled={isEditing}
+        onClick={onStartVoiceNote}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="2" width="6" height="12" rx="3" />
+          <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className={`icon-btn poll-toggle-btn ${showPoll ? "active" : ""}`}
+        title="Create poll"
+        aria-label="Create poll"
+        aria-expanded={showPoll}
+        disabled={isEditing}
+        onClick={onTogglePoll}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 20V11M12 20V4M19 20v-7" />
+        </svg>
+      </button>
+      <textarea
+        ref={composerRef}
+        value={draft}
+        maxLength={4000}
+        onChange={(event) => handleChange(event.target.value)}
+        rows={1}
+        placeholder={isEditing ? "Edit message…" : "Message…"}
+        aria-label="Community message"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            handleSubmit();
+          }
+        }}
+      />
+      <button
+        type="submit"
+        className="send-btn"
+        disabled={isEditing ? !draft.trim() : !draft.trim() && !hasFile}
+        onPointerDown={(event) => event.preventDefault()}
+        onMouseDown={(event) => event.preventDefault()}
+      >
+        {isEditing ? "✓" : "➤"}
+      </button>
+    </form>
+  );
+});
+
 export function CommunityChatView({
   onOpenProfile,
   onBack,
@@ -186,7 +321,8 @@ export function CommunityChatView({
 }) {
   const store = useJaText();
   const setCommunityTyping = store.setCommunityTyping;
-  const [draft, setDraft] = useState("");
+  const toggleCommunityReaction = store.toggleCommunityReaction;
+  const [composerSeed, setComposerSeed] = useState({ nonce: 0, text: "" });
   const [file, setFile] = useState<File | null>(null);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
@@ -205,7 +341,11 @@ export function CommunityChatView({
   const [showUnsendWarning, setShowUnsendWarning] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [messageMenuClosing, setMessageMenuClosing] = useState(false);
-  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const [reactionTarget, setReactionTarget] = useState<{
+    x: number;
+    y: number;
+    message: CommunityMessage;
+  } | null>(null);
   const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -447,15 +587,6 @@ export function CommunityChatView({
     imageGestureRef.current = null;
   }
 
-  useLayoutEffect(() => {
-    const el = composerRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    const next = Math.min(el.scrollHeight, 120);
-    el.style.height = `${next}px`;
-    el.style.overflowY = el.scrollHeight > 120 ? "auto" : "hidden";
-  }, [draft]);
-
   function openForwardDialog(message: CommunityMessage) {
     if (forwardCloseTimerRef.current !== null) {
       window.clearTimeout(forwardCloseTimerRef.current);
@@ -467,26 +598,23 @@ export function CommunityChatView({
     closeMessageMenu();
   }
 
-  async function sendText(event?: FormEvent) {
-    event?.preventDefault();
-    const keepFocus = document.activeElement === composerRef.current;
+  async function handleSubmitCommunityDraft(submittedBody: string) {
     if (editingMessage) {
-      const editedBody = draft.trim();
-      if (!editedBody) return;
+      if (!submittedBody) return;
+      const targetId = editingMessage.id;
       setError(null);
+      setEditingMessage(null);
+      setFile(null);
       try {
-        await store.editCommunityMessage(editingMessage.id, editedBody);
-        setEditingMessage(null);
-        setDraft("");
-        setFile(null);
-        if (keepFocus) composerRef.current?.focus({ preventScroll: true });
+        await store.editCommunityMessage(targetId, submittedBody);
       } catch (cause) {
+        setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: submittedBody }));
         setError(friendlyError(cause, "Could not edit the announcement."));
       }
       return;
     }
-    if (!draft.trim() && !file) return;
-    const sentBody = draft.trim();
+    if (!submittedBody && !file) return;
+    const sentBody = submittedBody;
     const sentFile = file;
     const sentReply = replyTo;
     const sentAt = Math.max(Date.now(), lastPendingAtRef.current + 1);
@@ -522,11 +650,9 @@ export function CommunityChatView({
         messagesElement.current.scrollTop = messagesElement.current.scrollHeight;
       }
     });
-    setDraft("");
     setFile(null);
     setReplyTo(null);
     setError(null);
-    if (keepFocus) composerRef.current?.focus({ preventScroll: true });
     if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
     typingRef.current = false;
     void setCommunityTyping(false).catch(() => undefined);
@@ -548,35 +674,36 @@ export function CommunityChatView({
         pendingAttachmentUrlsRef.current.delete(pendingId);
       }
       setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
-      setDraft((cur) => (cur.trim() ? cur : sentBody));
+      if (sentBody) {
+        setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: sentBody }));
+      }
       if (sentFile) setFile((cur) => cur ?? sentFile);
       setError(friendlyError(cause, "Could not post to the community."));
     }
   }
 
-  function updateDraft(value: string) {
-    if (editingMessage) {
-      setDraft(value);
-      return;
-    }
-    setDraft(value);
-    const typing = !!value.trim();
-    if (typing !== typingRef.current) {
-      typingRef.current = typing;
-      void setCommunityTyping(typing).catch((cause: unknown) => {
-        setError(friendlyError(cause, "Couldn't update typing status."));
-      });
-    }
-    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-    if (typing) {
-      typingTimer.current = window.setTimeout(() => {
-        typingRef.current = false;
-        void setCommunityTyping(false).catch((cause: unknown) => {
-          setError(friendlyError(cause, "Couldn't update typing status."));
-        });
-      }, 2500);
-    }
-  }
+  const handleCommunityTypingSignal = useCallback(
+    (typing: boolean) => {
+      if (typing !== typingRef.current) {
+        typingRef.current = typing;
+        window.setTimeout(() => {
+          void setCommunityTyping(typing).catch((cause: unknown) => {
+            setError(friendlyError(cause, "Couldn't update typing status."));
+          });
+        }, 0);
+      }
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      if (typing) {
+        typingTimer.current = window.setTimeout(() => {
+          typingRef.current = false;
+          void setCommunityTyping(false).catch((cause: unknown) => {
+            setError(friendlyError(cause, "Couldn't update typing status."));
+          });
+        }, 3500);
+      }
+    },
+    [setCommunityTyping],
+  );
 
   async function sendSticker(sticker: Parameters<typeof store.sendCommunitySticker>[0]) {
     try {
@@ -644,7 +771,7 @@ export function CommunityChatView({
     try {
       await store.editCommunityMessage(editingMessage.id, editingMessage.body);
       setEditingMessage(null);
-      setDraft("");
+      setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
     } catch (cause) {
       setError(friendlyError(cause, "Could not edit the announcement."));
     } finally {
@@ -684,7 +811,6 @@ export function CommunityChatView({
           message.type === "text" &&
           !!message.body.trim(),
       });
-      setReactionPickerOpen(false);
     },
     [store.me?.id],
   );
@@ -760,7 +886,7 @@ export function CommunityChatView({
     setEditingMessage({ id: message.id, body: message.body });
     setReplyTo(null);
     setFile(null);
-    setDraft(message.body);
+    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: message.body }));
     closeMessageMenu();
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }
@@ -812,14 +938,14 @@ export function CommunityChatView({
   const reactToMessage = useCallback(
     async (message: CommunityMessage, emoji: string) => {
       try {
-        await store.toggleCommunityReaction(message.id, emoji);
+        await toggleCommunityReaction(message.id, emoji);
         closeMessageMenu();
-        setReactionPickerOpen(false);
+        setReactionTarget(null);
       } catch (err) {
         setError(friendlyError(err, "Couldn't add the reaction."));
       }
     },
-    [closeMessageMenu, store],
+    [closeMessageMenu, toggleCommunityReaction],
   );
   async function favoriteSticker(message: CommunityMessage) {
     try {
@@ -1169,7 +1295,7 @@ export function CommunityChatView({
       {editingMessage && (
         <div className="reply-composer-preview">
           <div><strong>Editing your message</strong><span>{editingMessage.body}</span></div>
-          <button type="button" className="mini-btn" onClick={() => { setEditingMessage(null); setDraft(""); }}>×</button>
+          <button type="button" className="mini-btn" onClick={() => { setEditingMessage(null); setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" })); }}>×</button>
         </div>
       )}
 
@@ -1200,69 +1326,21 @@ export function CommunityChatView({
               />
             </div>
           ) : (
-            <form className="composer community-composer" onSubmit={(event) => void sendText(event)}>
-              <input
-                ref={fileInput}
-                type="file"
-                hidden
-                onChange={(e) => {
-                  setFile(e.target.files?.[0] ?? null);
-                  e.currentTarget.value = "";
-                }}
-              />
-              <button type="button" className="icon-btn attach-btn" disabled={!!editingMessage} onClick={() => fileInput.current?.click()} title="Attach a photo or file">📎</button>
-              <StickerPicker friendId="" disabled={!!editingMessage} onSelect={sendSticker} />
-              <button
-                type="button"
-                className="icon-btn voice-note-btn"
-                title="Record voice note"
-                aria-label="Record voice note"
-                disabled={!!editingMessage}
-                onClick={() => setRecordingVoiceNote(true)}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="9" y="2" width="6" height="12" rx="3" />
-                  <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                className={`icon-btn poll-toggle-btn ${showPoll ? "active" : ""}`}
-                title="Create poll"
-                aria-label="Create poll"
-                aria-expanded={showPoll}
-                disabled={!!editingMessage}
-                onClick={() => setShowPoll((open) => !open)}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M5 20V11M12 20V4M19 20v-7" />
-                </svg>
-              </button>
-              <textarea
-                ref={composerRef}
-                value={draft}
-                maxLength={4000}
-                onChange={(event) => updateDraft(event.target.value)}
-                rows={1}
-                placeholder={editingMessage ? "Edit message…" : "Message…"}
-                aria-label="Community message"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void sendText();
-                  }
-                }}
-              />
-              <button
-                type="submit"
-                className="send-btn"
-                disabled={editingMessage ? !draft.trim() : !draft.trim() && !file}
-                onPointerDown={(event) => event.preventDefault()}
-                onMouseDown={(event) => event.preventDefault()}
-              >
-                {editingMessage ? "✓" : "➤"}
-              </button>
-            </form>
+            <CommunityChatComposer
+              key={`${editingMessage?.id ?? "new"}:${composerSeed.nonce}`}
+              initialDraft={editingMessage ? editingMessage.body : composerSeed.text}
+              hasFile={Boolean(file)}
+              isEditing={Boolean(editingMessage)}
+              showPoll={showPoll}
+              composerRef={composerRef}
+              fileInputRef={fileInput}
+              onSelectFile={setFile}
+              onSelectSticker={sendSticker}
+              onStartVoiceNote={() => setRecordingVoiceNote(true)}
+              onTogglePoll={() => setShowPoll((open) => !open)}
+              onTypingSignal={handleCommunityTypingSignal}
+              onSubmitDraft={(body) => void handleSubmitCommunityDraft(body)}
+            />
           )}
         </>
       ) : (
@@ -1340,14 +1418,21 @@ export function CommunityChatView({
             <>
               {messageMenu.canEdit && <button type="button" role="menuitem" onClick={() => startEditingMessage(messageMenu.message)}><span>✏️</span> Edit message</button>}
               <button type="button" role="menuitem" onClick={() => openForwardDialog(messageMenu.message)}><span>↗️</span> Forward</button>
-              <button type="button" role="menuitem" onClick={() => setReactionPickerOpen((open) => !open)} aria-expanded={reactionPickerOpen}><span>✨</span> Reaction</button>
-              {reactionPickerOpen && (
-                <div className="context-reactions" aria-label="Choose reaction">
-                  {REACTION_EMOJIS.map((emoji) => (
-                    <button type="button" key={emoji} aria-label={`React with ${emoji}`} onClick={() => void reactToMessage(messageMenu.message, emoji)}>{emoji}</button>
-                  ))}
-                </div>
-              )}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const target = messageMenu;
+                  closeMessageMenu();
+                  setReactionTarget({
+                    x: target.x,
+                    y: target.y,
+                    message: target.message,
+                  });
+                }}
+              >
+                <span>✨</span> Reaction
+              </button>
             </>
           )}
           <button type="button" role="menuitem" onClick={() => void copyMessage(messageMenu.message)}><span>📋</span> Copy text</button>
@@ -1434,6 +1519,17 @@ export function CommunityChatView({
         </div>
       )}
 
+      {reactionTarget && (
+        <ReactionEmojiPicker
+          x={reactionTarget.x}
+          y={reactionTarget.y}
+          currentEmoji={
+            reactionTarget.message.reactions?.find((r) => r.userId === store.me?.id)?.emoji
+          }
+          onSelect={(emoji) => void reactToMessage(reactionTarget.message, emoji)}
+          onClose={() => setReactionTarget(null)}
+        />
+      )}
       {bubbleStyleOpen && (
         <BubbleStyleModal onClose={() => setBubbleStyleOpen(false)} />
       )}

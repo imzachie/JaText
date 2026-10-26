@@ -8,6 +8,7 @@ import {
   useState,
   type FormEvent,
   type MouseEvent,
+  type RefObject,
 } from "react";
 import { Phone, Video } from "./CallIcons";
 import { playMessageSound } from "../lib/alerts";
@@ -18,6 +19,7 @@ import {
   useCall,
 } from "../lib/calling";
 import { copyImageUrlToClipboard } from "../lib/clipboard";
+import { syncComposerTextareaHeight } from "../lib/composerUtils";
 import {
   getCachedWallpaper,
   getSavedOutgoingBubbleStyle,
@@ -30,6 +32,7 @@ import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { CallMessageCard } from "./CallMessageCard";
 import { ContextMenu } from "./ContextMenu";
+import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { StickerPicker } from "./StickerPicker";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
@@ -38,7 +41,6 @@ import { friendlyError } from "../lib/errors";
 import type { ChatMessage, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 
-const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -294,6 +296,8 @@ const ChatHistory = memo(function ChatHistory({
                               className="msg-image"
                               src={message.attachmentUrl}
                               alt={message.attachmentName ?? "attachment"}
+                              loading="lazy"
+                              decoding="async"
                               onLoad={() => {
                                 if (initialScrollAllowedRef.current) {
                                   const container = messagesRef.current;
@@ -391,6 +395,137 @@ const ChatHistory = memo(function ChatHistory({
   );
 });
 
+const DirectChatComposer = memo(function DirectChatComposer({
+  friendId,
+  friendUsername,
+  initialDraft,
+  hasFile,
+  isFriendBlocked,
+  isEditing,
+  composerRef,
+  fileInputRef,
+  onSelectFile,
+  onStartVoiceNote,
+  onTypingSignal,
+  onSubmitDraft,
+}: {
+  friendId: string;
+  friendUsername: string;
+  initialDraft: string;
+  hasFile: boolean;
+  isFriendBlocked: boolean;
+  isEditing: boolean;
+  composerRef: RefObject<HTMLTextAreaElement | null>;
+  fileInputRef: RefObject<HTMLInputElement | null>;
+  onSelectFile: (file: File | null) => void;
+  onStartVoiceNote: () => void;
+  onTypingSignal: (hasText: boolean) => void;
+  onSubmitDraft: (body: string) => void;
+}) {
+  const [draft, setDraft] = useState(initialDraft);
+  const prevLenRef = useRef(initialDraft.length);
+
+  useLayoutEffect(() => {
+    syncComposerTextareaHeight(composerRef.current, 0, initialDraft);
+    prevLenRef.current = initialDraft.length;
+  }, [composerRef, initialDraft]);
+
+  function handleChange(next: string) {
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = next.length;
+    setDraft(next);
+    syncComposerTextareaHeight(composerRef.current, prevLen, next);
+    if (!isEditing) {
+      onTypingSignal(Boolean(next.trim()));
+    }
+  }
+
+  function handleSubmit(e?: FormEvent) {
+    e?.preventDefault();
+    if (isFriendBlocked) return;
+    const trimmed = draft.trim();
+    if (isEditing ? !trimmed : !trimmed && !hasFile) return;
+    const keepFocus = document.activeElement === composerRef.current;
+    prevLenRef.current = 0;
+    setDraft("");
+    syncComposerTextareaHeight(composerRef.current, trimmed.length, "");
+    onSubmitDraft(trimmed);
+    if (keepFocus) {
+      composerRef.current?.focus({ preventScroll: true });
+    }
+  }
+
+  return (
+    <form className="composer" onSubmit={handleSubmit}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        hidden
+        onChange={(e) => {
+          onSelectFile(e.target.files?.[0] ?? null);
+          e.currentTarget.value = "";
+        }}
+      />
+      <button
+        type="button"
+        className="icon-btn attach-btn"
+        title="Attach a photo or file"
+        disabled={isFriendBlocked || isEditing}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        📎
+      </button>
+      <StickerPicker friendId={friendId} disabled={isFriendBlocked || isEditing} />
+      <button
+        type="button"
+        className="icon-btn voice-note-btn"
+        title="Record voice note"
+        aria-label="Record voice note"
+        disabled={isFriendBlocked || isEditing}
+        onClick={onStartVoiceNote}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="2" width="6" height="12" rx="3" />
+          <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+        </svg>
+      </button>
+      <textarea
+        ref={composerRef}
+        value={draft}
+        onChange={(e) => handleChange(e.target.value)}
+        placeholder={
+          isFriendBlocked
+            ? "Unblock to message"
+            : isEditing
+              ? "Edit message…"
+              : "Message…"
+        }
+        aria-label={`Message @${friendUsername}`}
+        disabled={isFriendBlocked}
+        rows={1}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit();
+          }
+        }}
+      />
+      <button
+        className="send-btn"
+        type="submit"
+        disabled={
+          isFriendBlocked ||
+          (isEditing ? !draft.trim() : !draft.trim() && !hasFile)
+        }
+        onPointerDown={(event) => event.preventDefault()}
+        onMouseDown={(event) => event.preventDefault()}
+      >
+        {isEditing ? "✓" : "➤"}
+      </button>
+    </form>
+  );
+});
+
 export function ChatView({
   friend,
   onOpenProfile,
@@ -408,12 +543,13 @@ export function ChatView({
     activeMessagesReady,
     friendActivities,
     sendMessage,
+    editMessage,
     markMessagesRead,
     setTyping,
     soundsEnabled,
     toggleMessageReaction,
   } = store;
-  const [draft, setDraft] = useState("");
+  const [composerSeed, setComposerSeed] = useState({ nonce: 0, text: "" });
   const [file, setFile] = useState<File | null>(null);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
@@ -423,7 +559,11 @@ export function ChatView({
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [messageMenuClosing, setMessageMenuClosing] = useState(false);
-  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const [reactionTarget, setReactionTarget] = useState<{
+    x: number;
+    y: number;
+    message: ChatMessage;
+  } | null>(null);
   const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
   const isMobileWallpaper = useIsMobileWallpaperSupported();
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
@@ -743,107 +883,127 @@ export function ChatView({
     [friend.id],
   );
 
-  useLayoutEffect(() => {
-    const el = composerRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    const next = Math.min(el.scrollHeight, 120);
-    el.style.height = `${next}px`;
-    el.style.overflowY = el.scrollHeight > 120 ? "auto" : "hidden";
-  }, [draft]);
+  const handleToggleTranscript = useCallback((id: string, show: boolean) => {
+    setShownTranscriptIds((prev) => ({ ...prev, [id]: show }));
+  }, []);
 
-  async function onSend(e?: FormEvent) {
-    e?.preventDefault();
-    const keepFocus = document.activeElement === composerRef.current;
-    if (editingMessage) {
-      const editedBody = draft.trim();
-      if (!editedBody || isFriendBlocked) return;
-      setError(null);
-      try {
-        await store.editMessage(editingMessage.id, editedBody);
-        setEditingMessage(null);
-        setDraft("");
-        if (keepFocus) composerRef.current?.focus({ preventScroll: true });
-      } catch (err) {
-        setError(friendlyError(err, "Couldn't edit the message. Please try again."));
+  const handleStartVoiceNote = useCallback(() => {
+    setRecordingVoiceNote(true);
+  }, []);
+
+  const publishTyping = useCallback(
+    (isTyping: boolean) => {
+      window.setTimeout(() => {
+        void setTypingRef.current(friend.id, isTyping).catch((err: unknown) => {
+          setError(friendlyError(err, "Couldn't update your typing status."));
+        });
+      }, 0);
+    },
+    [friend.id],
+  );
+
+  const handleTypingSignal = useCallback(
+    (hasText: boolean) => {
+      if (!hasText) {
+        if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+        if (typingActive.current) {
+          typingActive.current = false;
+          publishTyping(false);
+        }
+        return;
       }
-      return;
-    }
-    if ((!draft.trim() && !file) || isFriendBlocked) return;
-    const sentBody = draft.trim();
-    const sentFile = file;
-    const sentReply = replyTo;
-    const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
-    lastPendingMessageAtRef.current = sentAt;
-    const pendingId = `pending-${sentAt}`;
-    const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
-    if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
-    setPendingMessages((current) => [
-      ...current.slice(-299),
-      {
-        id: pendingId,
-        senderId: me?.id ?? "",
-        receiverId: friend.id,
-        body: sentBody,
-        bubbleStyle: getSavedOutgoingBubbleStyle(),
-        attachmentUrl,
-        attachmentName: sentFile?.name,
-        attachmentType: sentFile?.type,
-        createdAt: sentAt,
-        deliveryStatus: "delivered",
-      },
-    ]);
-    window.requestAnimationFrame(scrollToBottom);
-    setDraft("");
-    setFile(null);
-    setReplyTo(null);
-    setError(null);
-    if (keepFocus) composerRef.current?.focus({ preventScroll: true });
-    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-    typingActive.current = false;
-    void setTyping(friend.id, false).catch((err: unknown) => {
-      setError(friendlyError(err, "Couldn't update your typing status."));
-    });
-    try {
-      await sendMessage(friend.id, sentBody, sentFile ?? undefined, sentReply?.id);
-      if (soundsEnabled) playMessageSound("sent");
-      window.setTimeout(() => removePendingMessage(pendingId), 1500);
-    } catch (err) {
-      removePendingMessage(pendingId);
-      setDraft((current) => current.trim() ? current : sentBody);
-      if (sentFile) setFile((current) => current ?? sentFile);
-      setError(friendlyError(err, "Couldn't send the message. Please try again."));
-    }
 
-  }
-
-  function publishTyping(isTyping: boolean) {
-    void setTyping(friend.id, isTyping).catch((err: unknown) => {
-      setError(friendlyError(err, "Couldn't update your typing status."));
-    });
-  }
-
-  function onDraftChange(value: string) {
-    setDraft(value);
-    if (!value.trim()) {
+      const now = Date.now();
+      if (!typingActive.current || now - lastTypingUpdate.current >= 3_000) {
+        typingActive.current = true;
+        lastTypingUpdate.current = now;
+        publishTyping(true);
+      }
       if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-      typingActive.current = false;
-      publishTyping(false);
-      return;
-    }
+      typingTimer.current = window.setTimeout(() => {
+        typingActive.current = false;
+        publishTyping(false);
+      }, 3_500);
+    },
+    [publishTyping],
+  );
 
-    const now = Date.now();
-    if (!typingActive.current || now - lastTypingUpdate.current >= 2_000) {
-      typingActive.current = true;
-      lastTypingUpdate.current = now;
-      publishTyping(true);
-    }
-    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-    typingTimer.current = window.setTimeout(() => {
-      typingActive.current = false;
-      publishTyping(false);
-    }, 2_500);
-  }
+  const handleSubmitDraft = useCallback(
+    async (submittedBody: string) => {
+      if (editingMessage) {
+        if (!submittedBody || isFriendBlocked) return;
+        const targetId = editingMessage.id;
+        setError(null);
+        setEditingMessage(null);
+        try {
+          await editMessage(targetId, submittedBody);
+        } catch (err) {
+          setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: submittedBody }));
+          setError(friendlyError(err, "Couldn't edit the message. Please try again."));
+        }
+        return;
+      }
+      if ((!submittedBody && !file) || isFriendBlocked) return;
+      const sentBody = submittedBody;
+      const sentFile = file;
+      const sentReply = replyTo;
+      const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
+      lastPendingMessageAtRef.current = sentAt;
+      const pendingId = `pending-${sentAt}`;
+      const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
+      if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
+      setPendingMessages((current) => [
+        ...current.slice(-299),
+        {
+          id: pendingId,
+          senderId: me?.id ?? "",
+          receiverId: friend.id,
+          body: sentBody,
+          bubbleStyle: getSavedOutgoingBubbleStyle(),
+          attachmentUrl,
+          attachmentName: sentFile?.name,
+          attachmentType: sentFile?.type,
+          createdAt: sentAt,
+          deliveryStatus: "delivered",
+        },
+      ]);
+      window.requestAnimationFrame(scrollToBottom);
+      setFile(null);
+      setReplyTo(null);
+      setError(null);
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      if (typingActive.current) {
+        typingActive.current = false;
+        publishTyping(false);
+      }
+      try {
+        await sendMessage(friend.id, sentBody, sentFile ?? undefined, sentReply?.id);
+        if (soundsEnabled) playMessageSound("sent");
+        window.setTimeout(() => removePendingMessage(pendingId), 1500);
+      } catch (err) {
+        removePendingMessage(pendingId);
+        if (sentBody) {
+          setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: sentBody }));
+        }
+        if (sentFile) setFile((current) => current ?? sentFile);
+        setError(friendlyError(err, "Couldn't send the message. Please try again."));
+      }
+    },
+    [
+      editMessage,
+      editingMessage,
+      file,
+      friend.id,
+      isFriendBlocked,
+      me?.id,
+      publishTyping,
+      removePendingMessage,
+      replyTo,
+      scrollToBottom,
+      sendMessage,
+      soundsEnabled,
+    ],
+  );
 
   const openMessageMenuAt = useCallback(
     (x: number, y: number, message: ChatMessage) => {
@@ -869,7 +1029,6 @@ export function ChatView({
           !isCallCard &&
           !!message.body.trim(),
       });
-      setReactionPickerOpen(false);
     },
     [me?.id],
   );
@@ -995,21 +1154,21 @@ export function ChatView({
     setEditingMessage(message);
     setReplyTo(null);
     setFile(null);
-    setDraft(message.body);
+    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: message.body }));
     closeMessageMenu();
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }
 
   function cancelEditingMessage() {
     setEditingMessage(null);
-    setDraft("");
+    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
   }
 
   const reactToMessage = useCallback(async (message: ChatMessage, emoji: string) => {
     try {
       await toggleMessageReaction(message.id, emoji);
       closeMessageMenu();
-      setReactionPickerOpen(false);
+      setReactionTarget(null);
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't add the reaction. Please try again."));
     }
@@ -1133,9 +1292,7 @@ export function ChatView({
         initialScrollAllowedRef={initialScrollAllowedRef}
         messagesReady={conversationReady}
         shownTranscriptIds={shownTranscriptIds}
-        onToggleTranscript={(id, show) =>
-          setShownTranscriptIds((prev) => ({ ...prev, [id]: show }))
-        }
+        onToggleTranscript={handleToggleTranscript}
         onOpenProfile={onOpenProfile}
         onOpenMessageMenu={openMessageMenu}
         onOpenMessageMenuAt={openMessageMenuAt}
@@ -1191,72 +1348,21 @@ export function ChatView({
           />
         </div>
       ) : (
-        <form className="composer" onSubmit={onSend}>
-          <input
-            ref={fileInput}
-            type="file"
-            hidden
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          />
-          <button
-            type="button"
-            className="icon-btn attach-btn"
-            title="Attach a photo or file"
-            disabled={isFriendBlocked || !!editingMessage}
-            onClick={() => fileInput.current?.click()}
-          >
-            📎
-          </button>
-          <StickerPicker friendId={friend.id} disabled={isFriendBlocked || !!editingMessage} />
-          <button
-            type="button"
-            className="icon-btn voice-note-btn"
-            title="Record voice note"
-            aria-label="Record voice note"
-            disabled={isFriendBlocked || !!editingMessage}
-            onClick={() => setRecordingVoiceNote(true)}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="9" y="2" width="6" height="12" rx="3" />
-              <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
-            </svg>
-          </button>
-          <textarea
-            ref={composerRef}
-            value={draft}
-            onChange={(e) =>
-              editingMessage ? setDraft(e.target.value) : onDraftChange(e.target.value)
-            }
-            placeholder={
-              isFriendBlocked
-                ? "Unblock to message"
-                : editingMessage
-                  ? "Edit message…"
-                  : "Message…"
-            }
-            aria-label={`Message @${friend.username}`}
-            disabled={isFriendBlocked}
-            rows={1}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void onSend();
-              }
-            }}
-          />
-          <button
-            className="send-btn"
-            type="submit"
-            disabled={
-              isFriendBlocked ||
-              (editingMessage ? !draft.trim() : !draft.trim() && !file)
-            }
-            onPointerDown={(event) => event.preventDefault()}
-            onMouseDown={(event) => event.preventDefault()}
-          >
-            {editingMessage ? "✓" : "➤"}
-          </button>
-        </form>
+        <DirectChatComposer
+          key={`${friend.id}:${editingMessage?.id ?? "new"}:${composerSeed.nonce}`}
+          friendId={friend.id}
+          friendUsername={friend.username}
+          initialDraft={editingMessage ? editingMessage.body : composerSeed.text}
+          hasFile={Boolean(file)}
+          isFriendBlocked={isFriendBlocked}
+          isEditing={Boolean(editingMessage)}
+          composerRef={composerRef}
+          fileInputRef={fileInput}
+          onSelectFile={setFile}
+          onStartVoiceNote={handleStartVoiceNote}
+          onTypingSignal={handleTypingSignal}
+          onSubmitDraft={(body) => void handleSubmitDraft(body)}
+        />
       )}
 
       {messageMenu && (
@@ -1332,25 +1438,18 @@ export function ChatView({
               <button
                 type="button"
                 role="menuitem"
-                onClick={() => setReactionPickerOpen((open) => !open)}
-                aria-expanded={reactionPickerOpen}
+                onClick={() => {
+                  const target = messageMenu;
+                  closeMessageMenu();
+                  setReactionTarget({
+                    x: target.x,
+                    y: target.y,
+                    message: target.message,
+                  });
+                }}
               >
                 <span>✨</span> Reaction
               </button>
-              {reactionPickerOpen && (
-                <div className="context-reactions" aria-label="Choose reaction">
-                  {REACTION_EMOJIS.map((emoji) => (
-                    <button
-                      type="button"
-                      key={emoji}
-                      aria-label={`React with ${emoji}`}
-                      onClick={() => void reactToMessage(messageMenu.message, emoji)}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              )}
             </>
           )}
           <button type="button" role="menuitem" onClick={() => void copyMessage(messageMenu.message)}>
@@ -1445,6 +1544,17 @@ export function ChatView({
             </div>
           </section>
         </div>
+      )}
+      {reactionTarget && (
+        <ReactionEmojiPicker
+          x={reactionTarget.x}
+          y={reactionTarget.y}
+          currentEmoji={
+            reactionTarget.message.reactions?.find((r) => r.userId === me.id)?.emoji
+          }
+          onSelect={(emoji) => void reactToMessage(reactionTarget.message, emoji)}
+          onClose={() => setReactionTarget(null)}
+        />
       )}
       {bubbleStyleOpen && (
         <BubbleStyleModal onClose={() => setBubbleStyleOpen(false)} />

@@ -11,11 +11,13 @@ import {
   type FormEvent,
   type MouseEvent,
   type ReactNode,
+  type RefObject,
   type UIEvent,
 } from "react";
 import { playMessageSound } from "../lib/alerts";
 import { formatPreviewMessageText } from "../lib/calling";
 import { copyImageUrlToClipboard } from "../lib/clipboard";
+import { syncComposerTextareaHeight } from "../lib/composerUtils";
 import {
   getCachedWallpaper,
   getSavedOutgoingBubbleStyle,
@@ -29,18 +31,19 @@ import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { ContextMenu } from "./ContextMenu";
+import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { Avatar } from "./Avatar";
 import { StickerPicker } from "./StickerPicker";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
-import type { FriendActivity, GroupMember, GroupMessage, JaUser } from "../lib/types";
+import type { FriendActivity, GroupMember, GroupMessage, JaUser, StickerMedia } from "../lib/types";
 
-const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
 const EMPTY_GROUP_MESSAGES: GroupMessage[] = [];
+const EMPTY_GROUP_MEMBERS: GroupMember[] = [];
 
 type GroupAvatarEditState =
   | { kind: "keep" }
@@ -428,6 +431,8 @@ const GroupChatHistory = memo(function GroupChatHistory({
                                 className="msg-image"
                                 src={message.attachmentUrl}
                                 alt={message.attachmentName ?? "attachment"}
+                                loading="lazy"
+                                decoding="async"
                                 onLoad={handleMediaLoad}
                               />
                             </button>
@@ -485,6 +490,8 @@ const GroupChatHistory = memo(function GroupChatHistory({
                               className="group-message-sticker"
                               src={message.stickerUrl}
                               alt={message.stickerName ?? "Sticker"}
+                              loading="lazy"
+                              decoding="async"
                               onLoad={handleMediaLoad}
                             />
                           </button>
@@ -537,6 +544,361 @@ const GroupChatHistory = memo(function GroupChatHistory({
   );
 });
 
+const GroupChatComposer = memo(function GroupChatComposer({
+  initialDraft,
+  members,
+  summaryMemberCount,
+  myId,
+  activityByUserId,
+  hasFile,
+  hasForwardedMessage,
+  isEditing,
+  busy,
+  recordingVoiceNote,
+  composerRef,
+  fileInputRef,
+  onSelectFile,
+  onSelectSticker,
+  onStartVoiceNote,
+  onCancelVoiceNote,
+  onSendVoiceNote,
+  onVoiceError,
+  onTypingSignal,
+  onSubmitDraft,
+}: {
+  initialDraft: string;
+  members: GroupMember[];
+  summaryMemberCount: number;
+  myId: string;
+  activityByUserId: Map<string, FriendActivity>;
+  hasFile: boolean;
+  hasForwardedMessage: boolean;
+  isEditing: boolean;
+  busy: boolean;
+  recordingVoiceNote: boolean;
+  composerRef: RefObject<HTMLTextAreaElement | null>;
+  fileInputRef: RefObject<HTMLInputElement | null>;
+  onSelectFile: (file: File | null) => void;
+  onSelectSticker: (sticker: StickerMedia) => Promise<void>;
+  onStartVoiceNote: () => void;
+  onCancelVoiceNote: () => void;
+  onSendVoiceNote: (file: File) => void;
+  onVoiceError: (message: string) => void;
+  onTypingSignal: (hasText: boolean) => void;
+  onSubmitDraft: (body: string) => void;
+}) {
+  const [draft, setDraft] = useState(initialDraft);
+  const [cursorPos, setCursorPos] = useState(initialDraft.length);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissedAt, setMentionDismissedAt] = useState<number | null>(null);
+  const prevLenRef = useRef(initialDraft.length);
+
+  useLayoutEffect(() => {
+    syncComposerTextareaHeight(composerRef.current, 0, initialDraft);
+    prevLenRef.current = initialDraft.length;
+  }, [composerRef, initialDraft]);
+
+  const activeMentionMatch = useMemo(() => {
+    const match = detectMentionQuery(draft, cursorPos);
+    if (!match) return null;
+    if (mentionDismissedAt !== null && mentionDismissedAt === match.start) return null;
+    return match;
+  }, [cursorPos, draft, mentionDismissedAt]);
+
+  const mentionCandidates = useMemo<MentionCandidate[]>(() => {
+    if (!activeMentionMatch) return [];
+    const q = activeMentionMatch.query.toLowerCase();
+    const list: MentionCandidate[] = [];
+    if ("everyone".includes(q)) {
+      const count = members.length || summaryMemberCount;
+      list.push({
+        kind: "everyone",
+        handle: "everyone",
+        displayName: "@everyone",
+        subtitle: count > 0 ? `Notify all ${count} members in this group` : "Notify everyone in this group",
+      });
+    }
+    const matchingMembers = members
+      .filter(
+        (member) =>
+          member.id !== myId &&
+          Boolean(member.username) &&
+          (member.username.toLowerCase().includes(q) ||
+            member.displayName.toLowerCase().includes(q)),
+      )
+      .sort((a, b) => {
+        const aStarts =
+          a.username.toLowerCase().startsWith(q) || a.displayName.toLowerCase().startsWith(q) ? 0 : 1;
+        const bStarts =
+          b.username.toLowerCase().startsWith(q) || b.displayName.toLowerCase().startsWith(q) ? 0 : 1;
+        if (aStarts !== bStarts) return aStarts - bStarts;
+        return a.displayName.localeCompare(b.displayName);
+      });
+    for (const member of matchingMembers.slice(0, 8)) {
+      list.push({ kind: "member", handle: member.username, member });
+    }
+    return list;
+  }, [activeMentionMatch, members, myId, summaryMemberCount]);
+
+  const safeMentionIndex =
+    mentionCandidates.length > 0 ? Math.min(mentionIndex, mentionCandidates.length - 1) : 0;
+
+  function applyMention(handle: string) {
+    if (!activeMentionMatch) return;
+    const before = draft.slice(0, activeMentionMatch.start);
+    const after = draft.slice(cursorPos);
+    const insertion = `@${handle} `;
+    const nextDraft = `${before}${insertion}${after.replace(/^\s+/, "")}`;
+    const nextCursor = before.length + insertion.length;
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = nextDraft.length;
+    setDraft(nextDraft);
+    setCursorPos(nextCursor);
+    setMentionIndex(0);
+    setMentionDismissedAt(null);
+    syncComposerTextareaHeight(composerRef.current, prevLen, nextDraft);
+    window.requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    });
+  }
+
+  function handleDraftChange(value: string, selectionStart?: number | null) {
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = value.length;
+    setDraft(value);
+    // Only update cursor/mention state when '@' is present so normal typing does 1 state update!
+    if (value.includes("@") || activeMentionMatch !== null) {
+      setCursorPos(selectionStart ?? value.length);
+      setMentionIndex(0);
+      setMentionDismissedAt(null);
+    }
+    syncComposerTextareaHeight(composerRef.current, prevLen, value);
+    if (!isEditing) {
+      onTypingSignal(Boolean(value.trim()));
+    }
+  }
+
+  function onComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (isEditing) return;
+    const items = Array.from(event.clipboardData?.items ?? []);
+    const fileItem = items.find((item) => item.kind === "file");
+    if (!fileItem) return;
+    const pasted = fileItem.getAsFile();
+    if (pasted) {
+      event.preventDefault();
+      onSelectFile(pasted);
+    }
+  }
+
+  function handleSubmit(event?: FormEvent) {
+    event?.preventDefault();
+    const trimmed = draft.trim();
+    if (isEditing ? !trimmed : !trimmed && !hasFile && !hasForwardedMessage) return;
+    const keepFocus = document.activeElement === composerRef.current;
+    prevLenRef.current = 0;
+    setDraft("");
+    setCursorPos(0);
+    setMentionIndex(0);
+    setMentionDismissedAt(null);
+    syncComposerTextareaHeight(composerRef.current, trimmed.length, "");
+    onSubmitDraft(trimmed);
+    if (keepFocus) {
+      composerRef.current?.focus({ preventScroll: true });
+    }
+  }
+
+  return (
+    <div className="composer-wrap">
+      {mentionCandidates.length > 0 && (
+        <div className="mention-autocomplete" role="listbox" aria-label="Mention someone">
+          <div className="mention-autocomplete-header">
+            Members matching <strong>@{activeMentionMatch?.query ?? ""}</strong>
+          </div>
+          {mentionCandidates.map((candidate, idx) => {
+            const isActive = idx === safeMentionIndex;
+            if (candidate.kind === "everyone") {
+              return (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={isActive}
+                  key="mention-everyone"
+                  className={`mention-option ${isActive ? "active" : ""}`}
+                  onMouseEnter={() => setMentionIndex(idx)}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applyMention("everyone");
+                  }}
+                >
+                  <span className="mention-everyone-avatar" aria-hidden="true">
+                    @
+                  </span>
+                  <span className="mention-option-text">
+                    <strong>@everyone</strong>
+                    <small className="muted">{candidate.subtitle}</small>
+                  </span>
+                  <span className="mention-role-tag everyone">Ping all</span>
+                </button>
+              );
+            }
+            const { member } = candidate;
+            const activity = activityByUserId.get(member.id);
+            return (
+              <button
+                type="button"
+                role="option"
+                aria-selected={isActive}
+                key={`mention-${member.id}`}
+                className={`mention-option ${isActive ? "active" : ""}`}
+                onMouseEnter={() => setMentionIndex(idx)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  applyMention(member.username);
+                }}
+              >
+                <Avatar user={member} size={30} status={activity?.status} />
+                <span className="mention-option-text">
+                  <strong>{member.displayName}</strong>
+                  <small className="muted">@{member.username}</small>
+                </span>
+                {member.role !== "member" && (
+                  <span className={`mention-role-tag ${member.role}`}>
+                    {member.role === "owner" ? "Owner" : "Mod"}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {recordingVoiceNote ? (
+        <div className="composer voice-composer-active">
+          <VoiceNoteRecorder
+            onCancel={onCancelVoiceNote}
+            onSendVoiceNote={onSendVoiceNote}
+            onError={onVoiceError}
+          />
+        </div>
+      ) : (
+        <form className="composer" onSubmit={handleSubmit}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            hidden
+            onChange={(event) => {
+              const selected = event.target.files?.[0] ?? null;
+              onSelectFile(selected);
+              event.currentTarget.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className="icon-btn attach-btn"
+            title="Attach a photo or file"
+            aria-label="Attach a photo or file"
+            disabled={isEditing}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            📎
+          </button>
+          <StickerPicker
+            friendId=""
+            disabled={busy || isEditing}
+            onSelect={onSelectSticker}
+          />
+          <button
+            type="button"
+            className="icon-btn voice-note-btn"
+            title="Record voice note"
+            aria-label="Record voice note"
+            disabled={busy || isEditing}
+            onClick={onStartVoiceNote}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="2" width="6" height="12" rx="3" />
+              <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+            </svg>
+          </button>
+          <textarea
+            ref={composerRef}
+            value={draft}
+            maxLength={4000}
+            onChange={(event) =>
+              handleDraftChange(event.target.value, event.currentTarget.selectionStart)
+            }
+            onClick={(event) => {
+              if (draft.includes("@")) {
+                setCursorPos(event.currentTarget.selectionStart ?? 0);
+              }
+            }}
+            onKeyUp={(event) => {
+              if (
+                draft.includes("@") &&
+                event.key !== "ArrowDown" &&
+                event.key !== "ArrowUp" &&
+                event.key !== "Enter" &&
+                event.key !== "Escape"
+              ) {
+                setCursorPos(event.currentTarget.selectionStart ?? 0);
+              }
+            }}
+            onPaste={onComposerPaste}
+            rows={1}
+            placeholder={isEditing ? "Edit message…" : "Message…"}
+            aria-label="Group message"
+            onKeyDown={(event) => {
+              if (mentionCandidates.length > 0) {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
+                  return;
+                }
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setMentionIndex(
+                    (prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length,
+                  );
+                  return;
+                }
+                if (event.key === "Enter" || event.key === "Tab") {
+                  event.preventDefault();
+                  const picked = mentionCandidates[safeMentionIndex];
+                  if (picked) applyMention(picked.handle);
+                  return;
+                }
+                if (event.key === "Escape" && activeMentionMatch) {
+                  event.preventDefault();
+                  setMentionDismissedAt(activeMentionMatch.start);
+                  return;
+                }
+              }
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                handleSubmit();
+              }
+            }}
+          />
+          <button
+            type="submit"
+            className="send-btn"
+            disabled={isEditing ? !draft.trim() : !draft.trim() && !hasFile && !hasForwardedMessage}
+            onPointerDown={(event) => event.preventDefault()}
+            onMouseDown={(event) => event.preventDefault()}
+            aria-label={isEditing ? "Save edit" : "Send message"}
+          >
+            {isEditing ? "✓" : "➤"}
+          </button>
+        </form>
+      )}
+    </div>
+  );
+});
+
 export function GroupChatView({
   onOpenProfile,
   onBack,
@@ -547,16 +909,16 @@ export function GroupChatView({
   const store = useJaText();
   const groupId = store.activeGroupId;
   const setGroupTyping = store.setGroupTyping;
+  const toggleGroupReaction = store.toggleGroupReaction;
+  const sendGroupSticker = store.sendGroupSticker;
+  const soundsEnabled = store.soundsEnabled;
   const summary = store.groups.find((entry) => entry.id === groupId);
   const group = store.groupDetails?.id === groupId ? store.groupDetails : null;
 
-  const [draft, setDraft] = useState("");
-  const [cursorPos, setCursorPos] = useState(0);
-  const [mentionIndex, setMentionIndex] = useState(0);
+  const [composerSeed, setComposerSeed] = useState({ nonce: 0, text: "" });
   const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
   const isMobileWallpaper = useIsMobileWallpaperSupported();
-  const [mentionDismissedAt, setMentionDismissedAt] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
@@ -580,7 +942,11 @@ export function GroupChatView({
 
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [messageMenuClosing, setMessageMenuClosing] = useState(false);
-  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const [reactionTarget, setReactionTarget] = useState<{
+    x: number;
+    y: number;
+    message: GroupMessage;
+  } | null>(null);
   const [forwardMessage, setForwardMessageState] = useState<GroupMessage | null>(null);
   const [forwardClosing, setForwardClosing] = useState(false);
   const [pendingMessages, setPendingMessages] = useState<GroupMessage[]>([]);
@@ -632,76 +998,22 @@ export function GroupChatView({
     return map;
   }, [store.friendActivities]);
 
-  // Mention autocomplete computation
-  const activeMentionMatch = useMemo(() => {
-    const match = detectMentionQuery(draft, cursorPos);
-    if (!match) return null;
-    if (mentionDismissedAt !== null && mentionDismissedAt === match.start) return null;
-    return match;
-  }, [cursorPos, draft, mentionDismissedAt]);
-
-  const mentionCandidates = useMemo<MentionCandidate[]>(() => {
-    if (!activeMentionMatch) return [];
-    const q = activeMentionMatch.query.toLowerCase();
-    const list: MentionCandidate[] = [];
-    if ("everyone".includes(q)) {
-      const count = group?.members.length ?? summary?.memberCount ?? 0;
-      list.push({
-        kind: "everyone",
-        handle: "everyone",
-        displayName: "@everyone",
-        subtitle: count > 0 ? `Notify all ${count} members in this group` : "Notify everyone in this group",
-      });
-    }
-    const members = group?.members ?? [];
-    const matchingMembers = members
-      .filter(
-        (member) =>
-          member.id !== store.me?.id &&
-          Boolean(member.username) &&
-          (member.username.toLowerCase().includes(q) ||
-            member.displayName.toLowerCase().includes(q)),
-      )
-      .sort((a, b) => {
-        const aStarts =
-          a.username.toLowerCase().startsWith(q) || a.displayName.toLowerCase().startsWith(q) ? 0 : 1;
-        const bStarts =
-          b.username.toLowerCase().startsWith(q) || b.displayName.toLowerCase().startsWith(q) ? 0 : 1;
-        if (aStarts !== bStarts) return aStarts - bStarts;
-        return a.displayName.localeCompare(b.displayName);
-      });
-    for (const member of matchingMembers.slice(0, 8)) {
-      list.push({ kind: "member", handle: member.username, member });
-    }
-    return list;
-  }, [activeMentionMatch, group?.members, store.me?.id, summary?.memberCount]);
-
-  const safeMentionIndex =
-    mentionCandidates.length > 0 ? Math.min(mentionIndex, mentionCandidates.length - 1) : 0;
-
-  const applyMention = useCallback(
-    (handle: string) => {
-      if (!activeMentionMatch) return;
-      const before = draft.slice(0, activeMentionMatch.start);
-      const after = draft.slice(cursorPos);
-      const needsLeadingSpace = false;
-      const insertion = `${needsLeadingSpace ? " " : ""}@${handle} `;
-      const nextDraft = `${before}${insertion}${after.replace(/^\s+/, "")}`;
-      const nextCursor = before.length + insertion.length;
-      setDraft(nextDraft);
-      setCursorPos(nextCursor);
-      setMentionIndex(0);
-      setMentionDismissedAt(null);
-      window.requestAnimationFrame(() => {
-        const el = composerRef.current;
-        if (el) {
-          el.focus();
-          el.setSelectionRange(nextCursor, nextCursor);
-        }
-      });
-    },
-    [activeMentionMatch, cursorPos, draft],
+  const meSummary = useMemo(
+    () => ({ id: store.me?.id ?? "", username: store.me?.username ?? "" }),
+    [store.me?.id, store.me?.username],
   );
+
+  const handleToggleTranscript = useCallback((id: string, show: boolean) => {
+    setShownTranscriptIds((prev) => ({ ...prev, [id]: show }));
+  }, []);
+
+  const handleStartVoiceNote = useCallback(() => {
+    setRecordingVoiceNote(true);
+  }, []);
+
+  const handleCancelVoiceNote = useCallback(() => {
+    setRecordingVoiceNote(false);
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     const container = messagesRef.current;
@@ -963,79 +1275,79 @@ export function GroupChatView({
     imageGestureRef.current = null;
   }
 
-  function publishTyping(isTyping: boolean) {
-    if (!groupId) return;
-    void setGroupTyping(groupId, isTyping).catch((err: unknown) => {
-      setError(friendlyError(err, "Couldn't update your typing status."));
-    });
-  }
+  const publishTyping = useCallback(
+    (isTyping: boolean) => {
+      if (!groupId) return;
+      window.setTimeout(() => {
+        void setGroupTypingRef.current(groupId, isTyping).catch((err: unknown) => {
+          setError(friendlyError(err, "Couldn't update your typing status."));
+        });
+      }, 0);
+    },
+    [groupId],
+  );
 
-  function onDraftChange(value: string, selectionStart?: number | null) {
-    setDraft(value);
-    setCursorPos(selectionStart ?? value.length);
-    setMentionIndex(0);
-    setMentionDismissedAt(null);
-    if (editingMessage || !groupId) return;
-    if (!value.trim()) {
+  const handleTypingSignal = useCallback(
+    (hasText: boolean) => {
+      if (!groupId) return;
+      if (!hasText) {
+        if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+        if (typingRef.current) {
+          typingRef.current = false;
+          publishTyping(false);
+        }
+        return;
+      }
+      const now = Date.now();
+      if (!typingRef.current || now - lastTypingUpdate.current >= 3000) {
+        typingRef.current = true;
+        lastTypingUpdate.current = now;
+        publishTyping(true);
+      }
       if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-      typingRef.current = false;
-      publishTyping(false);
-      return;
-    }
-    const now = Date.now();
-    if (!typingRef.current || now - lastTypingUpdate.current >= 2000) {
-      typingRef.current = true;
-      lastTypingUpdate.current = now;
-      publishTyping(true);
-    }
-    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-    typingTimer.current = window.setTimeout(() => {
-      typingRef.current = false;
-      publishTyping(false);
-    }, 2500);
-  }
+      typingTimer.current = window.setTimeout(() => {
+        typingRef.current = false;
+        publishTyping(false);
+      }, 3500);
+    },
+    [groupId, publishTyping],
+  );
 
-  function onComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    if (editingMessage) return;
-    const items = Array.from(event.clipboardData?.items ?? []);
-    const fileItem = items.find((item) => item.kind === "file");
-    if (!fileItem) return;
-    const pasted = fileItem.getAsFile();
-    if (pasted) {
-      event.preventDefault();
-      setFile(pasted);
-    }
-  }
-
-  useLayoutEffect(() => {
-    const el = composerRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    const next = Math.min(el.scrollHeight, 120);
-    el.style.height = `${next}px`;
-    el.style.overflowY = el.scrollHeight > 120 ? "auto" : "hidden";
-  }, [draft]);
-
-  async function onSend(e?: FormEvent) {
-    e?.preventDefault();
-    if (!groupId) return;
-    const keepFocus = document.activeElement === composerRef.current;
-    if (editingMessage) {
-      const editedBody = draft.trim();
-      if (!editedBody) return;
-      setError(null);
+  const handleSelectSticker = useCallback(
+    async (sticker: StickerMedia) => {
+      if (!groupId) return;
       try {
-        await store.editGroupMessage(editingMessage.id, editedBody);
-        setEditingMessage(null);
-        setDraft("");
-        if (keepFocus) composerRef.current?.focus({ preventScroll: true });
+        if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+        typingRef.current = false;
+        await setGroupTypingRef.current(groupId, false);
+        wasPinnedRef.current = true;
+        await sendGroupSticker(groupId, sticker, replyTo?.id);
+        setReplyTo(null);
+        if (soundsEnabled) playMessageSound("sent");
+      } catch (cause) {
+        setError(friendlyError(cause, "Could not send the sticker."));
+      }
+    },
+    [groupId, replyTo, sendGroupSticker, soundsEnabled],
+  );
+
+  async function handleSubmitDraft(submittedBody: string) {
+    if (!groupId) return;
+    if (editingMessage) {
+      if (!submittedBody) return;
+      const targetId = editingMessage.id;
+      setError(null);
+      setEditingMessage(null);
+      try {
+        await store.editGroupMessage(targetId, submittedBody);
       } catch (err) {
+        setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: submittedBody }));
         setError(friendlyError(err, "Couldn't edit the message."));
       }
       return;
     }
-    if (!draft.trim() && !file && !forwardedMessage) return;
-    const sentBody = draft.trim();
+    if (!submittedBody && !file && !forwardedMessage) return;
+    const sentBody = submittedBody;
     const sentFile = file;
     const sentReply = replyTo;
     const sentForwarded = forwardedMessage;
@@ -1067,18 +1379,15 @@ export function GroupChatView({
       } as GroupMessage,
     ]);
     window.requestAnimationFrame(scrollToBottom);
-    setDraft("");
-    setCursorPos(0);
     setFile(null);
     setReplyTo(null);
     setForwardedMessage(null);
     setError(null);
-    if (keepFocus) composerRef.current?.focus({ preventScroll: true });
     if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-    typingRef.current = false;
-    void setGroupTyping(groupId, false).catch((err: unknown) =>
-      setError(friendlyError(err, "Couldn't update typing status.")),
-    );
+    if (typingRef.current) {
+      typingRef.current = false;
+      publishTyping(false);
+    }
     try {
       if (sentForwarded) {
         await store.forwardGroupMessage(sentForwarded.id, { groupId });
@@ -1104,7 +1413,9 @@ export function GroupChatView({
         pendingAttachmentUrlsRef.current.delete(pendingId);
       }
       setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
-      setDraft((c) => (c.trim() ? c : sentBody));
+      if (sentBody) {
+        setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: sentBody }));
+      }
       if (sentFile) setFile((c) => c ?? sentFile);
       setError(friendlyError(err, "Couldn't send the group message."));
     }
@@ -1131,7 +1442,6 @@ export function GroupChatView({
           !message.unsentAt &&
           Boolean(message.body.trim()),
       });
-      setReactionPickerOpen(false);
     },
     [store.me?.id],
   );
@@ -1271,29 +1581,27 @@ export function GroupChatView({
     setEditingMessage(message);
     setReplyTo(null);
     setFile(null);
-    setDraft(message.body);
-    setCursorPos(message.body.length);
+    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: message.body }));
     closeMessageMenu();
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }
 
   function cancelEditingMessage() {
     setEditingMessage(null);
-    setDraft("");
-    setCursorPos(0);
+    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
   }
 
   const reactToMessage = useCallback(
     async (message: GroupMessage, emoji: string) => {
       try {
-        await store.toggleGroupReaction(message.id, emoji);
+        await toggleGroupReaction(message.id, emoji);
         closeMessageMenu();
-        setReactionPickerOpen(false);
+        setReactionTarget(null);
       } catch (err) {
         setError(friendlyError(err, "Couldn't add the reaction."));
       }
     },
-    [closeMessageMenu, store],
+    [closeMessageMenu, toggleGroupReaction],
   );
 
   async function favoriteSticker(message: GroupMessage) {
@@ -1521,6 +1829,8 @@ export function GroupChatView({
               className="group-avatar"
               src={group?.avatarUrl ?? summary?.avatarUrl}
               alt=""
+              referrerPolicy="no-referrer"
+              decoding="async"
             />
           ) : (
             <div className="group-avatar group-avatar-fallback" aria-hidden="true">
@@ -1570,15 +1880,13 @@ export function GroupChatView({
       <GroupChatHistory
         messages={displayedMessages}
         messagesReady={conversationReady}
-        me={{ id: store.me?.id ?? "", username: store.me?.username ?? "" }}
-        members={group?.members ?? []}
+        me={meSummary}
+        members={group?.members ?? EMPTY_GROUP_MEMBERS}
         messagesRef={messagesRef}
         initialScrollAllowedRef={initialScrollAllowedRef}
         wasPinnedRef={wasPinnedRef}
         shownTranscriptIds={shownTranscriptIds}
-        onToggleTranscript={(id, show) =>
-          setShownTranscriptIds((prev) => ({ ...prev, [id]: show }))
-        }
+        onToggleTranscript={handleToggleTranscript}
         onScroll={handleMessagesScroll}
         onOpenProfile={onOpenProfile}
         onOpenImage={openImagePreview}
@@ -1634,7 +1942,7 @@ export function GroupChatView({
                 ? replyTo.unsentAt
                   ? "This message was unsent"
                   : replyTo.body || replyTo.attachmentName || replyTo.stickerName || "Attachment"
-                : draft}
+                : forwardedMessage?.body || forwardedMessage?.attachmentName || "Forwarded message"}
             </span>
           </div>
           <button
@@ -1643,7 +1951,9 @@ export function GroupChatView({
             onClick={() => {
               setReplyTo(null);
               setForwardedMessage(null);
-              if (forwardedMessage) setDraft("");
+              if (forwardedMessage) {
+                setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
+              }
             }}
           >
             ✕
@@ -1654,198 +1964,29 @@ export function GroupChatView({
       {isMuted ? (
         <div className="community-readonly">You are muted in this group.</div>
       ) : (
-        <div className="composer-wrap">
-          {mentionCandidates.length > 0 && (
-            <div className="mention-autocomplete" role="listbox" aria-label="Mention someone">
-              <div className="mention-autocomplete-header">
-                Members matching <strong>@{activeMentionMatch?.query ?? ""}</strong>
-              </div>
-              {mentionCandidates.map((candidate, idx) => {
-                const isActive = idx === safeMentionIndex;
-                if (candidate.kind === "everyone") {
-                  return (
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={isActive}
-                      key="mention-everyone"
-                      className={`mention-option ${isActive ? "active" : ""}`}
-                      onMouseEnter={() => setMentionIndex(idx)}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        applyMention("everyone");
-                      }}
-                    >
-                      <span className="mention-everyone-avatar" aria-hidden="true">
-                        @
-                      </span>
-                      <span className="mention-option-text">
-                        <strong>@everyone</strong>
-                        <small className="muted">{candidate.subtitle}</small>
-                      </span>
-                      <span className="mention-role-tag everyone">Ping all</span>
-                    </button>
-                  );
-                }
-                const { member } = candidate;
-                const activity = activityByUserId.get(member.id);
-                return (
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={isActive}
-                    key={`mention-${member.id}`}
-                    className={`mention-option ${isActive ? "active" : ""}`}
-                    onMouseEnter={() => setMentionIndex(idx)}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      applyMention(member.username);
-                    }}
-                  >
-                    <Avatar user={member} size={30} status={activity?.status} />
-                    <span className="mention-option-text">
-                      <strong>{member.displayName}</strong>
-                      <small className="muted">@{member.username}</small>
-                    </span>
-                    {member.role !== "member" && (
-                      <span className={`mention-role-tag ${member.role}`}>
-                        {member.role === "owner" ? "Owner" : "Mod"}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {recordingVoiceNote ? (
-            <div className="composer voice-composer-active">
-              <VoiceNoteRecorder
-                onCancel={() => setRecordingVoiceNote(false)}
-                onSendVoiceNote={(voiceFile) => sendGroupVoiceNote(voiceFile)}
-                onError={(msg) => setError(msg)}
-              />
-            </div>
-          ) : (
-            <form className="composer" onSubmit={(event) => void onSend(event)}>
-              <input
-                ref={fileInput}
-                type="file"
-                hidden
-                onChange={(event) => {
-                  const selected = event.target.files?.[0] ?? null;
-                  setFile(selected);
-                  event.currentTarget.value = "";
-                }}
-              />
-              <button
-                type="button"
-                className="icon-btn attach-btn"
-                title="Attach a photo or file"
-                aria-label="Attach a photo or file"
-                disabled={!!editingMessage}
-                onClick={() => fileInput.current?.click()}
-              >
-                📎
-              </button>
-              <StickerPicker
-                friendId=""
-                disabled={busy || !!editingMessage}
-                onSelect={async (sticker) => {
-                  if (!groupId) return;
-                  try {
-                    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
-                    typingRef.current = false;
-                    await setGroupTyping(groupId, false);
-                    wasPinnedRef.current = true;
-                    await store.sendGroupSticker(groupId, sticker, replyTo?.id);
-                    setReplyTo(null);
-                    if (store.soundsEnabled) playMessageSound("sent");
-                  } catch (cause) {
-                    setError(friendlyError(cause, "Could not send the sticker."));
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className="icon-btn voice-note-btn"
-                title="Record voice note"
-                aria-label="Record voice note"
-                disabled={busy || !!editingMessage}
-                onClick={() => setRecordingVoiceNote(true)}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="9" y="2" width="6" height="12" rx="3" />
-                  <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
-                </svg>
-              </button>
-              <textarea
-                ref={composerRef}
-                value={draft}
-                maxLength={4000}
-                onChange={(event) =>
-                  onDraftChange(event.target.value, event.currentTarget.selectionStart)
-                }
-                onClick={(event) => setCursorPos(event.currentTarget.selectionStart ?? 0)}
-                onKeyUp={(event) => {
-                  if (
-                    event.key !== "ArrowDown" &&
-                    event.key !== "ArrowUp" &&
-                    event.key !== "Enter" &&
-                    event.key !== "Escape"
-                  ) {
-                    setCursorPos(event.currentTarget.selectionStart ?? 0);
-                  }
-                }}
-                onPaste={onComposerPaste}
-                rows={1}
-                placeholder={editingMessage ? "Edit message…" : "Message…"}
-                aria-label="Group message"
-                onKeyDown={(event) => {
-                  if (mentionCandidates.length > 0) {
-                    if (event.key === "ArrowDown") {
-                      event.preventDefault();
-                      setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
-                      return;
-                    }
-                    if (event.key === "ArrowUp") {
-                      event.preventDefault();
-                      setMentionIndex(
-                        (prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length,
-                      );
-                      return;
-                    }
-                    if (event.key === "Enter" || event.key === "Tab") {
-                      event.preventDefault();
-                      const picked = mentionCandidates[safeMentionIndex];
-                      if (picked) applyMention(picked.handle);
-                      return;
-                    }
-                    if (event.key === "Escape" && activeMentionMatch) {
-                      event.preventDefault();
-                      setMentionDismissedAt(activeMentionMatch.start);
-                      return;
-                    }
-                  }
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void onSend();
-                  }
-                }}
-              />
-              <button
-                type="submit"
-                className="send-btn"
-                disabled={editingMessage ? !draft.trim() : !draft.trim() && !file && !forwardedMessage}
-                onPointerDown={(event) => event.preventDefault()}
-                onMouseDown={(event) => event.preventDefault()}
-                aria-label={editingMessage ? "Save edit" : "Send message"}
-              >
-                {editingMessage ? "✓" : "➤"}
-              </button>
-            </form>
-          )}
-        </div>
+        <GroupChatComposer
+          key={`${groupId}:${editingMessage?.id ?? "new"}:${composerSeed.nonce}`}
+          initialDraft={editingMessage ? editingMessage.body : composerSeed.text}
+          members={group?.members ?? EMPTY_GROUP_MEMBERS}
+          summaryMemberCount={summary?.memberCount ?? 0}
+          myId={store.me?.id ?? ""}
+          activityByUserId={activityByUserId}
+          hasFile={Boolean(file)}
+          hasForwardedMessage={Boolean(forwardedMessage)}
+          isEditing={Boolean(editingMessage)}
+          busy={busy}
+          recordingVoiceNote={recordingVoiceNote}
+          composerRef={composerRef}
+          fileInputRef={fileInput}
+          onSelectFile={setFile}
+          onSelectSticker={handleSelectSticker}
+          onStartVoiceNote={handleStartVoiceNote}
+          onCancelVoiceNote={handleCancelVoiceNote}
+          onSendVoiceNote={(voiceFile) => void sendGroupVoiceNote(voiceFile)}
+          onVoiceError={setError}
+          onTypingSignal={handleTypingSignal}
+          onSubmitDraft={(body) => void handleSubmitDraft(body)}
+        />
       )}
 
       {messageMenu && (
@@ -1921,25 +2062,18 @@ export function GroupChatView({
               <button
                 type="button"
                 role="menuitem"
-                onClick={() => setReactionPickerOpen((open) => !open)}
-                aria-expanded={reactionPickerOpen}
+                onClick={() => {
+                  const target = messageMenu;
+                  closeMessageMenu();
+                  setReactionTarget({
+                    x: target.x,
+                    y: target.y,
+                    message: target.message,
+                  });
+                }}
               >
                 <span>✨</span> Reaction
               </button>
-              {reactionPickerOpen && (
-                <div className="context-reactions" aria-label="Choose reaction">
-                  {REACTION_EMOJIS.map((emoji) => (
-                    <button
-                      type="button"
-                      key={emoji}
-                      aria-label={`React with ${emoji}`}
-                      onClick={() => void reactToMessage(messageMenu.message, emoji)}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              )}
             </>
           )}
           <button
@@ -2088,6 +2222,17 @@ export function GroupChatView({
         </div>
       )}
 
+      {reactionTarget && (
+        <ReactionEmojiPicker
+          x={reactionTarget.x}
+          y={reactionTarget.y}
+          currentEmoji={
+            reactionTarget.message.reactions?.find((r) => r.userId === store.me?.id)?.emoji
+          }
+          onSelect={(emoji) => void reactToMessage(reactionTarget.message, emoji)}
+          onClose={() => setReactionTarget(null)}
+        />
+      )}
       {bubbleStyleOpen && (
         <BubbleStyleModal onClose={() => setBubbleStyleOpen(false)} />
       )}
@@ -2272,7 +2417,13 @@ export function GroupChatView({
                     title={group.avatarUrl ? "View group photo" : group.name}
                   >
                     {group.avatarUrl ? (
-                      <img className="group-pfp-circle-img" src={group.avatarUrl} alt={group.name} />
+                      <img
+                        className="group-pfp-circle-img"
+                        src={group.avatarUrl}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        decoding="async"
+                      />
                     ) : (
                       <span className="group-pfp-circle-fallback" aria-hidden="true">
                         {group.name.slice(0, 2).toUpperCase() || "👥"}

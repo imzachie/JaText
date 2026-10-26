@@ -2,9 +2,8 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { query, mutation } from "./_generated/server";
 import type { Ctx } from "./lib";
-import { areFriends, isJaTextOwner, pairKey, profileOf, requireUser, scheduleMessagePush } from "./lib";
+import { areFriends, isJaTextOwner, isValidReactionEmoji, pairKey, profileOf, requireUser, scheduleMessagePush } from "./lib";
 
-const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 
 async function communityRole(ctx: Ctx, userId: Id<"users">) {
@@ -328,15 +327,16 @@ export const toggleReaction = mutation({
   args: { messageId: v.id("communityMessages"), emoji: v.string() },
   handler: async (ctx, { messageId, emoji }) => {
     const me = await requireUser(ctx);
-    if (!(REACTION_EMOJIS as readonly string[]).includes(emoji)) throw new Error("That reaction is not available.");
+    const cleanEmoji = emoji.trim();
+    if (!isValidReactionEmoji(cleanEmoji)) throw new Error("That reaction is not available.");
     const message = await ctx.db.get(messageId);
     if (!message || message.hiddenFor?.includes(me._id) || message.unsentAt) throw new Error("This message cannot be reacted to.");
     const reactions = message.reactions ?? [];
     const existing = reactions.find((reaction) => reaction.userId === me._id);
     const updated =
-      existing?.emoji === emoji
+      existing?.emoji === cleanEmoji
         ? reactions.filter((reaction) => reaction.userId !== me._id)
-        : [...reactions.filter((reaction) => reaction.userId !== me._id), { userId: me._id, emoji }];
+        : [...reactions.filter((reaction) => reaction.userId !== me._id), { userId: me._id, emoji: cleanEmoji }];
     await ctx.db.patch(messageId, { reactions: updated });
   },
 });

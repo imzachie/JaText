@@ -227,7 +227,14 @@ export function Sidebar({
                 onClick={() => store.setActiveGroupId(group.id)}
               >
                 {group.avatarUrl ? (
-                  <img className="group-avatar sidebar-group-avatar" src={group.avatarUrl} alt="" />
+                  <img
+                    className="group-avatar sidebar-group-avatar"
+                    src={group.avatarUrl}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    decoding="async"
+                    loading="lazy"
+                  />
                 ) : (
                   <div className="group-avatar sidebar-group-avatar group-avatar-fallback" aria-hidden="true">👥</div>
                 )}
@@ -353,7 +360,20 @@ export function Sidebar({
                 key={group.id}
                 onClick={() => store.setActiveGroupId(group.id)}
               >
-                <span>{group.avatarUrl ? <img className="group-avatar sidebar-group-avatar" src={group.avatarUrl} alt="" /> : "👥"}</span>
+                <span>
+                  {group.avatarUrl ? (
+                    <img
+                      className="group-avatar sidebar-group-avatar"
+                      src={group.avatarUrl}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      decoding="async"
+                      loading="lazy"
+                    />
+                  ) : (
+                    "👥"
+                  )}
+                </span>
                 <span><strong>{group.name}</strong><small className="muted">{group.memberCount} members</small></span>
               </button>
             ))}

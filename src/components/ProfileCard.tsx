@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { Phone, Video } from "./CallIcons";
 import { useCall } from "../lib/calling";
 import {
@@ -9,6 +9,7 @@ import {
   useIsMobileWallpaperSupported,
 } from "../lib/chatCustomization";
 import { colorById } from "../lib/colors";
+import { normalizeAvatarSrc } from "../lib/imageUtils";
 import { useJaText } from "../lib/store";
 import type { ActivityStatus, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
@@ -16,8 +17,8 @@ import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 
 /**
  * The card shown when you click someone's pfp or the 3-dots header menu.
- * Their avatar color drives the outline around the pfp and the
- * background color behind it.
+ * Their avatar color drives the outline around the entire profile card,
+ * the horizontal banner divider, and the outline ring around the pfp.
  */
 export function ProfileCard({
   user,
@@ -27,24 +28,23 @@ export function ProfileCard({
   status?: ActivityStatus;
 }) {
   const color = colorById(user.avatarColor);
+  const bannerSrc = normalizeAvatarSrc(user.bannerUrl);
   return (
-    <div className="profile-card">
+    <div
+      className="profile-card"
+      style={{ "--profile-outline": color.hex } as CSSProperties}
+    >
       <div
         className="profile-banner"
         style={
-          user.bannerUrl
-            ? { backgroundImage: `url(${user.bannerUrl})` }
+          bannerSrc
+            ? { backgroundImage: `url(${bannerSrc})` }
             : { background: color.gradient }
         }
       />
-      <div
-        className="profile-body"
-      >
-        <div
-          className="profile-avatar-wrap"
-          style={{ background: color.soft, boxShadow: `0 0 0 4px var(--panel)` }}
-        >
-          <Avatar user={user} size={84} ringWidth={4} status={status} />
+      <div className="profile-body">
+        <div className="profile-avatar-wrap">
+          <Avatar user={user} size={86} ringWidth={3.5} status={status} />
         </div>
         <div className="profile-names">
           <div className="profile-display">{user.displayName || "Unnamed"}</div>
@@ -80,6 +80,7 @@ export function ProfileModal({
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
   const [blockBusy, setBlockBusy] = useState(false);
 
+  const color = colorById(user.avatarColor);
   const isNotMe = Boolean(me && me.id !== user.id);
   const isFriend = Boolean(isNotMe && friends.some((f) => f.id === user.id));
   const isBlocked = Boolean(isNotMe && blockedUserIds.includes(user.id));
@@ -159,7 +160,11 @@ export function ProfileModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal-card profile-modal-card"
+        style={{ "--profile-outline": color.hex } as CSSProperties}
+        onClick={(e) => e.stopPropagation()}
+      >
         <button className="modal-close" onClick={onClose} aria-label="Close profile">
           ✕
         </button>
@@ -170,52 +175,57 @@ export function ProfileModal({
               <>
                 <button
                   type="button"
-                  className="ghost-btn profile-action-pill"
+                  className="ghost-btn profile-action-row"
                   onClick={() => {
                     setActiveChatId(user.id);
                     onClose();
                   }}
                 >
-                  💬 Message
+                  <span>💬</span>
+                  <span>Message</span>
                 </button>
                 <button
                   type="button"
-                  className="ghost-btn profile-action-pill"
+                  className="ghost-btn profile-action-row"
                   onClick={() => {
                     onClose();
                     void startCall(user, "voice");
                   }}
                 >
-                  <Phone size={15} /> Voice call
+                  <Phone size={16} />
+                  <span>Voice call</span>
                 </button>
                 <button
                   type="button"
-                  className="primary-btn profile-action-pill"
+                  className="primary-btn profile-action-row"
                   onClick={() => {
                     onClose();
                     void startCall(user, "video");
                   }}
                 >
-                  <Video size={15} /> Video call
+                  <Video size={16} />
+                  <span>Video call</span>
                 </button>
                 {isMobileWallpaper && !isBlocked && (
                   <button
                     type="button"
-                    className="ghost-btn profile-action-pill"
+                    className="ghost-btn profile-action-row"
                     onClick={() => setWallpaperOpen(true)}
                   >
-                    🖼️ Chat wallpaper
+                    <span>🖼️</span>
+                    <span>Chat wallpaper</span>
                   </button>
                 )}
               </>
             )}
             <button
               type="button"
-              className="ghost-btn danger profile-action-pill"
+              className="ghost-btn danger profile-action-row"
               disabled={blockBusy}
               onClick={() => void handleToggleBlock()}
             >
-              {isBlocked ? "Unblock" : "🚫 Block"}
+              <span>{isBlocked ? "✓" : "🚫"}</span>
+              <span>{isBlocked ? "Unblock" : "Block"}</span>
             </button>
           </div>
         )}

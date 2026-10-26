@@ -1,4 +1,4 @@
-import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
+import { memo, type CSSProperties, type HTMLAttributes, type ReactNode } from "react";
 import { type BubbleStyleId, getBubbleStyleMeta } from "../lib/chatCustomization";
 
 interface BubbleVisualSpec {
@@ -686,11 +686,21 @@ interface DecoratedMessageBubbleProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
 }
 
+const CACHED_DECORATIONS = new Map<Exclude<BubbleStyleId, "default">, ReactNode>();
+function getCachedDecorations(styleId: Exclude<BubbleStyleId, "default">): ReactNode {
+  let cached = CACHED_DECORATIONS.get(styleId);
+  if (cached === undefined) {
+    cached = BUBBLE_SPECS[styleId].renderDecorations();
+    CACHED_DECORATIONS.set(styleId, cached);
+  }
+  return cached;
+}
+
 /**
  * Renders a live message bubble in DM, Group, or Community chat.
  * Falls back cleanly to standard `.bubble` when `styleId === "default"` or `unsent`.
  */
-export function DecoratedMessageBubble({
+export const DecoratedMessageBubble = memo(function DecoratedMessageBubble({
   styleId,
   mine,
   unsent,
@@ -736,8 +746,8 @@ export function DecoratedMessageBubble({
       style={customStyle}
       {...rest}
     >
-      {spec.renderDecorations()}
+      {getCachedDecorations(styleId)}
       <div className="styled-bubble-inner">{children}</div>
     </div>
   );
-}
+});

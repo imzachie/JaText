@@ -9,6 +9,9 @@ export function friendlyError(error: unknown, fallback: string): string {
   if (/Could not find public function for ['"]?groups:addMembers['"]?/i.test(raw)) {
     return "Backend sync needed: run `git pull && npx convex deploy` once in your JaText project folder to enable adding members.";
   }
+  if (/That reaction is not available/i.test(raw)) {
+    return "Backend sync needed: run `git pull && npx convex deploy` once in your JaText project folder to enable all reaction emojis.";
+  }
   if (/Could not find public function for ['"]?([^'"]+)['"]?/i.test(raw)) {
     return "Backend sync needed: run `git pull && npx convex deploy` once in your JaText project folder.";
   }
