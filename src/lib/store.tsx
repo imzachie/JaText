@@ -1379,43 +1379,78 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     setCommunityModerators: async () => {
       throw new Error("The community is only available with the live JaText backend.");
     },
-    sendCommunityText: async () => {
+    sendCommunityText: async (..._args: unknown[]) => {
       throw new Error("The community is only available with the live JaText backend.");
     },
-    sendCommunitySticker: async () => {
+    sendCommunitySticker: async (..._args: unknown[]) => {
       throw new Error("The community is only available with the live JaText backend.");
     },
-    setCommunityTyping: async () => {
+    setCommunityTyping: async (..._args: unknown[]) => {
       throw new Error("The community is only available with the live JaText backend.");
     },
-    createCommunityPoll: async () => {
+    createCommunityPoll: async (..._args: unknown[]) => {
       throw new Error("The community is only available with the live JaText backend.");
     },
-    voteCommunityPoll: async () => {
+    voteCommunityPoll: async (..._args: unknown[]) => {
       throw new Error("The community is only available with the live JaText backend.");
     },
-    endCommunityPoll: async () => {
+    endCommunityPoll: async (..._args: unknown[]) => {
       throw new Error("The community is only available with the live JaText backend.");
     },
-    editCommunityMessage: async () => {
+    editCommunityMessage: async (..._args: unknown[]) => {
       throw new Error("The community is only available with the live JaText backend.");
     },
     deleteCommunityMessage: async () => {
       throw new Error("The community is only available with the live JaText backend.");
     },
+    toggleCommunityReaction: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    deleteCommunityMessageForMe: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    unsendCommunityMessage: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+      return false;
+    },
+    forwardCommunityMessage: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    favoriteCommunityStickerFromMessage: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
     createGroup: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
-    sendGroupMessage: async () => {
+    toggleGroupReaction: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
-    sendGroupSticker: async () => {
+    deleteGroupMessageForMe: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
-    setGroupTyping: async () => {
+    unsendGroupMessage: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+      return false;
+    },
+    editGroupMessage: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
-    renameGroup: async () => {
+    forwardGroupMessage: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    favoriteGroupStickerFromMessage: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    sendGroupMessage: async (..._args: unknown[]) => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    sendGroupSticker: async (..._args: unknown[]) => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    setGroupTyping: async (..._args: unknown[]) => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    renameGroup: async (..._args: unknown[]) => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
     setGroupAvatar: async () => {

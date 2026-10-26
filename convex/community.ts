@@ -2,7 +2,10 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { query, mutation } from "./_generated/server";
 import type { Ctx } from "./lib";
-import { isJaTextOwner, profileOf, requireUser } from "./lib";
+import { areFriends, isJaTextOwner, pairKey, profileOf, requireUser, scheduleMessagePush } from "./lib";
+
+const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
+const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 
 async function communityRole(ctx: Ctx, userId: Id<"users">) {
   const user = await ctx.db.get(userId);
@@ -34,8 +37,9 @@ export const list = query({
     const me = await requireUser(ctx);
     const messages = await ctx.db.query("communityMessages").order("desc").take(200);
     const role = await communityRole(ctx, me._id);
+    const filtered = messages.filter((m) => !m.hiddenFor?.includes(me._id));
     return Promise.all(
-      messages.reverse().map(async (message) => {
+      filtered.reverse().map(async (message) => {
         const sender = await ctx.db.get(message.senderId);
         const senderProfile = sender ? await profileOf(ctx, sender) : null;
         const votes =
@@ -48,6 +52,22 @@ export const list = query({
         const myVote = votes.find((vote) => vote.userId === me._id);
         const reply = message.replyToId ? await ctx.db.get(message.replyToId) : null;
         const replySender = reply ? await ctx.db.get(reply.senderId) : null;
+        const forwardedSender = message.forwardedFromId ? await ctx.db.get(message.forwardedFromId) : null;
+        const mediaKey =
+          message.stickerKey ??
+          (message.attachmentId
+            ? `upload:${message.attachmentId}`
+            : message.attachmentUrl
+              ? `klipy:${message.attachmentUrl}`
+              : message.stickerStorageId
+                ? `upload:${message.stickerStorageId}`
+                : undefined);
+        const favorite = mediaKey
+          ? await ctx.db
+              .query("stickerLibrary")
+              .withIndex("by_user_media", (q) => q.eq("userId", me._id).eq("mediaKey", mediaKey))
+              .unique()
+          : null;
         return {
           id: message._id as string,
           senderId: message.senderId as string,
@@ -55,7 +75,7 @@ export const list = query({
           senderUsername: sender?.username ?? "",
           senderAvatarUrl: senderProfile?.avatarUrl,
           senderAvatarColor: senderProfile?.avatarColor ?? "black",
-          body: message.body,
+          body: message.unsentAt ? "" : message.body,
           type: message.type,
           pollOptions: message.pollOptions ?? [],
           pollEndedAt: message.pollEndedAt,
@@ -66,17 +86,32 @@ export const list = query({
           myVote: myVote?.optionIndex,
           createdAt: message._creationTime,
           editedAt: message.editedAt,
-          forwardedFromName: message.forwardedFromName,
-          stickerUrl: message.stickerStorageId
-            ? ((await ctx.storage.getUrl(message.stickerStorageId)) ?? undefined)
-            : message.stickerUrl,
-          stickerName: message.stickerName,
+          unsentAt: message.unsentAt,
+          forwardedFromName: forwardedSender?.displayName ?? forwardedSender?.name ?? message.forwardedFromName,
+          attachmentUrl: message.unsentAt
+            ? undefined
+            : message.attachmentUrl ?? (message.attachmentId ? ((await ctx.storage.getUrl(message.attachmentId)) ?? undefined) : undefined),
+          attachmentName: message.unsentAt ? undefined : message.attachmentName,
+          attachmentType: message.unsentAt ? undefined : message.attachmentType,
+          stickerUrl: message.unsentAt
+            ? undefined
+            : message.stickerStorageId
+              ? ((await ctx.storage.getUrl(message.stickerStorageId)) ?? undefined)
+              : message.stickerUrl,
+          stickerName: message.unsentAt ? undefined : message.stickerName,
+          stickerKey: message.stickerKey ?? (favorite ? mediaKey : undefined),
+          isStickerFavorite: favorite?.isFavorite ?? false,
+          reactions: message.reactions?.map((r) => ({ userId: r.userId as string, emoji: r.emoji })),
           replyTo: reply && replySender
             ? {
                 id: reply._id as string,
                 senderId: reply.senderId as string,
                 senderName: replySender.displayName ?? replySender.name ?? "",
-                body: reply.body || reply.stickerName || "Sticker",
+                body: reply.hiddenFor?.includes(me._id)
+                  ? "Message unavailable"
+                  : reply.unsentAt
+                    ? "This message was unsent"
+                    : reply.body || reply.stickerName || reply.attachmentName || "Sticker",
               }
             : undefined,
           canModerate: role.canModerate,
@@ -147,17 +182,22 @@ export const sendText = mutation({
     body: v.string(),
     replyToId: v.optional(v.id("communityMessages")),
     forwardedFromId: v.optional(v.id("communityMessages")),
+    attachmentId: v.optional(v.id("_storage")),
+    attachmentName: v.optional(v.string()),
+    attachmentType: v.optional(v.string()),
   },
-  handler: async (ctx, { body, replyToId, forwardedFromId }) => {
+  handler: async (ctx, { body, replyToId, forwardedFromId, attachmentId, attachmentName, attachmentType }) => {
     const me = await requireUser(ctx);
     const { canModerate } = await communityRole(ctx, me._id);
     if (!canModerate) throw new Error("Only JaText community moderators can post.");
     const text = body.trim();
-    if (!text) throw new Error("Community messages cannot be empty.");
-    if (replyToId && !(await ctx.db.get(replyToId)))
-      throw new Error("The announcement you are replying to is unavailable.");
+    if (!text && !attachmentId) throw new Error("Community messages cannot be empty.");
+    if (replyToId) {
+      const parent = await ctx.db.get(replyToId);
+      if (!parent || parent.hiddenFor?.includes(me._id) || parent.unsentAt) throw new Error("The announcement you are replying to is unavailable.");
+    }
     const forwardedMessage = forwardedFromId ? await ctx.db.get(forwardedFromId) : null;
-    if (forwardedFromId && !forwardedMessage)
+    if (forwardedFromId && (!forwardedMessage || forwardedMessage.hiddenFor?.includes(me._id) || forwardedMessage.unsentAt))
       throw new Error("The forwarded announcement is unavailable.");
     const forwardedSender = forwardedMessage ? await ctx.db.get(forwardedMessage.senderId) : null;
     await ctx.db.insert("communityMessages", {
@@ -166,6 +206,10 @@ export const sendText = mutation({
       type: "text",
       replyToId,
       forwardedFromName: forwardedSender?.displayName ?? forwardedSender?.name,
+      forwardedFromId: forwardedSender?._id as Id<"users"> | undefined,
+      attachmentId,
+      attachmentName,
+      attachmentType,
     });
   },
 });
@@ -176,6 +220,7 @@ export const sendSticker = mutation({
     stickerStorageId: v.optional(v.id("_storage")),
     stickerName: v.string(),
     replyToId: v.optional(v.id("communityMessages")),
+    stickerKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const me = await requireUser(ctx);
@@ -191,8 +236,141 @@ export const sendSticker = mutation({
       stickerUrl: args.stickerUrl,
       stickerStorageId: args.stickerStorageId,
       stickerName: args.stickerName.slice(0, 120),
+      stickerKey: args.stickerKey,
       replyToId: args.replyToId,
     });
+  },
+});
+
+export const forward = mutation({
+  args: {
+    messageId: v.id("communityMessages"),
+    targetGroupId: v.optional(v.id("groups")),
+    targetUserId: v.optional(v.id("users")),
+    targetCommunity: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { messageId, targetGroupId, targetUserId, targetCommunity }) => {
+    const me = await requireUser(ctx);
+    const source = await ctx.db.get(messageId);
+    if (!source || source.hiddenFor?.includes(me._id) || source.unsentAt) throw new Error("This message can no longer be forwarded.");
+    const sender = await ctx.db.get(source.senderId);
+    if (targetGroupId) {
+      const membership = await ctx.db.query("groupMembers").withIndex("by_group_user", (q) => q.eq("groupId", targetGroupId).eq("userId", me._id)).unique();
+      if (!membership) throw new Error("You are not a member of that group.");
+      if (membership.muted) throw new Error("You are muted in that group.");
+      await ctx.db.insert("groupMessages", {
+        groupId: targetGroupId,
+        senderId: me._id,
+        body: source.body,
+        attachmentId: source.attachmentId,
+        attachmentName: source.attachmentName,
+        attachmentType: source.attachmentType,
+        attachmentUrl: source.attachmentUrl,
+        stickerUrl: source.stickerUrl,
+        stickerStorageId: source.stickerStorageId,
+        stickerName: source.stickerName,
+        stickerKey: source.stickerKey,
+        forwardedFromId: source.senderId,
+        forwardedFromName: sender?.displayName ?? sender?.name,
+      });
+    } else if (targetUserId) {
+      if (!(await areFriends(ctx, me._id, targetUserId))) throw new Error("You can only forward messages to accepted friends.");
+      const pair = pairKey(me._id, targetUserId);
+      await ctx.db.insert("messages", {
+        senderId: me._id,
+        receiverId: targetUserId,
+        pairKey: pair,
+        body: source.body,
+        attachmentId: source.attachmentId,
+        attachmentName: source.attachmentName,
+        attachmentType: source.attachmentType,
+        attachmentUrl: source.attachmentUrl ?? source.stickerUrl,
+        stickerKey: source.stickerKey,
+        forwardedFromId: source.senderId,
+        deliveryStatus: "delivered",
+      });
+      const meDoc = await ctx.db.get(me._id);
+      if (meDoc) await scheduleMessagePush(ctx, meDoc, targetUserId, source.body || "Forwarded you a message");
+    } else if (targetCommunity) {
+      const { canModerate } = await communityRole(ctx, me._id);
+      if (!canModerate) throw new Error("Only JaText community moderators can post.");
+      await ctx.db.insert("communityMessages", {
+        senderId: me._id,
+        body: source.body,
+        type: source.type === "poll" ? "text" : source.type,
+        pollOptions: source.pollOptions,
+        stickerUrl: source.stickerUrl,
+        stickerStorageId: source.stickerStorageId,
+        stickerName: source.stickerName,
+        stickerKey: source.stickerKey,
+        attachmentId: source.attachmentId,
+        attachmentName: source.attachmentName,
+        attachmentType: source.attachmentType,
+        attachmentUrl: source.attachmentUrl,
+        forwardedFromName: sender?.displayName ?? sender?.name,
+        forwardedFromId: source.senderId,
+      });
+    } else {
+      throw new Error("Choose where to forward this message.");
+    }
+  },
+});
+
+export const toggleReaction = mutation({
+  args: { messageId: v.id("communityMessages"), emoji: v.string() },
+  handler: async (ctx, { messageId, emoji }) => {
+    await requireUser(ctx);
+    if (!(REACTION_EMOJIS as readonly string[]).includes(emoji)) throw new Error("That reaction is not available.");
+    const message = await ctx.db.get(messageId);
+    if (!message || message.hiddenFor?.includes((await requireUser(ctx))._id) || message.unsentAt) throw new Error("This message cannot be reacted to.");
+    const me = await requireUser(ctx);
+    const reactions = message.reactions ?? [];
+    const existing = reactions.find((reaction) => reaction.userId === me._id);
+    const updated =
+      existing?.emoji === emoji
+        ? reactions.filter((reaction) => reaction.userId !== me._id)
+        : [...reactions.filter((reaction) => reaction.userId !== me._id), { userId: me._id, emoji }];
+    await ctx.db.patch(messageId, { reactions: updated });
+  },
+});
+
+export const deleteForMe = mutation({
+  args: { messageId: v.id("communityMessages") },
+  handler: async (ctx, { messageId }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (!message) throw new Error("Message not found.");
+    if (!message.hiddenFor?.includes(me._id)) {
+      await ctx.db.patch(messageId, { hiddenFor: [...(message.hiddenFor ?? []), me._id] });
+    }
+  },
+});
+
+export const unsend = mutation({
+  args: { messageId: v.id("communityMessages") },
+  handler: async (ctx, { messageId }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (!message || message.senderId !== me._id) throw new Error("You can only unsend your own messages.");
+    if (message.unsentAt) throw new Error("This message was already unsent.");
+    if (Date.now() - message._creationTime >= UNSEND_WINDOW_MS) throw new Error("Messages can only be unsent within one hour.");
+    const now = Date.now();
+    const showWarning = me.unsendWarningShownAt === undefined || now - me.unsendWarningShownAt >= 3 * 60 * 60 * 1000;
+    if (showWarning) await ctx.db.patch(me._id, { unsendWarningShownAt: now });
+    await ctx.db.patch(messageId, {
+      body: "",
+      attachmentId: undefined,
+      attachmentName: undefined,
+      attachmentType: undefined,
+      attachmentUrl: undefined,
+      stickerUrl: undefined,
+      stickerStorageId: undefined,
+      stickerName: undefined,
+      stickerKey: undefined,
+      reactions: [],
+      unsentAt: now,
+    });
+    return showWarning;
   },
 });
 
@@ -272,11 +450,13 @@ export const editMessage = mutation({
     const role = await communityRole(ctx, me._id);
     if (!role.canModerate) throw new Error("Only JaText community moderators can edit announcements.");
     const message = await ctx.db.get(messageId);
-    if (!message || message.type !== "text") throw new Error("Announcement not found.");
+    if (!message || (message.type !== "text" && message.type !== "poll")) throw new Error("Announcement not found.");
+    if (message.unsentAt || message.hiddenFor?.includes(me._id)) throw new Error("This message is no longer available to edit.");
     if (!role.isOwner && message.senderId !== me._id)
       throw new Error("You can only edit your own announcements.");
     const text = body.trim();
     if (!text) throw new Error("Announcements cannot be empty.");
+    if (text.length > 4000) throw new Error("Messages can be up to 4,000 characters.");
     await ctx.db.patch(messageId, { body: text.slice(0, 4000), editedAt: Date.now() });
   },
 });
