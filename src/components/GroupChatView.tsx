@@ -705,7 +705,7 @@ export function GroupChatView({ onBack }: { onBack: () => void }) {
         setError(friendlyError(err, "Couldn't add the reaction."));
       }
     },
-    [store],
+    [closeMessageMenu, store],
   );
   async function favoriteSticker(message: GroupMessage) {
     try {

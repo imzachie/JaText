@@ -158,6 +158,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const saveStickerMut = useMutation(api.stickers.saveUpload);
   const setStickerFavoriteMut = useMutation(api.stickers.setFavorite);
   const favoriteStickerFromMessageMut = useMutation(api.stickers.favoriteFromMessage);
+  const favoriteGroupStickerFromMessageMut = useMutation(api.stickers.favoriteFromGroupMessage);
+  const favoriteCommunityStickerFromMessageMut = useMutation(api.stickers.favoriteFromCommunityMessage);
   const sendStickerMut = useMutation(api.stickers.send);
   const registerPushDeviceMut = useMutation(api.push.registerDevice);
   const unregisterPushDeviceMut = useMutation(api.push.unregisterDevice);
@@ -461,22 +463,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const favoriteCommunityStickerFromMessage: JaTextStore["favoriteCommunityStickerFromMessage"] = useCallback(
     async (messageId) => {
-      const msg = communityMessages.find((m) => m.id === messageId);
-      if (!msg || (!msg.attachmentUrl && !msg.stickerUrl)) throw new Error("No media to favorite.");
-      const key = msg.stickerKey ?? (msg.attachmentUrl ? `upload:${msg.attachmentUrl}` : msg.stickerUrl ? `klipy:${msg.stickerUrl}` : `community:${messageId}`);
-      const existing = (stickerLibrary?.favorites ?? []).find((s) => s.key === key) || (stickerLibrary?.recent ?? []).find((s) => s.key === key);
-      const isFav = existing?.isFavorite ?? false;
-      await setStickerFavoriteMut({
-        mediaKey: key,
-        url: msg.attachmentUrl ?? msg.stickerUrl ?? "",
-        previewUrl: msg.attachmentUrl ?? msg.stickerUrl,
-        name: msg.attachmentName ?? msg.stickerName ?? "Community media",
-        mediaType: msg.attachmentType === "image/gif" ? "gif" : msg.stickerUrl ? "sticker" : "image",
-        source: msg.stickerKey?.startsWith("klipy:") ? "klipy" : "upload",
-        isFavorite: !isFav,
-      });
+      await favoriteCommunityStickerFromMessageMut({ messageId: messageId as Id<"communityMessages"> });
     },
-    [communityMessages, setStickerFavoriteMut, stickerLibrary],
+    [favoriteCommunityStickerFromMessageMut],
   );
   const createGroup = useCallback<JaTextStore["createGroup"]>(
     async (name, memberIds) =>
@@ -553,22 +542,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const favoriteGroupStickerFromMessage: JaTextStore["favoriteGroupStickerFromMessage"] = useCallback(
     async (messageId) => {
-      const msg = groupMessages.find((m) => m.id === messageId);
-      if (!msg || (!msg.attachmentUrl && !msg.stickerUrl)) throw new Error("No media to favorite.");
-      const key = msg.stickerKey ?? (msg.attachmentUrl ? `upload:${msg.attachmentUrl}` : msg.stickerUrl ? `klipy:${msg.stickerUrl}` : `group:${messageId}`);
-      const existing = (stickerLibrary?.favorites ?? []).find((s) => s.key === key) || (stickerLibrary?.recent ?? []).find((s) => s.key === key);
-      const isFav = existing?.isFavorite ?? false;
-      await setStickerFavoriteMut({
-        mediaKey: key,
-        url: msg.attachmentUrl ?? msg.stickerUrl ?? "",
-        previewUrl: msg.attachmentUrl ?? msg.stickerUrl,
-        name: msg.attachmentName ?? msg.stickerName ?? "Group media",
-        mediaType: msg.attachmentType === "image/gif" ? "gif" : msg.stickerUrl ? "sticker" : "image",
-        source: msg.stickerKey?.startsWith("klipy:") ? "klipy" : "upload",
-        isFavorite: !isFav,
-      });
+      await favoriteGroupStickerFromMessageMut({ messageId: messageId as Id<"groupMessages"> });
     },
-    [groupMessages, setStickerFavoriteMut, stickerLibrary],
+    [favoriteGroupStickerFromMessageMut],
   );
   const renameGroup = useCallback<JaTextStore["renameGroup"]>(
     async (groupId, name) => {

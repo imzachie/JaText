@@ -61,7 +61,9 @@ export const list = query({
               ? `klipy:${message.attachmentUrl}`
               : message.stickerStorageId
                 ? `upload:${message.stickerStorageId}`
-                : undefined);
+                : message.stickerUrl
+                  ? `klipy:${message.stickerUrl}`
+                  : undefined);
         const favorite = mediaKey
           ? await ctx.db
               .query("stickerLibrary")
@@ -191,7 +193,7 @@ export const sendText = mutation({
     const { canModerate } = await communityRole(ctx, me._id);
     if (!canModerate) throw new Error("Only JaText community moderators can post.");
     const text = body.trim();
-    if (!text && !attachmentId) throw new Error("Community messages cannot be empty.");
+    if (!text && !attachmentId && !forwardedFromId) throw new Error("Community messages cannot be empty.");
     if (replyToId) {
       const parent = await ctx.db.get(replyToId);
       if (!parent || parent.hiddenFor?.includes(me._id) || parent.unsentAt) throw new Error("The announcement you are replying to is unavailable.");
@@ -202,14 +204,18 @@ export const sendText = mutation({
     const forwardedSender = forwardedMessage ? await ctx.db.get(forwardedMessage.senderId) : null;
     await ctx.db.insert("communityMessages", {
       senderId: me._id,
-      body: text.slice(0, 4000),
-      type: "text",
+      body: (text || forwardedMessage?.body || "").slice(0, 4000),
+      type: !text && !attachmentId && forwardedMessage?.type === "sticker" ? "sticker" : "text",
       replyToId,
       forwardedFromName: forwardedSender?.displayName ?? forwardedSender?.name,
       forwardedFromId: forwardedSender?._id as Id<"users"> | undefined,
-      attachmentId,
-      attachmentName,
-      attachmentType,
+      attachmentId: attachmentId ?? forwardedMessage?.attachmentId,
+      attachmentName: attachmentName ?? forwardedMessage?.attachmentName,
+      attachmentType: attachmentType ?? forwardedMessage?.attachmentType,
+      stickerUrl: forwardedMessage?.stickerUrl,
+      stickerStorageId: forwardedMessage?.stickerStorageId,
+      stickerName: forwardedMessage?.stickerName,
+      stickerKey: forwardedMessage?.stickerKey,
     });
   },
 });
@@ -281,9 +287,11 @@ export const forward = mutation({
         receiverId: targetUserId,
         pairKey: pair,
         body: source.body,
-        attachmentId: source.attachmentId,
-        attachmentName: source.attachmentName,
-        attachmentType: source.attachmentType,
+        attachmentId: source.attachmentId ?? source.stickerStorageId,
+        attachmentName: source.attachmentName ?? source.stickerName,
+        attachmentType:
+          source.attachmentType ??
+          (source.stickerStorageId || source.stickerUrl ? "image/*" : undefined),
         attachmentUrl: source.attachmentUrl ?? source.stickerUrl,
         stickerKey: source.stickerKey,
         forwardedFromId: source.senderId,
@@ -319,11 +327,10 @@ export const forward = mutation({
 export const toggleReaction = mutation({
   args: { messageId: v.id("communityMessages"), emoji: v.string() },
   handler: async (ctx, { messageId, emoji }) => {
-    await requireUser(ctx);
+    const me = await requireUser(ctx);
     if (!(REACTION_EMOJIS as readonly string[]).includes(emoji)) throw new Error("That reaction is not available.");
     const message = await ctx.db.get(messageId);
-    if (!message || message.hiddenFor?.includes((await requireUser(ctx))._id) || message.unsentAt) throw new Error("This message cannot be reacted to.");
-    const me = await requireUser(ctx);
+    if (!message || message.hiddenFor?.includes(me._id) || message.unsentAt) throw new Error("This message cannot be reacted to.");
     const reactions = message.reactions ?? [];
     const existing = reactions.find((reaction) => reaction.userId === me._id);
     const updated =
