@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { areFriends, pairKey, profileOf, requireUser, scheduleGroupMentionPush, scheduleMessagePush, type Ctx } from "./lib";
@@ -15,7 +15,7 @@ async function requireMembership(
     .query("groupMembers")
     .withIndex("by_group_user", (q) => q.eq("groupId", groupId).eq("userId", userId))
     .unique();
-  if (!membership) throw new Error("You are not a member of this group.");
+  if (!membership) throw new ConvexError("You are not a member of this group.");
   return membership;
 }
 
@@ -25,7 +25,9 @@ async function requireGroupModerator(
   userId: Id<"users">,
 ) {
   const membership = await requireMembership(ctx, groupId, userId);
-  if (membership.role === "member") throw new Error("Only the group owner or a moderator can do that.");
+  if (membership.role === "member") {
+    throw new ConvexError("Only the group owner or a moderator can do that.");
+  }
   return membership;
 }
 
@@ -373,13 +375,15 @@ export const addMembers = mutation({
       .withIndex("by_group", (q) => q.eq("groupId", groupId))
       .collect();
     if (existing.length + uniqueIds.length > 100) {
-      throw new Error("Groups can have up to 100 members.");
+      throw new ConvexError("Groups can have up to 100 members.");
     }
     const existingSet = new Set(existing.map((member) => member.userId));
     for (const userId of uniqueIds) {
       if (existingSet.has(userId)) continue;
+      const targetUser = await ctx.db.get(userId);
+      if (!targetUser) continue;
       if (!(await areFriends(ctx, me._id, userId))) {
-        throw new Error("You can only add your accepted friends to a group.");
+        throw new ConvexError("You can only add your accepted friends to a group.");
       }
       await ctx.db.insert("groupMembers", {
         groupId,

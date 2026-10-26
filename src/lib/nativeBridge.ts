@@ -7,6 +7,7 @@ export interface SpeechTranscriptEvent {
 
 export interface JaTextNativePlugin {
   checkPushSupport(): Promise<{ firebaseConfigured: boolean }>;
+  copyImageBase64(options: { base64: string }): Promise<{ copied: boolean }>;
   requestMediaPermissions(options: { video: boolean }): Promise<{ granted: boolean }>;
   setCallAudioRoute(options: { active: boolean; speaker: boolean }): Promise<{ speaker: boolean }>;
   startSpeechCapture(): Promise<{ started: boolean }>;
