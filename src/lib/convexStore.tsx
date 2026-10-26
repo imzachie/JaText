@@ -3,7 +3,7 @@ import { useAction, useConvex, useConvexAuth, useMutation, useQuery } from "conv
 import { useAuthActions } from "@convex-dev/auth/react";
 import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
-import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 // Works with both the checked-in stub and the real generated API
 // (run `npx convex dev` once to generate convex/_generated for real).
@@ -32,6 +32,22 @@ import type {
 
 const PUSH_TOKEN_STORAGE_KEY = "jatext-push-token-v1";
 const ANDROID_AUTH_CALLBACK = "com.ahad00010.jatext://auth";
+
+interface JaTextNativePlugin {
+  checkPushSupport(): Promise<{ firebaseConfigured: boolean }>;
+}
+
+const JaTextNative = registerPlugin<JaTextNativePlugin>("JaTextNative");
+
+async function checkNativeFirebaseConfigured(): Promise<boolean> {
+  if (!Capacitor.isNativePlatform()) return false;
+  try {
+    const res = await JaTextNative.checkPushSupport();
+    return res.firebaseConfigured === true;
+  } catch {
+    return false;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* Real Convex store — active when VITE_CONVEX_URL is set.             */
@@ -219,21 +235,35 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       const permission = await PushNotifications.checkPermissions();
       if (permission.receive !== "granted") {
         setPushRegistrationStatus("error");
-        throw new Error("Allow JaText notifications in Android settings, then try again.");
+        return;
       }
-      await PushNotifications.createChannel({
-        id: "messages",
-        name: "Messages",
-        description: "New JaText messages",
-        importance: 5,
-        sound: "default",
-      });
+      try {
+        await PushNotifications.createChannel({
+          id: "messages",
+          name: "Messages",
+          description: "New JaText messages",
+          importance: 5,
+          sound: "default",
+        });
+      } catch (error: unknown) {
+        console.warn("Could not create Android notification channel.", error);
+      }
+      const firebaseConfigured = await checkNativeFirebaseConfigured();
+      if (!firebaseConfigured) {
+        if (!disposed) setPushRegistrationStatus("unavailable");
+        return;
+      }
       if (!disposed) {
         setPushRegistrationStatus("registering");
         await PushNotifications.register();
       }
     };
     const registerForPush = async () => {
+      const firebaseConfigured = await checkNativeFirebaseConfigured();
+      if (!firebaseConfigured) {
+        await requestRegistration();
+        return;
+      }
       listeners.push(
         await PushNotifications.addListener("registration", async ({ value: token }) => {
           if (disposed) return;
@@ -310,6 +340,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     if (permission.receive !== "granted") {
       throw new Error("Allow JaText notifications in Android settings, then try again.");
     }
+    const firebaseConfigured = await checkNativeFirebaseConfigured();
+    if (!firebaseConfigured) {
+      setPushRegistrationStatus("unavailable");
+      throw new Error(
+        "In-app alerts are active, while background FCM push requires google-services.json in the APK build.",
+      );
+    }
     setPushRegistrationStatus("registering");
     await PushNotifications.register();
   }, [isAuthenticated, notificationPreferences.notificationsEnabled]);
@@ -342,7 +379,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         active:
           document.visibilityState === "visible" &&
           Date.now() - lastActivityAt < 5 * 60_000,
-      });
+      }).catch(() => undefined);
     };
     const events: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "touchstart", "mousemove"];
     events.forEach((event) => window.addEventListener(event, markActive, { passive: true }));

@@ -155,24 +155,28 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           {Capacitor.isNativePlatform() && mode === "convex" && notificationsEnabled && (
             <>
               <p className="muted small" role="status">
-                Push registration: {pushRegistrationStatus}
+                {pushRegistrationStatus === "unavailable"
+                  ? "In-app alerts active · background FCM not configured in this build"
+                  : `Push registration: ${pushRegistrationStatus}`}
               </p>
-              <button
-                className="ghost-btn"
-                type="button"
-                onClick={() => {
-                  setNotificationError(null);
-                  void refreshPushRegistration().catch((error: unknown) => {
-                    setNotificationError(
-                      error instanceof Error
-                        ? error.message
-                        : "Could not refresh push registration.",
-                    );
-                  });
-                }}
-              >
-                Repair push registration
-              </button>
+              {pushRegistrationStatus !== "unavailable" && (
+                <button
+                  className="ghost-btn"
+                  type="button"
+                  onClick={() => {
+                    setNotificationError(null);
+                    void refreshPushRegistration().catch((error: unknown) => {
+                      setNotificationError(
+                        error instanceof Error
+                          ? error.message
+                          : "Could not refresh push registration.",
+                      );
+                    });
+                  }}
+                >
+                  Repair push registration
+                </button>
+              )}
             </>
           )}
         </section>

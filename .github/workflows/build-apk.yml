@@ -36,9 +36,10 @@ jobs:
           path: android/jatext-release.jks
           key: jatext-release-keystore-v1
 
-      - name: Configure release signing
+      - name: Configure release signing and optional Firebase config
         env:
           KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || 'JaTextReleaseKey2026!' }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           if [ ! -f android/jatext-release.jks ]; then
             keytool -genkeypair -v \
@@ -52,6 +53,9 @@ jobs:
               -dname "CN=JaText, OU=Mobile, O=JaText, L=KualaLumpur, ST=Selangor, C=MY"
           fi
           printf "storeFile=jatext-release.jks\nstorePassword=%s\nkeyAlias=jatext\nkeyPassword=%s\n" "${KEYSTORE_PASS}" "${KEYSTORE_PASS}" > android/keystore.properties
+          if [ -n "${GOOGLE_SERVICES_JSON}" ]; then
+            printf "%s\n" "${GOOGLE_SERVICES_JSON}" > android/app/google-services.json
+          fi
 
       - name: Install dependencies and sync Capacitor Android
         run: |

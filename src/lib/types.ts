@@ -223,7 +223,7 @@ export interface JaTextStore {
   groupTypingUsers: ChatTypingUser[];
   communityTypingUsers: ChatTypingUser[];
   notificationsEnabled: boolean;
-  pushRegistrationStatus: "idle" | "registering" | "registered" | "error";
+  pushRegistrationStatus: "idle" | "registering" | "registered" | "unavailable" | "error";
   soundsEnabled: boolean;
   activeChatId: string | null;
   setActiveChatId: (id: string | null) => void;

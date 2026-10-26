@@ -143,20 +143,25 @@ export default function App() {
       }, 4_500);
 
       if (
+        !Capacitor.isNativePlatform() &&
         notificationsEnabled &&
         "Notification" in window &&
         Notification.permission === "granted" &&
         (document.visibilityState !== "visible" || !document.hasFocus())
       ) {
-        const notification = new Notification(`Message from ${friend.displayName}`, {
-          body: preview.body,
-          tag: `jatext-${friend.id}`,
-        });
-        notification.onclick = () => {
-          window.focus();
-          setActiveChatId(friend.id);
-          notification.close();
-        };
+        try {
+          const notification = new Notification(`Message from ${friend.displayName}`, {
+            body: preview.body,
+            tag: `jatext-${friend.id}`,
+          });
+          notification.onclick = () => {
+            window.focus();
+            setActiveChatId(friend.id);
+            notification.close();
+          };
+        } catch {
+          // Mobile browsers / WebViews disallow direct Notification construction.
+        }
       }
     }
   }, [
@@ -225,20 +230,25 @@ export default function App() {
       }, 5_000);
 
       if (
+        !Capacitor.isNativePlatform() &&
         notificationsEnabled &&
         "Notification" in window &&
         Notification.permission === "granted" &&
         (document.visibilityState !== "visible" || !document.hasFocus())
       ) {
-        const notification = new Notification(title, {
-          body: group.lastMessage || "Open group chat",
-          tag: `jatext-group-${group.id}`,
-        });
-        notification.onclick = () => {
-          window.focus();
-          setActiveGroupId(group.id);
-          notification.close();
-        };
+        try {
+          const notification = new Notification(title, {
+            body: group.lastMessage || "Open group chat",
+            tag: `jatext-group-${group.id}`,
+          });
+          notification.onclick = () => {
+            window.focus();
+            setActiveGroupId(group.id);
+            notification.close();
+          };
+        } catch {
+          // Mobile browsers / WebViews disallow direct Notification construction.
+        }
       }
     }
   }, [
