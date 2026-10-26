@@ -245,7 +245,7 @@ export function Sidebar({
                   </div>
                   <span className="muted small friend-preview">
                     {group.lastMessage
-                      ? `${group.lastSenderId === me.id ? "You: " : group.lastSenderName ? `${group.lastSenderName}: ` : ""}${group.lastMessage}`
+                      ? `${group.lastSenderId === me.id ? "You: " : group.lastSenderName ? `${group.lastSenderName}: ` : ""}${formatPreviewMessageText(group.lastMessage)}`
                       : `${group.memberCount} members`}
                   </span>
                 </div>

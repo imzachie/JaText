@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAction, useConvex, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { App } from "@capacitor/app";
@@ -12,6 +12,14 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { JaTextContext } from "./store";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
+import {
+  WALLPAPER_PREFIX,
+  attachBubbleStyleToFile,
+  attachBubbleStyleToOutgoing,
+  extractMessageBubbleStyle,
+  getSavedOutgoingBubbleStyle,
+  stripBubbleStyleFromText,
+} from "./chatCustomization";
 import { OFFICIAL_COMMUNITY_ID } from "./types";
 import type {
   ChatMessage,
@@ -33,6 +41,54 @@ import type {
 
 const PUSH_TOKEN_STORAGE_KEY = "jatext-push-token-v1";
 const ANDROID_AUTH_CALLBACK = "com.ahad00010.jatext://auth";
+
+function isControlPayload(text: string): boolean {
+  return text.startsWith("__JATEXT_CALL") || text.startsWith(WALLPAPER_PREFIX);
+}
+
+function cleanAttachmentMime(mime?: string): string | undefined {
+  if (!mime) return mime;
+  return mime.replace(/;jbs=[a-z0-9-]+/gi, "");
+}
+
+function normalizeDirectMessage(raw: ChatMessage): ChatMessage {
+  const { cleanBody, bubbleStyle } = extractMessageBubbleStyle(raw.body, raw.attachmentType);
+  return {
+    ...raw,
+    body: cleanBody,
+    bubbleStyle,
+    attachmentType: cleanAttachmentMime(raw.attachmentType),
+    replyTo: raw.replyTo
+      ? { ...raw.replyTo, body: stripBubbleStyleFromText(raw.replyTo.body) }
+      : undefined,
+  };
+}
+
+function normalizeGroupMessage(raw: GroupMessage): GroupMessage {
+  const { cleanBody, bubbleStyle } = extractMessageBubbleStyle(raw.body, raw.attachmentType);
+  return {
+    ...raw,
+    body: cleanBody,
+    bubbleStyle,
+    attachmentType: cleanAttachmentMime(raw.attachmentType),
+    replyTo: raw.replyTo
+      ? { ...raw.replyTo, body: stripBubbleStyleFromText(raw.replyTo.body) }
+      : undefined,
+  };
+}
+
+function normalizeCommunityMessage(raw: CommunityMessage): CommunityMessage {
+  const { cleanBody, bubbleStyle } = extractMessageBubbleStyle(raw.body, raw.attachmentType);
+  return {
+    ...raw,
+    body: cleanBody,
+    bubbleStyle,
+    attachmentType: cleanAttachmentMime(raw.attachmentType),
+    replyTo: raw.replyTo
+      ? { ...raw.replyTo, body: stripBubbleStyleFromText(raw.replyTo.body) }
+      : undefined,
+  };
+}
 
 async function checkNativeFirebaseConfigured(): Promise<boolean> {
   if (!Capacitor.isNativePlatform()) return false;
@@ -93,12 +149,18 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       ? { otherId: activeChatId as Id<"users"> }
       : "skip",
   );
-  const activeMessages = (activeMessagesQuery ?? []) as ChatMessage[];
+  const activeMessages = useMemo(
+    () => ((activeMessagesQuery ?? []) as ChatMessage[]).map(normalizeDirectMessage),
+    [activeMessagesQuery],
+  );
   const communityMessagesQuery = useQuery(
     api.community.list,
     isAuthenticated ? {} : "skip",
   );
-  const communityMessages = (communityMessagesQuery ?? []) as CommunityMessage[];
+  const communityMessages = useMemo(
+    () => ((communityMessagesQuery ?? []) as CommunityMessage[]).map(normalizeCommunityMessage),
+    [communityMessagesQuery],
+  );
   const communityTypingUsers = (useQuery(
     api.community.typingUsers,
     isAuthenticated ? {} : "skip",
@@ -136,7 +198,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       ? { groupId: activeGroupId as Id<"groups"> }
       : "skip",
   );
-  const groupMessages = (groupMessagesQuery ?? []) as GroupMessage[];
+  const groupMessages = useMemo(
+    () => ((groupMessagesQuery ?? []) as GroupMessage[]).map(normalizeGroupMessage),
+    [groupMessagesQuery],
+  );
   const groupTypingUsers = (useQuery(
     api.groups.typingUsers,
     isAuthenticated && activeGroupId ? { groupId: activeGroupId as Id<"groups"> } : "skip",
@@ -415,10 +480,16 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const sendCommunityText = useCallback<JaTextStore["sendCommunityText"]>(
     async (body, file, replyToId, forwardedFromId) => {
-      const attachmentId = file ? await upload(file) : undefined;
+      const trimmed = body.trim();
+      const style = isControlPayload(trimmed) ? "default" : getSavedOutgoingBubbleStyle();
+      const wireBody = style === "default" ? trimmed : attachBubbleStyleToOutgoing(trimmed, style);
+      const wireFile = file && style !== "default" ? attachBubbleStyleToFile(file, style) : file;
+      const attachmentId = wireFile ? await upload(wireFile) : undefined;
       await sendCommunityTextMut({
-        body,
-        ...(attachmentId ? { attachmentId, attachmentName: file!.name, attachmentType: file!.type } : {}),
+        body: wireBody,
+        ...(attachmentId
+          ? { attachmentId, attachmentName: wireFile!.name, attachmentType: wireFile!.type }
+          : {}),
         ...(replyToId ? { replyToId: replyToId as Id<"communityMessages"> } : {}),
         ...(forwardedFromId ? { forwardedFromId: forwardedFromId as Id<"communityMessages"> } : {}),
       });
@@ -463,12 +534,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const editCommunityMessage = useCallback<JaTextStore["editCommunityMessage"]>(
     async (messageId, body) => {
+      const existing = communityMessages.find((m) => m.id === messageId);
+      const preserved = attachBubbleStyleToOutgoing(
+        body.trim(),
+        existing?.bubbleStyle ?? "default",
+      );
       await editCommunityMessageMut({
         messageId: messageId as Id<"communityMessages">,
-        body,
+        body: preserved,
       });
     },
-    [editCommunityMessageMut],
+    [communityMessages, editCommunityMessageMut],
   );
   const deleteCommunityMessage = useCallback<JaTextStore["deleteCommunityMessage"]>(
     async (messageId) => {
@@ -529,11 +605,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const sendGroupMessage = useCallback<JaTextStore["sendGroupMessage"]>(
     async (groupId, body, file, replyToId, forwardedFromId) => {
-      const attachmentId = file ? await upload(file) : undefined;
+      const trimmed = body.trim();
+      const style = isControlPayload(trimmed) ? "default" : getSavedOutgoingBubbleStyle();
+      const wireBody = style === "default" ? trimmed : attachBubbleStyleToOutgoing(trimmed, style);
+      const wireFile = file && style !== "default" ? attachBubbleStyleToFile(file, style) : file;
+      const attachmentId = wireFile ? await upload(wireFile) : undefined;
       await sendGroupMessageMut({
         groupId: groupId as Id<"groups">,
-        body,
-        ...(attachmentId ? { attachmentId, attachmentName: file!.name, attachmentType: file!.type } : {}),
+        body: wireBody,
+        ...(attachmentId
+          ? { attachmentId, attachmentName: wireFile!.name, attachmentType: wireFile!.type }
+          : {}),
         ...(replyToId ? { replyToId: replyToId as Id<"groupMessages"> } : {}),
         ...(forwardedFromId ? { forwardedFromId: forwardedFromId as Id<"groupMessages"> } : {}),
       });
@@ -578,9 +660,14 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const editGroupMessage = useCallback<JaTextStore["editGroupMessage"]>(
     async (messageId, body) => {
-      await editGroupMut({ messageId: messageId as Id<"groupMessages">, body });
+      const existing = groupMessages.find((m) => m.id === messageId);
+      const preserved = attachBubbleStyleToOutgoing(
+        body.trim(),
+        existing?.bubbleStyle ?? "default",
+      );
+      await editGroupMut({ messageId: messageId as Id<"groupMessages">, body: preserved });
     },
-    [editGroupMut],
+    [editGroupMut, groupMessages],
   );
   const forwardGroupMessage: JaTextStore["forwardGroupMessage"] = useCallback(
     async (messageId, target) => {
@@ -797,12 +884,16 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const sendMessage = useCallback<JaTextStore["sendMessage"]>(
     async (receiverId, body, file, replyToId) => {
-      const attachmentId = file ? await upload(file) : undefined;
+      const trimmed = body.trim();
+      const style = isControlPayload(trimmed) ? "default" : getSavedOutgoingBubbleStyle();
+      const wireBody = style === "default" ? trimmed : attachBubbleStyleToOutgoing(trimmed, style);
+      const wireFile = file && style !== "default" ? attachBubbleStyleToFile(file, style) : file;
+      const attachmentId = wireFile ? await upload(wireFile) : undefined;
       await sendMessageMut({
         receiverId: receiverId as Id<"users">,
-        body: body.trim(),
+        body: wireBody,
         ...(attachmentId
-          ? { attachmentId, attachmentName: file!.name, attachmentType: file!.type }
+          ? { attachmentId, attachmentName: wireFile!.name, attachmentType: wireFile!.type }
           : {}),
         ...(replyToId ? { replyToId: replyToId as Id<"messages"> } : {}),
       });
@@ -908,9 +999,14 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const editMessage = useCallback<JaTextStore["editMessage"]>(
     async (messageId, body) => {
-      await editMessageMut({ messageId: messageId as Id<"messages">, body });
+      const existing = activeMessages.find((m) => m.id === messageId);
+      const preserved = attachBubbleStyleToOutgoing(
+        body.trim(),
+        existing?.bubbleStyle ?? "default",
+      );
+      await editMessageMut({ messageId: messageId as Id<"messages">, body: preserved });
     },
-    [editMessageMut],
+    [activeMessages, editMessageMut],
   );
 
   const setConversationArchived = useCallback<JaTextStore["setConversationArchived"]>(
@@ -997,7 +1093,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       const rows = await convex.query(api.messages.list, {
         otherId: otherId as Id<"users">,
       });
-      return (rows ?? []) as ChatMessage[];
+      return ((rows ?? []) as ChatMessage[]).map(normalizeDirectMessage);
     },
     [convex, isAuthenticated],
   );

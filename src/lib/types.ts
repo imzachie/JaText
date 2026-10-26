@@ -1,3 +1,5 @@
+import type { BubbleStyleId } from "./chatCustomization";
+
 export interface JaUser {
   id: string;
   email?: string;
@@ -40,6 +42,7 @@ export interface ChatMessage {
   senderId: string;
   receiverId: string;
   body: string;
+  bubbleStyle?: BubbleStyleId;
   attachmentUrl?: string;
   attachmentName?: string;
   attachmentType?: string;
@@ -95,6 +98,7 @@ export interface CommunityMessage {
   senderAvatarUrl?: string;
   senderAvatarColor: string;
   body: string;
+  bubbleStyle?: BubbleStyleId;
   type: "text" | "poll" | "sticker";
   pollOptions: string[];
   pollEndedAt?: number;
@@ -163,6 +167,7 @@ export interface GroupMessage {
   senderAvatarUrl?: string;
   senderAvatarColor: string;
   body: string;
+  bubbleStyle?: BubbleStyleId;
   attachmentUrl?: string;
   attachmentName?: string;
   attachmentType?: string;

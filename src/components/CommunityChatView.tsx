@@ -4,9 +4,12 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
 import { playMessageSound } from "../lib/alerts";
+import { getSavedOutgoingBubbleStyle } from "../lib/chatCustomization";
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { friendlyError } from "../lib/errors";
 import { Avatar } from "./Avatar";
+import { BubbleStyleModal } from "./BubbleStyleModal";
+import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { StickerPicker } from "./StickerPicker";
 import { ContextMenu } from "./ContextMenu";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
@@ -200,6 +203,45 @@ export function CommunityChatView({
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
   const [messageMenuClosing, setMessageMenuClosing] = useState(false);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+
+  function cancelPostTouchHold() {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressOriginRef.current = null;
+  }
+
+  function startPostTouchHold(
+    event: React.TouchEvent<HTMLElement>,
+    message: CommunityMessage,
+  ) {
+    if (message.id.startsWith("pending-") || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    longPressOriginRef.current = { x: touch.clientX, y: touch.clientY };
+    if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+    const { clientX, clientY } = touch;
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTimerRef.current = null;
+      openMessageMenuAt(clientX, clientY, message);
+    }, 450);
+  }
+
+  function movePostTouchHold(event: React.TouchEvent<HTMLElement>) {
+    if (!longPressOriginRef.current || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    if (
+      Math.hypot(
+        touch.clientX - longPressOriginRef.current.x,
+        touch.clientY - longPressOriginRef.current.y,
+      ) > 12
+    ) {
+      cancelPostTouchHold();
+    }
+  }
   const [forwardMessage, setForwardMessage] = useState<CommunityMessage | null>(null);
   const [forwardSearch, setForwardSearch] = useState("");
   const [forwardClosing, setForwardClosing] = useState(false);
@@ -460,6 +502,7 @@ export function CommunityChatView({
         senderAvatarUrl: store.me?.avatarUrl,
         senderAvatarColor: store.me?.avatarColor ?? "black",
         body: sentBody,
+        bubbleStyle: getSavedOutgoingBubbleStyle(),
         type: "text" as const,
         pollOptions: [],
         votes: [],
@@ -877,7 +920,16 @@ export function CommunityChatView({
             (message.attachmentType?.startsWith("video/") ||
               /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
           return (
-            <article className="community-post" key={message.renderKey ?? message.id} id={`community-message-${message.id}`} onContextMenu={(e) => openMessageMenu(e, message)}>
+            <article
+              className="community-post"
+              key={message.renderKey ?? message.id}
+              id={`community-message-${message.id}`}
+              onContextMenu={(e) => openMessageMenu(e, message)}
+              onTouchStart={(e) => startPostTouchHold(e, message)}
+              onTouchMove={movePostTouchHold}
+              onTouchEnd={cancelPostTouchHold}
+              onTouchCancel={cancelPostTouchHold}
+            >
               <div className="community-post-header">
                 <Avatar
                   user={{
@@ -998,7 +1050,18 @@ export function CommunityChatView({
                           />
                         </button>
                       )}
-                      {message.body && <p className="community-post-body">{message.body}</p>}
+                      {message.body &&
+                        (message.bubbleStyle && message.bubbleStyle !== "default" ? (
+                          <DecoratedMessageBubble
+                            styleId={message.bubbleStyle}
+                            mine={message.senderId === store.me?.id}
+                            className="community-styled-bubble"
+                          >
+                            <p className="community-post-body">{message.body}</p>
+                          </DecoratedMessageBubble>
+                        ) : (
+                          <p className="community-post-body">{message.body}</p>
+                        ))}
                     </>
                   )}
                   {!!message.reactions?.length && (
@@ -1233,6 +1296,19 @@ export function CommunityChatView({
         <ContextMenu x={messageMenu.x} y={messageMenu.y} label="Message actions" className={`message-context-menu ${messageMenuClosing ? "closing" : ""}`} onClose={closeMessageMenu}>
           <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}><span>↩️</span> Reply</button>
           {!messageMenu.message.unsentAt &&
+            messageMenu.message.senderId === store.me?.id && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMessageMenu();
+                  setBubbleStyleOpen(true);
+                }}
+              >
+                <span>💬</span> Bubble style
+              </button>
+            )}
+          {!messageMenu.message.unsentAt &&
             isVoiceNoteOrAudio(
               messageMenu.message.attachmentType,
               messageMenu.message.attachmentName,
@@ -1350,6 +1426,9 @@ export function CommunityChatView({
         </div>
       )}
 
+      {bubbleStyleOpen && (
+        <BubbleStyleModal onClose={() => setBubbleStyleOpen(false)} />
+      )}
       {imagePreview && (
         <div className={`media-lightbox ${imageClosing ? "closing" : ""}`} role="dialog" aria-modal="true" aria-label="Image viewer" onClick={closeImagePreview}>
           <button type="button" className="media-lightbox-close" aria-label="Close image viewer" onClick={closeImagePreview}>×</button>
