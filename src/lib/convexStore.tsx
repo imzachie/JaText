@@ -164,15 +164,24 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const setCommunityModeratorsMut = useMutation(api.community.setModerators);
   const sendCommunityTextMut = useMutation(api.community.sendText);
   const sendCommunityStickerMut = useMutation(api.community.sendSticker);
+  const sendCommunityForwardMut = useMutation(api.community.forward);
   const setCommunityTypingMut = useMutation(api.community.setTyping);
   const createCommunityPollMut = useMutation(api.community.createPoll);
   const voteCommunityPollMut = useMutation(api.community.vote);
   const endCommunityPollMut = useMutation(api.community.endPoll);
   const editCommunityMessageMut = useMutation(api.community.editMessage);
   const deleteCommunityMessageMut = useMutation(api.community.deleteMessage);
+  const toggleCommunityReactionMut = useMutation(api.community.toggleReaction);
+  const deleteCommunityForMeMut = useMutation(api.community.deleteForMe);
+  const unsendCommunityMut = useMutation(api.community.unsend);
   const createGroupMut = useMutation(api.groups.create);
   const sendGroupMessageMut = useMutation(api.groups.send);
+  const forwardGroupMut = useMutation(api.groups.forward);
   const setGroupTypingMut = useMutation(api.groups.setTyping);
+  const toggleGroupReactionMut = useMutation(api.groups.toggleReaction);
+  const deleteGroupForMeMut = useMutation(api.groups.deleteForMe);
+  const unsendGroupMut = useMutation(api.groups.unsend);
+  const editGroupMut = useMutation(api.groups.edit);
   const renameGroupMut = useMutation(api.groups.rename);
   const setGroupAvatarMut = useMutation(api.groups.setAvatar);
   const setGroupMemberRoleMut = useMutation(api.groups.setMemberRole);
@@ -360,14 +369,16 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [setCommunityModeratorsMut],
   );
   const sendCommunityText = useCallback<JaTextStore["sendCommunityText"]>(
-    async (body, replyToId, forwardedFromId) => {
+    async (body, file, replyToId, forwardedFromId) => {
+      const attachmentId = file ? await upload(file) : undefined;
       await sendCommunityTextMut({
         body,
+        ...(attachmentId ? { attachmentId, attachmentName: file!.name, attachmentType: file!.type } : {}),
         ...(replyToId ? { replyToId: replyToId as Id<"communityMessages"> } : {}),
         ...(forwardedFromId ? { forwardedFromId: forwardedFromId as Id<"communityMessages"> } : {}),
       });
     },
-    [sendCommunityTextMut],
+    [sendCommunityTextMut, upload],
   );
   const sendCommunitySticker = useCallback<JaTextStore["sendCommunitySticker"]>(
     async (sticker, replyToId) => {
@@ -375,6 +386,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         ...(sticker.source === "klipy" ? { stickerUrl: sticker.url } : {}),
         ...(sticker.storageId ? { stickerStorageId: sticker.storageId as Id<"_storage"> } : {}),
         stickerName: sticker.name,
+        stickerKey: sticker.key,
         ...(replyToId ? { replyToId: replyToId as Id<"communityMessages"> } : {}),
       });
     },
@@ -419,6 +431,53 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     },
     [deleteCommunityMessageMut],
   );
+  const toggleCommunityReaction = useCallback<JaTextStore["toggleCommunityReaction"]>(
+    async (messageId, emoji) => {
+      await toggleCommunityReactionMut({ messageId: messageId as Id<"communityMessages">, emoji });
+    },
+    [toggleCommunityReactionMut],
+  );
+  const deleteCommunityMessageForMe = useCallback<JaTextStore["deleteCommunityMessageForMe"]>(
+    async (messageId) => {
+      await deleteCommunityForMeMut({ messageId: messageId as Id<"communityMessages"> });
+    },
+    [deleteCommunityForMeMut],
+  );
+  const unsendCommunityMessage = useCallback<JaTextStore["unsendCommunityMessage"]>(
+    async (messageId) => (await unsendCommunityMut({ messageId: messageId as Id<"communityMessages"> })) as boolean,
+    [unsendCommunityMut],
+  );
+  const forwardCommunityMessage: JaTextStore["forwardCommunityMessage"] = useCallback(
+    async (messageId, target) => {
+      if (target.groupId) {
+        await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetGroupId: target.groupId as Id<"groups"> });
+      } else if (target.userId) {
+        await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetUserId: target.userId as Id<"users"> });
+      } else if (target.community) {
+        await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetCommunity: true });
+      }
+    },
+    [sendCommunityForwardMut],
+  );
+  const favoriteCommunityStickerFromMessage: JaTextStore["favoriteCommunityStickerFromMessage"] = useCallback(
+    async (messageId) => {
+      const msg = communityMessages.find((m) => m.id === messageId);
+      if (!msg || (!msg.attachmentUrl && !msg.stickerUrl)) throw new Error("No media to favorite.");
+      const key = msg.stickerKey ?? (msg.attachmentUrl ? `upload:${msg.attachmentUrl}` : msg.stickerUrl ? `klipy:${msg.stickerUrl}` : `community:${messageId}`);
+      const existing = (stickerLibrary?.favorites ?? []).find((s) => s.key === key) || (stickerLibrary?.recent ?? []).find((s) => s.key === key);
+      const isFav = existing?.isFavorite ?? false;
+      await setStickerFavoriteMut({
+        mediaKey: key,
+        url: msg.attachmentUrl ?? msg.stickerUrl ?? "",
+        previewUrl: msg.attachmentUrl ?? msg.stickerUrl,
+        name: msg.attachmentName ?? msg.stickerName ?? "Community media",
+        mediaType: msg.attachmentType === "image/gif" ? "gif" : msg.stickerUrl ? "sticker" : "image",
+        source: msg.stickerKey?.startsWith("klipy:") ? "klipy" : "upload",
+        isFavorite: !isFav,
+      });
+    },
+    [communityMessages, setStickerFavoriteMut, stickerLibrary],
+  );
   const createGroup = useCallback<JaTextStore["createGroup"]>(
     async (name, memberIds) =>
       (await createGroupMut({
@@ -428,15 +487,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [createGroupMut],
   );
   const sendGroupMessage = useCallback<JaTextStore["sendGroupMessage"]>(
-    async (groupId, body, replyToId, forwardedFromId) => {
+    async (groupId, body, file, replyToId, forwardedFromId) => {
+      const attachmentId = file ? await upload(file) : undefined;
       await sendGroupMessageMut({
         groupId: groupId as Id<"groups">,
         body,
+        ...(attachmentId ? { attachmentId, attachmentName: file!.name, attachmentType: file!.type } : {}),
         ...(replyToId ? { replyToId: replyToId as Id<"groupMessages"> } : {}),
         ...(forwardedFromId ? { forwardedFromId: forwardedFromId as Id<"groupMessages"> } : {}),
       });
     },
-    [sendGroupMessageMut],
+    [sendGroupMessageMut, upload],
   );
   const sendGroupSticker = useCallback<JaTextStore["sendGroupSticker"]>(
     async (groupId, sticker, replyToId) => {
@@ -447,6 +508,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         ...(sticker.source === "klipy" ? { stickerUrl: sticker.url } : {}),
         ...(sticker.storageId ? { stickerStorageId: sticker.storageId as Id<"_storage"> } : {}),
         stickerName: sticker.name,
+        stickerKey: sticker.key,
       });
     },
     [sendGroupMessageMut],
@@ -456,6 +518,57 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       await setGroupTypingMut({ groupId: groupId as Id<"groups">, isTyping });
     },
     [setGroupTypingMut],
+  );
+  const toggleGroupReaction = useCallback<JaTextStore["toggleGroupReaction"]>(
+    async (messageId, emoji) => {
+      await toggleGroupReactionMut({ messageId: messageId as Id<"groupMessages">, emoji });
+    },
+    [toggleGroupReactionMut],
+  );
+  const deleteGroupMessageForMe = useCallback<JaTextStore["deleteGroupMessageForMe"]>(
+    async (messageId) => {
+      await deleteGroupForMeMut({ messageId: messageId as Id<"groupMessages"> });
+    },
+    [deleteGroupForMeMut],
+  );
+  const unsendGroupMessage = useCallback<JaTextStore["unsendGroupMessage"]>(
+    async (messageId) => (await unsendGroupMut({ messageId: messageId as Id<"groupMessages"> })) as boolean,
+    [unsendGroupMut],
+  );
+  const editGroupMessage = useCallback<JaTextStore["editGroupMessage"]>(
+    async (messageId, body) => {
+      await editGroupMut({ messageId: messageId as Id<"groupMessages">, body });
+    },
+    [editGroupMut],
+  );
+  const forwardGroupMessage: JaTextStore["forwardGroupMessage"] = useCallback(
+    async (messageId, target) => {
+      if (target.groupId) {
+        await forwardGroupMut({ messageId: messageId as Id<"groupMessages">, targetGroupId: target.groupId as Id<"groups"> });
+      } else if (target.userId) {
+        await forwardGroupMut({ messageId: messageId as Id<"groupMessages">, targetUserId: target.userId as Id<"users"> });
+      }
+    },
+    [forwardGroupMut],
+  );
+  const favoriteGroupStickerFromMessage: JaTextStore["favoriteGroupStickerFromMessage"] = useCallback(
+    async (messageId) => {
+      const msg = groupMessages.find((m) => m.id === messageId);
+      if (!msg || (!msg.attachmentUrl && !msg.stickerUrl)) throw new Error("No media to favorite.");
+      const key = msg.stickerKey ?? (msg.attachmentUrl ? `upload:${msg.attachmentUrl}` : msg.stickerUrl ? `klipy:${msg.stickerUrl}` : `group:${messageId}`);
+      const existing = (stickerLibrary?.favorites ?? []).find((s) => s.key === key) || (stickerLibrary?.recent ?? []).find((s) => s.key === key);
+      const isFav = existing?.isFavorite ?? false;
+      await setStickerFavoriteMut({
+        mediaKey: key,
+        url: msg.attachmentUrl ?? msg.stickerUrl ?? "",
+        previewUrl: msg.attachmentUrl ?? msg.stickerUrl,
+        name: msg.attachmentName ?? msg.stickerName ?? "Group media",
+        mediaType: msg.attachmentType === "image/gif" ? "gif" : msg.stickerUrl ? "sticker" : "image",
+        source: msg.stickerKey?.startsWith("klipy:") ? "klipy" : "upload",
+        isFavorite: !isFav,
+      });
+    },
+    [groupMessages, setStickerFavoriteMut, stickerLibrary],
   );
   const renameGroup = useCallback<JaTextStore["renameGroup"]>(
     async (groupId, name) => {
@@ -919,10 +1032,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     endCommunityPoll,
     editCommunityMessage,
     deleteCommunityMessage,
+    toggleCommunityReaction,
+    deleteCommunityMessageForMe,
+    unsendCommunityMessage,
+    forwardCommunityMessage,
+    favoriteCommunityStickerFromMessage,
     createGroup,
     sendGroupMessage,
     sendGroupSticker,
     setGroupTyping,
+    toggleGroupReaction,
+    deleteGroupMessageForMe,
+    unsendGroupMessage,
+    editGroupMessage,
+    forwardGroupMessage,
+    favoriteGroupStickerFromMessage,
     renameGroup,
     setGroupAvatar,
     setGroupMemberRole,

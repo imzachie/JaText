@@ -1,7 +1,10 @@
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
-import { mutation, query } from "./_generated/server";
-import { areFriends, profileOf, requireUser, type Ctx } from "./lib";
+import type { Doc, Id } from "./_generated/dataModel";
+import { mutation, query, type QueryCtx } from "./_generated/server";
+import { areFriends, pairKey, profileOf, requireUser, scheduleMessagePush, type Ctx } from "./lib";
+
+const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
+const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 
 async function requireMembership(
   ctx: Ctx,
@@ -26,6 +29,80 @@ async function requireGroupModerator(
   return membership;
 }
 
+async function withGroupMessageDetails(
+  ctx: QueryCtx,
+  m: Doc<"groupMessages">,
+  currentUserId: Id<"users">,
+) {
+  const [sender, reply, forwarder] = await Promise.all([
+    ctx.db.get(m.senderId),
+    m.replyToId ? ctx.db.get(m.replyToId) : null,
+    m.forwardedFromId ? ctx.db.get(m.forwardedFromId) : null,
+  ]);
+  const senderProfile = sender ? await profileOf(ctx, sender) : null;
+  const replySender = reply ? await ctx.db.get(reply.senderId) : null;
+  const mediaKey =
+    m.stickerKey ??
+    (m.attachmentId
+      ? `upload:${m.attachmentId}`
+      : m.attachmentUrl
+        ? `klipy:${m.attachmentUrl}`
+        : m.stickerStorageId
+          ? `upload:${m.stickerStorageId}`
+          : undefined);
+  const favorite = mediaKey
+    ? await ctx.db
+        .query("stickerLibrary")
+        .withIndex("by_user_media", (q) => q.eq("userId", currentUserId).eq("mediaKey", mediaKey))
+        .unique()
+    : null;
+  const attachmentUrl = m.unsentAt
+    ? undefined
+    : m.attachmentUrl ??
+      (m.attachmentId ? ((await ctx.storage.getUrl(m.attachmentId)) ?? undefined) : undefined);
+  const stickerUrl = m.unsentAt
+    ? undefined
+    : m.stickerStorageId
+      ? ((await ctx.storage.getUrl(m.stickerStorageId)) ?? undefined)
+      : m.stickerUrl;
+  return {
+    id: m._id as string,
+    senderId: m.senderId as string,
+    senderName: sender?.displayName ?? sender?.name ?? "",
+    senderUsername: sender?.username ?? "",
+    senderAvatarUrl: senderProfile?.avatarUrl,
+    senderAvatarColor: sender?.avatarColor ?? "black",
+    body: m.unsentAt ? "" : m.body,
+    attachmentUrl,
+    attachmentName: m.unsentAt ? undefined : m.attachmentName,
+    attachmentType: m.unsentAt ? undefined : m.attachmentType,
+    stickerUrl,
+    stickerName: m.unsentAt ? undefined : m.stickerName,
+    stickerKey: m.stickerKey ?? (favorite ? mediaKey : undefined),
+    isStickerFavorite: favorite?.isFavorite ?? false,
+    forwardedFromName: forwarder?.displayName ?? forwarder?.name ?? m.forwardedFromName,
+    replyTo: reply && replySender
+      ? {
+          id: reply._id as string,
+          senderId: reply.senderId as string,
+          senderName: replySender.displayName ?? replySender.name ?? "",
+          body: reply.hiddenFor?.includes(currentUserId)
+            ? "Message unavailable"
+            : reply.unsentAt
+              ? "This message was unsent"
+              : reply.body || reply.stickerName || reply.attachmentName || "Sticker",
+        }
+      : undefined,
+    createdAt: m._creationTime,
+    editedAt: m.editedAt,
+    unsentAt: m.unsentAt,
+    reactions: m.reactions?.map((reaction) => ({
+      userId: reaction.userId as string,
+      emoji: reaction.emoji,
+    })),
+  };
+}
+
 export const listMine = query({
   args: {},
   handler: async (ctx) => {
@@ -47,6 +124,12 @@ export const listMine = query({
           .withIndex("by_group", (q) => q.eq("groupId", group._id))
           .order("desc")
           .first();
+        // filter hidden for last message preview if needed, but keep simple
+        const previewBody = lastMessage?.hiddenFor?.includes(me._id) || lastMessage?.unsentAt
+          ? lastMessage?.unsentAt
+            ? "This message was unsent"
+            : ""
+          : lastMessage?.body || (lastMessage?.attachmentUrl || lastMessage?.attachmentId || lastMessage?.stickerUrl ? "📎 Attachment" : "");
         return {
           id: group._id as string,
           name: group.name,
@@ -56,7 +139,7 @@ export const listMine = query({
           ownerId: group.ownerId as string,
           role: membership.role,
           memberCount: members.length,
-          lastMessage: lastMessage?.body ?? "",
+          lastMessage: previewBody ?? "",
           lastMessageAt: lastMessage?._creationTime ?? group._creationTime,
         };
       }),
@@ -112,42 +195,8 @@ export const listMessages = query({
       .withIndex("by_group", (q) => q.eq("groupId", groupId))
       .order("asc")
       .collect();
-    return Promise.all(
-      messages.map(async (message) => {
-        const sender = await ctx.db.get(message.senderId);
-        return {
-          id: message._id as string,
-          senderId: message.senderId as string,
-          senderName: sender?.displayName ?? sender?.name ?? "",
-          senderUsername: sender?.username ?? "",
-          senderAvatarUrl: sender?.avatarId
-            ? ((await ctx.storage.getUrl(sender.avatarId)) ?? undefined)
-            : sender?.image,
-          senderAvatarColor: sender?.avatarColor ?? "black",
-          body: message.body,
-          stickerUrl: message.stickerStorageId
-            ? ((await ctx.storage.getUrl(message.stickerStorageId)) ?? undefined)
-            : message.stickerUrl,
-          stickerName: message.stickerName,
-          forwardedFromName: message.forwardedFromName,
-          replyTo: message.replyToId
-            ? await (async () => {
-                const reply = await ctx.db.get(message.replyToId!);
-                const replySender = reply ? await ctx.db.get(reply.senderId) : null;
-                return reply && replySender
-                  ? {
-                      id: reply._id as string,
-                      senderId: reply.senderId as string,
-                      senderName: replySender.displayName ?? replySender.name ?? "",
-                      body: reply.body || reply.stickerName || "Sticker",
-                    }
-                  : undefined;
-              })()
-            : undefined,
-          createdAt: message._creationTime,
-        };
-      }),
-    );
+    const visible = messages.filter((m) => !m.hiddenFor?.includes(me._id));
+    return Promise.all(visible.map((message) => withGroupMessageDetails(ctx, message, me._id)));
   },
 });
 
@@ -193,32 +242,186 @@ export const send = mutation({
     stickerUrl: v.optional(v.string()),
     stickerStorageId: v.optional(v.id("_storage")),
     stickerName: v.optional(v.string()),
+    stickerKey: v.optional(v.string()),
+    attachmentId: v.optional(v.id("_storage")),
+    attachmentName: v.optional(v.string()),
+    attachmentType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const me = await requireUser(ctx);
     const membership = await requireMembership(ctx, args.groupId, me._id);
     if (membership.muted) throw new Error("You are muted in this group.");
     const text = args.body.trim();
-    if (!text && !args.stickerUrl && !args.stickerStorageId) throw new Error("Message is empty.");
+    if (!text && !args.stickerUrl && !args.stickerStorageId && !args.attachmentId) throw new Error("Message is empty.");
     if (args.replyToId) {
       const replied = await ctx.db.get(args.replyToId);
       if (!replied || replied.groupId !== args.groupId)
         throw new Error("The message you are replying to is unavailable.");
+      if (replied.hiddenFor?.includes(me._id) || replied.unsentAt)
+        throw new Error("The message you are replying to is unavailable.");
     }
-    const forwardedMessage = args.forwardedFromId ? await ctx.db.get(args.forwardedFromId) : null;
-    if (args.forwardedFromId && (!forwardedMessage || forwardedMessage.groupId !== args.groupId))
-      throw new Error("The forwarded message is unavailable.");
-    const forwardedSender = forwardedMessage ? await ctx.db.get(forwardedMessage.senderId) : null;
+    let forwardedFromName: string | undefined;
+    let forwardedFromId: Id<"users"> | undefined;
+    if (args.forwardedFromId) {
+      const forwardedMessage = await ctx.db.get(args.forwardedFromId);
+      if (!forwardedMessage || forwardedMessage.groupId !== args.groupId)
+        throw new Error("The forwarded message is unavailable.");
+      if (forwardedMessage.hiddenFor?.includes(me._id) || forwardedMessage.unsentAt)
+        throw new Error("This message can no longer be forwarded.");
+      const forwardedSender = await ctx.db.get(forwardedMessage.senderId);
+      forwardedFromName = forwardedSender?.displayName ?? forwardedSender?.name;
+      forwardedFromId = forwardedMessage.senderId;
+      // If forwarding, copy attachment/sticker if not explicitly provided? Already handled by caller; but ensure body copying
+    }
     await ctx.db.insert("groupMessages", {
       groupId: args.groupId,
       senderId: me._id,
       body: text.slice(0, 4000),
       replyToId: args.replyToId,
-      forwardedFromName: forwardedSender?.displayName ?? forwardedSender?.name,
+      forwardedFromName,
+      forwardedFromId,
       stickerUrl: args.stickerUrl,
       stickerStorageId: args.stickerStorageId,
       stickerName: args.stickerName?.slice(0, 120),
+      stickerKey: args.stickerKey,
+      attachmentId: args.attachmentId,
+      attachmentName: args.attachmentName,
+      attachmentType: args.attachmentType,
     });
+  },
+});
+
+export const forward = mutation({
+  args: {
+    messageId: v.id("groupMessages"),
+    targetGroupId: v.optional(v.id("groups")),
+    targetUserId: v.optional(v.id("users")),
+  },
+  handler: async (ctx, { messageId, targetGroupId, targetUserId }) => {
+    const me = await requireUser(ctx);
+    const source = await ctx.db.get(messageId);
+    if (!source || source.hiddenFor?.includes(me._id) || source.unsentAt)
+      throw new Error("This message can no longer be forwarded.");
+    // verify source membership
+    await requireMembership(ctx, source.groupId, me._id);
+    if (targetGroupId) {
+      const membership = await requireMembership(ctx, targetGroupId, me._id);
+      if (membership.muted) throw new Error("You are muted in that group.");
+      // resolve forwarded sender
+      const sender = await ctx.db.get(source.senderId);
+      await ctx.db.insert("groupMessages", {
+        groupId: targetGroupId,
+        senderId: me._id,
+        body: source.body,
+        attachmentId: source.attachmentId,
+        attachmentName: source.attachmentName,
+        attachmentType: source.attachmentType,
+        stickerUrl: source.stickerUrl,
+        stickerStorageId: source.stickerStorageId,
+        stickerName: source.stickerName,
+        stickerKey: source.stickerKey,
+        forwardedFromId: source.senderId,
+        forwardedFromName: sender?.displayName ?? sender?.name,
+      });
+    } else if (targetUserId) {
+      if (!(await areFriends(ctx, me._id, targetUserId)))
+        throw new Error("You can only forward messages to accepted friends.");
+      const pair = pairKey(me._id, targetUserId);
+      await ctx.db.insert("messages", {
+        senderId: me._id,
+        receiverId: targetUserId,
+        pairKey: pair,
+        body: source.body,
+        attachmentId: source.attachmentId,
+        attachmentName: source.attachmentName,
+        attachmentType: source.attachmentType,
+        attachmentUrl: source.attachmentUrl ?? source.stickerUrl,
+        stickerKey: source.stickerKey,
+        forwardedFromId: source.senderId,
+        deliveryStatus: "delivered",
+      });
+      const meDoc = await ctx.db.get(me._id);
+      if (meDoc && targetUserId) {
+        await scheduleMessagePush(ctx, meDoc, targetUserId, source.body || "Forwarded you a message");
+      }
+    } else {
+      throw new Error("Choose where to forward this message.");
+    }
+  },
+});
+
+export const toggleReaction = mutation({
+  args: { messageId: v.id("groupMessages"), emoji: v.string() },
+  handler: async (ctx, { messageId, emoji }) => {
+    const me = await requireUser(ctx);
+    if (!(REACTION_EMOJIS as readonly string[]).includes(emoji)) throw new Error("That reaction is not available.");
+    const message = await ctx.db.get(messageId);
+    if (!message || message.hiddenFor?.includes(me._id) || message.unsentAt)
+      throw new Error("This message cannot be reacted to.");
+    await requireMembership(ctx, message.groupId, me._id);
+    const reactions = message.reactions ?? [];
+    const existing = reactions.find((reaction) => reaction.userId === me._id);
+    const updated =
+      existing?.emoji === emoji
+        ? reactions.filter((reaction) => reaction.userId !== me._id)
+        : [...reactions.filter((reaction) => reaction.userId !== me._id), { userId: me._id, emoji }];
+    await ctx.db.patch(messageId, { reactions: updated });
+  },
+});
+
+export const deleteForMe = mutation({
+  args: { messageId: v.id("groupMessages") },
+  handler: async (ctx, { messageId }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (!message) throw new Error("Message not found.");
+    await requireMembership(ctx, message.groupId, me._id);
+    if (!message.hiddenFor?.includes(me._id)) {
+      await ctx.db.patch(messageId, { hiddenFor: [...(message.hiddenFor ?? []), me._id] });
+    }
+  },
+});
+
+export const unsend = mutation({
+  args: { messageId: v.id("groupMessages") },
+  handler: async (ctx, { messageId }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (!message || message.senderId !== me._id) throw new Error("You can only unsend your own messages.");
+    if (message.unsentAt) throw new Error("This message was already unsent.");
+    if (Date.now() - message._creationTime >= UNSEND_WINDOW_MS) throw new Error("Messages can only be unsent within one hour.");
+    const now = Date.now();
+    const showWarning = me.unsendWarningShownAt === undefined || now - me.unsendWarningShownAt >= 3 * 60 * 60 * 1000;
+    if (showWarning) await ctx.db.patch(me._id, { unsendWarningShownAt: now });
+    await ctx.db.patch(messageId, {
+      body: "",
+      attachmentId: undefined,
+      attachmentName: undefined,
+      attachmentType: undefined,
+      attachmentUrl: undefined,
+      stickerUrl: undefined,
+      stickerStorageId: undefined,
+      stickerName: undefined,
+      stickerKey: undefined,
+      reactions: [],
+      unsentAt: now,
+    });
+    return showWarning;
+  },
+});
+
+export const edit = mutation({
+  args: { messageId: v.id("groupMessages"), body: v.string() },
+  handler: async (ctx, { messageId, body }) => {
+    const me = await requireUser(ctx);
+    const message = await ctx.db.get(messageId);
+    if (!message || message.senderId !== me._id) throw new Error("You can only edit your own messages.");
+    if (message.unsentAt || message.hiddenFor?.includes(me._id)) throw new Error("This message is no longer available to edit.");
+    const text = body.trim();
+    if (!text && !message.attachmentId && !message.stickerStorageId && !message.stickerUrl) throw new Error("Message cannot be empty.");
+    if (text.length > 4000) throw new Error("Messages can be up to 4,000 characters.");
+    await requireMembership(ctx, message.groupId, me._id);
+    await ctx.db.patch(messageId, { body: text, editedAt: Date.now() });
   },
 });
 

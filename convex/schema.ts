@@ -152,8 +152,24 @@ export default defineSchema({
     stickerUrl: v.optional(v.string()),
     stickerStorageId: v.optional(v.id("_storage")),
     stickerName: v.optional(v.string()),
+    attachmentId: v.optional(v.id("_storage")),
+    attachmentName: v.optional(v.string()),
+    attachmentType: v.optional(v.string()),
+    attachmentUrl: v.optional(v.string()),
+    stickerKey: v.optional(v.string()),
     replyToId: v.optional(v.id("communityMessages")),
     forwardedFromName: v.optional(v.string()),
+    forwardedFromId: v.optional(v.id("users")),
+    unsentAt: v.optional(v.number()),
+    hiddenFor: v.optional(v.array(v.id("users"))),
+    reactions: v.optional(
+      v.array(
+        v.object({
+          userId: v.id("users"),
+          emoji: v.string(),
+        }),
+      ),
+    ),
   }),
 
   communityPollVotes: defineTable({
@@ -186,9 +202,26 @@ export default defineSchema({
     body: v.string(),
     replyToId: v.optional(v.id("groupMessages")),
     forwardedFromName: v.optional(v.string()),
+    forwardedFromId: v.optional(v.id("users")),
     stickerUrl: v.optional(v.string()),
     stickerStorageId: v.optional(v.id("_storage")),
     stickerName: v.optional(v.string()),
+    stickerKey: v.optional(v.string()),
+    attachmentId: v.optional(v.id("_storage")),
+    attachmentName: v.optional(v.string()),
+    attachmentType: v.optional(v.string()),
+    attachmentUrl: v.optional(v.string()),
+    unsentAt: v.optional(v.number()),
+    editedAt: v.optional(v.number()),
+    hiddenFor: v.optional(v.array(v.id("users"))),
+    reactions: v.optional(
+      v.array(
+        v.object({
+          userId: v.id("users"),
+          emoji: v.string(),
+        }),
+      ),
+    ),
   }).index("by_group", ["groupId"]),
 
   chatTyping: defineTable({

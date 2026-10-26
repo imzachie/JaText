@@ -88,6 +88,7 @@ export interface ChatPreview {
 
 export interface CommunityMessage {
   id: string;
+  renderKey?: string;
   senderId: string;
   senderName: string;
   senderUsername: string;
@@ -101,10 +102,17 @@ export interface CommunityMessage {
   myVote?: number;
   createdAt: number;
   editedAt?: number;
+  unsentAt?: number;
+  attachmentUrl?: string;
+  attachmentName?: string;
+  attachmentType?: string;
   stickerUrl?: string;
   stickerName?: string;
+  stickerKey?: string;
+  isStickerFavorite?: boolean;
   forwardedFromName?: string;
   replyTo?: { id: string; senderId: string; senderName: string; body: string };
+  reactions?: MessageReaction[];
   canModerate: boolean;
   isOwner: boolean;
 }
@@ -145,17 +153,26 @@ export interface GroupDetails {
 
 export interface GroupMessage {
   id: string;
+  renderKey?: string;
   senderId: string;
   senderName: string;
   senderUsername: string;
   senderAvatarUrl?: string;
   senderAvatarColor: string;
   body: string;
+  attachmentUrl?: string;
+  attachmentName?: string;
+  attachmentType?: string;
   stickerUrl?: string;
   stickerName?: string;
+  stickerKey?: string;
+  isStickerFavorite?: boolean;
   forwardedFromName?: string;
   replyTo?: { id: string; senderId: string; senderName: string; body: string };
   createdAt: number;
+  editedAt?: number;
+  unsentAt?: number;
+  reactions?: MessageReaction[];
 }
 
 export interface ChatTypingUser {
@@ -239,7 +256,7 @@ export interface JaTextStore {
   setActivity: (status: StatusPreference, customStatus: string) => Promise<void>;
   setTyping: (receiverId: string, isTyping: boolean) => Promise<void>;
   setCommunityModerators: (userIds: string[]) => Promise<void>;
-  sendCommunityText: (body: string, replyToId?: string, forwardedFromId?: string) => Promise<void>;
+  sendCommunityText: (body: string, file?: File, replyToId?: string, forwardedFromId?: string) => Promise<void>;
   sendCommunitySticker: (sticker: StickerMedia, replyToId?: string) => Promise<void>;
   setCommunityTyping: (isTyping: boolean) => Promise<void>;
   createCommunityPoll: (question: string, options: string[]) => Promise<void>;
@@ -247,10 +264,21 @@ export interface JaTextStore {
   endCommunityPoll: (pollId: string) => Promise<void>;
   editCommunityMessage: (messageId: string, body: string) => Promise<void>;
   deleteCommunityMessage: (messageId: string) => Promise<void>;
+  toggleCommunityReaction: (messageId: string, emoji: string) => Promise<void>;
+  deleteCommunityMessageForMe: (messageId: string) => Promise<void>;
+  unsendCommunityMessage: (messageId: string) => Promise<boolean>;
+  forwardCommunityMessage: (messageId: string, target: { groupId?: string; userId?: string; community?: boolean }) => Promise<void>;
+  favoriteCommunityStickerFromMessage: (messageId: string) => Promise<void>;
   createGroup: (name: string, memberIds: string[]) => Promise<string>;
-  sendGroupMessage: (groupId: string, body: string, replyToId?: string, forwardedFromId?: string) => Promise<void>;
+  sendGroupMessage: (groupId: string, body: string, file?: File, replyToId?: string, forwardedFromId?: string) => Promise<void>;
   sendGroupSticker: (groupId: string, sticker: StickerMedia, replyToId?: string) => Promise<void>;
   setGroupTyping: (groupId: string, isTyping: boolean) => Promise<void>;
+  toggleGroupReaction: (messageId: string, emoji: string) => Promise<void>;
+  deleteGroupMessageForMe: (messageId: string) => Promise<void>;
+  unsendGroupMessage: (messageId: string) => Promise<boolean>;
+  editGroupMessage: (messageId: string, body: string) => Promise<void>;
+  forwardGroupMessage: (messageId: string, target: { groupId?: string; userId?: string; community?: boolean }) => Promise<void>;
+  favoriteGroupStickerFromMessage: (messageId: string) => Promise<void>;
   renameGroup: (groupId: string, name: string) => Promise<void>;
   setGroupAvatar: (groupId: string, file: File | null) => Promise<void>;
   setGroupMemberRole: (groupId: string, userId: string, role: "moderator" | "member") => Promise<void>;
