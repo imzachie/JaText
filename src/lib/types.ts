@@ -94,13 +94,17 @@ export interface CommunityMessage {
   senderAvatarUrl?: string;
   senderAvatarColor: string;
   body: string;
-  type: "text" | "poll";
+  type: "text" | "poll" | "sticker";
   pollOptions: string[];
   pollEndedAt?: number;
   votes: { userId: string; optionIndex: number }[];
   myVote?: number;
   createdAt: number;
   editedAt?: number;
+  stickerUrl?: string;
+  stickerName?: string;
+  forwardedFromName?: string;
+  replyTo?: { id: string; senderId: string; senderName: string; body: string };
   canModerate: boolean;
   isOwner: boolean;
 }
@@ -144,8 +148,20 @@ export interface GroupMessage {
   senderId: string;
   senderName: string;
   senderUsername: string;
+  senderAvatarUrl?: string;
+  senderAvatarColor: string;
   body: string;
+  stickerUrl?: string;
+  stickerName?: string;
+  forwardedFromName?: string;
+  replyTo?: { id: string; senderId: string; senderName: string; body: string };
   createdAt: number;
+}
+
+export interface ChatTypingUser {
+  id: string;
+  displayName: string;
+  username: string;
 }
 
 export const OFFICIAL_COMMUNITY_ID = "jatext-official-community";
@@ -180,6 +196,8 @@ export interface JaTextStore {
   setActiveGroupId: (id: string | null) => void;
   groupDetails: GroupDetails | null;
   groupMessages: GroupMessage[];
+  groupTypingUsers: ChatTypingUser[];
+  communityTypingUsers: ChatTypingUser[];
   notificationsEnabled: boolean;
   pushRegistrationStatus: "idle" | "registering" | "registered" | "error";
   soundsEnabled: boolean;
@@ -221,14 +239,18 @@ export interface JaTextStore {
   setActivity: (status: StatusPreference, customStatus: string) => Promise<void>;
   setTyping: (receiverId: string, isTyping: boolean) => Promise<void>;
   setCommunityModerators: (userIds: string[]) => Promise<void>;
-  sendCommunityText: (body: string) => Promise<void>;
+  sendCommunityText: (body: string, replyToId?: string, forwardedFromId?: string) => Promise<void>;
+  sendCommunitySticker: (sticker: StickerMedia, replyToId?: string) => Promise<void>;
+  setCommunityTyping: (isTyping: boolean) => Promise<void>;
   createCommunityPoll: (question: string, options: string[]) => Promise<void>;
   voteCommunityPoll: (pollId: string, optionIndex: number) => Promise<void>;
   endCommunityPoll: (pollId: string) => Promise<void>;
   editCommunityMessage: (messageId: string, body: string) => Promise<void>;
   deleteCommunityMessage: (messageId: string) => Promise<void>;
   createGroup: (name: string, memberIds: string[]) => Promise<string>;
-  sendGroupMessage: (groupId: string, body: string) => Promise<void>;
+  sendGroupMessage: (groupId: string, body: string, replyToId?: string, forwardedFromId?: string) => Promise<void>;
+  sendGroupSticker: (groupId: string, sticker: StickerMedia, replyToId?: string) => Promise<void>;
+  setGroupTyping: (groupId: string, isTyping: boolean) => Promise<void>;
   renameGroup: (groupId: string, name: string) => Promise<void>;
   setGroupAvatar: (groupId: string, file: File | null) => Promise<void>;
   setGroupMemberRole: (groupId: string, userId: string, role: "moderator" | "member") => Promise<void>;

@@ -15,6 +15,7 @@ import { OFFICIAL_COMMUNITY_ID } from "./types";
 import type {
   ChatMessage,
   ChatPreview,
+  ChatTypingUser,
   CommunityMessage,
   CommunityUser,
   FriendActivity,
@@ -86,6 +87,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     api.community.list,
     isAuthenticated ? {} : "skip",
   ) ?? []) as CommunityMessage[];
+  const communityTypingUsers = (useQuery(
+    api.community.typingUsers,
+    isAuthenticated ? {} : "skip",
+  ) ?? []) as ChatTypingUser[];
   const communityPermissions = (useQuery(
     api.community.permissions,
     isAuthenticated ? {} : "skip",
@@ -119,6 +124,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       ? { groupId: activeGroupId as Id<"groups"> }
       : "skip",
   ) ?? []) as GroupMessage[];
+  const groupTypingUsers = (useQuery(
+    api.groups.typingUsers,
+    isAuthenticated && activeGroupId ? { groupId: activeGroupId as Id<"groups"> } : "skip",
+  ) ?? []) as ChatTypingUser[];
   const stickerLibrary = useQuery(
     api.stickers.library,
     isAuthenticated ? {} : "skip",
@@ -154,6 +163,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const unregisterPushDeviceMut = useMutation(api.push.unregisterDevice);
   const setCommunityModeratorsMut = useMutation(api.community.setModerators);
   const sendCommunityTextMut = useMutation(api.community.sendText);
+  const sendCommunityStickerMut = useMutation(api.community.sendSticker);
+  const setCommunityTypingMut = useMutation(api.community.setTyping);
   const createCommunityPollMut = useMutation(api.community.createPoll);
   const voteCommunityPollMut = useMutation(api.community.vote);
   const endCommunityPollMut = useMutation(api.community.endPoll);
@@ -161,6 +172,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const deleteCommunityMessageMut = useMutation(api.community.deleteMessage);
   const createGroupMut = useMutation(api.groups.create);
   const sendGroupMessageMut = useMutation(api.groups.send);
+  const setGroupTypingMut = useMutation(api.groups.setTyping);
   const renameGroupMut = useMutation(api.groups.rename);
   const setGroupAvatarMut = useMutation(api.groups.setAvatar);
   const setGroupMemberRoleMut = useMutation(api.groups.setMemberRole);
@@ -348,10 +360,31 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [setCommunityModeratorsMut],
   );
   const sendCommunityText = useCallback<JaTextStore["sendCommunityText"]>(
-    async (body) => {
-      await sendCommunityTextMut({ body });
+    async (body, replyToId, forwardedFromId) => {
+      await sendCommunityTextMut({
+        body,
+        ...(replyToId ? { replyToId: replyToId as Id<"communityMessages"> } : {}),
+        ...(forwardedFromId ? { forwardedFromId: forwardedFromId as Id<"communityMessages"> } : {}),
+      });
     },
     [sendCommunityTextMut],
+  );
+  const sendCommunitySticker = useCallback<JaTextStore["sendCommunitySticker"]>(
+    async (sticker, replyToId) => {
+      await sendCommunityStickerMut({
+        ...(sticker.source === "klipy" ? { stickerUrl: sticker.url } : {}),
+        ...(sticker.storageId ? { stickerStorageId: sticker.storageId as Id<"_storage"> } : {}),
+        stickerName: sticker.name,
+        ...(replyToId ? { replyToId: replyToId as Id<"communityMessages"> } : {}),
+      });
+    },
+    [sendCommunityStickerMut],
+  );
+  const setCommunityTyping = useCallback<JaTextStore["setCommunityTyping"]>(
+    async (isTyping) => {
+      await setCommunityTypingMut({ isTyping });
+    },
+    [setCommunityTypingMut],
   );
   const createCommunityPoll = useCallback<JaTextStore["createCommunityPoll"]>(
     async (question, options) => {
@@ -395,10 +428,34 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [createGroupMut],
   );
   const sendGroupMessage = useCallback<JaTextStore["sendGroupMessage"]>(
-    async (groupId, body) => {
-      await sendGroupMessageMut({ groupId: groupId as Id<"groups">, body });
+    async (groupId, body, replyToId, forwardedFromId) => {
+      await sendGroupMessageMut({
+        groupId: groupId as Id<"groups">,
+        body,
+        ...(replyToId ? { replyToId: replyToId as Id<"groupMessages"> } : {}),
+        ...(forwardedFromId ? { forwardedFromId: forwardedFromId as Id<"groupMessages"> } : {}),
+      });
     },
     [sendGroupMessageMut],
+  );
+  const sendGroupSticker = useCallback<JaTextStore["sendGroupSticker"]>(
+    async (groupId, sticker, replyToId) => {
+      await sendGroupMessageMut({
+        groupId: groupId as Id<"groups">,
+        body: "",
+        ...(replyToId ? { replyToId: replyToId as Id<"groupMessages"> } : {}),
+        ...(sticker.source === "klipy" ? { stickerUrl: sticker.url } : {}),
+        ...(sticker.storageId ? { stickerStorageId: sticker.storageId as Id<"_storage"> } : {}),
+        stickerName: sticker.name,
+      });
+    },
+    [sendGroupMessageMut],
+  );
+  const setGroupTyping = useCallback<JaTextStore["setGroupTyping"]>(
+    async (groupId, isTyping) => {
+      await setGroupTypingMut({ groupId: groupId as Id<"groups">, isTyping });
+    },
+    [setGroupTypingMut],
   );
   const renameGroup = useCallback<JaTextStore["renameGroup"]>(
     async (groupId, name) => {
@@ -822,6 +879,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     setActiveGroupId,
     groupDetails,
     groupMessages,
+    groupTypingUsers,
+    communityTypingUsers,
     blockedUserIds,
     signInEmail,
     signUpEmail,
@@ -853,6 +912,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     setTyping,
     setCommunityModerators,
     sendCommunityText,
+    sendCommunitySticker,
+    setCommunityTyping,
     createCommunityPoll,
     voteCommunityPoll,
     endCommunityPoll,
@@ -860,6 +921,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     deleteCommunityMessage,
     createGroup,
     sendGroupMessage,
+    sendGroupSticker,
+    setGroupTyping,
     renameGroup,
     setGroupAvatar,
     setGroupMemberRole,

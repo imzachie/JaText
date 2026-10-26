@@ -5,6 +5,7 @@ import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import { Avatar } from "./Avatar";
+import { StickerPicker } from "./StickerPicker";
 import type { CommunityMessage } from "../lib/types";
 
 function PollOption({
@@ -121,8 +122,22 @@ function CommunityVoterDialog({
   );
 }
 
+function CommunityTypingStatus() {
+  const typingUsers = useQuery(api.community.typingUsers, {});
+  if (!typingUsers?.length) return null;
+  const names = typingUsers.map((user) => user.displayName || user.username);
+  return (
+    <div className="chat-typing-status" role="status">
+      {names.length === 1
+        ? `${names[0]} is typing…`
+        : `${names.slice(0, 2).join(", ")}${names.length > 2 ? ` and ${names.length - 2} more` : ""} are typing…`}
+    </div>
+  );
+}
+
 export function CommunityChatView({ onBack }: { onBack: () => void }) {
   const store = useJaText();
+  const setCommunityTyping = store.setCommunityTyping;
   const [draft, setDraft] = useState("");
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
@@ -133,10 +148,14 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
   const [directorySearch, setDirectorySearch] = useState("");
   const [editingMessage, setEditingMessage] = useState<{ id: string; body: string } | null>(null);
   const [voterPollId, setVoterPollId] = useState<string | null>(null);
+  const [replyTo, setReplyTo] = useState<CommunityMessage | null>(null);
+  const [forwardedMessage, setForwardedMessage] = useState<CommunityMessage | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesElement = useRef<HTMLDivElement>(null);
   const directorySearchInput = useRef<HTMLInputElement>(null);
+  const typingTimer = useRef<number | null>(null);
+  const typingRef = useRef(false);
   const wasPinnedRef = useRef(true);
   const lastMessageId = store.communityMessages.at(-1)?.id;
   const voterPoll = store.communityMessages.find((message) => message.id === voterPollId);
@@ -156,18 +175,64 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
     if (element && wasPinnedRef.current) element.scrollTop = element.scrollHeight;
   }, [lastMessageId]);
 
+  useEffect(() => () => {
+    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+    if (typingRef.current) {
+      void setCommunityTyping(false).catch((cause: unknown) => {
+        console.error("Could not clear community typing status.", cause);
+      });
+    }
+  }, [setCommunityTyping]);
+
   async function sendText(event: FormEvent) {
     event.preventDefault();
     if (!draft.trim() || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await store.sendCommunityText(draft);
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      await store.sendCommunityText(draft, replyTo?.id, forwardedMessage?.id);
       setDraft("");
+      setReplyTo(null);
+      setForwardedMessage(null);
+      typingRef.current = false;
+      await setCommunityTyping(false);
     } catch (cause) {
       setError(friendlyError(cause, "Could not post to the community."));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function updateDraft(value: string) {
+    setDraft(value);
+    const typing = !!value.trim();
+    if (typing !== typingRef.current) {
+      typingRef.current = typing;
+      void setCommunityTyping(typing).catch((cause: unknown) => {
+        setError(friendlyError(cause, "Couldn't update typing status."));
+      });
+    }
+    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+    if (typing) {
+      typingTimer.current = window.setTimeout(() => {
+        typingRef.current = false;
+        void setCommunityTyping(false).catch((cause: unknown) => {
+          setError(friendlyError(cause, "Couldn't update typing status."));
+        });
+      }, 2500);
+    }
+  }
+
+  async function sendSticker(sticker: Parameters<typeof store.sendCommunitySticker>[0]) {
+    try {
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      typingRef.current = false;
+      await setCommunityTyping(false);
+      await store.sendCommunitySticker(sticker, replyTo?.id);
+      setReplyTo(null);
+    } catch (cause) {
+      setError(friendlyError(cause, "Could not send the sticker."));
     }
   }
 
@@ -332,7 +397,38 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
                   </div>
                 </form>
               ) : (
-                <p className="community-post-body">{message.body}</p>
+                <>
+                  {message.forwardedFromName && (
+                    <span className="message-meta forwarded-label">↗ Forwarded from {message.forwardedFromName}</span>
+                  )}
+                  {message.replyTo && (
+                    <button
+                      type="button"
+                      className="reply-quote community-reply-quote"
+                      onClick={() => document.getElementById(`community-message-${message.replyTo?.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                    >
+                      <strong>{message.replyTo.senderName}</strong>
+                      <span>{message.replyTo.body}</span>
+                    </button>
+                  )}
+                  {message.stickerUrl
+                    ? <img className="group-message-sticker" src={message.stickerUrl} alt={message.stickerName ?? "Sticker"} />
+                    : <p className="community-post-body">{message.body}</p>}
+                </>
+              )}
+              <span id={`community-message-${message.id}`} />
+              {message.type !== "poll" && store.communityPermissions.canModerate && (
+                <div className="community-post-actions">
+                  <button type="button" className="mini-btn" onClick={() => {
+                    setReplyTo(message);
+                    setForwardedMessage(null);
+                  }}>Reply</button>
+                  <button type="button" className="mini-btn" onClick={() => {
+                    setReplyTo(null);
+                    setForwardedMessage(message);
+                    setDraft(message.body || (message.stickerUrl ? "Sticker" : ""));
+                  }}>Forward</button>
+                </div>
               )}
               {(canManagePost || message.type === "poll") && (
                 <div className="community-post-actions">
@@ -404,6 +500,7 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
       </div>
 
       {error && <div className="error-box community-error" role="alert">{error}</div>}
+      {store.mode === "convex" && <CommunityTypingStatus />}
       {store.communityPermissions.canModerate ? (
         <>
           {showPoll && (
@@ -454,13 +551,39 @@ export function CommunityChatView({ onBack }: { onBack: () => void }) {
             </form>
           )}
           <form className="composer community-composer" onSubmit={(event) => void sendText(event)}>
+            {(replyTo || forwardedMessage) && (
+              <div className="reply-composer-preview">
+                <div>
+                  <strong>{replyTo ? `Replying to ${replyTo.senderName}` : `Forwarding from ${forwardedMessage?.senderName}`}</strong>
+                  <span>{replyTo?.body ?? draft}</span>
+                </div>
+                <button type="button" className="mini-btn" onClick={() => {
+                  setReplyTo(null);
+                  setForwardedMessage(null);
+                  if (forwardedMessage) setDraft("");
+                }}>×</button>
+              </div>
+            )}
+            <StickerPicker friendId="" disabled={busy} onSelect={sendSticker} />
+            <button type="button" className="icon-btn voice-note-placeholder" title="Voice notes coming soon" aria-label="Voice notes coming soon" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="9" y="2" width="6" height="12" rx="3" />
+                <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+              </svg>
+            </button>
             <textarea
               value={draft}
               maxLength={4000}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => updateDraft(event.target.value)}
               rows={1}
               placeholder="Post an official community message…"
               aria-label="Community message"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
             />
             <button type="button" className="ghost-btn" onClick={() => setShowPoll((open) => !open)}>
               Create poll

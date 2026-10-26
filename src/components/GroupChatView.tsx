@@ -1,19 +1,35 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
+import { Avatar } from "./Avatar";
+import { StickerPicker } from "./StickerPicker";
+import type { GroupMessage } from "../lib/types";
+
+function typingLabel(names: string[]) {
+  if (names.length === 1) return `${names[0]} is typing…`;
+  const first = names.slice(0, 2).join(", ");
+  const more = names.length > 2 ? ` and ${names.length - 2} more` : "";
+  return `${first}${more} are typing…`;
+}
 
 export function GroupChatView({ onBack }: { onBack: () => void }) {
   const store = useJaText();
   const groupId = store.activeGroupId;
+  const setGroupTyping = store.setGroupTyping;
   const summary = store.groups.find((group) => group.id === groupId);
   const group = store.groupDetails?.id === groupId ? store.groupDetails : null;
   const [draft, setDraft] = useState("");
+  const [replyTo, setReplyTo] = useState<GroupMessage | null>(null);
+  const [forwardedMessage, setForwardedMessage] = useState<GroupMessage | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [showManage, setShowManage] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesElement = useRef<HTMLDivElement>(null);
   const wasPinnedRef = useRef(true);
+  const typingTimer = useRef<number | null>(null);
+  const typingRef = useRef(false);
+  const typingNames = store.groupTypingUsers.map((user) => user.displayName || user.username);
   const lastMessageId = store.groupMessages.at(-1)?.id;
 
   useEffect(() => {
@@ -21,19 +37,81 @@ export function GroupChatView({ onBack }: { onBack: () => void }) {
     if (element && wasPinnedRef.current) element.scrollTop = element.scrollHeight;
   }, [lastMessageId]);
 
+  useEffect(() => {
+    if (!groupId) return;
+    return () => {
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      if (typingRef.current) {
+        void setGroupTyping(groupId, false).catch((cause: unknown) => {
+          console.error("Could not clear group typing status.", cause);
+        });
+      }
+    };
+  }, [groupId, setGroupTyping]);
+
+  function updateDraft(value: string) {
+    setDraft(value);
+    if (!groupId) return;
+    const typing = !!value.trim();
+    if (typing !== typingRef.current) {
+      typingRef.current = typing;
+      void setGroupTyping(groupId, typing).catch((cause: unknown) => {
+        setError(friendlyError(cause, "Couldn't update typing status."));
+      });
+    }
+    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+    if (typing) {
+      typingTimer.current = window.setTimeout(() => {
+        typingRef.current = false;
+        void setGroupTyping(groupId, false).catch((cause: unknown) => {
+          setError(friendlyError(cause, "Couldn't update typing status."));
+        });
+      }, 2500);
+    }
+  }
+
   async function send(event: FormEvent) {
     event.preventDefault();
     if (!groupId || !draft.trim() || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await store.sendGroupMessage(groupId, draft);
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      await store.sendGroupMessage(groupId, draft, replyTo?.id, forwardedMessage?.id);
       setDraft("");
+      setReplyTo(null);
+      setForwardedMessage(null);
+      typingRef.current = false;
+      await store.setGroupTyping(groupId, false);
     } catch (cause) {
       setError(friendlyError(cause, "Could not send the group message."));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function sendSticker(sticker: Parameters<typeof store.sendGroupSticker>[1]) {
+    if (!groupId) return;
+    try {
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      typingRef.current = false;
+      await setGroupTyping(groupId, false);
+      await store.sendGroupSticker(groupId, sticker, replyTo?.id);
+      setReplyTo(null);
+    } catch (cause) {
+      setError(friendlyError(cause, "Could not send the sticker."));
+    }
+  }
+
+  function replyToMessage(message: GroupMessage) {
+    setReplyTo(message);
+    setForwardedMessage(null);
+  }
+
+  function forwardMessage(message: GroupMessage) {
+    setForwardedMessage(message);
+    setReplyTo(null);
+    setDraft(message.body || (message.stickerUrl ? "Sticker" : ""));
   }
 
   async function runAction(action: () => Promise<void>, success?: () => void) {
@@ -97,29 +175,97 @@ export function GroupChatView({ onBack }: { onBack: () => void }) {
           </div>
         )}
         {store.groupMessages.map((message) => (
-          <article className={`group-message ${message.senderId === store.me?.id ? "mine" : ""}`} key={message.id}>
-            <div className="group-message-meta">
-              <strong>{message.senderName}</strong>
-              <span className="muted small">@{message.senderUsername}</span>
-              <time className="muted small">{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time>
-            </div>
-            <p>{message.body}</p>
-          </article>
+          <div
+            className={`group-message-row ${message.senderId === store.me?.id ? "mine" : ""}`}
+            id={`group-message-${message.id}`}
+            key={message.id}
+          >
+            <Avatar
+              user={{
+                displayName: message.senderName,
+                username: message.senderUsername,
+                avatarColor: message.senderAvatarColor,
+                avatarUrl: message.senderAvatarUrl,
+              }}
+              size={34}
+            />
+            <article className="group-message-content">
+              <div className="group-message-meta">
+                <strong>{message.senderName}</strong>
+                <span className="muted small">@{message.senderUsername}</span>
+                <time className="muted small">{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time>
+              </div>
+              {message.forwardedFromName && (
+                <span className="message-meta forwarded-label">↗ Forwarded from {message.forwardedFromName}</span>
+              )}
+              <div className="group-message-bubble">
+                {message.replyTo && (
+                  <button
+                    type="button"
+                    className="reply-quote"
+                    onClick={() => document.getElementById(`group-message-${message.replyTo?.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                  >
+                    <strong>{message.replyTo.senderName}</strong>
+                    <span>{message.replyTo.body}</span>
+                  </button>
+                )}
+                {message.stickerUrl && <img className="group-message-sticker" src={message.stickerUrl} alt={message.stickerName ?? "Sticker"} />}
+                {message.body && <p>{message.body}</p>}
+              </div>
+              <div className="group-message-actions">
+                <button type="button" className="mini-btn" onClick={() => replyToMessage(message)}>Reply</button>
+                <button type="button" className="mini-btn" onClick={() => forwardMessage(message)}>Forward</button>
+              </div>
+            </article>
+          </div>
         ))}
       </div>
 
       {error && <div className="error-box community-error" role="alert">{error}</div>}
+      {typingNames.length > 0 && (
+        <div className="chat-typing-status" role="status">{typingLabel(typingNames)}</div>
+      )}
       {group?.members.find((member) => member.id === store.me?.id)?.muted ? (
         <div className="community-readonly">You are muted in this group.</div>
       ) : (
         <form className="composer group-composer" onSubmit={(event) => void send(event)}>
+          {(replyTo || forwardedMessage) && (
+            <div className="reply-composer-preview">
+              <div>
+                <strong>{replyTo ? `Replying to ${replyTo.senderName}` : `Forwarding from ${forwardedMessage?.senderName}`}</strong>
+                <span>{replyTo?.body ?? draft}</span>
+              </div>
+              <button type="button" className="mini-btn" onClick={() => {
+                setReplyTo(null);
+                setForwardedMessage(null);
+                if (forwardedMessage) setDraft("");
+              }}>×</button>
+            </div>
+          )}
+          <StickerPicker
+            friendId=""
+            disabled={busy}
+            onSelect={sendSticker}
+          />
+          <button type="button" className="icon-btn voice-note-placeholder" title="Voice notes coming soon" aria-label="Voice notes coming soon" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="2" width="6" height="12" rx="3" />
+              <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+            </svg>
+          </button>
           <textarea
             value={draft}
             maxLength={4000}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => updateDraft(event.target.value)}
             rows={1}
             placeholder="Message the group…"
             aria-label="Group message"
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
           />
           <button type="submit" className="send-btn" disabled={busy || !draft.trim()}>➤</button>
         </form>

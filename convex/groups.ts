@@ -120,7 +120,30 @@ export const listMessages = query({
           senderId: message.senderId as string,
           senderName: sender?.displayName ?? sender?.name ?? "",
           senderUsername: sender?.username ?? "",
+          senderAvatarUrl: sender?.avatarId
+            ? ((await ctx.storage.getUrl(sender.avatarId)) ?? undefined)
+            : sender?.image,
+          senderAvatarColor: sender?.avatarColor ?? "black",
           body: message.body,
+          stickerUrl: message.stickerStorageId
+            ? ((await ctx.storage.getUrl(message.stickerStorageId)) ?? undefined)
+            : message.stickerUrl,
+          stickerName: message.stickerName,
+          forwardedFromName: message.forwardedFromName,
+          replyTo: message.replyToId
+            ? await (async () => {
+                const reply = await ctx.db.get(message.replyToId!);
+                const replySender = reply ? await ctx.db.get(reply.senderId) : null;
+                return reply && replySender
+                  ? {
+                      id: reply._id as string,
+                      senderId: reply.senderId as string,
+                      senderName: replySender.displayName ?? replySender.name ?? "",
+                      body: reply.body || reply.stickerName || "Sticker",
+                    }
+                  : undefined;
+              })()
+            : undefined,
           createdAt: message._creationTime,
         };
       }),
@@ -162,18 +185,88 @@ export const create = mutation({
 });
 
 export const send = mutation({
-  args: { groupId: v.id("groups"), body: v.string() },
-  handler: async (ctx, { groupId, body }) => {
+  args: {
+    groupId: v.id("groups"),
+    body: v.string(),
+    replyToId: v.optional(v.id("groupMessages")),
+    forwardedFromId: v.optional(v.id("groupMessages")),
+    stickerUrl: v.optional(v.string()),
+    stickerStorageId: v.optional(v.id("_storage")),
+    stickerName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
     const me = await requireUser(ctx);
-    const membership = await requireMembership(ctx, groupId, me._id);
+    const membership = await requireMembership(ctx, args.groupId, me._id);
     if (membership.muted) throw new Error("You are muted in this group.");
-    const text = body.trim();
-    if (!text) throw new Error("Message is empty.");
+    const text = args.body.trim();
+    if (!text && !args.stickerUrl && !args.stickerStorageId) throw new Error("Message is empty.");
+    if (args.replyToId) {
+      const replied = await ctx.db.get(args.replyToId);
+      if (!replied || replied.groupId !== args.groupId)
+        throw new Error("The message you are replying to is unavailable.");
+    }
+    const forwardedMessage = args.forwardedFromId ? await ctx.db.get(args.forwardedFromId) : null;
+    if (args.forwardedFromId && (!forwardedMessage || forwardedMessage.groupId !== args.groupId))
+      throw new Error("The forwarded message is unavailable.");
+    const forwardedSender = forwardedMessage ? await ctx.db.get(forwardedMessage.senderId) : null;
     await ctx.db.insert("groupMessages", {
-      groupId,
+      groupId: args.groupId,
       senderId: me._id,
       body: text.slice(0, 4000),
+      replyToId: args.replyToId,
+      forwardedFromName: forwardedSender?.displayName ?? forwardedSender?.name,
+      stickerUrl: args.stickerUrl,
+      stickerStorageId: args.stickerStorageId,
+      stickerName: args.stickerName?.slice(0, 120),
     });
+  },
+});
+
+export const setTyping = mutation({
+  args: { groupId: v.id("groups"), isTyping: v.boolean() },
+  handler: async (ctx, { groupId, isTyping }) => {
+    const me = await requireUser(ctx);
+    await requireMembership(ctx, groupId, me._id);
+    const existing = await ctx.db
+      .query("chatTyping")
+      .withIndex("by_channel_user", (q) => q.eq("channelId", `group:${groupId}`).eq("userId", me._id))
+      .unique();
+    if (!isTyping) {
+      if (existing) await ctx.db.delete(existing._id);
+      return;
+    }
+    if (existing) await ctx.db.patch(existing._id, { typingAt: Date.now() });
+    else await ctx.db.insert("chatTyping", {
+      channelId: `group:${groupId}`,
+      userId: me._id,
+      typingAt: Date.now(),
+    });
+  },
+});
+
+export const typingUsers = query({
+  args: { groupId: v.id("groups") },
+  handler: async (ctx, { groupId }) => {
+    const me = await requireUser(ctx);
+    await requireMembership(ctx, groupId, me._id);
+    const entries = await ctx.db
+      .query("chatTyping")
+      .withIndex("by_channel", (q) => q.eq("channelId", `group:${groupId}`))
+      .collect();
+    const now = Date.now();
+    const users = await Promise.all(
+      entries
+        .filter((entry) => entry.userId !== me._id && now - entry.typingAt < 5_000)
+        .map(async (entry) => {
+          const user = await ctx.db.get(entry.userId);
+          return user ? {
+            id: user._id as string,
+            displayName: user.displayName ?? user.name ?? "",
+            username: user.username ?? "",
+          } : null;
+        }),
+    );
+    return users.filter((user) => user !== null);
   },
 });
 

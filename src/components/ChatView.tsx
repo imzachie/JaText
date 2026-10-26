@@ -14,7 +14,7 @@ import { ContextMenu } from "./ContextMenu";
 import { StickerPicker } from "./StickerPicker";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
-import type { ActivityStatus, ChatMessage, JaUser } from "../lib/types";
+import type { ChatMessage, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
@@ -78,8 +78,6 @@ const ChatHistory = memo(function ChatHistory({
   messages,
   friend,
   me,
-  isTyping,
-  status,
   messagesRef,
   initialScrollAllowedRef,
   messagesReady,
@@ -91,8 +89,6 @@ const ChatHistory = memo(function ChatHistory({
   messages: ChatMessage[];
   friend: JaUser;
   me: JaUser;
-  isTyping: boolean;
-  status: ActivityStatus;
   messagesRef: { current: HTMLDivElement | null };
   initialScrollAllowedRef: { current: boolean };
   messagesReady: boolean;
@@ -279,14 +275,6 @@ const ChatHistory = memo(function ChatHistory({
           </div>
         );
       })}
-      {isTyping && (
-        <div className="msg-row theirs typing-row" aria-label={`${friend.displayName} is typing`}>
-          <Avatar user={friend} size={30} ringWidth={2} status={status} />
-          <div className="typing-bubble" aria-hidden="true">
-            <span>.</span><span>.</span><span>.</span>
-          </div>
-        </div>
-      )}
     </div>
   );
 });
@@ -918,8 +906,6 @@ export function ChatView({
         messages={displayedMessages}
         friend={friend}
         me={me}
-        isTyping={friendActivity?.isTyping ?? false}
-        status={friendActivity?.status ?? "offline"}
         messagesRef={messagesRef}
         initialScrollAllowedRef={initialScrollAllowedRef}
         messagesReady={conversationReady}
@@ -930,6 +916,11 @@ export function ChatView({
       />
 
       {error && <div className="error-box chat-error">{error}</div>}
+      {friendActivity?.isTyping && (
+        <div className="chat-typing-status" role="status">
+          {friend.displayName || friend.username} is typing…
+        </div>
+      )}
 
       {file && (
         <div className="attach-preview">

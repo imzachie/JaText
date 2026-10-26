@@ -1338,6 +1338,8 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     setActiveGroupId,
     groupDetails: null,
     groupMessages: [],
+    groupTypingUsers: [],
+    communityTypingUsers: [],
     notificationsEnabled: notificationPreferences.notificationsEnabled,
     pushRegistrationStatus: "idle",
     soundsEnabled: notificationPreferences.soundsEnabled,
@@ -1380,6 +1382,12 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     sendCommunityText: async () => {
       throw new Error("The community is only available with the live JaText backend.");
     },
+    sendCommunitySticker: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
+    setCommunityTyping: async () => {
+      throw new Error("The community is only available with the live JaText backend.");
+    },
     createCommunityPoll: async () => {
       throw new Error("The community is only available with the live JaText backend.");
     },
@@ -1399,6 +1407,12 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
     sendGroupMessage: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    sendGroupSticker: async () => {
+      throw new Error("Group chats are only available with the live JaText backend.");
+    },
+    setGroupTyping: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
     renameGroup: async () => {

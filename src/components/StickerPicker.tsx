@@ -15,9 +15,11 @@ const tabs: { id: PickerTab; label: string }[] = [
 export function StickerPicker({
   friendId,
   disabled = false,
+  onSelect,
 }: {
   friendId: string;
   disabled?: boolean;
+  onSelect?: (sticker: StickerMedia) => Promise<void>;
 }) {
   const store = useJaText();
   const searchKlipy = store.searchKlipy;
@@ -104,7 +106,8 @@ export function StickerPicker({
     setSendingKey(sticker.key);
     setError(null);
     try {
-      await store.sendSticker(friendId, sticker);
+      if (onSelect) await onSelect(sticker);
+      else await store.sendSticker(friendId, sticker);
       closePicker();
     } catch (cause) {
       setError(friendlyError(cause, "Couldn't send this sticker. Please try again."));
@@ -160,7 +163,8 @@ export function StickerPicker({
       const saved = savedUpload ?? (await store.saveSticker(uploadFile));
       setSavedUpload(saved);
       if (sendNow) {
-        await store.sendSticker(friendId, saved);
+        if (onSelect) await onSelect(saved);
+        else await store.sendSticker(friendId, saved);
         closePicker();
       }
     } catch (cause) {

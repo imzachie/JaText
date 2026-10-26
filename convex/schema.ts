@@ -145,10 +145,15 @@ export default defineSchema({
   communityMessages: defineTable({
     senderId: v.id("users"),
     body: v.string(),
-    type: v.union(v.literal("text"), v.literal("poll")),
+    type: v.union(v.literal("text"), v.literal("poll"), v.literal("sticker")),
     pollOptions: v.optional(v.array(v.string())),
     pollEndedAt: v.optional(v.number()),
     editedAt: v.optional(v.number()),
+    stickerUrl: v.optional(v.string()),
+    stickerStorageId: v.optional(v.id("_storage")),
+    stickerName: v.optional(v.string()),
+    replyToId: v.optional(v.id("communityMessages")),
+    forwardedFromName: v.optional(v.string()),
   }),
 
   communityPollVotes: defineTable({
@@ -179,5 +184,18 @@ export default defineSchema({
     groupId: v.id("groups"),
     senderId: v.id("users"),
     body: v.string(),
+    replyToId: v.optional(v.id("groupMessages")),
+    forwardedFromName: v.optional(v.string()),
+    stickerUrl: v.optional(v.string()),
+    stickerStorageId: v.optional(v.id("_storage")),
+    stickerName: v.optional(v.string()),
   }).index("by_group", ["groupId"]),
+
+  chatTyping: defineTable({
+    channelId: v.string(),
+    userId: v.id("users"),
+    typingAt: v.number(),
+  })
+    .index("by_channel", ["channelId"])
+    .index("by_channel_user", ["channelId", "userId"]),
 });

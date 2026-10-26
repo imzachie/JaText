@@ -46,6 +46,8 @@ export const list = query({
                 .collect()
             : [];
         const myVote = votes.find((vote) => vote.userId === me._id);
+        const reply = message.replyToId ? await ctx.db.get(message.replyToId) : null;
+        const replySender = reply ? await ctx.db.get(reply.senderId) : null;
         return {
           id: message._id as string,
           senderId: message.senderId as string,
@@ -64,6 +66,19 @@ export const list = query({
           myVote: myVote?.optionIndex,
           createdAt: message._creationTime,
           editedAt: message.editedAt,
+          forwardedFromName: message.forwardedFromName,
+          stickerUrl: message.stickerStorageId
+            ? ((await ctx.storage.getUrl(message.stickerStorageId)) ?? undefined)
+            : message.stickerUrl,
+          stickerName: message.stickerName,
+          replyTo: reply && replySender
+            ? {
+                id: reply._id as string,
+                senderId: reply.senderId as string,
+                senderName: replySender.displayName ?? replySender.name ?? "",
+                body: reply.body || reply.stickerName || "Sticker",
+              }
+            : undefined,
           canModerate: role.canModerate,
           isOwner: role.isOwner,
         };
@@ -128,18 +143,104 @@ export const setModerators = mutation({
 });
 
 export const sendText = mutation({
-  args: { body: v.string() },
-  handler: async (ctx, { body }) => {
+  args: {
+    body: v.string(),
+    replyToId: v.optional(v.id("communityMessages")),
+    forwardedFromId: v.optional(v.id("communityMessages")),
+  },
+  handler: async (ctx, { body, replyToId, forwardedFromId }) => {
     const me = await requireUser(ctx);
     const { canModerate } = await communityRole(ctx, me._id);
     if (!canModerate) throw new Error("Only JaText community moderators can post.");
     const text = body.trim();
     if (!text) throw new Error("Community messages cannot be empty.");
+    if (replyToId && !(await ctx.db.get(replyToId)))
+      throw new Error("The announcement you are replying to is unavailable.");
+    const forwardedMessage = forwardedFromId ? await ctx.db.get(forwardedFromId) : null;
+    if (forwardedFromId && !forwardedMessage)
+      throw new Error("The forwarded announcement is unavailable.");
+    const forwardedSender = forwardedMessage ? await ctx.db.get(forwardedMessage.senderId) : null;
     await ctx.db.insert("communityMessages", {
       senderId: me._id,
       body: text.slice(0, 4000),
       type: "text",
+      replyToId,
+      forwardedFromName: forwardedSender?.displayName ?? forwardedSender?.name,
     });
+  },
+});
+
+export const sendSticker = mutation({
+  args: {
+    stickerUrl: v.optional(v.string()),
+    stickerStorageId: v.optional(v.id("_storage")),
+    stickerName: v.string(),
+    replyToId: v.optional(v.id("communityMessages")),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireUser(ctx);
+    const { canModerate } = await communityRole(ctx, me._id);
+    if (!canModerate) throw new Error("Only JaText community moderators can post.");
+    if (!args.stickerUrl && !args.stickerStorageId) throw new Error("Sticker is unavailable.");
+    if (args.replyToId && !(await ctx.db.get(args.replyToId)))
+      throw new Error("The announcement you are replying to is unavailable.");
+    await ctx.db.insert("communityMessages", {
+      senderId: me._id,
+      body: "",
+      type: "sticker",
+      stickerUrl: args.stickerUrl,
+      stickerStorageId: args.stickerStorageId,
+      stickerName: args.stickerName.slice(0, 120),
+      replyToId: args.replyToId,
+    });
+  },
+});
+
+export const setTyping = mutation({
+  args: { isTyping: v.boolean() },
+  handler: async (ctx, { isTyping }) => {
+    const me = await requireUser(ctx);
+    const { canModerate } = await communityRole(ctx, me._id);
+    if (!canModerate) return;
+    const existing = await ctx.db
+      .query("chatTyping")
+      .withIndex("by_channel_user", (q) => q.eq("channelId", "community").eq("userId", me._id))
+      .unique();
+    if (!isTyping) {
+      if (existing) await ctx.db.delete(existing._id);
+      return;
+    }
+    if (existing) await ctx.db.patch(existing._id, { typingAt: Date.now() });
+    else await ctx.db.insert("chatTyping", {
+      channelId: "community",
+      userId: me._id,
+      typingAt: Date.now(),
+    });
+  },
+});
+
+export const typingUsers = query({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireUser(ctx);
+    const entries = await ctx.db
+      .query("chatTyping")
+      .withIndex("by_channel", (q) => q.eq("channelId", "community"))
+      .collect();
+    const now = Date.now();
+    const users = await Promise.all(
+      entries
+        .filter((entry) => entry.userId !== me._id && now - entry.typingAt < 5_000)
+        .map(async (entry) => {
+          const user = await ctx.db.get(entry.userId);
+          return user ? {
+            id: user._id as string,
+            displayName: user.displayName ?? user.name ?? "",
+            username: user.username ?? "",
+          } : null;
+        }),
+    );
+    return users.filter((user) => user !== null);
   },
 });
 
