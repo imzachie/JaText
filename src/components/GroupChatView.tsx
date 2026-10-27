@@ -28,6 +28,8 @@ import {
 } from "../lib/groupSeenSignals";
 import { syncComposerTextareaHeight } from "../lib/composerUtils";
 import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts";
+import { useE2EESnapshot } from "../lib/e2ee/keystore";
+import { LockIcon, MessageEncryptionModal } from "./E2EEModals";
 import {
   parseGroupCallInvite,
   resolveGroupCallLiveState,
@@ -1102,6 +1104,18 @@ export function GroupChatView({
   );
 
   const [callStateTick, setCallStateTick] = useState(0);
+  const [inspectingMessage, setInspectingMessage] = useState<GroupMessage | null>(null);
+  const [copiedGroupKey, setCopiedGroupKey] = useState(false);
+  const e2ee = useE2EESnapshot();
+  const groupEpochsMap = groupId ? e2ee.groupEpochs[groupId] : undefined;
+  const latestGroupEpoch = useMemo(() => {
+    if (!groupEpochsMap) return undefined;
+    const nums = Object.keys(groupEpochsMap)
+      .map(Number)
+      .filter((n) => Number.isFinite(n));
+    if (nums.length === 0) return undefined;
+    return groupEpochsMap[Math.max(...nums)];
+  }, [groupEpochsMap]);
   useEffect(() => {
     const hasPotentialActiveInvite = conversationMessages.some((m) => {
       if (m.unsentAt) return false;
@@ -2136,7 +2150,9 @@ export function GroupChatView({
         <button type="button" className="chat-title" onClick={openManageModal}>
           <strong>{group?.name ?? summary?.name ?? "Group chat"}</strong>
           <span className="muted small">
-            {group?.members.length ?? summary?.memberCount ?? 0} members · Tap for group settings
+            {group?.members.length ?? summary?.memberCount ?? 0} members
+            {latestGroupEpoch ? ` · 🔒 Encrypted (Epoch #${latestGroupEpoch.epoch})` : ""}
+            {" · Tap for group settings"}
           </span>
         </button>
         <div className="chat-header-actions">
@@ -2536,6 +2552,16 @@ export function GroupChatView({
               <span>↩️</span> Unsend
             </button>
           )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setInspectingMessage(messageMenu.message);
+              closeMessageMenu();
+            }}
+          >
+            <span>🔐</span> Encryption details
+          </button>
         </ContextMenu>
       )}
 
@@ -2690,6 +2716,50 @@ export function GroupChatView({
               ×
             </button>
             <h2>Group settings</h2>
+
+            <div className="profile-e2ee-section group-e2ee-card">
+              <div className="profile-e2ee-header">
+                <span className="profile-e2ee-title">
+                  <LockIcon size={15} />
+                  <strong>Group End-to-End Encryption</strong>
+                </span>
+                <span className={`e2ee-pill ${latestGroupEpoch ? "active" : "pending"}`}>
+                  {latestGroupEpoch
+                    ? `Epoch #${latestGroupEpoch.epoch} · AES-256-GCM`
+                    : "Provisioning…"}
+                </span>
+              </div>
+              {latestGroupEpoch ? (
+                <>
+                  <div className="profile-e2ee-sub">
+                    Group Key SHA-256 Fingerprint (rotates automatically when members are removed):
+                  </div>
+                  <code className="e2ee-fingerprint-code">
+                    {latestGroupEpoch.fingerprint}
+                  </code>
+                  <div className="profile-e2ee-btn-row">
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(
+                          `JaText Group E2EE (${group.name})\nEpoch: #${latestGroupEpoch.epoch}\nFingerprint: ${latestGroupEpoch.fingerprint}`,
+                        );
+                        setCopiedGroupKey(true);
+                        window.setTimeout(() => setCopiedGroupKey(false), 1800);
+                      }}
+                    >
+                      {copiedGroupKey ? "✓ Copied" : "Copy group E2EE key"}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="muted small profile-e2ee-wait">
+                  A shared AES-256-GCM group epoch key is generated and wrapped via ECDH P-256 for
+                  each member automatically when you send a message.
+                </p>
+              )}
+            </div>
 
             {canManageGroup ? (
               <form className="group-profile-card" onSubmit={(event) => void saveGroupChanges(event)}>
@@ -3055,6 +3125,21 @@ export function GroupChatView({
             </div>
           </section>
         </div>
+      )}
+      {inspectingMessage && (
+        <MessageEncryptionModal
+          proof={
+            inspectingMessage.e2ee ?? {
+              encrypted: false,
+              decrypted: true,
+              signatureVerified: false,
+              algorithm: "Legacy Plaintext Group Message (sent before v2.5 E2EE)",
+              channel: "plain",
+              rawWireBody: inspectingMessage.body,
+            }
+          }
+          onClose={() => setInspectingMessage(null)}
+        />
       )}
     </section>
   );

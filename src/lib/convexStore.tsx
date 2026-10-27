@@ -30,6 +30,52 @@ import {
   getSavedOutgoingBubbleStyle,
   stripBubbleStyleFromText,
 } from "./chatCustomization";
+import {
+  E2EE_DEVSYNC_REQ_PREFIX,
+  E2EE_DEVSYNC_RES_PREFIX,
+  E2EE_VAULT_STICKER_NAME,
+  createGroupKeySignalPacket,
+  generateDeviceSyncKeypair,
+  openSealedE2EEVault,
+  sealE2EEVault,
+  toPublicIdentityBundle,
+  unwrapDeviceSyncResponse,
+  wrapVaultForDeviceSync,
+  type DeviceSyncRequest,
+  type DeviceSyncResponse,
+  type LocalDeviceSyncKeypair,
+  type PublicIdentityBundle,
+  type SealedE2EEVault,
+} from "./e2ee/cryptoPrimitives";
+import {
+  clearActiveE2EESession,
+  clearDecryptedSessionCaches,
+  ensureInitialGroupEpoch,
+  ensureUserE2EEInitialized,
+  exportCurrentVaultContents,
+  getActiveE2EEState,
+  getLatestGroupEpoch,
+  importRestoredVaultContents,
+  ingestPeerIdentityBundle,
+  markCurrentIdentityBackedUp,
+  parseGroupKeySignal,
+  parseIdentitySignal,
+  rotateGroupEpoch,
+  serializeGroupKeySignal,
+  serializeIdentitySignal,
+  useE2EESnapshot,
+} from "./e2ee/keystore";
+import {
+  hydrateDecryptedChatPreview,
+  hydrateDecryptedDmMessage,
+  hydrateDecryptedGroupMessage,
+  hydrateDecryptedGroupSummary,
+  isInternalE2EEStickerName,
+  prepareOutgoingDmEncrypted,
+  prepareOutgoingGroupEncrypted,
+  scanDmRowsForE2EESignals,
+  scanGroupRowsForE2EESignals,
+} from "./e2ee/messagePipeline";
 import { OFFICIAL_COMMUNITY_ID } from "./types";
 import type {
   ChatMessage,
@@ -133,6 +179,18 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     loadLocalCommunityReactions,
   );
   const serverSupportsExtendedReactionsRef = useRef<boolean | null>(null);
+  const e2eeServerSupportedRef = useRef<boolean | null>(null);
+  const announcedDmKeysRef = useRef(new Set<string>());
+  const announcedGroupKeysRef = useRef(new Set<string>());
+  const localDeviceSyncRef = useRef<LocalDeviceSyncKeypair | null>(null);
+  const [activeDeviceSyncCode, setActiveDeviceSyncCode] = useState<string | null>(null);
+  const [pendingDeviceSyncRequests, setPendingDeviceSyncRequests] = useState<DeviceSyncRequest[]>([]);
+  const [remoteVaultSealed, setRemoteVaultSealed] = useState<SealedE2EEVault | null>(null);
+  const [, bumpE2EEHydration] = useState(0);
+  const triggerE2EERerender = useCallback(() => {
+    bumpE2EEHydration((v) => v + 1);
+  }, []);
+  const e2eeSnapshot = useE2EESnapshot();
   const handledOAuthCodes = useRef(new Set<string>());
   const previewsQuery = useQuery(
     api.messages.previews,
@@ -155,16 +213,22 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       return [];
     }
   });
-  const previews = previewsQuery ?? [];
+  const rawPreviews = previewsQuery ?? [];
   const friends = useMemo(() => {
     const hiddenSet = new Set(localUnfriendedIds);
-    for (const p of previews) {
+    for (const p of rawPreviews) {
       if (p.body === "__JATEXT_CALL_SIG__:{\"kind\":\"unfriend\"}") {
         hiddenSet.add(p.friendId);
       }
     }
     return rawFriends.filter((f) => !hiddenSet.has(f.id));
-  }, [localUnfriendedIds, previews, rawFriends]);
+  }, [localUnfriendedIds, rawPreviews, rawFriends]);
+  const previews = useMemo(() => {
+    // Reference e2eeSnapshot.version so previews re-decrypt immediately when keys arrive
+    void e2eeSnapshot.version;
+    if (!me?.id) return rawPreviews;
+    return rawPreviews.map((p) => hydrateDecryptedChatPreview(p, me.id));
+  }, [e2eeSnapshot.version, me?.id, rawPreviews]);
   const incoming = (useQuery(
     api.friends.listIncoming,
     isAuthenticated ? {} : "skip",
@@ -183,14 +247,18 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       ? { otherId: activeChatId as Id<"users"> }
       : "skip",
   );
-  const dmFold = useMemo(
-    () =>
-      foldReactionSignals(
-        ((activeMessagesQuery ?? []) as ChatMessage[]).map(normalizeDirectMessage),
-        optimisticReactions,
-      ),
-    [activeMessagesQuery, optimisticReactions],
-  );
+  useEffect(() => {
+    if (!activeMessagesQuery) return;
+    scanDmRowsForE2EESignals(activeMessagesQuery as ChatMessage[]);
+  }, [activeMessagesQuery]);
+  const dmFold = useMemo(() => {
+    void e2eeSnapshot.version;
+    const peerId = activeChatId && activeChatId !== OFFICIAL_COMMUNITY_ID ? activeChatId : "";
+    const hydrated = ((activeMessagesQuery ?? []) as ChatMessage[]).map((row) =>
+      normalizeDirectMessage(hydrateDecryptedDmMessage(row, peerId, triggerE2EERerender)),
+    );
+    return foldReactionSignals(hydrated, optimisticReactions);
+  }, [activeChatId, activeMessagesQuery, e2eeSnapshot.version, optimisticReactions, triggerE2EERerender]);
   const activeMessages = dmFold.messages;
   const communityMessagesQuery = useQuery(
     api.community.list,
@@ -231,8 +299,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     isAuthenticated ? {} : "skip",
   ) as GroupSummary[] | undefined;
   const groups = useMemo(() => {
+    void e2eeSnapshot.version;
     const rawGroups = groupsQuery ?? [];
-    return rawGroups.map((group) => {
+    return rawGroups.map((rawGroup) => {
+      const group = me?.id
+        ? hydrateDecryptedGroupSummary(rawGroup, me.id, me.username)
+        : rawGroup;
       const formatted = formatGroupReactionPreview(group.lastMessage);
       if (!formatted.isSignal) return group;
       return {
@@ -240,7 +312,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         lastMessage: formatted.text,
       };
     });
-  }, [groupsQuery]);
+  }, [e2eeSnapshot.version, groupsQuery, me?.id, me?.username]);
   const groupDetailsQuery = useQuery(
     api.groups.get,
     isAuthenticated && activeGroupId
@@ -254,14 +326,18 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       ? { groupId: activeGroupId as Id<"groups"> }
       : "skip",
   );
-  const groupFold = useMemo(
-    () =>
-      foldReactionSignals(
-        ((groupMessagesQuery ?? []) as GroupMessage[]).map(normalizeGroupMessage),
-        optimisticReactions,
-      ),
-    [groupMessagesQuery, optimisticReactions],
-  );
+  useEffect(() => {
+    if (!groupMessagesQuery) return;
+    scanGroupRowsForE2EESignals(groupMessagesQuery as GroupMessage[]);
+  }, [groupMessagesQuery]);
+  const groupFold = useMemo(() => {
+    void e2eeSnapshot.version;
+    const gid = activeGroupId ?? "";
+    const hydrated = ((groupMessagesQuery ?? []) as GroupMessage[]).map((row) =>
+      normalizeGroupMessage(hydrateDecryptedGroupMessage(row, gid, groupDetails, triggerE2EERerender)),
+    );
+    return foldReactionSignals(hydrated, optimisticReactions);
+  }, [activeGroupId, e2eeSnapshot.version, groupDetails, groupMessagesQuery, optimisticReactions, triggerE2EERerender]);
   const groupMessages = groupFold.messages;
   const groupTypingUsers = (useQuery(
     api.groups.typingUsers,
@@ -758,17 +834,143 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     async (messageId) => (await unsendCommunityMut({ messageId: messageId as Id<"communityMessages"> })) as boolean,
     [unsendCommunityMut],
   );
+  const distributeGroupEpochToMembers = useCallback(
+    async (
+      groupId: string,
+      epochNumber: number,
+      epochSecretB64: string,
+      targetMemberIds?: string[],
+    ) => {
+      const state = getActiveE2EEState();
+      if (!state) return;
+      const details =
+        (activeGroupId === groupId ? groupDetails : null) ??
+        ((await convex.query(api.groups.get, { groupId: groupId as Id<"groups"> }).catch(() => null)) as GroupDetails | null);
+      if (!details) return;
+
+      const allowedSet = targetMemberIds ? new Set(targetMemberIds) : null;
+      const memberBundles: PublicIdentityBundle[] = [toPublicIdentityBundle(state.primaryIdentity)];
+      for (const m of details.members) {
+        if (m.id === state.userId) continue;
+        if (allowedSet && !allowedSet.has(m.id)) continue;
+        const peer = state.peerKeys[m.id];
+        if (peer) memberBundles.push(peer.bundle);
+      }
+
+      const pkt = await createGroupKeySignalPacket({
+        groupId,
+        epoch: epochNumber,
+        epochSecretB64,
+        senderIdentity: state.primaryIdentity,
+        memberBundles,
+      });
+      await sendGroupMessageMut({
+        groupId: groupId as Id<"groups">,
+        body: serializeGroupKeySignal(pkt),
+      });
+    },
+    [activeGroupId, convex, groupDetails, sendGroupMessageMut],
+  );
+
+  const ensureGroupEpochReadyForSend = useCallback(
+    async (groupId: string) => {
+      let epochEntry = getLatestGroupEpoch(groupId);
+      if (!epochEntry) {
+        epochEntry = await ensureInitialGroupEpoch(groupId);
+        if (epochEntry) {
+          await distributeGroupEpochToMembers(groupId, epochEntry.epoch, epochEntry.secretB64).catch(
+            () => undefined,
+          );
+        }
+      }
+      return epochEntry;
+    },
+    [distributeGroupEpochToMembers],
+  );
+
   const forwardCommunityMessage: JaTextStore["forwardCommunityMessage"] = useCallback(
     async (messageId, target) => {
-      if (target.groupId) {
-        await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetGroupId: target.groupId as Id<"groups"> });
-      } else if (target.userId) {
+      const src = communityMessages.find((m) => m.id === messageId);
+      if (target.community || !src) {
+        if (target.groupId) {
+          await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetGroupId: target.groupId as Id<"groups"> });
+        } else if (target.userId) {
+          await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetUserId: target.userId as Id<"users"> });
+        } else if (target.community) {
+          await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetCommunity: true });
+        }
+        return;
+      }
+      let fwdFile: File | undefined;
+      if (src.attachmentUrl) {
+        try {
+          const resp = await fetch(src.attachmentUrl);
+          if (resp.ok) {
+            const blob = await resp.blob();
+            fwdFile = new File([blob], src.attachmentName || "forwarded", {
+              type: src.attachmentType || blob.type || "application/octet-stream",
+            });
+          }
+        } catch {
+          // Ignore media fetch failure
+        }
+      }
+      const fwdText = src.body ? `↪ Forwarded from @${src.senderUsername}:\n${src.body}` : "";
+      if (target.userId) {
+        const enc = await prepareOutgoingDmEncrypted({
+          receiverId: target.userId,
+          wireBody: fwdText,
+          file: fwdFile,
+          uploadFile: upload,
+        });
+        if (enc) {
+          await sendMessageMut({
+            receiverId: target.userId as Id<"users">,
+            body: enc.wireBody,
+            ...(enc.attachmentId
+              ? {
+                  attachmentId: enc.attachmentId,
+                  attachmentName: enc.attachmentName,
+                  attachmentType: enc.attachmentType,
+                }
+              : {}),
+          });
+          return;
+        }
         await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetUserId: target.userId as Id<"users"> });
-      } else if (target.community) {
-        await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetCommunity: true });
+      } else if (target.groupId) {
+        await ensureGroupEpochReadyForSend(target.groupId);
+        const enc = await prepareOutgoingGroupEncrypted({
+          groupId: target.groupId,
+          wireBody: fwdText,
+          file: fwdFile,
+          uploadFile: upload,
+        });
+        if (enc) {
+          await sendGroupMessageMut({
+            groupId: target.groupId as Id<"groups">,
+            body: enc.wireBody,
+            ...(enc.attachmentId
+              ? {
+                  attachmentId: enc.attachmentId,
+                  attachmentName: enc.attachmentName,
+                  attachmentType: enc.attachmentType,
+                }
+              : {}),
+          });
+          return;
+        }
+        await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetGroupId: target.groupId as Id<"groups"> });
       }
     },
-    [sendCommunityForwardMut],
+    [
+      communityMessages,
+      ensureGroupEpochReadyForSend,
+      sendCommunityForwardMut,
+      sendGroupMessageMut,
+      sendMessageMut,
+      upload,
+    ],
   );
   const favoriteCommunityStickerFromMessage: JaTextStore["favoriteCommunityStickerFromMessage"] = useCallback(
     async (messageId) => {
@@ -777,12 +979,27 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [favoriteCommunityStickerFromMessageMut],
   );
   const createGroup = useCallback<JaTextStore["createGroup"]>(
-    async (name, memberIds) =>
-      (await createGroupMut({
+    async (name, memberIds) => {
+      const gid = (await createGroupMut({
         name,
         memberIds: memberIds as Id<"users">[],
-      })) as string,
-    [createGroupMut],
+      })) as string;
+      const state = getActiveE2EEState();
+      if (state) {
+        await sendGroupMessageMut({
+          groupId: gid as Id<"groups">,
+          body: serializeIdentitySignal(state.primaryIdentity),
+        }).catch(() => undefined);
+        const epoch = await ensureInitialGroupEpoch(gid);
+        if (epoch) {
+          await distributeGroupEpochToMembers(gid, epoch.epoch, epoch.secretB64).catch(
+            () => undefined,
+          );
+        }
+      }
+      return gid;
+    },
+    [createGroupMut, distributeGroupEpochToMembers, sendGroupMessageMut],
   );
   const addGroupMembers = useCallback<JaTextStore["addGroupMembers"]>(
     async (groupId, memberIds) => {
@@ -790,8 +1007,14 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         groupId: groupId as Id<"groups">,
         memberIds: memberIds as Id<"users">[],
       });
+      const epoch = await ensureGroupEpochReadyForSend(groupId);
+      if (epoch) {
+        await distributeGroupEpochToMembers(groupId, epoch.epoch, epoch.secretB64).catch(
+          () => undefined,
+        );
+      }
     },
-    [addGroupMembersMut],
+    [addGroupMembersMut, distributeGroupEpochToMembers, ensureGroupEpochReadyForSend],
   );
   const sendGroupMessage = useCallback<JaTextStore["sendGroupMessage"]>(
     async (groupId, body, file, replyToId, forwardedFromId) => {
@@ -799,6 +1022,34 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       const style = isControlPayload(trimmed) ? "default" : getSavedOutgoingBubbleStyle();
       const wireBody = style === "default" ? trimmed : attachBubbleStyleToOutgoing(trimmed, style);
       const wireFile = file && style !== "default" ? attachBubbleStyleToFile(file, style) : file;
+
+      // Do not double-encrypt raw E2EE bootstrap packets
+      if (!trimmed.includes('"kind":"e2ee_ik"') && !trimmed.includes('"kind":"e2ee_gk"')) {
+        await ensureGroupEpochReadyForSend(groupId);
+        const enc = await prepareOutgoingGroupEncrypted({
+          groupId,
+          wireBody,
+          file: wireFile,
+          uploadFile: upload,
+        });
+        if (enc) {
+          await sendGroupMessageMut({
+            groupId: groupId as Id<"groups">,
+            body: enc.wireBody,
+            ...(enc.attachmentId
+              ? {
+                  attachmentId: enc.attachmentId,
+                  attachmentName: enc.attachmentName,
+                  attachmentType: enc.attachmentType,
+                }
+              : {}),
+            ...(replyToId ? { replyToId: replyToId as Id<"groupMessages"> } : {}),
+            ...(forwardedFromId ? { forwardedFromId: forwardedFromId as Id<"groupMessages"> } : {}),
+          });
+          return;
+        }
+      }
+
       const attachmentId = wireFile ? await upload(wireFile) : undefined;
       await sendGroupMessageMut({
         groupId: groupId as Id<"groups">,
@@ -810,10 +1061,32 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         ...(forwardedFromId ? { forwardedFromId: forwardedFromId as Id<"groupMessages"> } : {}),
       });
     },
-    [sendGroupMessageMut, upload],
+    [ensureGroupEpochReadyForSend, sendGroupMessageMut, upload],
   );
   const sendGroupSticker = useCallback<JaTextStore["sendGroupSticker"]>(
     async (groupId, sticker, replyToId) => {
+      await ensureGroupEpochReadyForSend(groupId);
+      const enc = await prepareOutgoingGroupEncrypted({
+        groupId,
+        wireBody: "",
+        sticker,
+        uploadFile: upload,
+      });
+      if (enc) {
+        await sendGroupMessageMut({
+          groupId: groupId as Id<"groups">,
+          body: enc.wireBody,
+          ...(enc.attachmentId
+            ? {
+                attachmentId: enc.attachmentId,
+                attachmentName: enc.attachmentName,
+                attachmentType: enc.attachmentType,
+              }
+            : {}),
+          ...(replyToId ? { replyToId: replyToId as Id<"groupMessages"> } : {}),
+        });
+        return;
+      }
       await sendGroupMessageMut({
         groupId: groupId as Id<"groups">,
         body: "",
@@ -824,7 +1097,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         stickerKey: sticker.key,
       });
     },
-    [sendGroupMessageMut],
+    [ensureGroupEpochReadyForSend, sendGroupMessageMut, upload],
   );
   const setGroupTyping = useCallback<JaTextStore["setGroupTyping"]>(
     async (groupId, isTyping) => {
@@ -969,25 +1242,173 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         body.trim(),
         existing?.bubbleStyle ?? "default",
       );
+      if (activeGroupId) {
+        await ensureGroupEpochReadyForSend(activeGroupId);
+        const enc = await prepareOutgoingGroupEncrypted({
+          groupId: activeGroupId,
+          wireBody: preserved,
+          uploadFile: upload,
+        });
+        if (enc) {
+          await editGroupMut({
+            messageId: messageId as Id<"groupMessages">,
+            body: enc.wireBody,
+          });
+          return;
+        }
+      }
       await editGroupMut({ messageId: messageId as Id<"groupMessages">, body: preserved });
     },
-    [editGroupMut, groupMessages],
+    [activeGroupId, editGroupMut, ensureGroupEpochReadyForSend, groupMessages, upload],
   );
   const forwardGroupMessage: JaTextStore["forwardGroupMessage"] = useCallback(
     async (messageId, target) => {
-      if (target.groupId) {
-        await forwardGroupMut({ messageId: messageId as Id<"groupMessages">, targetGroupId: target.groupId as Id<"groups"> });
-      } else if (target.userId) {
+      const src = groupMessages.find((m) => m.id === messageId);
+      if (!src) {
+        if (target.groupId) {
+          await forwardGroupMut({ messageId: messageId as Id<"groupMessages">, targetGroupId: target.groupId as Id<"groups"> });
+        } else if (target.userId) {
+          await forwardGroupMut({ messageId: messageId as Id<"groupMessages">, targetUserId: target.userId as Id<"users"> });
+        }
+        return;
+      }
+
+      // Re-encrypt decrypted content cleanly for the target recipient/group!
+      const mediaUrl = src.attachmentUrl ?? src.stickerUrl;
+      let fwdFile: File | undefined;
+      let klipySticker: StickerMedia | undefined;
+      if (mediaUrl) {
+        if (src.stickerKey?.startsWith("klipy:")) {
+          klipySticker = {
+            key: src.stickerKey,
+            url: mediaUrl,
+            name: src.stickerName || "GIF",
+            mediaType: "gif",
+            source: "klipy",
+            isFavorite: false,
+            useCount: 0,
+          };
+        } else {
+          try {
+            const resp = await fetch(mediaUrl);
+            if (resp.ok) {
+              const blob = await resp.blob();
+              fwdFile = new File(
+                [blob],
+                src.attachmentName || src.stickerName || "forwarded",
+                { type: src.attachmentType || blob.type || "application/octet-stream" },
+              );
+            }
+          } catch {
+            // Ignore fetch failure
+          }
+        }
+      }
+      const fwdBody = src.body ? `↪ Forwarded from ${src.senderName || "group"}:\n${src.body}` : "";
+
+      if (target.userId) {
+        const enc = await prepareOutgoingDmEncrypted({
+          receiverId: target.userId,
+          wireBody: fwdBody,
+          file: fwdFile,
+          sticker: klipySticker,
+          uploadFile: upload,
+        });
+        if (enc) {
+          await sendMessageMut({
+            receiverId: target.userId as Id<"users">,
+            body: enc.wireBody,
+            ...(enc.attachmentId
+              ? {
+                  attachmentId: enc.attachmentId,
+                  attachmentName: enc.attachmentName,
+                  attachmentType: enc.attachmentType,
+                }
+              : {}),
+          });
+          return;
+        }
         await forwardGroupMut({ messageId: messageId as Id<"groupMessages">, targetUserId: target.userId as Id<"users"> });
+      } else if (target.groupId) {
+        await ensureGroupEpochReadyForSend(target.groupId);
+        const enc = await prepareOutgoingGroupEncrypted({
+          groupId: target.groupId,
+          wireBody: fwdBody,
+          file: fwdFile,
+          sticker: klipySticker,
+          uploadFile: upload,
+        });
+        if (enc) {
+          await sendGroupMessageMut({
+            groupId: target.groupId as Id<"groups">,
+            body: enc.wireBody,
+            ...(enc.attachmentId
+              ? {
+                  attachmentId: enc.attachmentId,
+                  attachmentName: enc.attachmentName,
+                  attachmentType: enc.attachmentType,
+                }
+              : {}),
+          });
+          return;
+        }
+        await forwardGroupMut({ messageId: messageId as Id<"groupMessages">, targetGroupId: target.groupId as Id<"groups"> });
       }
     },
-    [forwardGroupMut],
+    [
+      ensureGroupEpochReadyForSend,
+      forwardGroupMut,
+      groupMessages,
+      sendGroupMessageMut,
+      sendMessageMut,
+      upload,
+    ],
   );
   const favoriteGroupStickerFromMessage: JaTextStore["favoriteGroupStickerFromMessage"] = useCallback(
     async (messageId) => {
+      const msg = groupMessages.find((m) => m.id === messageId);
+      if (msg?.e2ee?.encrypted) {
+        const url = msg.stickerUrl ?? msg.attachmentUrl;
+        if (url && msg.stickerKey?.startsWith("klipy:")) {
+          await setStickerFavoriteMut({
+            mediaKey: msg.stickerKey,
+            url,
+            previewUrl: url,
+            name: msg.stickerName || msg.attachmentName || "GIF",
+            mediaType: "gif",
+            source: "klipy",
+            isFavorite: !msg.isStickerFavorite,
+          });
+          return;
+        }
+        if (url) {
+          const resp = await fetch(url);
+          if (resp.ok) {
+            const blob = await resp.blob();
+            const file = new File(
+              [blob],
+              msg.stickerName || msg.attachmentName || "favourite.png",
+              { type: msg.attachmentType || blob.type || "image/png" },
+            );
+            const storageId = await upload(file);
+            await saveStickerMut({
+              storageId,
+              name: file.name,
+              mediaType: file.type === "image/gif" ? "gif" : "sticker",
+            });
+            return;
+          }
+        }
+      }
       await favoriteGroupStickerFromMessageMut({ messageId: messageId as Id<"groupMessages"> });
     },
-    [favoriteGroupStickerFromMessageMut],
+    [
+      favoriteGroupStickerFromMessageMut,
+      groupMessages,
+      saveStickerMut,
+      setStickerFavoriteMut,
+      upload,
+    ],
   );
   const renameGroup = useCallback<JaTextStore["renameGroup"]>(
     async (groupId, name) => {
@@ -1029,8 +1450,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         groupId: groupId as Id<"groups">,
         userId: userId as Id<"users">,
       });
+      // Real E2EE forward-exclusion: rotate to epoch + 1 wrapped ONLY for remaining members!
+      const nextEpoch = await rotateGroupEpoch(groupId);
+      if (nextEpoch) {
+        const remainingIds = (groupDetails?.members ?? [])
+          .filter((m) => m.id !== userId)
+          .map((m) => m.id);
+        await distributeGroupEpochToMembers(
+          groupId,
+          nextEpoch.epoch,
+          nextEpoch.secretB64,
+          remainingIds.length > 0 ? remainingIds : undefined,
+        ).catch(() => undefined);
+      }
     },
-    [removeGroupMemberMut],
+    [distributeGroupEpochToMembers, groupDetails?.members, removeGroupMemberMut],
   );
   const leaveGroup = useCallback<JaTextStore["leaveGroup"]>(
     async (groupId) => {
@@ -1121,6 +1555,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     setActiveChatIdForStore(null);
     setActiveGroupId(null);
+    clearDecryptedSessionCaches();
+    clearActiveE2EESession();
     try {
       const pushToken = localStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
       if (isAuthenticated && pushToken) {
@@ -1244,6 +1680,37 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       const style = isControlPayload(trimmed) ? "default" : getSavedOutgoingBubbleStyle();
       const wireBody = style === "default" ? trimmed : attachBubbleStyleToOutgoing(trimmed, style);
       const wireFile = file && style !== "default" ? attachBubbleStyleToFile(file, style) : file;
+
+      // Do not encrypt raw E2EE bootstrap/friendship control packets
+      const isBootstrapControl =
+        trimmed.includes('"kind":"e2ee_ik"') ||
+        trimmed.includes('"kind":"unfriend"') ||
+        trimmed.includes('"kind":"refriend"');
+
+      if (!isBootstrapControl) {
+        const enc = await prepareOutgoingDmEncrypted({
+          receiverId,
+          wireBody,
+          file: wireFile,
+          uploadFile: upload,
+        });
+        if (enc) {
+          await sendMessageMut({
+            receiverId: receiverId as Id<"users">,
+            body: enc.wireBody,
+            ...(enc.attachmentId
+              ? {
+                  attachmentId: enc.attachmentId,
+                  attachmentName: enc.attachmentName,
+                  attachmentType: enc.attachmentType,
+                }
+              : {}),
+            ...(replyToId ? { replyToId: replyToId as Id<"messages"> } : {}),
+          });
+          return;
+        }
+      }
+
       const attachmentId = wireFile ? await upload(wireFile) : undefined;
       await sendMessageMut({
         receiverId: receiverId as Id<"users">,
@@ -1301,13 +1768,62 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     JaTextStore["favoriteStickerFromMessage"]
   >(
     async (messageId) => {
+      const msg = activeMessages.find((m) => m.id === messageId);
+      if (msg?.e2ee?.encrypted && msg.attachmentUrl) {
+        if (msg.stickerKey?.startsWith("klipy:")) {
+          await setStickerFavoriteMut({
+            mediaKey: msg.stickerKey,
+            url: msg.attachmentUrl,
+            previewUrl: msg.attachmentUrl,
+            name: msg.attachmentName || "GIF",
+            mediaType: "gif",
+            source: "klipy",
+            isFavorite: !msg.isStickerFavorite,
+          });
+          return;
+        }
+        const resp = await fetch(msg.attachmentUrl);
+        if (resp.ok) {
+          const blob = await resp.blob();
+          const file = new File([blob], msg.attachmentName || "favourite.png", {
+            type: msg.attachmentType || blob.type || "image/png",
+          });
+          const storageId = await upload(file);
+          await saveStickerMut({
+            storageId,
+            name: file.name,
+            mediaType: file.type === "image/gif" ? "gif" : "sticker",
+          });
+          return;
+        }
+      }
       await favoriteStickerFromMessageMut({ messageId: messageId as Id<"messages"> });
     },
-    [favoriteStickerFromMessageMut],
+    [activeMessages, favoriteStickerFromMessageMut, saveStickerMut, setStickerFavoriteMut, upload],
   );
 
   const sendSticker = useCallback<JaTextStore["sendSticker"]>(
     async (receiverId, sticker) => {
+      const enc = await prepareOutgoingDmEncrypted({
+        receiverId,
+        wireBody: "",
+        sticker,
+        uploadFile: upload,
+      });
+      if (enc) {
+        await sendMessageMut({
+          receiverId: receiverId as Id<"users">,
+          body: enc.wireBody,
+          ...(enc.attachmentId
+            ? {
+                attachmentId: enc.attachmentId,
+                attachmentName: enc.attachmentName,
+                attachmentType: enc.attachmentType,
+              }
+            : {}),
+        });
+        return;
+      }
       await sendStickerMut({
         receiverId: receiverId as Id<"users">,
         mediaKey: sticker.key,
@@ -1321,17 +1837,68 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         source: sticker.source,
       });
     },
-    [sendStickerMut],
+    [sendMessageMut, sendStickerMut, upload],
   );
 
   const forwardMessage = useCallback<JaTextStore["forwardMessage"]>(
     async (messageId, receiverId) => {
+      const src = activeMessages.find((m) => m.id === messageId);
+      if (src) {
+        let fwdFile: File | undefined;
+        let klipySticker: StickerMedia | undefined;
+        if (src.attachmentUrl) {
+          if (src.stickerKey?.startsWith("klipy:")) {
+            klipySticker = {
+              key: src.stickerKey,
+              url: src.attachmentUrl,
+              name: src.attachmentName || "GIF",
+              mediaType: "gif",
+              source: "klipy",
+              isFavorite: false,
+              useCount: 0,
+            };
+          } else {
+            try {
+              const resp = await fetch(src.attachmentUrl);
+              if (resp.ok) {
+                const blob = await resp.blob();
+                fwdFile = new File([blob], src.attachmentName || "forwarded", {
+                  type: src.attachmentType || blob.type || "application/octet-stream",
+                });
+              }
+            } catch {
+              // Ignore fetch failure
+            }
+          }
+        }
+        const enc = await prepareOutgoingDmEncrypted({
+          receiverId,
+          wireBody: src.body ? `↪ Forwarded:\n${src.body}` : "",
+          file: fwdFile,
+          sticker: klipySticker,
+          uploadFile: upload,
+        });
+        if (enc) {
+          await sendMessageMut({
+            receiverId: receiverId as Id<"users">,
+            body: enc.wireBody,
+            ...(enc.attachmentId
+              ? {
+                  attachmentId: enc.attachmentId,
+                  attachmentName: enc.attachmentName,
+                  attachmentType: enc.attachmentType,
+                }
+              : {}),
+          });
+          return;
+        }
+      }
       await forwardMessageMut({
         messageId: messageId as Id<"messages">,
         receiverId: receiverId as Id<"users">,
       });
     },
-    [forwardMessageMut],
+    [activeMessages, forwardMessageMut, sendMessageMut, upload],
   );
 
   const toggleMessageReaction = useCallback<JaTextStore["toggleMessageReaction"]>(
@@ -1478,9 +2045,29 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         body.trim(),
         existing?.bubbleStyle ?? "default",
       );
+      const peerId =
+        existing && me
+          ? existing.senderId === me.id
+            ? existing.receiverId
+            : existing.senderId
+          : activeChatId;
+      if (peerId && peerId !== OFFICIAL_COMMUNITY_ID) {
+        const enc = await prepareOutgoingDmEncrypted({
+          receiverId: peerId,
+          wireBody: preserved,
+          uploadFile: upload,
+        });
+        if (enc) {
+          await editMessageMut({
+            messageId: messageId as Id<"messages">,
+            body: enc.wireBody,
+          });
+          return;
+        }
+      }
       await editMessageMut({ messageId: messageId as Id<"messages">, body: preserved });
     },
-    [activeMessages, editMessageMut],
+    [activeChatId, activeMessages, editMessageMut, me, upload],
   );
 
   const setConversationArchived = useCallback<JaTextStore["setConversationArchived"]>(
@@ -1564,25 +2151,33 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const fetchMessagesWithUser = useCallback<JaTextStore["fetchMessagesWithUser"]>(
     async (otherId) => {
       if (!isAuthenticated || !otherId || otherId === OFFICIAL_COMMUNITY_ID) return [];
-      const rows = await convex.query(api.messages.list, {
+      const rows = ((await convex.query(api.messages.list, {
         otherId: otherId as Id<"users">,
-      });
-      return foldReactionSignals(((rows ?? []) as ChatMessage[]).map(normalizeDirectMessage))
-        .messages;
+      })) ?? []) as ChatMessage[];
+      scanDmRowsForE2EESignals(rows);
+      const hydrated = rows.map((r) =>
+        normalizeDirectMessage(hydrateDecryptedDmMessage(r, otherId, triggerE2EERerender)),
+      );
+      return foldReactionSignals(hydrated).messages;
     },
-    [convex, isAuthenticated],
+    [convex, isAuthenticated, triggerE2EERerender],
   );
 
   const fetchGroupMessages = useCallback<JaTextStore["fetchGroupMessages"]>(
     async (groupId) => {
       if (!isAuthenticated || !groupId) return [];
-      const rows = await convex.query(api.groups.listMessages, {
+      const rows = ((await convex.query(api.groups.listMessages, {
         groupId: groupId as Id<"groups">,
-      });
-      return foldReactionSignals(((rows ?? []) as GroupMessage[]).map(normalizeGroupMessage))
-        .messages;
+      })) ?? []) as GroupMessage[];
+      scanGroupRowsForE2EESignals(rows);
+      const hydrated = rows.map((r) =>
+        normalizeGroupMessage(
+          hydrateDecryptedGroupMessage(r, groupId, activeGroupId === groupId ? groupDetails : null, triggerE2EERerender),
+        ),
+      );
+      return foldReactionSignals(hydrated).messages;
     },
-    [convex, isAuthenticated],
+    [activeGroupId, convex, groupDetails, isAuthenticated, triggerE2EERerender],
   );
 
   const fetchGroupDetails = useCallback<JaTextStore["fetchGroupDetails"]>(
@@ -1594,6 +2189,462 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       return (details ?? null) as GroupDetails | null;
     },
     [convex, isAuthenticated],
+  );
+
+  /* ------------------------------------------------------------------ */
+  /* Real E2EE Identity Init, Key Handshake, Vault & Live Device Sync   */
+  /* ------------------------------------------------------------------ */
+
+  useEffect(() => {
+    if (!isAuthenticated || !me?.id) return;
+    let cancelled = false;
+    void ensureUserE2EEInitialized(me.id).then(async (state) => {
+      if (cancelled) return;
+      if (e2eeServerSupportedRef.current !== false) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await convex.mutation("e2ee:publishIdentity" as any, {
+            keyId: state.primaryIdentity.keyId,
+            dhPubB64: state.primaryIdentity.dhPubB64,
+            sigPubB64: state.primaryIdentity.sigPubB64,
+            selfSigB64: state.primaryIdentity.selfSigB64,
+          });
+          e2eeServerSupportedRef.current = true;
+        } catch {
+          e2eeServerSupportedRef.current = false;
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [convex, isAuthenticated, me?.id]);
+
+  // Background E2EE signed key exchange across accepted friends & private groups
+  useEffect(() => {
+    if (!isAuthenticated || !me?.id || !e2eeSnapshot.ready || !e2eeSnapshot.myKeyId) return;
+    const state = getActiveE2EEState();
+    if (!state || state.userId !== me.id) return;
+    let cancelled = false;
+
+    const syncKeys = async () => {
+      // Opportunistic server directory lookup if Convex e2ee module is deployed
+      if (e2eeServerSupportedRef.current !== false && friends.length > 0) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const bundles = (await convex.query("e2ee:getUserIdentities" as any, {
+            userIds: friends.map((f) => f.id as Id<"users">),
+          })) as PublicIdentityBundle[];
+          for (const b of bundles) {
+            await ingestPeerIdentityBundle(b);
+          }
+          e2eeServerSupportedRef.current = true;
+        } catch {
+          e2eeServerSupportedRef.current = false;
+        }
+      }
+
+      // Announce our signed E2EE identity key in each friend pair (reusing our own prior signal row)
+      const mySigPacket = serializeIdentitySignal(state.primaryIdentity);
+      for (const friend of friends) {
+        if (cancelled) return;
+        const syncTag = `${me.id}:${friend.id}:${state.primaryIdentity.keyId}`;
+        if (announcedDmKeysRef.current.has(syncTag)) continue;
+        announcedDmKeysRef.current.add(syncTag);
+
+        try {
+          const rows = ((await convex.query(api.messages.list, {
+            otherId: friend.id as Id<"users">,
+          })) ?? []) as ChatMessage[];
+          scanDmRowsForE2EESignals(rows);
+          const myExistingRows = rows.filter(
+            (r) => r.senderId === me.id && parseIdentitySignal(r.body, me.id) !== null,
+          );
+          const latestOwn = myExistingRows[myExistingRows.length - 1];
+          const parsedOwn = latestOwn ? parseIdentitySignal(latestOwn.body, me.id) : null;
+          if (parsedOwn?.keyId === state.primaryIdentity.keyId) {
+            continue;
+          }
+          if (latestOwn) {
+            await editMessageMut({
+              messageId: latestOwn.id as Id<"messages">,
+              body: mySigPacket,
+            }).catch(async () => {
+              await sendMessageMut({
+                receiverId: friend.id as Id<"users">,
+                body: mySigPacket,
+              });
+            });
+          } else {
+            await sendMessageMut({
+              receiverId: friend.id as Id<"users">,
+              body: mySigPacket,
+            });
+          }
+        } catch {
+          announcedDmKeysRef.current.delete(syncTag);
+        }
+      }
+
+      // Sync group identity announcements & group epoch envelopes
+      for (const grp of groupsQuery ?? []) {
+        if (cancelled) return;
+        const grpSyncTag = `${me.id}:${grp.id}:${state.primaryIdentity.keyId}`;
+        if (announcedGroupKeysRef.current.has(grpSyncTag)) continue;
+        announcedGroupKeysRef.current.add(grpSyncTag);
+
+        try {
+          const rows = ((await convex.query(api.groups.listMessages, {
+            groupId: grp.id as Id<"groups">,
+          })) ?? []) as GroupMessage[];
+          scanGroupRowsForE2EESignals(rows);
+
+          const myOwnIkRows = rows.filter(
+            (r) => r.senderId === me.id && parseIdentitySignal(r.body, me.id) !== null,
+          );
+          const latestOwnIk = myOwnIkRows[myOwnIkRows.length - 1];
+          const parsedOwnIk = latestOwnIk ? parseIdentitySignal(latestOwnIk.body, me.id) : null;
+          if (parsedOwnIk?.keyId !== state.primaryIdentity.keyId) {
+            if (latestOwnIk) {
+              await editGroupMut({
+                messageId: latestOwnIk.id as Id<"groupMessages">,
+                body: mySigPacket,
+              }).catch(async () => {
+                await sendGroupMessageMut({
+                  groupId: grp.id as Id<"groups">,
+                  body: mySigPacket,
+                });
+              });
+            } else {
+              await sendGroupMessageMut({
+                groupId: grp.id as Id<"groups">,
+                body: mySigPacket,
+              });
+            }
+          }
+
+          // If owner and group has no epoch key yet, initialize Epoch #1
+          const hasAnyGkRow = rows.some((r) => parseGroupKeySignal(r.body) !== null);
+          if (!hasAnyGkRow && grp.role === "owner" && !getLatestGroupEpoch(grp.id)) {
+            const ep = await ensureInitialGroupEpoch(grp.id);
+            if (ep) {
+              await distributeGroupEpochToMembers(grp.id, ep.epoch, ep.secretB64).catch(
+                () => undefined,
+              );
+            }
+          }
+        } catch {
+          announcedGroupKeysRef.current.delete(grpSyncTag);
+        }
+      }
+    };
+
+    void syncKeys();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    convex,
+    distributeGroupEpochToMembers,
+    e2eeSnapshot.myKeyId,
+    e2eeSnapshot.ready,
+    editGroupMut,
+    editMessageMut,
+    friends,
+    groupsQuery,
+    isAuthenticated,
+    me?.id,
+    sendGroupMessageMut,
+    sendMessageMut,
+  ]);
+
+  // Auto-wrap active group's current epoch key for any member whose E2EE key newly arrived
+  const wrappedGroupMembersCacheRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!activeGroupId || !groupDetails || !groupMessagesQuery || !me?.id) return;
+    const state = getActiveE2EEState();
+    const epochEntry = getLatestGroupEpoch(activeGroupId);
+    if (!state || !epochEntry) return;
+
+    const wrappedUserKeyPairs = new Set<string>();
+    for (const row of groupMessagesQuery as GroupMessage[]) {
+      const pkt = parseGroupKeySignal(row.body);
+      if (pkt && pkt.ep === epochEntry.epoch) {
+        for (const [uid, wrap] of Object.entries(pkt.wraps)) {
+          wrappedUserKeyPairs.add(`${uid}:${wrap.kid}`);
+        }
+      }
+    }
+
+    const missingMembers = groupDetails.members.filter((m) => {
+      if (m.id === me.id) return false;
+      const peer = state.peerKeys[m.id];
+      if (!peer) return false;
+      const pair = `${m.id}:${peer.bundle.keyId}`;
+      const guard = `${activeGroupId}:${epochEntry.epoch}:${pair}`;
+      return !wrappedUserKeyPairs.has(pair) && !wrappedGroupMembersCacheRef.current.has(guard);
+    });
+
+    if (missingMembers.length === 0) return;
+    for (const m of missingMembers) {
+      const peer = state.peerKeys[m.id];
+      if (peer) {
+        wrappedGroupMembersCacheRef.current.add(
+          `${activeGroupId}:${epochEntry.epoch}:${m.id}:${peer.bundle.keyId}`,
+        );
+      }
+    }
+    void distributeGroupEpochToMembers(
+      activeGroupId,
+      epochEntry.epoch,
+      epochEntry.secretB64,
+    ).catch(() => undefined);
+  }, [
+    activeGroupId,
+    distributeGroupEpochToMembers,
+    e2eeSnapshot.version,
+    groupDetails,
+    groupMessagesQuery,
+    me?.id,
+  ]);
+
+  // Monitor private stickerLibrary for remote E2EE Vault & Live Device Sync packets
+  useEffect(() => {
+    if (!isAuthenticated || !me?.id || !stickerLibrary) return;
+    let cancelled = false;
+    const allItems = [...stickerLibrary.favorites, ...stickerLibrary.recent];
+
+    // 1. Discover latest sealed PBKDF2 Vault
+    const vaultItems = allItems.filter((item) => item.name === E2EE_VAULT_STICKER_NAME && item.url);
+    if (vaultItems.length > 0) {
+      const latestVaultItem = vaultItems[0];
+      void fetch(latestVaultItem.url)
+        .then((r) => (r.ok ? (r.json() as Promise<SealedE2EEVault>) : null))
+        .then(async (sealed) => {
+          if (cancelled || !sealed || sealed.v !== 1 || sealed.userId !== me.id) return;
+          setRemoteVaultSealed(sealed);
+          const cur = getActiveE2EEState();
+          if (cur && cur.primaryIdentity.keyId === sealed.keyId && cur.backedUpKeyId !== sealed.keyId) {
+            await markCurrentIdentityBackedUp(sealed.keyId);
+          }
+        })
+        .catch(() => undefined);
+    } else {
+      setRemoteVaultSealed(null);
+    }
+
+    // 2. Discover incoming Live Device Sync requests from another logged-in device
+    const reqItems = stickerLibrary.favorites.filter(
+      (item) => item.name.startsWith(E2EE_DEVSYNC_REQ_PREFIX) && item.url,
+    );
+    if (reqItems.length > 0) {
+      void Promise.all(
+        reqItems.map(async (item) => {
+          try {
+            const resp = await fetch(item.url);
+            if (!resp.ok) return null;
+            const parsed = (await resp.json()) as DeviceSyncRequest;
+            if (
+              parsed?.v === 1 &&
+              parsed.userId === me.id &&
+              parsed.deviceId !== localDeviceSyncRef.current?.request.deviceId &&
+              Date.now() - parsed.createdAt < 15 * 60_000
+            ) {
+              return parsed;
+            }
+          } catch {
+            // Ignore malformed sync request
+          }
+          return null;
+        }),
+      ).then((reqs) => {
+        if (!cancelled) {
+          setPendingDeviceSyncRequests(reqs.filter((r): r is DeviceSyncRequest => r !== null));
+        }
+      });
+    } else {
+      setPendingDeviceSyncRequests([]);
+    }
+
+    // 3. Check if our own active Live Device Sync request received an encrypted response!
+    const myPendingSync = localDeviceSyncRef.current;
+    if (myPendingSync) {
+      const expectedName = `${E2EE_DEVSYNC_RES_PREFIX}${myPendingSync.request.deviceId}`;
+      const resItem = allItems.find((item) => item.name === expectedName && item.url);
+      if (resItem) {
+        void fetch(resItem.url)
+          .then((r) => (r.ok ? (r.json() as Promise<DeviceSyncResponse>) : null))
+          .then(async (syncResp) => {
+            if (cancelled || !syncResp) return;
+            const contents = await unwrapDeviceSyncResponse({
+              response: syncResp,
+              localSync: myPendingSync,
+            });
+            await importRestoredVaultContents(contents);
+            localDeviceSyncRef.current = null;
+            setActiveDeviceSyncCode(null);
+            announcedDmKeysRef.current.clear();
+            announcedGroupKeysRef.current.clear();
+            await setStickerFavoriteMut({
+              mediaKey: resItem.key,
+              name: resItem.name,
+              mediaType: resItem.mediaType,
+              source: resItem.source,
+              isFavorite: false,
+            }).catch(() => undefined);
+          })
+          .catch(() => undefined);
+      }
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, me?.id, setStickerFavoriteMut, stickerLibrary]);
+
+  const saveE2EEVaultBackup = useCallback<NonNullable<JaTextStore["saveE2EEVaultBackup"]>>(
+    async (passphrase) => {
+      const contents = exportCurrentVaultContents();
+      if (!contents) throw new Error("Local E2EE keystore is not ready yet.");
+      const { sealed, recoveryKey } = await sealE2EEVault({ contents, passphrase });
+      const jsonBytes = new TextEncoder().encode(JSON.stringify(sealed));
+      const vaultFile = new File([jsonBytes], "e2ee-vault.json", {
+        type: "application/octet-stream",
+      });
+      const storageId = await upload(vaultFile);
+
+      // Remove older vault favorites from private stickerLibrary
+      const oldVaults = (stickerLibrary?.favorites ?? []).filter(
+        (s) => s.name === E2EE_VAULT_STICKER_NAME,
+      );
+      await saveStickerMut({
+        storageId,
+        name: E2EE_VAULT_STICKER_NAME,
+        mediaType: "sticker",
+      });
+      await Promise.all(
+        oldVaults.map((oldItem) =>
+          setStickerFavoriteMut({
+            mediaKey: oldItem.key,
+            name: oldItem.name,
+            mediaType: oldItem.mediaType,
+            source: oldItem.source,
+            isFavorite: false,
+          }).catch(() => undefined),
+        ),
+      );
+      if (e2eeServerSupportedRef.current !== false) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await convex.mutation("e2ee:saveVault" as any, {
+            keyId: sealed.keyId,
+            sealedJson: JSON.stringify(sealed),
+          });
+        } catch {
+          e2eeServerSupportedRef.current = false;
+        }
+      }
+
+      setRemoteVaultSealed(sealed);
+      await markCurrentIdentityBackedUp(sealed.keyId);
+      return { recoveryKey };
+    },
+    [convex, saveStickerMut, setStickerFavoriteMut, stickerLibrary?.favorites, upload],
+  );
+
+  const restoreE2EEVaultBackup = useCallback<NonNullable<JaTextStore["restoreE2EEVaultBackup"]>>(
+    async (secretInput, mode) => {
+      let sealed = remoteVaultSealed;
+      if (!sealed && e2eeServerSupportedRef.current !== false) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const res = (await convex.query("e2ee:getMyVault" as any, {})) as {
+            sealedJson: string;
+          } | null;
+          if (res?.sealedJson) sealed = JSON.parse(res.sealedJson) as SealedE2EEVault;
+        } catch {
+          e2eeServerSupportedRef.current = false;
+        }
+      }
+      if (!sealed) {
+        throw new Error("No E2EE key backup found on this account yet.");
+      }
+      const contents = await openSealedE2EEVault({ sealed, secretInput, mode });
+      await importRestoredVaultContents(contents);
+      announcedDmKeysRef.current.clear();
+      announcedGroupKeysRef.current.clear();
+    },
+    [convex, remoteVaultSealed],
+  );
+
+  const requestLiveDeviceSync = useCallback<NonNullable<JaTextStore["requestLiveDeviceSync"]>>(
+    async () => {
+      if (!me?.id) throw new Error("Sign in first.");
+      const deviceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const label = Capacitor.isNativePlatform() ? "JaText Android App" : "JaText Web Browser";
+      const syncPair = await generateDeviceSyncKeypair(me.id, deviceId, label);
+      localDeviceSyncRef.current = syncPair;
+      setActiveDeviceSyncCode(syncPair.request.sasCode);
+
+      const bytes = new TextEncoder().encode(JSON.stringify(syncPair.request));
+      const reqFile = new File([bytes], "e2ee-devsync-req.json", {
+        type: "application/octet-stream",
+      });
+      const storageId = await upload(reqFile);
+      await saveStickerMut({
+        storageId,
+        name: `${E2EE_DEVSYNC_REQ_PREFIX}${deviceId}`,
+        mediaType: "sticker",
+      });
+      return syncPair.request.sasCode;
+    },
+    [me?.id, saveStickerMut, upload],
+  );
+
+  const approveDeviceSyncRequest = useCallback<
+    NonNullable<JaTextStore["approveDeviceSyncRequest"]>
+  >(
+    async (request) => {
+      const contents = exportCurrentVaultContents();
+      if (!contents) throw new Error("Local E2EE keystore is not ready.");
+      const syncResp = await wrapVaultForDeviceSync({ request, contents });
+      const bytes = new TextEncoder().encode(JSON.stringify(syncResp));
+      const resFile = new File([bytes], "e2ee-devsync-res.json", {
+        type: "application/octet-stream",
+      });
+      const storageId = await upload(resFile);
+      await saveStickerMut({
+        storageId,
+        name: `${E2EE_DEVSYNC_RES_PREFIX}${request.deviceId}`,
+        mediaType: "sticker",
+      });
+
+      // Clean up the fulfilled request item from favorites
+      const reqName = `${E2EE_DEVSYNC_REQ_PREFIX}${request.deviceId}`;
+      const matchingReq = (stickerLibrary?.favorites ?? []).find((s) => s.name === reqName);
+      if (matchingReq) {
+        await setStickerFavoriteMut({
+          mediaKey: matchingReq.key,
+          name: matchingReq.name,
+          mediaType: matchingReq.mediaType,
+          source: matchingReq.source,
+          isFavorite: false,
+        }).catch(() => undefined);
+      }
+      setPendingDeviceSyncRequests((prev) =>
+        prev.filter((r) => r.deviceId !== request.deviceId),
+      );
+    },
+    [saveStickerMut, setStickerFavoriteMut, stickerLibrary?.favorites, upload],
+  );
+
+  const visibleStickerFavorites = useMemo(
+    () => (stickerLibrary?.favorites ?? []).filter((s) => !isInternalE2EEStickerName(s.name)),
+    [stickerLibrary?.favorites],
+  );
+  const visibleRecentStickers = useMemo(
+    () => (stickerLibrary?.recent ?? []).filter((s) => !isInternalE2EEStickerName(s.name)),
+    [stickerLibrary?.recent],
   );
 
   const value: JaTextStore = {
@@ -1651,8 +2702,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     deleteConversationForMe,
     setUserBlocked,
     markMessagesRead,
-    stickerFavorites: stickerLibrary?.favorites ?? [],
-    recentStickers: stickerLibrary?.recent ?? [],
+    stickerFavorites: visibleStickerFavorites,
+    recentStickers: visibleRecentStickers,
     searchKlipy,
     saveSticker,
     setStickerFavorite,
@@ -1697,6 +2748,14 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     refreshPushRegistration,
     setNotificationsEnabled,
     setSoundsEnabled,
+    hasRemoteE2EEVault: Boolean(remoteVaultSealed),
+    remoteVaultKeyId: remoteVaultSealed?.keyId ?? null,
+    pendingDeviceSyncRequests,
+    activeDeviceSyncCode,
+    saveE2EEVaultBackup,
+    restoreE2EEVaultBackup,
+    requestLiveDeviceSync,
+    approveDeviceSyncRequest,
   };
 
   return <JaTextContext.Provider value={value}>{children}</JaTextContext.Provider>;

@@ -22,6 +22,13 @@ import {
 } from "./types";
 import { WALLPAPER_PREFIX, getSavedOutgoingBubbleStyle } from "./chatCustomization";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
+import { generateIdentityRecord, toPublicIdentityBundle } from "./e2ee/cryptoPrimitives";
+import {
+  clearActiveE2EESession,
+  ensureUserE2EEInitialized,
+  getActiveE2EEState,
+  ingestPeerIdentityBundle,
+} from "./e2ee/keystore";
 
 export const JaTextContext = createContext<JaTextStore | null>(null);
 
@@ -801,6 +808,39 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       }),
     [db.blocks, db.presence, db.users, friends, me?.id],
   );
+
+  useEffect(() => {
+    if (!me?.id) {
+      clearActiveE2EESession();
+      return;
+    }
+    let cancelled = false;
+    void ensureUserE2EEInitialized(me.id).then(async () => {
+      if (cancelled) return;
+      const cur = getActiveE2EEState();
+      if (!cur) return;
+      for (const f of friends) {
+        if (!cur.peerKeys[f.id]) {
+          const demoPeerKeyKey = `jatext:demo-e2ee-peer:${f.id}`;
+          let recJson = localStorage.getItem(demoPeerKeyKey);
+          if (!recJson) {
+            const rec = await generateIdentityRecord(f.id);
+            recJson = JSON.stringify(rec);
+            try {
+              localStorage.setItem(demoPeerKeyKey, recJson);
+            } catch {
+              // Ignore quota
+            }
+          }
+          const rec = JSON.parse(recJson);
+          await ingestPeerIdentityBundle(toPublicIdentityBundle(rec));
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [friends, me?.id]);
 
   const sendMessage = useCallback<JaTextStore["sendMessage"]>(
     async (receiverId, body, file, replyToId) => {

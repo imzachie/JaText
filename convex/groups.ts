@@ -350,7 +350,9 @@ export const send = mutation({
     if (mentionedUserIds.length > 0) {
       const group = await ctx.db.get(args.groupId);
       const groupName = group?.name ?? "Group chat";
-      const pushBody = finalBody || "Mentioned you in an attachment";
+      const pushBody = finalBody.includes("__JATEXT_E2EE_V1__:")
+        ? "🔒 Mentioned you in an encrypted message"
+        : finalBody || "Mentioned you in an attachment";
       await Promise.all(
         mentionedUserIds.map((targetUserId) =>
           scheduleGroupMentionPush(

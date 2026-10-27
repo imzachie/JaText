@@ -12,6 +12,7 @@ import { Onboarding } from "./components/Onboarding";
 import { NotificationWelcome } from "./components/NotificationWelcome";
 import { ProfileModal } from "./components/ProfileCard";
 import { SettingsModal } from "./components/Settings";
+import { E2EEKeyVaultModal, LockIcon } from "./components/E2EEModals";
 import { Sidebar } from "./components/Sidebar";
 import {
   CallProvider,
@@ -69,6 +70,7 @@ function AppContent() {
   } = store;
   const [profileUser, setProfileUser] = useState<JaUser | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [e2eeModalOpen, setE2eeModalOpen] = useState(false);
   const [notificationWelcomeSeen, setNotificationWelcomeSeen] = useState(
     () => localStorage.getItem(NOTIFICATION_WELCOME_KEY) === "true",
   );
@@ -330,7 +332,11 @@ function AppContent() {
     return (
       <div className="splash">
         <img className="logo-icon splash-logo" src="/jatext-logo-icon.png" alt="" />
-        <p>Loading JaText…</p>
+        <p className="splash-loading-text">Loading JaText…</p>
+        <div className="splash-e2ee" role="status" aria-label="End-to-End Encrypted">
+          <LockIcon size={14} className="splash-e2ee-icon" />
+          <span>End-to-End Encrypted</span>
+        </div>
       </div>
     );
   }
@@ -390,9 +396,38 @@ function AppContent() {
           user={freshProfileUser}
           status={profileStatus}
           onClose={() => setProfileUser(null)}
+          onOpenE2EEVault={() => {
+            setProfileUser(null);
+            setE2eeModalOpen(true);
+          }}
         />
       )}
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          onOpenE2EEVault={() => {
+            setSettingsOpen(false);
+            setE2eeModalOpen(true);
+          }}
+        />
+      )}
+      {e2eeModalOpen && <E2EEKeyVaultModal onClose={() => setE2eeModalOpen(false)} />}
+      {(store.pendingDeviceSyncRequests?.length ?? 0) > 0 && !e2eeModalOpen && (
+        <div className="e2ee-sync-toast" role="region" aria-label="Device E2EE sync request">
+          <LockIcon size={16} />
+          <span>
+            <strong>{store.pendingDeviceSyncRequests![0].deviceLabel}</strong> requested E2EE key
+            sync (<code>{store.pendingDeviceSyncRequests![0].sasCode}</code>)
+          </span>
+          <button
+            type="button"
+            className="primary-btn small-btn"
+            onClick={() => setE2eeModalOpen(true)}
+          >
+            Review
+          </button>
+        </div>
+      )}
       <CallOverlay />
       <GroupCallOverlay />
     </div>

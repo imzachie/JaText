@@ -233,4 +233,28 @@ export default defineSchema({
   })
     .index("by_channel", ["channelId"])
     .index("by_channel_user", ["channelId", "userId"]),
+
+  e2eeUserKeys: defineTable({
+    userId: v.id("users"),
+    keyId: v.string(),
+    dhPubB64: v.string(),
+    sigPubB64: v.string(),
+    selfSigB64: v.string(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+
+  e2eeKeyBackups: defineTable({
+    userId: v.id("users"),
+    keyId: v.string(),
+    sealedJson: v.string(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+
+  e2eeGroupKeys: defineTable({
+    groupId: v.id("groups"),
+    epoch: v.number(),
+    senderId: v.id("users"),
+    packetJson: v.string(),
+    createdAt: v.number(),
+  }).index("by_group_epoch", ["groupId", "epoch"]),
 });
