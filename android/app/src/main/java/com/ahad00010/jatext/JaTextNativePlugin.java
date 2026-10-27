@@ -135,8 +135,8 @@ public class JaTextNativePlugin extends Plugin {
         Context ctx = getContext();
         JSObject result = new JSObject();
         if (ctx == null) {
-            result.put("versionName", "2.3");
-            result.put("versionCode", 14);
+            result.put("versionName", "2.4");
+            result.put("versionCode", 15);
             result.put("canInstallPackages", true);
             call.resolve(result);
             return;

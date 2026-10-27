@@ -371,6 +371,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 }
 .friend-row {
   display: flex; gap: 12px; align-items: center;
+  flex-shrink: 0;
   padding: 10px; border-radius: 16px; cursor: pointer;
 }
 .friend-row:hover { background: var(--panel-2); }
@@ -477,6 +478,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .group-manage-member {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 9px;
   padding: 8px;
   border-radius: 10px;
@@ -512,9 +514,10 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .sidebar-footer { text-align: center; flex: none; padding-top: 4px; }
 
 .add-panel { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; flex: 1; padding-bottom: 8px; }
+.add-panel > * { flex-shrink: 0; }
 .add-panel h3 { margin: 8px 0 2px; font-size: 15px; }
 .add-form { display: flex; flex-direction: column; gap: 10px; }
-.request-row { display: flex; align-items: center; gap: 10px; background: var(--panel-2); padding: 10px; border-radius: 16px; }
+.request-row { display: flex; align-items: center; flex-shrink: 0; gap: 10px; background: var(--panel-2); padding: 10px; border-radius: 16px; }
 .request-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .accept-btn {
   background: var(--ok); color: #06280f; border: none;
@@ -4550,6 +4553,8 @@ input:focus, textarea:focus {
 .call-history-row {
   display: flex;
   align-items: center;
+  flex: none;
+  flex-shrink: 0;
   gap: 10px;
   width: 100%;
   box-sizing: border-box;
@@ -4578,6 +4583,7 @@ input:focus, textarea:focus {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  flex-shrink: 0;
   gap: 6px;
   min-width: 0;
 }
@@ -4592,6 +4598,7 @@ input:focus, textarea:focus {
 }
 
 .call-history-handle {
+  flex-shrink: 0;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
@@ -4602,6 +4609,7 @@ input:focus, textarea:focus {
 .call-history-sub {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 5px;
   min-width: 0;
   overflow: hidden;
