@@ -1,4 +1,6 @@
 import type { BubbleStyleId } from "./chatCustomization";
+import type { DeviceSyncRequest } from "./e2ee/cryptoPrimitives";
+import type { MessageE2EEProof } from "./e2ee/keystore";
 
 export interface JaUser {
   id: string;
@@ -55,6 +57,7 @@ export interface ChatMessage {
   forwardedFrom?: string;
   unsentAt?: number;
   reactions?: MessageReaction[];
+  e2ee?: MessageE2EEProof;
 }
 
 export type MessageDeliveryStatus = "delivered" | "sent" | "read";
@@ -183,6 +186,7 @@ export interface GroupMessage {
   mentionsEveryone?: boolean;
   mentionedUserIds?: string[];
   reactions?: MessageReaction[];
+  e2ee?: MessageE2EEProof;
 }
 
 export interface ChatTypingUser {
@@ -306,6 +310,16 @@ export interface JaTextStore {
   refreshPushRegistration: () => Promise<void>;
   setNotificationsEnabled: (enabled: boolean) => void;
   setSoundsEnabled: (enabled: boolean) => void;
+
+  /** Zero-knowledge E2EE Vault & Multi-Device Sync */
+  hasRemoteE2EEVault?: boolean;
+  remoteVaultKeyId?: string | null;
+  pendingDeviceSyncRequests?: DeviceSyncRequest[];
+  activeDeviceSyncCode?: string | null;
+  saveE2EEVaultBackup?: (passphrase: string) => Promise<{ recoveryKey: string }>;
+  restoreE2EEVaultBackup?: (secretInput: string, mode: "pin" | "recovery") => Promise<void>;
+  requestLiveDeviceSync?: () => Promise<string>;
+  approveDeviceSyncRequest?: (request: DeviceSyncRequest) => Promise<void>;
 }
 
 export const USERNAME_REGEX = /^[a-z0-9._]{3,20}$/;

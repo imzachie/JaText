@@ -33,6 +33,8 @@ import {
   useIsMobileWallpaperSupported,
 } from "../lib/chatCustomization";
 import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts";
+import { useE2EESnapshot } from "../lib/e2ee/keystore";
+import { MessageEncryptionModal } from "./E2EEModals";
 import { isVoiceNoteOrAudio, saveCachedVoiceTranscript, decodeVoiceNoteMime } from "../lib/voiceNotes";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
@@ -613,6 +615,9 @@ export function ChatView({
   const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
   const [wallpaperModalOpen, setWallpaperModalOpen] = useState(false);
   const [headerMoreMenu, setHeaderMoreMenu] = useState<{ x: number; y: number } | null>(null);
+  const [inspectingMessage, setInspectingMessage] = useState<ChatMessage | null>(null);
+  const e2ee = useE2EESnapshot();
+  const peerE2EE = e2ee.peerKeys[friend.id];
   const isMobileWallpaper = useIsMobileWallpaperSupported();
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
   const [forwardClosing, setForwardClosing] = useState(false);
@@ -1284,6 +1289,7 @@ export function ChatView({
           <span className="muted small chat-presence">
             @{friend.username} · {friendStatusLabel}
             {friendActivity?.customStatus ? ` · ${friendActivity.customStatus}` : ""}
+            {peerE2EE ? " · 🔒 Encrypted" : ""}
           </span>
         </button>
         <div className="chat-header-actions" aria-label="Chat actions">
@@ -1564,6 +1570,16 @@ export function ChatView({
               <span>↩️</span> Unsend
             </button>
           )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setInspectingMessage(messageMenu.message);
+              closeMessageMenu();
+            }}
+          >
+            <span>🔐</span> Encryption details
+          </button>
         </ContextMenu>
       )}
 
@@ -1787,6 +1803,21 @@ export function ChatView({
             Pinch to zoom · Drag to move · Click outside or press Esc to close
           </span>
         </div>
+      )}
+      {inspectingMessage && (
+        <MessageEncryptionModal
+          proof={
+            inspectingMessage.e2ee ?? {
+              encrypted: false,
+              decrypted: true,
+              signatureVerified: false,
+              algorithm: "Legacy Plaintext (sent before v2.5 E2EE)",
+              channel: "plain",
+              rawWireBody: inspectingMessage.body,
+            }
+          }
+          onClose={() => setInspectingMessage(null)}
+        />
       )}
     </section>
   );

@@ -1,12 +1,20 @@
 import { useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
+import { useE2EESnapshot } from "../lib/e2ee/keystore";
 import { useJaText } from "../lib/store";
 import { AnimatedModal } from "./AnimatedModal";
+import { LockIcon } from "./E2EEModals";
 import { LegalModal, type LegalTab } from "./LegalModal";
 import { ProfileForm } from "./ProfileForm";
 
-export function SettingsModal({ onClose }: { onClose: () => void }) {
+export function SettingsModal({
+  onClose,
+  onOpenE2EEVault,
+}: {
+  onClose: () => void;
+  onOpenE2EEVault?: () => void;
+}) {
   const {
     me,
     signOut,
@@ -14,11 +22,15 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     notificationsEnabled,
     pushRegistrationStatus,
     soundsEnabled,
+    hasRemoteE2EEVault,
     setActivity,
     setNotificationsEnabled,
     refreshPushRegistration,
     setSoundsEnabled,
   } = useJaText();
+  const e2ee = useE2EESnapshot();
+  const [copiedFp, setCopiedFp] = useState(false);
+  const needsVaultUnlock = Boolean(hasRemoteE2EEVault && !e2ee.backedUp);
   const [saved, setSaved] = useState(false);
   const [activityStatus, setActivityStatus] = useState(me?.statusPreference ?? "online");
   const [customStatus, setCustomStatus] = useState(me?.customStatus ?? "");
@@ -197,6 +209,69 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 setTimeout(requestClose, 650);
               }}
             />
+
+            <hr className="settings-hr" />
+            <section className="e2ee-settings-section">
+              <div className="profile-e2ee-header">
+                <span className="profile-e2ee-title">
+                  <LockIcon size={15} />
+                  <strong>End-to-End Encryption</strong>
+                </span>
+                <span
+                  className={`e2ee-pill ${
+                    needsVaultUnlock ? "locked" : e2ee.ready ? "active" : "pending"
+                  }`}
+                >
+                  {needsVaultUnlock
+                    ? "Backup Available"
+                    : e2ee.ready
+                      ? "Active · Zero-Knowledge"
+                      : "Initializing…"}
+                </span>
+              </div>
+              <p className="muted small">
+                Private DMs, group chats, voice notes, and attachments are encrypted on your device
+                with ECDH P-256 + AES-256-GCM before reaching Convex.
+              </p>
+              {e2ee.myFingerprint && (
+                <>
+                  <div className="profile-e2ee-sub">
+                    Device Key ID: <code>{e2ee.myKeyId}</code>
+                  </div>
+                  <code className="e2ee-fingerprint-code">{e2ee.myFingerprint}</code>
+                </>
+              )}
+              <div className="profile-e2ee-btn-row">
+                {e2ee.myFingerprint && (
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(
+                        `JaText E2EE Key (@${me.username} · ${e2ee.myKeyId})\nFingerprint: ${e2ee.myFingerprint}\nECDH-P256: ${e2ee.myDhPubB64 ?? ""}`,
+                      );
+                      setCopiedFp(true);
+                      window.setTimeout(() => setCopiedFp(false), 1800);
+                    }}
+                  >
+                    {copiedFp ? "✓ Copied" : "Copy E2EE key"}
+                  </button>
+                )}
+                {onOpenE2EEVault && (
+                  <button
+                    type="button"
+                    className="ghost-btn e2ee-vault-open-btn"
+                    onClick={onOpenE2EEVault}
+                  >
+                    {needsVaultUnlock
+                      ? "🔓 Unlock / Sync Device Key"
+                      : e2ee.backedUp
+                        ? "🔐 Manage Key Backup & Sync"
+                        : "🛡️ Set Up Key Backup & Sync"}
+                  </button>
+                )}
+              </div>
+            </section>
 
             <hr className="settings-hr" />
             <section className="legal-settings-section">

@@ -187,16 +187,18 @@ export const send = mutation({
 
     const trimmedBody = args.body.trim();
     if (!trimmedBody.startsWith("__JATEXT_CALL_SIG__:")) {
-      const pushSummary = trimmedBody.startsWith("__JATEXT_CALL__:")
-        ? trimmedBody.includes('"mode":"video"')
-          ? "📹 Incoming video call"
-          : "📞 Incoming voice call"
-        : trimmedBody ||
-          (args.attachmentType?.startsWith("audio/")
-            ? "🎤 Sent a voice note"
-            : args.attachmentName
-              ? `Sent ${args.attachmentName}`
-              : "Sent you an attachment");
+      const pushSummary = trimmedBody.includes("__JATEXT_E2EE_V1__:")
+        ? "🔒 Sent an encrypted message"
+        : trimmedBody.startsWith("__JATEXT_CALL__:")
+          ? trimmedBody.includes('"mode":"video"')
+            ? "📹 Incoming video call"
+            : "📞 Incoming voice call"
+          : trimmedBody ||
+            (args.attachmentType?.startsWith("audio/")
+              ? "🎤 Sent a voice note"
+              : args.attachmentName
+                ? `Sent ${args.attachmentName}`
+                : "Sent you an attachment");
       await scheduleMessagePush(ctx, me, args.receiverId, pushSummary);
     }
   },

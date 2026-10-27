@@ -9,10 +9,12 @@ import {
   useIsMobileWallpaperSupported,
 } from "../lib/chatCustomization";
 import { colorById } from "../lib/colors";
+import { togglePeerVerified, useE2EESnapshot } from "../lib/e2ee/keystore";
 import { normalizeAvatarSrc } from "../lib/imageUtils";
 import { useJaText } from "../lib/store";
 import type { ActivityStatus, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
+import { LockIcon } from "./E2EEModals";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 
 /**
@@ -68,18 +70,27 @@ export function ProfileModal({
   user,
   status,
   onClose,
+  onOpenE2EEVault,
 }: {
   user: JaUser;
   status?: ActivityStatus;
   onClose: () => void;
+  onOpenE2EEVault?: () => void;
 }) {
   const store = useJaText();
   const { me, friends, activeChatId, activeMessages, blockedUserIds, setActiveChatId } = store;
   const { startCall } = useCall();
+  const e2ee = useE2EESnapshot();
   const isMobileWallpaper = useIsMobileWallpaperSupported();
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
   const [blockBusy, setBlockBusy] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [showRawKey, setShowRawKey] = useState(false);
+  const [copiedE2ee, setCopiedE2ee] = useState(false);
+
+  const peerKey = me && me.id !== user.id ? e2ee.peerKeys[user.id] : undefined;
+  const isVerifiedPeer = Boolean(peerKey && peerKey.verifiedKeyId === peerKey.bundle.keyId);
+  const safetyBlocks = peerKey?.safetyNumber ? peerKey.safetyNumber.split(" ") : [];
 
   function animateClose() {
     if (closing) return;
@@ -183,6 +194,151 @@ export function ProfileModal({
           ✕
         </button>
         <ProfileCard user={user} status={status} />
+
+        <section className="profile-e2ee-section" aria-label="End-to-End Encryption Key">
+          <div className="profile-e2ee-header">
+            <span className="profile-e2ee-title">
+              <LockIcon size={15} />
+              <strong>End-to-End Encryption</strong>
+            </span>
+            {!isNotMe ? (
+              <span className="e2ee-pill active">
+                {e2ee.ready ? `Active · P-256` : "Initializing…"}
+              </span>
+            ) : peerKey ? (
+              <span className={`e2ee-pill ${isVerifiedPeer ? "verified" : "active"}`}>
+                {isVerifiedPeer ? "✓ Verified" : "Active · P-256"}
+              </span>
+            ) : (
+              <span className="e2ee-pill pending">Pending Key</span>
+            )}
+          </div>
+
+          {!isNotMe ? (
+            e2ee.myFingerprint ? (
+              <>
+                <div className="profile-e2ee-sub">
+                  Your E2EE Key ID: <code>{e2ee.myKeyId}</code>
+                </div>
+                <code className="e2ee-fingerprint-code">{e2ee.myFingerprint}</code>
+                {showRawKey && e2ee.myDhPubB64 && (
+                  <div className="profile-e2ee-raw">
+                    <span className="muted small">ECDH P-256 Public Key:</span>
+                    <code>{e2ee.myDhPubB64}</code>
+                    {e2ee.mySigPubB64 && (
+                      <>
+                        <span className="muted small">ECDSA P-256 Signing Key:</span>
+                        <code>{e2ee.mySigPubB64}</code>
+                      </>
+                    )}
+                  </div>
+                )}
+                <div className="profile-e2ee-btn-row">
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(
+                        `JaText E2EE Key (@${user.username} · ${e2ee.myKeyId})\nFingerprint: ${e2ee.myFingerprint}\nECDH-P256: ${e2ee.myDhPubB64 ?? ""}\nECDSA-P256: ${e2ee.mySigPubB64 ?? ""}`,
+                      );
+                      setCopiedE2ee(true);
+                      window.setTimeout(() => setCopiedE2ee(false), 1800);
+                    }}
+                  >
+                    {copiedE2ee ? "✓ Copied" : "Copy E2EE key"}
+                  </button>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    onClick={() => setShowRawKey((v) => !v)}
+                  >
+                    {showRawKey ? "Hide raw key" : "View raw key"}
+                  </button>
+                  {onOpenE2EEVault && (
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      onClick={onOpenE2EEVault}
+                    >
+                      Backup / Sync
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="muted small">Generating your on-device P-256 identity key…</p>
+            )
+          ) : peerKey ? (
+            <>
+              {peerKey.keyChangedAt && !isVerifiedPeer && (
+                <div className="e2ee-key-changed-banner">
+                  ⚠️ @{user.username}&apos;s E2EE key changed recently. Verify their 60-digit
+                  security number below.
+                </div>
+              )}
+              <div className="profile-e2ee-sub">
+                @{user.username}&apos;s Key ID: <code>{peerKey.bundle.keyId}</code> · Signed ECDSA P-256
+              </div>
+              <code className="e2ee-fingerprint-code">{peerKey.fingerprint}</code>
+
+              {safetyBlocks.length > 0 && (
+                <div className="profile-safety-wrap">
+                  <span className="muted small">60-Digit Safety Number (matches on both screens)</span>
+                  <div className="profile-safety-grid">
+                    {safetyBlocks.map((block, idx) => (
+                      <span key={idx}>{block}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {showRawKey && (
+                <div className="profile-e2ee-raw">
+                  <span className="muted small">ECDH P-256 Public Key:</span>
+                  <code>{peerKey.bundle.dhPubB64}</code>
+                  <span className="muted small">ECDSA P-256 Signing Key:</span>
+                  <code>{peerKey.bundle.sigPubB64}</code>
+                </div>
+              )}
+
+              <div className="profile-e2ee-btn-row">
+                <button
+                  type="button"
+                  className="mini-btn"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(
+                      `JaText E2EE Verification (@${user.username})\nKey ID: ${peerKey.bundle.keyId}\nFingerprint: ${peerKey.fingerprint}\nSafety Number: ${peerKey.safetyNumber}\nECDH-P256: ${peerKey.bundle.dhPubB64}`,
+                    );
+                    setCopiedE2ee(true);
+                    window.setTimeout(() => setCopiedE2ee(false), 1800);
+                  }}
+                >
+                  {copiedE2ee ? "✓ Copied" : "Copy E2EE key"}
+                </button>
+                <button
+                  type="button"
+                  className="mini-btn"
+                  onClick={() => setShowRawKey((v) => !v)}
+                >
+                  {showRawKey ? "Hide raw key" : "View raw key"}
+                </button>
+                <button
+                  type="button"
+                  className={`mini-btn ${isVerifiedPeer ? "verified-btn" : ""}`}
+                  onClick={() => void togglePeerVerified(user.id)}
+                >
+                  {isVerifiedPeer ? "✓ Verified" : "Mark verified"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="muted small profile-e2ee-wait">
+              Waiting for @{user.username} to open the latest JaText once to exchange signed P-256
+              keys. New messages will encrypt end-to-end automatically as soon as their key arrives.
+            </p>
+          )}
+        </section>
+
         {isNotMe && (
           <div className="profile-call-actions">
             {isFriend && (

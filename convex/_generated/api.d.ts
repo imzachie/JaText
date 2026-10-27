@@ -11,6 +11,7 @@
 import type * as auth from "../auth.js";
 import type * as blocks from "../blocks.js";
 import type * as community from "../community.js";
+import type * as e2ee from "../e2ee.js";
 import type * as friends from "../friends.js";
 import type * as groups from "../groups.js";
 import type * as http from "../http.js";
@@ -32,6 +33,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   blocks: typeof blocks;
   community: typeof community;
+  e2ee: typeof e2ee;
   friends: typeof friends;
   groups: typeof groups;
   http: typeof http;
