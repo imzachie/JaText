@@ -13,6 +13,16 @@ import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { updateCallHistoryStatus, upsertCallHistoryEntry } from "./callHistory";
 import { parseWallpaperSignal, stripBubbleStyleFromText } from "./chatCustomization";
 import { JaTextNative, configureNativeCallAudio, ensureNativeMediaPermissions } from "./nativeBridge";
+import {
+  createScreenAudioMixer,
+  isWebDisplayMediaSupported,
+  startMobileRearPresentationShare,
+  startMobileVideoFileShare,
+  startNativeAndroidScreenShare,
+  startWebDisplayScreenShare,
+  type ActiveScreenShareSession,
+  type ScreenAudioMixer,
+} from "./screenShareMedia";
 import { useJaText } from "./store";
 import type { ChatMessage, JaUser } from "./types";
 
@@ -194,6 +204,8 @@ export interface CallContextValue {
   stats: CallConnectionStats;
   callError: string | null;
   canScreenShare: boolean;
+  mobileSharePickerOpen: boolean;
+  sharedMediaVideoElement: HTMLVideoElement | null;
   startCall: (peer: JaUser, mode: CallMode) => Promise<void>;
   acceptIncomingCall: (withVideo: boolean) => Promise<void>;
   declineIncomingCall: () => Promise<void>;
@@ -203,6 +215,9 @@ export interface CallContextValue {
   toggleCamera: () => Promise<void>;
   flipCamera: () => Promise<void>;
   toggleScreenShare: () => Promise<void>;
+  startMobileVideoShare: (file: File) => Promise<void>;
+  startMobileCameraShare: () => Promise<void>;
+  closeMobileSharePicker: () => void;
   toggleSpeakerphone: () => Promise<void>;
   toggleStudioAudio: () => void;
   toggleCaptions: () => void;
@@ -298,14 +313,18 @@ export function formatPreviewMessageText(body: string): string {
         mode?: string;
         state?: string;
         durationSec?: number;
+        ts?: number;
       };
       const icon = parsed.mode === "video" ? "📹" : "📞";
       const label = parsed.mode === "video" ? "Group video call" : "Group voice call";
-      if (parsed.state === "active") return `${icon} ${label} · Join call`;
-      if (parsed.durationSec && parsed.durationSec > 0) {
-        return `${icon} ${label} · ${formatCallDuration(parsed.durationSec)}`;
+      const ageMs = parsed.ts && parsed.ts > 0 ? Date.now() - parsed.ts : 0;
+      if (parsed.state === "active" && ageMs < 55_000) {
+        return `${icon} ${label} · Join call`;
       }
-      return `${icon} ${label} ended`;
+      if (parsed.durationSec && parsed.durationSec > 0) {
+        return `${icon} GC VC Ended · ${formatCallDuration(parsed.durationSec)}`;
+      }
+      return `${icon} GC VC Ended`;
     } catch {
       return "📞 Group call";
     }
@@ -563,6 +582,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [reactions, setReactions] = useState<FloatingCallReaction[]>([]);
   const [captions, setCaptions] = useState<CallCaptionLine[]>([]);
   const [callError, setCallError] = useState<string | null>(null);
+  const [mobileSharePickerOpen, setMobileSharePickerOpen] = useState(false);
+  const [sharedMediaVideoElement, setSharedMediaVideoElement] = useState<HTMLVideoElement | null>(
+    null,
+  );
   const [stats, setStats] = useState<CallConnectionStats>({
     rttMs: null,
     bitrateKbps: null,
@@ -590,9 +613,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const prevBytesRef = useRef<{ bytes: number; ts: number } | null>(null);
   const captionSpeechRef = useRef<WebSpeechInstance | null>(null);
   const nativeCaptionListenerRef = useRef<PluginListenerHandle | null>(null);
-  const nativeScreenFrameListenerRef = useRef<PluginListenerHandle | null>(null);
-  const nativeScreenStopListenerRef = useRef<PluginListenerHandle | null>(null);
-  const nativeScreenKeepAliveRef = useRef<number | null>(null);
+  const activeScreenShareRef = useRef<ActiveScreenShareSession | null>(null);
+  const screenAudioMixerRef = useRef<ScreenAudioMixer | null>(null);
   const remoteAudioElementRef = useRef<HTMLAudioElement | null>(null);
   const isDeafenedRef = useRef(false);
   const stateRef = useRef({
@@ -702,21 +724,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const stopNativeScreenShareInternal = useCallback((notifyNativeService: boolean) => {
-    if (nativeScreenKeepAliveRef.current !== null) {
-      window.clearInterval(nativeScreenKeepAliveRef.current);
-      nativeScreenKeepAliveRef.current = null;
-    }
-    if (nativeScreenFrameListenerRef.current) {
-      void nativeScreenFrameListenerRef.current.remove();
-      nativeScreenFrameListenerRef.current = null;
-    }
-    if (nativeScreenStopListenerRef.current) {
-      void nativeScreenStopListenerRef.current.remove();
-      nativeScreenStopListenerRef.current = null;
-    }
-    if (notifyNativeService && Capacitor.isNativePlatform()) {
+    if (activeScreenShareRef.current) {
+      activeScreenShareRef.current.stop(notifyNativeService);
+      activeScreenShareRef.current = null;
+    } else if (notifyNativeService && Capacitor.isNativePlatform()) {
       void JaTextNative.stopScreenCapture().catch(() => undefined);
     }
+    if (screenAudioMixerRef.current) {
+      screenAudioMixerRef.current.dispose();
+      screenAudioMixerRef.current = null;
+    }
+    setSharedMediaVideoElement(null);
+    setMobileSharePickerOpen(false);
   }, []);
 
   const cleanupCallResources = useCallback(() => {
@@ -1799,6 +1818,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setIsMuted(next);
     if (rawMicTrackRef.current) rawMicTrackRef.current.enabled = !next;
     if (studioGraphRef.current) studioGraphRef.current.processedTrack.enabled = !next;
+    screenAudioMixerRef.current?.setMicMuted(next);
     broadcastMyState({ isMuted: next });
   }, [broadcastMyState, isMuted]);
 
@@ -1886,13 +1906,58 @@ export function CallProvider({ children }: { children: ReactNode }) {
     }
   }, [broadcastMyState, facingMode, isCameraOff, isScreenSharing, refreshLocalPreviewStream]);
 
-  const toggleScreenShare = useCallback(async () => {
-    if (isScreenSharing) {
-      stopNativeScreenShareInternal(true);
+  const restoreVoiceOnlyAudioSender = useCallback(async () => {
+    if (screenAudioMixerRef.current) {
+      screenAudioMixerRef.current.dispose();
+      screenAudioMixerRef.current = null;
+    }
+    const voiceTrack = studioGraphRef.current?.processedTrack ?? rawMicTrackRef.current;
+    if (audioSenderRef.current && voiceTrack) {
+      await audioSenderRef.current.replaceTrack(voiceTrack).catch(() => undefined);
+    }
+  }, []);
+
+  const triggerVideoRenegotiationIfNeeded = useCallback(async () => {
+    const pc = pcRef.current;
+    const cur = sessionRef.current;
+    if (!pc || !cur || pc.signalingState !== "stable") return;
+    try {
+      const videoTransceiver = pc
+        .getTransceivers()
+        .find((t) => t.sender === videoSenderRef.current || t.receiver?.track?.kind === "video");
+      if (videoTransceiver && videoTransceiver.direction !== "sendrecv") {
+        videoTransceiver.direction = "sendrecv";
+      }
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const sdp = pc.localDescription?.toJSON() ?? offer;
+      if (dcRef.current?.readyState === "open") {
+        sendDataChannelPacket({ type: "renegotiate-offer", sdp });
+      } else {
+        await sendSignalPacket(cur.peer.id, {
+          callId: cur.callId,
+          type: "renegotiate-offer",
+          sdp,
+          ts: Date.now(),
+        });
+      }
+    } catch {
+      // Ignore if simultaneous negotiation is in progress.
+    }
+  }, [sendDataChannelPacket, sendSignalPacket]);
+
+  const finishStoppingScreenShare = useCallback(
+    async (notifyNative: boolean) => {
+      stopNativeScreenShareInternal(notifyNative);
       if (screenTrackRef.current) {
-        screenTrackRef.current.stop();
+        try {
+          screenTrackRef.current.stop();
+        } catch {
+          // ignore
+        }
         screenTrackRef.current = null;
       }
+      await restoreVoiceOnlyAudioSender();
       const fallbackCam = cameraTrackRef.current;
       if (videoSenderRef.current) {
         await videoSenderRef.current.replaceTrack(fallbackCam ?? null).catch(() => undefined);
@@ -1901,127 +1966,120 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setIsCameraOff(!fallbackCam);
       refreshLocalPreviewStream();
       broadcastMyState({ isScreenSharing: false, isCameraOff: !fallbackCam });
+    },
+    [
+      broadcastMyState,
+      refreshLocalPreviewStream,
+      restoreVoiceOnlyAudioSender,
+      stopNativeScreenShareInternal,
+    ],
+  );
+
+  const activateScreenShareSession = useCallback(
+    async (shareSession: ActiveScreenShareSession, mixer: ScreenAudioMixer | null) => {
+      activeScreenShareRef.current = shareSession;
+      screenTrackRef.current = shareSession.videoTrack;
+      setSharedMediaVideoElement(shareSession.sharedVideoElement ?? null);
+
+      if (mixer && audioSenderRef.current) {
+        screenAudioMixerRef.current = mixer;
+        await audioSenderRef.current.replaceTrack(mixer.outputTrack).catch(() => undefined);
+      } else if (mixer) {
+        mixer.dispose();
+      }
+
+      const hadPriorVideo = Boolean(videoSenderRef.current?.track);
+      if (videoSenderRef.current) {
+        await videoSenderRef.current.replaceTrack(shareSession.videoTrack);
+      }
+
+      setIsScreenSharing(true);
+      setIsCameraOff(false);
+      refreshLocalPreviewStream();
+      broadcastMyState({ isScreenSharing: true, isCameraOff: false });
+
+      if (!hadPriorVideo) {
+        await triggerVideoRenegotiationIfNeeded();
+      }
+    },
+    [broadcastMyState, refreshLocalPreviewStream, triggerVideoRenegotiationIfNeeded],
+  );
+
+  const startMobileVideoShare = useCallback(
+    async (file: File) => {
+      setMobileSharePickerOpen(false);
+      setCallError(null);
+      const voiceTrack = studioGraphRef.current?.processedTrack ?? rawMicTrackRef.current;
+      const mixer = createScreenAudioMixer(voiceTrack, stateRef.current.isMuted);
+      try {
+        const shareSession = await startMobileVideoFileShare(file, {
+          mixer,
+          onSystemStopped: () => {
+            void finishStoppingScreenShare(false);
+          },
+        });
+        await activateScreenShareSession(shareSession, mixer);
+      } catch (err) {
+        mixer?.dispose();
+        setCallError(
+          err instanceof Error && err.message
+            ? err.message
+            : "Could not share the selected video.",
+        );
+      }
+    },
+    [activateScreenShareSession, finishStoppingScreenShare],
+  );
+
+  const startMobileCameraShare = useCallback(async () => {
+    setMobileSharePickerOpen(false);
+    setCallError(null);
+    try {
+      const shareSession = await startMobileRearPresentationShare({
+        onSystemStopped: () => {
+          void finishStoppingScreenShare(false);
+        },
+      });
+      await activateScreenShareSession(shareSession, null);
+    } catch (err) {
+      setCallError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Could not start presentation camera.",
+      );
+    }
+  }, [activateScreenShareSession, finishStoppingScreenShare]);
+
+  const closeMobileSharePicker = useCallback(() => {
+    setMobileSharePickerOpen(false);
+  }, []);
+
+  const toggleScreenShare = useCallback(async () => {
+    if (isScreenSharing) {
+      await finishStoppingScreenShare(true);
       return;
     }
 
-    // Native Android Screen Share via MediaProjection + Canvas Stream -> WebRTC
+    setCallError(null);
+    const voiceTrack = studioGraphRef.current?.processedTrack ?? rawMicTrackRef.current;
+
+    // 1. Native Android APK: full OS MediaProjection screen + internal media audio capture
     if (Capacitor.isNativePlatform()) {
+      const mixer = createScreenAudioMixer(voiceTrack, stateRef.current.isMuted);
       try {
-        setCallError(null);
-        const startRes = await JaTextNative.startScreenCapture();
-        if (!startRes.started) {
-          return;
-        }
-        const width = Math.max(240, startRes.width ?? 540);
-        const height = Math.max(240, startRes.height ?? 960);
-
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx2d = canvas.getContext("2d", { alpha: false });
-        if (!ctx2d) {
-          await JaTextNative.stopScreenCapture().catch(() => undefined);
-          setCallError("Could not initialize screen share canvas.");
-          return;
-        }
-        ctx2d.fillStyle = "#0b0b10";
-        ctx2d.fillRect(0, 0, width, height);
-
-        const captureCanvas = canvas as HTMLCanvasElement & {
-          captureStream?: (frameRate?: number) => MediaStream;
-        };
-        if (typeof captureCanvas.captureStream !== "function") {
-          await JaTextNative.stopScreenCapture().catch(() => undefined);
-          setCallError("Screen capture stream is not supported by this Android WebView.");
-          return;
-        }
-
-        const stream = captureCanvas.captureStream(15);
-        const screenTrack = stream.getVideoTracks()[0] as
-          | (MediaStreamTrack & { requestFrame?: () => void })
-          | undefined;
-        if (!screenTrack) {
-          await JaTextNative.stopScreenCapture().catch(() => undefined);
-          setCallError("Could not start mobile screen stream.");
-          return;
-        }
-
-        const decodeImg = new Image();
-        let decodingFrame = false;
-        let lastDrawnAt = performance.now();
-
-        nativeScreenFrameListenerRef.current = await JaTextNative.addListener(
-          "screenCaptureFrame",
-          (ev) => {
-            if (!ev.frame || decodingFrame) return;
-            decodingFrame = true;
-            decodeImg.onload = () => {
-              decodingFrame = false;
-              if (ev.width && ev.height && (canvas.width !== ev.width || canvas.height !== ev.height)) {
-                canvas.width = ev.width;
-                canvas.height = ev.height;
-              }
-              ctx2d.drawImage(decodeImg, 0, 0, canvas.width, canvas.height);
-              lastDrawnAt = performance.now();
-              if (typeof screenTrack.requestFrame === "function") {
-                try {
-                  screenTrack.requestFrame();
-                } catch {
-                  // Ignore.
-                }
-              }
-            };
-            decodeImg.onerror = () => {
-              decodingFrame = false;
-            };
-            decodeImg.src = `data:image/jpeg;base64,${ev.frame}`;
+        const shareSession = await startNativeAndroidScreenShare({
+          mixer,
+          onSystemStopped: () => {
+            void finishStoppingScreenShare(false);
           },
-        );
-
-        // Keepalive repaint for static screens so WebRTC sends keyframes promptly
-        nativeScreenKeepAliveRef.current = window.setInterval(() => {
-          if (performance.now() - lastDrawnAt > 260 && decodeImg.complete && decodeImg.naturalWidth > 0) {
-            ctx2d.drawImage(decodeImg, 0, 0, canvas.width, canvas.height);
-            if (typeof screenTrack.requestFrame === "function") {
-              try {
-                screenTrack.requestFrame();
-              } catch {
-                // Ignore.
-              }
-            }
-          }
-        }, 280);
-
-        const handleNativeStopped = () => {
-          stopNativeScreenShareInternal(false);
-          if (screenTrackRef.current) {
-            screenTrackRef.current.stop();
-            screenTrackRef.current = null;
-          }
-          const fallbackCam = cameraTrackRef.current;
-          if (videoSenderRef.current) {
-            void videoSenderRef.current.replaceTrack(fallbackCam ?? null).catch(() => undefined);
-          }
-          setIsScreenSharing(false);
-          setIsCameraOff(!fallbackCam);
-          refreshLocalPreviewStream();
-          broadcastMyState({ isScreenSharing: false, isCameraOff: !fallbackCam });
-        };
-
-        nativeScreenStopListenerRef.current = await JaTextNative.addListener(
-          "screenCaptureStopped",
-          handleNativeStopped,
-        );
-
-        screenTrackRef.current = screenTrack;
-        if (videoSenderRef.current) {
-          await videoSenderRef.current.replaceTrack(screenTrack);
+        });
+        if (!shareSession) {
+          mixer?.dispose();
+          return;
         }
-        setIsScreenSharing(true);
-        setIsCameraOff(false);
-        refreshLocalPreviewStream();
-        broadcastMyState({ isScreenSharing: true, isCameraOff: false });
+        await activateScreenShareSession(shareSession, mixer);
       } catch (err) {
+        mixer?.dispose();
         stopNativeScreenShareInternal(true);
         setCallError(
           err instanceof Error && err.message
@@ -2032,41 +2090,38 @@ export function CallProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      setCallError("Screen sharing isn't supported in this browser.");
-      return;
+    // 2. Desktop / Tablet Web supporting getDisplayMedia (WITH system/tab audio!)
+    if (isWebDisplayMediaSupported()) {
+      const mixer = createScreenAudioMixer(voiceTrack, stateRef.current.isMuted);
+      try {
+        const shareSession = await startWebDisplayScreenShare({
+          mixer,
+          onSystemStopped: () => {
+            void finishStoppingScreenShare(false);
+          },
+        });
+        await activateScreenShareSession(shareSession, mixer);
+        return;
+      } catch (err) {
+        mixer?.dispose();
+        const errName = err instanceof DOMException ? err.name : "";
+        // If user cancelled the desktop screen picker, simply return
+        if (errName === "NotAllowedError" || errName === "AbortError") {
+          return;
+        }
+        // If mobile browser exposed getDisplayMedia stub that threw NotSupportedError/InvalidStateError,
+        // fall through to the Mobile View Share Sheet!
+      }
     }
 
-    try {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false,
-      });
-      const screenTrack = displayStream.getVideoTracks()[0];
-      if (!screenTrack) return;
-      screenTrackRef.current = screenTrack;
-      screenTrack.onended = () => {
-        screenTrackRef.current = null;
-        const fallbackCam = cameraTrackRef.current;
-        if (videoSenderRef.current) {
-          void videoSenderRef.current.replaceTrack(fallbackCam ?? null).catch(() => undefined);
-        }
-        setIsScreenSharing(false);
-        setIsCameraOff(!fallbackCam);
-        refreshLocalPreviewStream();
-        broadcastMyState({ isScreenSharing: false, isCameraOff: !fallbackCam });
-      };
-      if (videoSenderRef.current) {
-        await videoSenderRef.current.replaceTrack(screenTrack);
-      }
-      setIsScreenSharing(true);
-      setIsCameraOff(false);
-      refreshLocalPreviewStream();
-      broadcastMyState({ isScreenSharing: true, isCameraOff: false });
-    } catch {
-      // User cancelled screen picker.
-    }
-  }, [broadcastMyState, isScreenSharing, refreshLocalPreviewStream, stopNativeScreenShareInternal]);
+    // 3. Mobile Browser View (Chrome Android / iOS Safari): open Mobile Share Sheet (Video+Audio / Live View / APK)
+    setMobileSharePickerOpen(true);
+  }, [
+    activateScreenShareSession,
+    finishStoppingScreenShare,
+    isScreenSharing,
+    stopNativeScreenShareInternal,
+  ]);
 
   const toggleSpeakerphone = useCallback(async () => {
     const next = !isSpeakerphone;
@@ -2083,7 +2138,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
     if (!rawMic || !sender) return;
 
     if (studioAudioEnabled) {
-      void sender.replaceTrack(rawMic).catch(() => undefined);
+      if (screenAudioMixerRef.current) {
+        screenAudioMixerRef.current.setMicTrack(rawMic, isMuted);
+      } else {
+        void sender.replaceTrack(rawMic).catch(() => undefined);
+      }
       if (studioGraphRef.current) {
         studioGraphRef.current.processedTrack.stop();
         void studioGraphRef.current.ctx.close().catch(() => undefined);
@@ -2118,7 +2177,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
       if (processedTrack) {
         processedTrack.enabled = !isMuted;
         studioGraphRef.current = { ctx, processedTrack };
-        void sender.replaceTrack(processedTrack).catch(() => undefined);
+        if (screenAudioMixerRef.current) {
+          screenAudioMixerRef.current.setMicTrack(processedTrack, isMuted);
+        } else {
+          void sender.replaceTrack(processedTrack).catch(() => undefined);
+        }
         setStudioAudioEnabled(true);
       }
     } catch {
@@ -2374,9 +2437,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     }
   }, [activeChatId, activeMessages, friends, me, session?.callId]);
 
-  const canScreenShare =
-    Capacitor.isNativePlatform() ||
-    (typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getDisplayMedia));
+  const canScreenShare = true;
 
   const contextValue = useMemo<CallContextValue>(
     () => ({
@@ -2403,6 +2464,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
       stats,
       callError,
       canScreenShare,
+      mobileSharePickerOpen,
+      sharedMediaVideoElement,
       startCall,
       acceptIncomingCall,
       declineIncomingCall,
@@ -2412,6 +2475,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
       toggleCamera,
       flipCamera,
       toggleScreenShare,
+      startMobileVideoShare,
+      startMobileCameraShare,
+      closeMobileSharePicker,
       toggleSpeakerphone,
       toggleStudioAudio,
       toggleCaptions,
@@ -2428,6 +2494,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       canScreenShare,
       captions,
       captionsEnabled,
+      closeMobileSharePicker,
       declineIncomingCall,
       endCall,
       facingMode,
@@ -2441,6 +2508,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       localStream,
       meSpeaking,
       minimized,
+      mobileSharePickerOpen,
       peerCameraOff,
       peerMuted,
       peerScreenSharing,
@@ -2451,7 +2519,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
       remoteStream,
       sendCallReaction,
       session,
+      sharedMediaVideoElement,
       startCall,
+      startMobileCameraShare,
+      startMobileVideoShare,
       stats,
       studioAudioEnabled,
       toggleCamera,

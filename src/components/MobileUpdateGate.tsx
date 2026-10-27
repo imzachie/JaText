@@ -45,8 +45,8 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
 
     void (async () => {
       const info = await JaTextNative.getAppVersionInfo().catch(() => ({
-        versionName: "2.0",
-        versionCode: 11,
+        versionName: "2.1",
+        versionCode: 12,
         canInstallPackages: true,
       }));
       if (cancelled) return;
@@ -246,10 +246,10 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <h2>Welcome to {currentLabel} of JaText!</h2>
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
-              <li>📞 Group Chat Calling, background call keep-alive &amp; Calls history tab</li>
-              <li>📱 Mobile Screen Sharing + tap any shared screen for Full View</li>
-              <li>✨ Smooth 60 FPS animations, swipe-to-reply &amp; saved message drafts</li>
-              <li>📝 Full Advanced Markdown, fixed reactions &amp; real Soundboard w/ Bruh</li>
+              <li>🔊 Screen Sharing WITH Audio on Mobile &amp; Desktop calls</li>
+              <li>📞 Polished Group Call cards, live GC VC Ended status &amp; Call history</li>
+              <li>🎙️ Lag-free background Voice Note Transcription + Volume controls</li>
+              <li>✨ Fixed mobile reply bubbles, 60 FPS animations &amp; Soundboard w/ Bruh</li>
             </ul>
             <button
               type="button"

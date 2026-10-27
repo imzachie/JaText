@@ -41,8 +41,8 @@ export function Sidebar({
   onOpenSettings: () => void;
 }) {
   const store = useJaText();
-  const { startCall } = useCall();
-  const { startGroupCall } = useGroupCall();
+  const { session, startCall } = useCall();
+  const { groupSession, startGroupCall } = useGroupCall();
   const draftsMap = useDraftsMap();
   const storedCallHistory = useCallHistoryEntries();
   const { me, friends, incoming, outgoing, previews, activeChatId, setActiveChatId } = store;
@@ -485,16 +485,20 @@ export function Sidebar({
                 const isMissed = entry.state === "missed" || entry.state === "declined";
                 const dirArrow = entry.direction === "outgoing" ? "↗" : "↙";
                 const dirLabel = entry.direction === "outgoing" ? "Outgoing" : "Incoming";
+                const isLiveNow =
+                  session?.callId === entry.callId || groupSession?.callId === entry.callId;
                 const stateLabel =
                   entry.state === "missed"
                     ? "Missed"
                     : entry.state === "declined"
                       ? "Declined"
-                      : entry.durationSec
-                        ? formatCallDuration(entry.durationSec)
-                        : entry.state === "connected"
-                          ? "In call"
-                          : "Ended";
+                      : isLiveNow
+                        ? "In call"
+                        : entry.durationSec
+                          ? formatCallDuration(entry.durationSec)
+                          : entry.kind === "group"
+                            ? "GC VC Ended"
+                            : "Ended";
 
                 return (
                   <div
@@ -534,19 +538,19 @@ export function Sidebar({
                       />
                     )}
 
-                    <div className="call-history-meta">
+                    <div className="call-history-info">
                       <div className="call-history-name-line">
                         <strong>{entry.peerDisplayName}</strong>
-                        <span className="muted small">{fmtTime(entry.timestamp)}</span>
+                        <span className="muted small call-history-time">{fmtTime(entry.timestamp)}</span>
                       </div>
                       <div className="call-history-handle">
                         {entry.kind === "group" ? "Group call" : `@${entry.peerUsername}`}
                       </div>
                       <div className={`call-history-sub ${isMissed ? "missed" : ""}`}>
-                        <span className={`call-dir-badge ${entry.direction}`}>
+                        <span className={`call-dir-badge ${isMissed ? "missed" : entry.direction}`}>
                           {dirArrow} {dirLabel}
                         </span>
-                        <span>
+                        <span className="call-history-state-copy">
                           · {entry.mode === "video" ? "Video" : "Voice"} · {stateLabel}
                         </span>
                       </div>

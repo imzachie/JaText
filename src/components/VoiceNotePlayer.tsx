@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type TouchEvent } from "react";
+import { Volume2, VolumeX } from "./CallIcons";
 import {
+  VOICE_TRANSCRIPT_EVENT,
   decodeVoiceNoteMime,
   formatAudioDuration,
   getCachedVoiceTranscript,
   getDefaultWaveform,
   resolveVoiceNoteTranscript,
+  type VoiceTranscriptEventDetail,
 } from "../lib/voiceNotes";
 
 const PLAYBACK_RATES = [1, 1.5, 2, 0.75] as const;
@@ -30,6 +33,7 @@ export function VoiceNotePlayer({
   const longPressTimerRef = useRef<number | null>(null);
   const touchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const longPressTriggeredRef = useRef(false);
+  const runningRequestKeyRef = useRef<string | null>(null);
 
   const meta = useMemo(() => decodeVoiceNoteMime(attachmentType), [attachmentType]);
   const bars = meta?.waveform ?? getDefaultWaveform();
@@ -38,13 +42,20 @@ export function VoiceNotePlayer({
   const [currentSec, setCurrentSec] = useState(0);
   const [durationSec, setDurationSec] = useState(meta?.durationSec ?? 0);
   const [rateIndex, setRateIndex] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
+
   const [transcriptState, setTranscriptState] = useState<{
     loading: boolean;
+    percent: number;
+    partialText: string | null;
     text: string | null;
     error: string | null;
   }>(() => {
     const initial = meta?.transcript ?? getCachedVoiceTranscript(messageId) ?? null;
-    return { loading: false, text: initial, error: null };
+    return { loading: false, percent: initial ? 100 : 0, partialText: null, text: initial, error: null };
   });
 
   useEffect(() => {
@@ -53,32 +64,122 @@ export function VoiceNotePlayer({
     }
   }, [durationSec, meta?.durationSec]);
 
+  // Subscribe to global live transcript events so live progress & finished text ALWAYS update immediately
+  useEffect(() => {
+    const handleTranscriptEvent = (raw: Event) => {
+      const detail = (raw as CustomEvent<VoiceTranscriptEventDetail>).detail;
+      if (!detail || detail.messageId !== messageId) return;
+      if (detail.status === "progress") {
+        setTranscriptState((prev) =>
+          prev.text
+            ? prev
+            : {
+                loading: true,
+                percent: detail.percent ?? prev.percent,
+                partialText: detail.partialText ?? prev.partialText,
+                text: null,
+                error: null,
+              },
+        );
+      } else if (detail.status === "done" && detail.text) {
+        runningRequestKeyRef.current = null;
+        setTranscriptState({
+          loading: false,
+          percent: 100,
+          partialText: null,
+          text: detail.text,
+          error: null,
+        });
+      } else if (detail.status === "error") {
+        runningRequestKeyRef.current = null;
+        setTranscriptState((prev) =>
+          prev.text
+            ? prev
+            : {
+                loading: false,
+                percent: 0,
+                partialText: null,
+                text: null,
+                error: detail.error ?? "Couldn't transcribe this voice note right now.",
+              },
+        );
+      }
+    };
+
+    window.addEventListener(VOICE_TRANSCRIPT_EVENT, handleTranscriptEvent);
+    return () => window.removeEventListener(VOICE_TRANSCRIPT_EVENT, handleTranscriptEvent);
+  }, [messageId]);
+
+  // Trigger transcription cleanly WITHOUT putting transcriptState.loading in deps (which previously cancelled itself!)
   useEffect(() => {
     if (!showTranscript) return;
-    if (transcriptState.text || transcriptState.loading) return;
 
-    let cancelled = false;
-    setTranscriptState({ loading: true, text: null, error: null });
-    void resolveVoiceNoteTranscript(messageId, audioUrl, meta?.transcript)
+    const cachedNow = meta?.transcript ?? getCachedVoiceTranscript(messageId);
+    if (cachedNow) {
+      setTranscriptState({
+        loading: false,
+        percent: 100,
+        partialText: null,
+        text: cachedNow,
+        error: null,
+      });
+      return;
+    }
+
+    const reqKey = `${messageId}:${audioUrl}:${retryNonce}`;
+    if (runningRequestKeyRef.current === reqKey) return;
+    runningRequestKeyRef.current = reqKey;
+
+    let mounted = true;
+    setTranscriptState({
+      loading: true,
+      percent: 2,
+      partialText: null,
+      text: null,
+      error: null,
+    });
+
+    void resolveVoiceNoteTranscript(messageId, audioUrl, meta?.transcript, (pct, partial) => {
+      if (!mounted) return;
+      setTranscriptState((prev) =>
+        prev.text
+          ? prev
+          : {
+              loading: true,
+              percent: pct,
+              partialText: partial ?? prev.partialText,
+              text: null,
+              error: null,
+            },
+      );
+    })
       .then((text) => {
-        if (!cancelled) {
-          setTranscriptState({ loading: false, text, error: null });
-        }
+        if (!mounted) return;
+        runningRequestKeyRef.current = null;
+        setTranscriptState({
+          loading: false,
+          percent: 100,
+          partialText: null,
+          text,
+          error: null,
+        });
       })
       .catch(() => {
-        if (!cancelled) {
-          setTranscriptState({
-            loading: false,
-            text: null,
-            error: "Couldn't transcribe this voice note right now.",
-          });
-        }
+        if (!mounted) return;
+        runningRequestKeyRef.current = null;
+        setTranscriptState({
+          loading: false,
+          percent: 0,
+          partialText: null,
+          text: null,
+          error: "Couldn't transcribe this voice note right now.",
+        });
       });
 
     return () => {
-      cancelled = true;
+      mounted = false;
     };
-  }, [audioUrl, messageId, meta?.transcript, showTranscript, transcriptState.loading, transcriptState.text]);
+  }, [audioUrl, messageId, meta?.transcript, retryNonce, showTranscript]);
 
   useEffect(
     () => () => {
@@ -101,6 +202,8 @@ export function VoiceNotePlayer({
       audio.pause();
     } else {
       audio.playbackRate = PLAYBACK_RATES[rateIndex];
+      audio.muted = muted;
+      audio.volume = volume;
       void audio.play().catch(() => setPlaying(false));
     }
   }
@@ -111,6 +214,26 @@ export function VoiceNotePlayer({
     setRateIndex(nextIdx);
     if (audioRef.current) {
       audioRef.current.playbackRate = PLAYBACK_RATES[nextIdx];
+    }
+  }
+
+  function toggleMuteAudio(event: MouseEvent) {
+    event.stopPropagation();
+    const nextMuted = !muted;
+    setMuted(nextMuted);
+    if (audioRef.current) {
+      audioRef.current.muted = nextMuted;
+    }
+  }
+
+  function handleVolumeChange(nextVal: number) {
+    const clamped = Math.max(0, Math.min(1, nextVal));
+    setVolume(clamped);
+    const shouldMute = clamped === 0;
+    setMuted(shouldMute);
+    if (audioRef.current) {
+      audioRef.current.volume = clamped;
+      audioRef.current.muted = shouldMute;
     }
   }
 
@@ -180,6 +303,7 @@ export function VoiceNotePlayer({
       onTouchMove={handleTouchMove}
       onTouchEnd={clearLongPressTimer}
       onTouchCancel={clearLongPressTimer}
+      onMouseLeave={() => setShowVolumeSlider(false)}
     >
       <audio
         ref={audioRef}
@@ -236,18 +360,49 @@ export function VoiceNotePlayer({
 
           <div className="voice-note-footer">
             <span className="voice-note-duration">
-              🎤 {playing || currentSec > 0
+              🎤{" "}
+              {playing || currentSec > 0
                 ? `${formatAudioDuration(currentSec)} / ${formatAudioDuration(effectiveDuration)}`
                 : formatAudioDuration(effectiveDuration)}
             </span>
-            <button
-              type="button"
-              className="voice-rate-pill"
-              onClick={cycleRate}
-              title="Change playback speed"
-            >
-              {PLAYBACK_RATES[rateIndex]}×
-            </button>
+
+            <div className="voice-note-controls" onClick={(e) => e.stopPropagation()}>
+              <div
+                className="voice-volume-wrap"
+                onMouseEnter={() => setShowVolumeSlider(true)}
+              >
+                <button
+                  type="button"
+                  className={`voice-vol-btn ${muted || volume === 0 ? "muted" : ""}`}
+                  onClick={toggleMuteAudio}
+                  aria-label={muted || volume === 0 ? "Unmute audio" : "Mute audio"}
+                  title={muted || volume === 0 ? "Unmute audio" : "Mute audio"}
+                >
+                  {muted || volume === 0 ? <VolumeX size={13} /> : <Volume2 size={13} />}
+                </button>
+                {showVolumeSlider && (
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={muted ? 0 : volume}
+                    aria-label="Audio volume"
+                    className="voice-vol-slider"
+                    onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                  />
+                )}
+              </div>
+
+              <button
+                type="button"
+                className="voice-rate-pill"
+                onClick={cycleRate}
+                title="Change playback speed"
+              >
+                {PLAYBACK_RATES[rateIndex]}×
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -255,7 +410,12 @@ export function VoiceNotePlayer({
       {showTranscript && (
         <div className="voice-transcript-box" role="region" aria-label="Voice note transcription">
           <div className="voice-transcript-header">
-            <span>📝 Transcription</span>
+            <span>
+              📝 Transcription
+              {transcriptState.loading && transcriptState.percent > 0
+                ? ` · ${transcriptState.percent}%`
+                : ""}
+            </span>
             {onToggleTranscript && (
               <button
                 type="button"
@@ -270,9 +430,34 @@ export function VoiceNotePlayer({
             )}
           </div>
           {transcriptState.loading ? (
-            <p className="voice-transcript-loading">Transcribing voice note…</p>
+            <div className="voice-transcript-progress-wrap">
+              <p className="voice-transcript-loading">
+                {transcriptState.partialText
+                  ? `${transcriptState.partialText} …`
+                  : "Transcribing in background…"}
+              </p>
+              <div className="voice-transcript-progress-bar">
+                <div
+                  className="voice-transcript-progress-fill"
+                  style={{ width: `${Math.max(6, transcriptState.percent)}%` }}
+                />
+              </div>
+            </div>
           ) : transcriptState.error ? (
-            <p className="voice-transcript-error">{transcriptState.error}</p>
+            <div className="voice-transcript-error-row">
+              <p className="voice-transcript-error">{transcriptState.error}</p>
+              <button
+                type="button"
+                className="voice-transcript-hide"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  runningRequestKeyRef.current = null;
+                  setRetryNonce((n) => n + 1);
+                }}
+              >
+                Retry
+              </button>
+            </div>
           ) : (
             <p className="voice-transcript-text">
               {transcriptState.text || "No clear speech detected in this voice note."}

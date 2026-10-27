@@ -29,6 +29,7 @@ import {
 } from "../lib/calling";
 import { useJaText } from "../lib/store";
 import { Avatar } from "./Avatar";
+import { MobileScreenShareSheet, SharedMediaPlaybackBar } from "./MobileScreenShareSheet";
 
 const CALL_REACTIONS = ["❤️", "😂", "🔥", "👏", "🎉", "👍"];
 const SOUNDBOARD_ITEMS: Array<{ id: SoundboardEffectId; emoji: string; label: string }> = [
@@ -58,9 +59,22 @@ function StreamVideo({
     if (el.srcObject !== stream) {
       el.srcObject = stream;
     }
-    if (stream) {
+    if (!stream) return;
+    const ensurePlay = () => {
       void el.play().catch(() => undefined);
+    };
+    ensurePlay();
+    const vTracks = stream.getVideoTracks();
+    for (const vt of vTracks) {
+      vt.addEventListener("unmute", ensurePlay);
     }
+    stream.addEventListener("addtrack", ensurePlay);
+    return () => {
+      for (const vt of vTracks) {
+        vt.removeEventListener("unmute", ensurePlay);
+      }
+      stream.removeEventListener("addtrack", ensurePlay);
+    };
   }, [stream]);
 
   return (
@@ -100,6 +114,8 @@ export function CallOverlay() {
     stats,
     callError,
     canScreenShare,
+    mobileSharePickerOpen,
+    sharedMediaVideoElement,
     acceptIncomingCall,
     declineIncomingCall,
     endCall,
@@ -108,6 +124,9 @@ export function CallOverlay() {
     toggleCamera,
     flipCamera,
     toggleScreenShare,
+    startMobileVideoShare,
+    startMobileCameraShare,
+    closeMobileSharePicker,
     toggleSpeakerphone,
     toggleStudioAudio,
     toggleCaptions,
@@ -839,6 +858,20 @@ export function CallOverlay() {
           </button>
         )}
       </div>
+
+      {isScreenSharing && sharedMediaVideoElement && (
+        <SharedMediaPlaybackBar
+          videoEl={sharedMediaVideoElement}
+          onStop={() => void toggleScreenShare()}
+        />
+      )}
+
+      <MobileScreenShareSheet
+        open={mobileSharePickerOpen}
+        onClose={closeMobileSharePicker}
+        onSelectVideoFile={(file) => void startMobileVideoShare(file)}
+        onSelectLiveCameraPresentation={() => void startMobileCameraShare()}
+      />
 
       {/* Primary Call Control Dock */}
       <footer className="call-primary-dock">

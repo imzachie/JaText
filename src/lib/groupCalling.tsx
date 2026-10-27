@@ -24,6 +24,16 @@ import {
 } from "./calling";
 import { updateCallHistoryStatus, upsertCallHistoryEntry } from "./callHistory";
 import { JaTextNative, configureNativeCallAudio, ensureNativeMediaPermissions } from "./nativeBridge";
+import {
+  createScreenAudioMixer,
+  isWebDisplayMediaSupported,
+  startMobileRearPresentationShare,
+  startMobileVideoFileShare,
+  startNativeAndroidScreenShare,
+  startWebDisplayScreenShare,
+  type ActiveScreenShareSession,
+  type ScreenAudioMixer,
+} from "./screenShareMedia";
 import { useJaText } from "./store";
 import type { GroupMessage, GroupSummary, JaUser } from "./types";
 
@@ -60,9 +70,10 @@ interface GroupSignalEnvelope {
   fromUsername: string;
   fromAvatarUrl?: string;
   fromAvatarColor: string;
-  toId: string; // "*" for broadcast join/leave, or specific peer userId
-  type: "join" | "offer" | "answer" | "leave";
+  toId: string; // "*" for broadcast join/leave/ended, or specific peer userId
+  type: "join" | "offer" | "answer" | "leave" | "ended";
   joinSeq: number;
+  durationSec?: number;
   sdp?: RTCSessionDescriptionInit;
   cameraOff?: boolean;
   screenSharing?: boolean;
@@ -80,6 +91,8 @@ type GroupDataChannelPacket =
   | { type: "reaction"; emoji: string; id: string }
   | { type: "soundboard"; effectId: SoundboardEffectId }
   | { type: "caption"; text: string }
+  | { type: "renegotiate-offer"; sdp: RTCSessionDescriptionInit }
+  | { type: "renegotiate-answer"; sdp: RTCSessionDescriptionInit }
   | { type: "leave" };
 
 export interface GroupCallParticipant {
@@ -122,6 +135,8 @@ export interface GroupCallContextValue {
   captions: CallCaptionLine[];
   callError: string | null;
   canScreenShare: boolean;
+  mobileSharePickerOpen: boolean;
+  sharedMediaVideoElement: HTMLVideoElement | null;
   startGroupCall: (group: GroupSummary, mode: CallMode) => Promise<void>;
   joinGroupCall: (invite: GroupCallInvitePayload, withVideo?: boolean, inviteMsgId?: string) => Promise<void>;
   acceptIncomingGroupCall: (withVideo: boolean) => Promise<void>;
@@ -132,6 +147,9 @@ export interface GroupCallContextValue {
   toggleCamera: () => Promise<void>;
   flipCamera: () => Promise<void>;
   toggleScreenShare: () => Promise<void>;
+  startMobileVideoShare: (file: File) => Promise<void>;
+  startMobileCameraShare: () => Promise<void>;
+  closeMobileSharePicker: () => void;
   toggleSpeakerphone: () => Promise<void>;
   toggleStudioAudio: () => void;
   toggleCaptions: () => void;
@@ -174,6 +192,84 @@ export function parseGroupCallInvite(body?: string | null): GroupCallInvitePaylo
 
 export function serializeGroupCallInvite(payload: GroupCallInvitePayload): string {
   return `${GROUP_CALL_INVITE_PREFIX}${JSON.stringify(payload)}`;
+}
+
+const GROUP_CALL_HEARTBEAT_STALE_MS = 52_000;
+
+export function resolveGroupCallLiveState(
+  invite: GroupCallInvitePayload,
+  rawGroupMessages: GroupMessage[],
+  activeSessionCallId: string | null,
+  inviteCreatedAt?: number,
+): { isEnded: boolean; durationSec?: number } {
+  if (invite.state === "ended") {
+    return { isEnded: true, durationSec: invite.durationSec };
+  }
+  if (activeSessionCallId === invite.callId) {
+    return { isEnded: false };
+  }
+
+  let latestActivityTs = Math.max(invite.ts || 0, inviteCreatedAt || 0);
+  let explicitEnded = false;
+  let endedDuration = invite.durationSec;
+  const participantStatus = new Map<string, { state: "joined" | "left"; ts: number }>();
+
+  for (const msg of rawGroupMessages) {
+    if (!msg.body.startsWith(GROUP_CALL_SIGNAL_PREFIX)) continue;
+    try {
+      const parsed = JSON.parse(
+        msg.body.slice(GROUP_CALL_SIGNAL_PREFIX.length),
+      ) as Partial<GroupSignalEnvelope>;
+      if (parsed.callId !== invite.callId || !parsed.fromId || !parsed.type) continue;
+      const sigTs = Math.max(parsed.ts ?? 0, msg.createdAt ?? 0, msg.editedAt ?? 0);
+      if (sigTs > latestActivityTs) {
+        latestActivityTs = sigTs;
+      }
+      if (parsed.type === "ended") {
+        explicitEnded = true;
+        if (parsed.durationSec && parsed.durationSec > 0) {
+          endedDuration = parsed.durationSec;
+        }
+      } else if (parsed.type === "join") {
+        const prev = participantStatus.get(parsed.fromId);
+        if (!prev || sigTs >= prev.ts) {
+          participantStatus.set(parsed.fromId, { state: "joined", ts: sigTs });
+        }
+      } else if (parsed.type === "leave") {
+        const prev = participantStatus.get(parsed.fromId);
+        if (!prev || sigTs >= prev.ts) {
+          participantStatus.set(parsed.fromId, { state: "left", ts: sigTs });
+        }
+      }
+    } catch {
+      // Ignore malformed signal header
+    }
+  }
+
+  if (explicitEnded) {
+    return { isEnded: true, durationSec: endedDuration };
+  }
+
+  if (participantStatus.size > 0) {
+    let activeCount = 0;
+    let maxLeaveTs = 0;
+    for (const entry of participantStatus.values()) {
+      if (entry.state === "joined") activeCount += 1;
+      else if (entry.ts > maxLeaveTs) maxLeaveTs = entry.ts;
+    }
+    if (activeCount === 0) {
+      const startRef = inviteCreatedAt || invite.ts || maxLeaveTs;
+      const computedSec =
+        maxLeaveTs > startRef ? Math.max(1, Math.round((maxLeaveTs - startRef) / 1000)) : undefined;
+      return { isEnded: true, durationSec: endedDuration ?? computedSec };
+    }
+  }
+
+  if (latestActivityTs > 0 && Date.now() - latestActivityTs > GROUP_CALL_HEARTBEAT_STALE_MS) {
+    return { isEnded: true, durationSec: endedDuration };
+  }
+
+  return { isEnded: false };
 }
 
 function waitForIceGathering(pc: RTCPeerConnection, maxWaitMs = 850): Promise<void> {
@@ -290,6 +386,10 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   const [reactions, setReactions] = useState<FloatingCallReaction[]>([]);
   const [captions, setCaptions] = useState<CallCaptionLine[]>([]);
   const [callError, setCallError] = useState<string | null>(null);
+  const [mobileSharePickerOpen, setMobileSharePickerOpen] = useState(false);
+  const [sharedMediaVideoElement, setSharedMediaVideoElement] = useState<HTMLVideoElement | null>(
+    null,
+  );
 
   const sessionRef = useRef<ActiveGroupCallSession | null>(null);
   const peersRef = useRef(new Map<string, PeerMeshEntry>());
@@ -297,14 +397,15 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   const studioGraphRef = useRef<{ ctx: AudioContext; processedTrack: MediaStreamTrack } | null>(null);
+  const activeScreenShareRef = useRef<ActiveScreenShareSession | null>(null);
+  const screenAudioMixerRef = useRef<ScreenAudioMixer | null>(null);
   const myJoinSeqRef = useRef<number>(0);
+  const myJoinSignalIdRef = useRef<string | null>(null);
+  const checkedGroupRingAtRef = useRef(new Map<string, number>());
   const handledInviteCallIdsRef = useRef(new Set<string>());
   const processedSignalIdsRef = useRef(new Set<string>());
   const ringIntervalRef = useRef<number | null>(null);
   const ringTimeoutRef = useRef<number | null>(null);
-  const nativeScreenFrameRef = useRef<PluginListenerHandle | null>(null);
-  const nativeScreenStopRef = useRef<PluginListenerHandle | null>(null);
-  const nativeScreenKeepAliveRef = useRef<number | null>(null);
   const nativeCaptionListenerRef = useRef<PluginListenerHandle | null>(null);
   const isDeafenedRef = useRef(false);
   const stateRef = useRef({
@@ -358,21 +459,18 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const stopNativeScreenShareInternal = useCallback((notifyService: boolean) => {
-    if (nativeScreenKeepAliveRef.current !== null) {
-      window.clearInterval(nativeScreenKeepAliveRef.current);
-      nativeScreenKeepAliveRef.current = null;
-    }
-    if (nativeScreenFrameRef.current) {
-      void nativeScreenFrameRef.current.remove();
-      nativeScreenFrameRef.current = null;
-    }
-    if (nativeScreenStopRef.current) {
-      void nativeScreenStopRef.current.remove();
-      nativeScreenStopRef.current = null;
-    }
-    if (notifyService && Capacitor.isNativePlatform()) {
+    if (activeScreenShareRef.current) {
+      activeScreenShareRef.current.stop(notifyService);
+      activeScreenShareRef.current = null;
+    } else if (notifyService && Capacitor.isNativePlatform()) {
       void JaTextNative.stopScreenCapture().catch(() => undefined);
     }
+    if (screenAudioMixerRef.current) {
+      screenAudioMixerRef.current.dispose();
+      screenAudioMixerRef.current = null;
+    }
+    setSharedMediaVideoElement(null);
+    setMobileSharePickerOpen(false);
   }, []);
 
   const stopCaptionCapture = useCallback(() => {
@@ -508,6 +606,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         toId: env.toId,
         type: env.type,
         joinSeq: env.joinSeq,
+        durationSec: env.durationSec,
         cameraOff: env.cameraOff,
         screenSharing: env.screenSharing,
         ts: env.ts,
@@ -592,6 +691,35 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
                 ];
               });
             }
+          } else if (msg.type === "renegotiate-offer") {
+            void (async () => {
+              try {
+                if (entry.pc.signalingState !== "stable") return;
+                await entry.pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+                const answer = await entry.pc.createAnswer();
+                await entry.pc.setLocalDescription(answer);
+                if (dc.readyState === "open") {
+                  dc.send(
+                    JSON.stringify({
+                      type: "renegotiate-answer",
+                      sdp: entry.pc.localDescription?.toJSON() ?? answer,
+                    } satisfies GroupDataChannelPacket),
+                  );
+                }
+              } catch {
+                // Ignore renegotiation collision.
+              }
+            })();
+          } else if (msg.type === "renegotiate-answer") {
+            void (async () => {
+              try {
+                if (entry.pc.signalingState === "have-local-offer") {
+                  await entry.pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+                }
+              } catch {
+                // Ignore.
+              }
+            })();
           } else if (msg.type === "leave") {
             removePeerEntry(entry.user.id);
           }
@@ -651,6 +779,10 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         if (track.kind === "audio") {
           entry.audioEl.srcObject = new MediaStream([track]);
           void entry.audioEl.play().catch(() => undefined);
+        } else {
+          track.onunmute = () => {
+            syncParticipantsState();
+          };
         }
         syncParticipantsState();
       };
@@ -720,18 +852,17 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     };
   }, [broadcastMyState, groupSession, isMuted, localStream]);
 
-  // Watch group previews for incoming group calls!
+  // Watch group previews (and fresh group messages when lastMessage was a signal) for incoming group calls!
   useEffect(() => {
     if (!me || groupSession) return;
+    let cancelled = false;
     const now = Date.now();
-    for (const grp of groups) {
-      if (!grp.lastMessage || grp.lastSenderId === me.id) continue;
-      if (now - grp.lastMessageAt > GROUP_RING_TIMEOUT_MS) continue;
-      const invite = parseGroupCallInvite(grp.lastMessage);
-      if (!invite || invite.state !== "active") continue;
-      if (handledInviteCallIdsRef.current.has(invite.callId)) continue;
 
+    const triggerIncomingGroupRing = (grp: GroupSummary, invite: GroupCallInvitePayload) => {
+      if (cancelled || sessionRef.current) return;
+      if (handledInviteCallIdsRef.current.has(invite.callId)) return;
       handledInviteCallIdsRef.current.add(invite.callId);
+
       setGroupSession({
         callId: invite.callId,
         group: grp,
@@ -774,9 +905,103 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
           setGroupSession(null);
         }
       }, GROUP_RING_TIMEOUT_MS);
-      break;
+    };
+
+    for (const grp of groups) {
+      if (grp.lastSenderId === me.id) continue;
+      if (now - grp.lastMessageAt > GROUP_RING_TIMEOUT_MS) continue;
+      const invite = grp.lastMessage ? parseGroupCallInvite(grp.lastMessage) : null;
+      if (invite && invite.state === "active") {
+        triggerIncomingGroupRing(grp, invite);
+        break;
+      }
+      // If a join signal briefly overwrote grp.lastMessage on Convex, check recent group messages once!
+      const prevCheckedAt = checkedGroupRingAtRef.current.get(grp.id) ?? 0;
+      if (!grp.lastMessage && grp.lastMessageAt > prevCheckedAt) {
+        checkedGroupRingAtRef.current.set(grp.id, grp.lastMessageAt);
+        void store
+          .fetchGroupMessages(grp.id)
+          .then((rows) => {
+            if (cancelled || sessionRef.current) return;
+            for (let i = rows.length - 1; i >= Math.max(0, rows.length - 10); i -= 1) {
+              const row = rows[i];
+              if (row.senderId === me.id || row.unsentAt) continue;
+              if (Date.now() - row.createdAt > GROUP_RING_TIMEOUT_MS) continue;
+              const rowInvite = parseGroupCallInvite(row.body);
+              if (rowInvite && rowInvite.state === "active") {
+                const liveState = resolveGroupCallLiveState(rowInvite, rows, null, row.createdAt);
+                if (!liveState.isEnded) {
+                  triggerIncomingGroupRing(grp, rowInvite);
+                }
+                break;
+              }
+            }
+          })
+          .catch(() => undefined);
+      }
     }
-  }, [cleanupAllGroupCallResources, groupSession, groups, me, soundsEnabled]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cleanupAllGroupCallResources, groupSession, groups, me, soundsEnabled, store]);
+
+  // If we hosted an earlier group call, left first, and the last remaining member later ended it,
+  // automatically persist state="ended" onto our invite message row!
+  useEffect(() => {
+    if (!me || !activeGroupId || groupMessages.length === 0) return;
+    for (let i = groupMessages.length - 1; i >= Math.max(0, groupMessages.length - 40); i -= 1) {
+      const msg = groupMessages[i];
+      if (msg.senderId !== me.id || msg.unsentAt) continue;
+      const invite = parseGroupCallInvite(msg.body);
+      if (!invite || invite.state !== "active") continue;
+      if (groupSession?.callId === invite.callId) continue;
+
+      const resolved = resolveGroupCallLiveState(invite, groupMessages, null, msg.createdAt);
+      if (resolved.isEnded) {
+        void store
+          .editGroupMessage(
+            msg.id,
+            serializeGroupCallInvite({
+              ...invite,
+              state: "ended",
+              durationSec: resolved.durationSec ?? invite.durationSec,
+              ts: Date.now(),
+            }),
+          )
+          .catch(() => undefined);
+      }
+    }
+  }, [activeGroupId, groupMessages, groupSession?.callId, me, store]);
+
+  // 20-second heartbeat while actively connected in a group call (edits our own single join signal row)
+  useEffect(() => {
+    if (!groupSession || groupSession.phase === "incoming" || !me) return;
+    const heartbeat = window.setInterval(() => {
+      const cur = sessionRef.current;
+      const sigId = myJoinSignalIdRef.current;
+      if (!cur || cur.phase === "incoming") return;
+      const header = `${GROUP_CALL_SIGNAL_PREFIX}${JSON.stringify({
+        callId: cur.callId,
+        groupId: cur.group.id,
+        fromId: me.id,
+        fromName: me.displayName,
+        fromUsername: me.username,
+        fromAvatarUrl: me.avatarUrl,
+        fromAvatarColor: me.avatarColor,
+        toId: "*",
+        type: "join",
+        joinSeq: myJoinSeqRef.current,
+        cameraOff: stateRef.current.isCameraOff,
+        screenSharing: stateRef.current.isScreenSharing,
+        ts: Date.now(),
+      })}`;
+      if (sigId) {
+        void store.editGroupMessage(sigId, header).catch(() => undefined);
+      }
+    }, 20_000);
+    return () => window.clearInterval(heartbeat);
+  }, [groupSession, me, store]);
 
   // Process mesh signaling packets while in a group call (joining or connected)
   useEffect(() => {
@@ -795,7 +1020,9 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         if (env.toId !== "*" && env.toId !== me.id) continue;
 
         processedSignalIdsRef.current.add(msg.id);
-        void store.deleteGroupMessageForMe(msg.id).catch(() => undefined);
+        if (env.type === "offer" || env.type === "answer") {
+          void store.deleteGroupMessageForMe(msg.id).catch(() => undefined);
+        }
 
         const peerUser: JaUser = {
           id: env.fromId,
@@ -808,7 +1035,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
           onboardingComplete: true,
         };
 
-        if (env.type === "leave") {
+        if (env.type === "leave" || env.type === "ended") {
           removePeerEntry(peerUser.id);
           continue;
         }
@@ -828,7 +1055,10 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
             entry.cameraOff = env.cameraOff !== false;
             entry.screenSharing = Boolean(env.screenSharing);
 
-            const activeAudio = studioGraphRef.current?.processedTrack ?? rawMicTrackRef.current;
+            const activeAudio =
+              screenAudioMixerRef.current?.outputTrack ??
+              studioGraphRef.current?.processedTrack ??
+              rawMicTrackRef.current;
             const activeVideo = screenTrackRef.current ?? cameraTrackRef.current;
             const outbound = new MediaStream();
             if (activeAudio) outbound.addTrack(activeAudio);
@@ -878,7 +1108,10 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
             entry.screenSharing = Boolean(env.screenSharing);
 
             await entry.pc.setRemoteDescription(env.sdp);
-            const activeAudio = studioGraphRef.current?.processedTrack ?? rawMicTrackRef.current;
+            const activeAudio =
+              screenAudioMixerRef.current?.outputTrack ??
+              studioGraphRef.current?.processedTrack ??
+              rawMicTrackRef.current;
             const activeVideo = screenTrackRef.current ?? cameraTrackRef.current;
 
             for (const tx of entry.pc.getTransceivers()) {
@@ -1075,17 +1308,8 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
           timestamp: joinSeq,
         });
 
-        await store.sendGroupMessage(group.id, serializeGroupCallInvite(invitePayload));
-        const recent = await store.fetchGroupMessages(group.id).catch(() => []);
-        const createdInvite = [...recent]
-          .reverse()
-          .find((m) => parseGroupCallInvite(m.body)?.callId === callId);
-        if (createdInvite) {
-          setGroupSession((cur) =>
-            cur && cur.callId === callId ? { ...cur, inviteMessageId: createdInvite.id } : cur,
-          );
-        }
-
+        // Send initial join signal FIRST, then send the visible Call Invite message SECOND
+        // so grp.lastMessage on Convex stays the Call Invite (ensuring every member rings & gets notified!)
         await sendGroupSignal(group.id, {
           callId,
           groupId: group.id,
@@ -1101,6 +1325,26 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
           screenSharing: false,
           ts: Date.now(),
         });
+
+        await store.sendGroupMessage(group.id, serializeGroupCallInvite(invitePayload));
+        const recent = await store.fetchGroupMessages(group.id).catch(() => []);
+        const createdInvite = [...recent]
+          .reverse()
+          .find((m) => parseGroupCallInvite(m.body)?.callId === callId);
+        const createdJoinSig = [...recent]
+          .reverse()
+          .find(
+            (m) =>
+              m.senderId === me.id &&
+              m.body.startsWith(GROUP_CALL_SIGNAL_PREFIX) &&
+              m.body.includes(callId),
+          );
+        myJoinSignalIdRef.current = createdJoinSig?.id ?? null;
+        if (createdInvite) {
+          setGroupSession((cur) =>
+            cur && cur.callId === callId ? { ...cur, inviteMessageId: createdInvite.id } : cur,
+          );
+        }
 
         if (soundsEnabled) playCallRingChime("connected");
       } catch (err) {
@@ -1175,6 +1419,17 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
           ts: Date.now(),
         });
 
+        const recent = await store.fetchGroupMessages(groupObj.id).catch(() => []);
+        const createdJoinSig = [...recent]
+          .reverse()
+          .find(
+            (m) =>
+              m.senderId === me.id &&
+              m.body.startsWith(GROUP_CALL_SIGNAL_PREFIX) &&
+              m.body.includes(invite.callId),
+          );
+        myJoinSignalIdRef.current = createdJoinSig?.id ?? null;
+
         if (soundsEnabled) playCallRingChime("connected");
       } catch (err) {
         cleanupAllGroupCallResources();
@@ -1192,6 +1447,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       sendGroupSignal,
       soundsEnabled,
       stopRingingTimers,
+      store,
     ],
   );
 
@@ -1230,6 +1486,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     const cur = sessionRef.current;
     if (!cur || !me) return;
     handledInviteCallIdsRef.current.add(cur.callId);
+    myJoinSignalIdRef.current = null;
     broadcastMeshData({ type: "leave" });
     if (soundsEnabled) playCallRingChime("ended");
 
@@ -1245,26 +1502,6 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     cleanupAllGroupCallResources();
     setGroupSession(null);
 
-    if (cur.hostId === me.id && cur.inviteMessageId && remainingPeers === 0) {
-      await store
-        .editGroupMessage(
-          cur.inviteMessageId,
-          serializeGroupCallInvite({
-            v: 1,
-            callId: cur.callId,
-            groupId: cur.group.id,
-            groupName: cur.group.name,
-            mode: cur.mode,
-            hostId: cur.hostId,
-            hostName: cur.hostName,
-            state: "ended",
-            durationSec: durationSec > 0 ? durationSec : undefined,
-            ts: Date.now(),
-          }),
-        )
-        .catch(() => undefined);
-    }
-
     await sendGroupSignal(cur.group.id, {
       callId: cur.callId,
       groupId: cur.group.id,
@@ -1279,22 +1516,54 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       ts: Date.now(),
     }).catch(() => undefined);
 
-    window.setTimeout(() => {
-      void store
-        .fetchGroupMessages(cur.group.id)
-        .then((rows) => {
-          for (const m of rows) {
-            if (
-              m.senderId === me.id &&
-              m.body.startsWith(GROUP_CALL_SIGNAL_PREFIX) &&
-              m.body.includes(cur.callId)
-            ) {
-              void store.deleteGroupMessageForMe(m.id).catch(() => undefined);
-            }
-          }
-        })
-        .catch(() => undefined);
-    }, 6000);
+    if (remainingPeers === 0) {
+      // Broadcast persistent "ended" marker so EVERY client immediately shows "GC VC Ended"
+      // and hides the active banner, even when the last person leaving wasn't the original host!
+      await sendGroupSignal(cur.group.id, {
+        callId: cur.callId,
+        groupId: cur.group.id,
+        fromId: me.id,
+        fromName: me.displayName,
+        fromUsername: me.username,
+        fromAvatarUrl: me.avatarUrl,
+        fromAvatarColor: me.avatarColor,
+        toId: "*",
+        type: "ended",
+        joinSeq: myJoinSeqRef.current,
+        durationSec: durationSec > 0 ? durationSec : undefined,
+        ts: Date.now(),
+      }).catch(() => undefined);
+
+      if (cur.hostId === me.id) {
+        let targetInviteMsgId = cur.inviteMessageId;
+        if (!targetInviteMsgId) {
+          const rows = await store.fetchGroupMessages(cur.group.id).catch(() => []);
+          const found = [...rows]
+            .reverse()
+            .find((m) => parseGroupCallInvite(m.body)?.callId === cur.callId);
+          targetInviteMsgId = found?.id;
+        }
+        if (targetInviteMsgId) {
+          await store
+            .editGroupMessage(
+              targetInviteMsgId,
+              serializeGroupCallInvite({
+                v: 1,
+                callId: cur.callId,
+                groupId: cur.group.id,
+                groupName: cur.group.name,
+                mode: cur.mode,
+                hostId: cur.hostId,
+                hostName: cur.hostName,
+                state: "ended",
+                durationSec: durationSec > 0 ? durationSec : undefined,
+                ts: Date.now(),
+              }),
+            )
+            .catch(() => undefined);
+        }
+      }
+    }
   }, [broadcastMeshData, cleanupAllGroupCallResources, me, sendGroupSignal, soundsEnabled, store]);
 
   const replaceMeshVideoTrack = useCallback(async (track: MediaStreamTrack | null) => {
@@ -1318,6 +1587,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     setIsMuted(next);
     if (rawMicTrackRef.current) rawMicTrackRef.current.enabled = !next;
     if (studioGraphRef.current) studioGraphRef.current.processedTrack.enabled = !next;
+    screenAudioMixerRef.current?.setMicMuted(next);
     broadcastMyState({ isMuted: next });
   }, [broadcastMyState, isMuted]);
 
@@ -1410,148 +1680,205 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     replaceMeshVideoTrack,
   ]);
 
-  const toggleScreenShare = useCallback(async () => {
-    if (isScreenSharing) {
-      stopNativeScreenShareInternal(true);
+  const renegotiateMeshVideoIfNeeded = useCallback(async () => {
+    for (const entry of peersRef.current.values()) {
+      try {
+        if (entry.pc.signalingState !== "stable" || entry.dc?.readyState !== "open") continue;
+        const vTx = entry.pc
+          .getTransceivers()
+          .find((t) => t.sender === entry.videoSender || t.receiver?.track?.kind === "video");
+        if (vTx && vTx.direction !== "sendrecv") {
+          vTx.direction = "sendrecv";
+        }
+        const offer = await entry.pc.createOffer();
+        await entry.pc.setLocalDescription(offer);
+        entry.dc.send(
+          JSON.stringify({
+            type: "renegotiate-offer",
+            sdp: entry.pc.localDescription?.toJSON() ?? offer,
+          } satisfies GroupDataChannelPacket),
+        );
+      } catch {
+        // Ignore transient mesh renegotiation error.
+      }
+    }
+  }, []);
+
+  const restoreGroupVoiceOnlyAudio = useCallback(async () => {
+    if (screenAudioMixerRef.current) {
+      screenAudioMixerRef.current.dispose();
+      screenAudioMixerRef.current = null;
+    }
+    const voiceTrack = studioGraphRef.current?.processedTrack ?? rawMicTrackRef.current;
+    await replaceMeshAudioTrack(voiceTrack ?? null);
+  }, [replaceMeshAudioTrack]);
+
+  const finishStoppingGroupScreenShare = useCallback(
+    async (notifyNative: boolean) => {
+      stopNativeScreenShareInternal(notifyNative);
       if (screenTrackRef.current) {
-        screenTrackRef.current.stop();
+        try {
+          screenTrackRef.current.stop();
+        } catch {
+          // ignore
+        }
         screenTrackRef.current = null;
       }
+      await restoreGroupVoiceOnlyAudio();
       const fallbackCam = cameraTrackRef.current;
       await replaceMeshVideoTrack(fallbackCam ?? null);
       setIsScreenSharing(false);
       setIsCameraOff(!fallbackCam);
       refreshLocalPreviewStream();
       broadcastMyState({ isScreenSharing: false, isCameraOff: !fallbackCam });
+    },
+    [
+      broadcastMyState,
+      refreshLocalPreviewStream,
+      replaceMeshVideoTrack,
+      restoreGroupVoiceOnlyAudio,
+      stopNativeScreenShareInternal,
+    ],
+  );
+
+  const activateGroupScreenShare = useCallback(
+    async (shareSession: ActiveScreenShareSession, mixer: ScreenAudioMixer | null) => {
+      activeScreenShareRef.current = shareSession;
+      screenTrackRef.current = shareSession.videoTrack;
+      setSharedMediaVideoElement(shareSession.sharedVideoElement ?? null);
+
+      if (mixer) {
+        screenAudioMixerRef.current = mixer;
+        await replaceMeshAudioTrack(mixer.outputTrack);
+      }
+
+      const hadPriorVideo = Array.from(peersRef.current.values()).every((e) =>
+        Boolean(e.videoSender?.track),
+      );
+      await replaceMeshVideoTrack(shareSession.videoTrack);
+      setIsScreenSharing(true);
+      setIsCameraOff(false);
+      refreshLocalPreviewStream();
+      broadcastMyState({ isScreenSharing: true, isCameraOff: false });
+
+      if (!hadPriorVideo) {
+        await renegotiateMeshVideoIfNeeded();
+      }
+    },
+    [
+      broadcastMyState,
+      refreshLocalPreviewStream,
+      renegotiateMeshVideoIfNeeded,
+      replaceMeshAudioTrack,
+      replaceMeshVideoTrack,
+    ],
+  );
+
+  const startMobileVideoShare = useCallback(
+    async (file: File) => {
+      setMobileSharePickerOpen(false);
+      setCallError(null);
+      const voiceTrack = studioGraphRef.current?.processedTrack ?? rawMicTrackRef.current;
+      const mixer = createScreenAudioMixer(voiceTrack, stateRef.current.isMuted);
+      try {
+        const shareSession = await startMobileVideoFileShare(file, {
+          mixer,
+          onSystemStopped: () => {
+            void finishStoppingGroupScreenShare(false);
+          },
+        });
+        await activateGroupScreenShare(shareSession, mixer);
+      } catch (err) {
+        mixer?.dispose();
+        setCallError(
+          err instanceof Error && err.message
+            ? err.message
+            : "Could not share the selected video.",
+        );
+      }
+    },
+    [activateGroupScreenShare, finishStoppingGroupScreenShare],
+  );
+
+  const startMobileCameraShare = useCallback(async () => {
+    setMobileSharePickerOpen(false);
+    setCallError(null);
+    try {
+      const shareSession = await startMobileRearPresentationShare({
+        onSystemStopped: () => {
+          void finishStoppingGroupScreenShare(false);
+        },
+      });
+      await activateGroupScreenShare(shareSession, null);
+    } catch (err) {
+      setCallError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Could not start presentation camera.",
+      );
+    }
+  }, [activateGroupScreenShare, finishStoppingGroupScreenShare]);
+
+  const closeMobileSharePicker = useCallback(() => {
+    setMobileSharePickerOpen(false);
+  }, []);
+
+  const toggleScreenShare = useCallback(async () => {
+    if (isScreenSharing) {
+      await finishStoppingGroupScreenShare(true);
       return;
     }
 
+    setCallError(null);
+    const voiceTrack = studioGraphRef.current?.processedTrack ?? rawMicTrackRef.current;
+
     if (Capacitor.isNativePlatform()) {
+      const mixer = createScreenAudioMixer(voiceTrack, stateRef.current.isMuted);
       try {
-        setCallError(null);
-        const startRes = await JaTextNative.startScreenCapture();
-        if (!startRes.started) return;
-        const width = Math.max(240, startRes.width ?? 540);
-        const height = Math.max(240, startRes.height ?? 960);
-
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx2d = canvas.getContext("2d", { alpha: false });
-        if (!ctx2d) {
-          await JaTextNative.stopScreenCapture().catch(() => undefined);
-          return;
-        }
-        ctx2d.fillStyle = "#0b0b10";
-        ctx2d.fillRect(0, 0, width, height);
-
-        const captureCanvas = canvas as HTMLCanvasElement & {
-          captureStream?: (fps?: number) => MediaStream;
-        };
-        if (typeof captureCanvas.captureStream !== "function") {
-          await JaTextNative.stopScreenCapture().catch(() => undefined);
-          return;
-        }
-        const stream = captureCanvas.captureStream(15);
-        const screenTrack = stream.getVideoTracks()[0] as
-          | (MediaStreamTrack & { requestFrame?: () => void })
-          | undefined;
-        if (!screenTrack) {
-          await JaTextNative.stopScreenCapture().catch(() => undefined);
-          return;
-        }
-
-        const decodeImg = new Image();
-        let decoding = false;
-        let lastDrawnAt = performance.now();
-
-        nativeScreenFrameRef.current = await JaTextNative.addListener("screenCaptureFrame", (ev) => {
-          if (!ev.frame || decoding) return;
-          decoding = true;
-          decodeImg.onload = () => {
-            decoding = false;
-            if (ev.width && ev.height && (canvas.width !== ev.width || canvas.height !== ev.height)) {
-              canvas.width = ev.width;
-              canvas.height = ev.height;
-            }
-            ctx2d.drawImage(decodeImg, 0, 0, canvas.width, canvas.height);
-            lastDrawnAt = performance.now();
-            screenTrack.requestFrame?.();
-          };
-          decodeImg.onerror = () => {
-            decoding = false;
-          };
-          decodeImg.src = `data:image/jpeg;base64,${ev.frame}`;
+        const shareSession = await startNativeAndroidScreenShare({
+          mixer,
+          onSystemStopped: () => {
+            void finishStoppingGroupScreenShare(false);
+          },
         });
-
-        nativeScreenKeepAliveRef.current = window.setInterval(() => {
-          if (performance.now() - lastDrawnAt > 260 && decodeImg.complete && decodeImg.naturalWidth > 0) {
-            ctx2d.drawImage(decodeImg, 0, 0, canvas.width, canvas.height);
-            screenTrack.requestFrame?.();
-          }
-        }, 280);
-
-        nativeScreenStopRef.current = await JaTextNative.addListener("screenCaptureStopped", () => {
-          stopNativeScreenShareInternal(false);
-          if (screenTrackRef.current) {
-            screenTrackRef.current.stop();
-            screenTrackRef.current = null;
-          }
-          const fallbackCam = cameraTrackRef.current;
-          void replaceMeshVideoTrack(fallbackCam ?? null);
-          setIsScreenSharing(false);
-          setIsCameraOff(!fallbackCam);
-          refreshLocalPreviewStream();
-          broadcastMyState({ isScreenSharing: false, isCameraOff: !fallbackCam });
-        });
-
-        screenTrackRef.current = screenTrack;
-        await replaceMeshVideoTrack(screenTrack);
-        setIsScreenSharing(true);
-        setIsCameraOff(false);
-        refreshLocalPreviewStream();
-        broadcastMyState({ isScreenSharing: true, isCameraOff: false });
+        if (!shareSession) {
+          mixer?.dispose();
+          return;
+        }
+        await activateGroupScreenShare(shareSession, mixer);
       } catch {
+        mixer?.dispose();
         stopNativeScreenShareInternal(true);
         setCallError("Could not start mobile screen sharing.");
       }
       return;
     }
 
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      setCallError("Screen sharing isn't supported in this browser.");
-      return;
+    if (isWebDisplayMediaSupported()) {
+      const mixer = createScreenAudioMixer(voiceTrack, stateRef.current.isMuted);
+      try {
+        const shareSession = await startWebDisplayScreenShare({
+          mixer,
+          onSystemStopped: () => {
+            void finishStoppingGroupScreenShare(false);
+          },
+        });
+        await activateGroupScreenShare(shareSession, mixer);
+        return;
+      } catch (err) {
+        mixer?.dispose();
+        const errName = err instanceof DOMException ? err.name : "";
+        if (errName === "NotAllowedError" || errName === "AbortError") {
+          return;
+        }
+      }
     }
-    try {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false,
-      });
-      const screenTrack = displayStream.getVideoTracks()[0];
-      if (!screenTrack) return;
-      screenTrackRef.current = screenTrack;
-      screenTrack.onended = () => {
-        screenTrackRef.current = null;
-        const fallbackCam = cameraTrackRef.current;
-        void replaceMeshVideoTrack(fallbackCam ?? null);
-        setIsScreenSharing(false);
-        setIsCameraOff(!fallbackCam);
-        refreshLocalPreviewStream();
-        broadcastMyState({ isScreenSharing: false, isCameraOff: !fallbackCam });
-      };
-      await replaceMeshVideoTrack(screenTrack);
-      setIsScreenSharing(true);
-      setIsCameraOff(false);
-      refreshLocalPreviewStream();
-      broadcastMyState({ isScreenSharing: true, isCameraOff: false });
-    } catch {
-      // User cancelled picker.
-    }
+
+    setMobileSharePickerOpen(true);
   }, [
-    broadcastMyState,
+    activateGroupScreenShare,
+    finishStoppingGroupScreenShare,
     isScreenSharing,
-    refreshLocalPreviewStream,
-    replaceMeshVideoTrack,
     stopNativeScreenShareInternal,
   ]);
 
@@ -1573,7 +1900,11 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         void studioGraphRef.current.ctx.close().catch(() => undefined);
         studioGraphRef.current = null;
       }
-      void replaceMeshAudioTrack(rawMic);
+      if (screenAudioMixerRef.current) {
+        screenAudioMixerRef.current.setMicTrack(rawMic, isMuted);
+      } else {
+        void replaceMeshAudioTrack(rawMic);
+      }
       setStudioAudioEnabled(false);
       return;
     }
@@ -1581,7 +1912,11 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     if (!graph) return;
     graph.processedTrack.enabled = !isMuted;
     studioGraphRef.current = graph;
-    void replaceMeshAudioTrack(graph.processedTrack);
+    if (screenAudioMixerRef.current) {
+      screenAudioMixerRef.current.setMicTrack(graph.processedTrack, isMuted);
+    } else {
+      void replaceMeshAudioTrack(graph.processedTrack);
+    }
     setStudioAudioEnabled(true);
   }, [isMuted, replaceMeshAudioTrack, studioAudioEnabled]);
 
@@ -1711,9 +2046,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     replaceMeshVideoTrack,
   ]);
 
-  const canScreenShare =
-    Capacitor.isNativePlatform() ||
-    (typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getDisplayMedia));
+  const canScreenShare = true;
 
   const value = useMemo<GroupCallContextValue>(
     () => ({
@@ -1735,6 +2068,8 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       captions,
       callError,
       canScreenShare,
+      mobileSharePickerOpen,
+      sharedMediaVideoElement,
       startGroupCall,
       joinGroupCall,
       acceptIncomingGroupCall,
@@ -1745,6 +2080,9 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       toggleCamera,
       flipCamera,
       toggleScreenShare,
+      startMobileVideoShare,
+      startMobileCameraShare,
+      closeMobileSharePicker,
       toggleSpeakerphone,
       toggleStudioAudio,
       toggleCaptions,
@@ -1760,6 +2098,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       canScreenShare,
       captions,
       captionsEnabled,
+      closeMobileSharePicker,
       declineIncomingGroupCall,
       facingMode,
       flipCamera,
@@ -1775,11 +2114,15 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       localStream,
       meSpeaking,
       minimized,
+      mobileSharePickerOpen,
       participants,
       playSoundboard,
       reactions,
       sendCallReaction,
+      sharedMediaVideoElement,
       startGroupCall,
+      startMobileCameraShare,
+      startMobileVideoShare,
       studioAudioEnabled,
       toggleCamera,
       toggleCaptions,
