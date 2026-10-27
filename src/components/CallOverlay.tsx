@@ -124,6 +124,8 @@ export function CallOverlay() {
     "none",
   );
   const [fullscreenTarget, setFullscreenTarget] = useState<"remote" | "local" | null>(null);
+  const [fsClosing, setFsClosing] = useState(false);
+  const [drawerClosing, setDrawerClosing] = useState(false);
   const [fsHudVisible, setFsHudVisible] = useState(true);
   const [fsZoom, setFsZoom] = useState(1);
   const [fsPan, setFsPan] = useState({ x: 0, y: 0 });
@@ -183,16 +185,31 @@ export function CallOverlay() {
     setFsZoom(1);
     setFsPan({ x: 0, y: 0 });
     setFsHudVisible(true);
+    setFsClosing(false);
     setFullscreenTarget(target);
   };
 
   const closeFullScreenView = () => {
+    if (fsClosing) return;
     if (typeof document !== "undefined" && document.fullscreenElement) {
       void document.exitFullscreen().catch(() => undefined);
     }
-    setFullscreenTarget(null);
-    setFsZoom(1);
-    setFsPan({ x: 0, y: 0 });
+    setFsClosing(true);
+    window.setTimeout(() => {
+      setFullscreenTarget(null);
+      setFsClosing(false);
+      setFsZoom(1);
+      setFsPan({ x: 0, y: 0 });
+    }, 180);
+  };
+
+  const closeOpenDrawer = () => {
+    if (openDrawer === "none" || drawerClosing) return;
+    setDrawerClosing(true);
+    window.setTimeout(() => {
+      setOpenDrawer("none");
+      setDrawerClosing(false);
+    }, 160);
   };
 
   const toggleBrowserTrueFullscreen = () => {
@@ -421,7 +438,7 @@ export function CallOverlay() {
       {activeFullscreenTarget && fsStream && (
         <div
           ref={fullscreenStageRef}
-          className="call-screenshare-fullscreen"
+          className={`call-screenshare-fullscreen ${fsClosing ? "is-closing" : ""}`}
           onTouchStart={handleFsTouchStart}
           onTouchMove={handleFsTouchMove}
           onTouchEnd={handleFsTouchEnd}
@@ -587,7 +604,12 @@ export function CallOverlay() {
       )}
 
       {/* Stage Area */}
-      <div className={`call-stage ${layoutMode === "grid" ? "grid-mode" : "spotlight-mode"}`}>
+      <div
+        className={`call-stage ${layoutMode === "grid" ? "grid-mode" : "spotlight-mode"}`}
+        onClick={() => {
+          if (openDrawer !== "none") closeOpenDrawer();
+        }}
+      >
         {/* Remote Tile */}
         <div
           className={`call-tile remote-tile ${peerSpeaking ? "speaking-ring" : ""} ${
@@ -721,7 +743,7 @@ export function CallOverlay() {
 
       {/* Expandable Reactions or Soundboard Tray */}
       {openDrawer === "reactions" && (
-        <div className="call-Floating-tray">
+        <div className={`call-Floating-tray ${drawerClosing ? "is-closing" : ""}`}>
           {CALL_REACTIONS.map((emoji) => (
             <button
               key={emoji}
@@ -736,7 +758,7 @@ export function CallOverlay() {
       )}
 
       {openDrawer === "soundboard" && (
-        <div className="call-Floating-tray soundboard">
+        <div className={`call-Floating-tray soundboard ${drawerClosing ? "is-closing" : ""}`}>
           {SOUNDBOARD_ITEMS.map((item) => (
             <button
               key={item.id}

@@ -105,7 +105,9 @@ export function GroupCallOverlay() {
 
   const [elapsedSec, setElapsedSec] = useState(0);
   const [openDrawer, setOpenDrawer] = useState<"none" | "reactions" | "soundboard">("none");
+  const [drawerClosing, setDrawerClosing] = useState(false);
   const [fullscreenPeerId, setFullscreenPeerId] = useState<string | null>(null); // "local" or participant.user.id
+  const [fsClosing, setFsClosing] = useState(false);
   const [fsHudVisible, setFsHudVisible] = useState(true);
   const [fsZoom, setFsZoom] = useState(1);
   const [fsPan, setFsPan] = useState({ x: 0, y: 0 });
@@ -354,7 +356,7 @@ export function GroupCallOverlay() {
       {fullscreenPeerId && fsStream && (
         <div
           ref={fsRef}
-          className="call-screenshare-fullscreen"
+          className={`call-screenshare-fullscreen ${fsClosing ? "is-closing" : ""}`}
           onTouchStart={handleFsTouchStart}
           onTouchMove={handleFsTouchMove}
           onTouchEnd={() => {
@@ -408,12 +410,17 @@ export function GroupCallOverlay() {
                   type="button"
                   className="call-fs-pill-btn close"
                   onClick={() => {
+                    if (fsClosing) return;
                     if (typeof document !== "undefined" && document.fullscreenElement) {
                       void document.exitFullscreen().catch(() => undefined);
                     }
-                    setFullscreenPeerId(null);
-                    setFsZoom(1);
-                    setFsPan({ x: 0, y: 0 });
+                    setFsClosing(true);
+                    window.setTimeout(() => {
+                      setFullscreenPeerId(null);
+                      setFsClosing(false);
+                      setFsZoom(1);
+                      setFsPan({ x: 0, y: 0 });
+                    }, 180);
                   }}
                 >
                   <X size={15} />
@@ -472,7 +479,18 @@ export function GroupCallOverlay() {
       )}
 
       {/* Multi-Party Mesh Grid Stage */}
-      <div className={`call-stage group-mesh-stage count-${Math.min(6, totalPeopleCount)}`}>
+      <div
+        className={`call-stage group-mesh-stage count-${Math.min(6, totalPeopleCount)}`}
+        onClick={() => {
+          if (openDrawer !== "none" && !drawerClosing) {
+            setDrawerClosing(true);
+            window.setTimeout(() => {
+              setOpenDrawer("none");
+              setDrawerClosing(false);
+            }, 160);
+          }
+        }}
+      >
         {/* Self Tile */}
         {me && (
           <div
@@ -617,7 +635,7 @@ export function GroupCallOverlay() {
       </div>
 
       {openDrawer === "reactions" && (
-        <div className="call-Floating-tray">
+        <div className={`call-Floating-tray ${drawerClosing ? "is-closing" : ""}`}>
           {CALL_REACTIONS.map((emoji) => (
             <button
               key={emoji}
@@ -632,7 +650,7 @@ export function GroupCallOverlay() {
       )}
 
       {openDrawer === "soundboard" && (
-        <div className="call-Floating-tray soundboard">
+        <div className={`call-Floating-tray soundboard ${drawerClosing ? "is-closing" : ""}`}>
           {SOUNDBOARD_ITEMS.map((item) => (
             <button
               key={item.id}

@@ -73,6 +73,26 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
             if ((title == null || title.isEmpty()) && (body == null || body.isEmpty())) {
                 return;
             }
+            if (body != null) {
+                if (body.startsWith("__JATEXT_CALL_SIG__:")) {
+                    return;
+                }
+                if (body.startsWith("__JATEXT_BUBBLE__:")) {
+                    int nl = body.indexOf('\n');
+                    body = nl >= 0 ? body.substring(nl + 1) : body;
+                }
+                if (body.startsWith("__JATEXT_CALL_GRP__:")) {
+                    body = body.contains("\"mode\":\"video\"")
+                        ? "📹 Incoming group video call"
+                        : "📞 Incoming group voice call";
+                } else if (body.startsWith("__JATEXT_CALL__:")) {
+                    body = body.contains("\"mode\":\"video\"")
+                        ? "📹 Incoming video call"
+                        : "📞 Incoming voice call";
+                } else if (body.startsWith("__JATEXT_WALLPAPER__:")) {
+                    body = "🖼️ Updated the chat wallpaper";
+                }
+            }
 
             NotificationManager nm =
                 (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);

@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { updateCallHistoryStatus, upsertCallHistoryEntry } from "./callHistory";
 import { parseWallpaperSignal, stripBubbleStyleFromText } from "./chatCustomization";
@@ -317,8 +318,13 @@ export function formatPreviewMessageText(body: string): string {
   if (invite) {
     const icon = invite.mode === "video" ? "📹" : "📞";
     const kind = invite.mode === "video" ? "Video call" : "Voice call";
-    if (invite.state === "ringing") return `${icon} ${kind} · Ringing…`;
-    if (invite.state === "connected") return `${icon} ${kind} · In call`;
+    const ageMs = invite.ts > 0 ? Date.now() - invite.ts : 0;
+    if (invite.state === "ringing") {
+      return ageMs > 60_000 ? `${icon} Missed ${kind.toLowerCase()}` : `${icon} ${kind} · Ringing…`;
+    }
+    if (invite.state === "connected") {
+      return ageMs > 4 * 60 * 60 * 1000 ? `${icon} ${kind} ended` : `${icon} ${kind} · In call`;
+    }
     if (invite.state === "missed") return `${icon} Missed ${kind.toLowerCase()}`;
     if (invite.state === "declined") return `${icon} Declined ${kind.toLowerCase()}`;
     if (invite.durationSec && invite.durationSec > 0) {
@@ -980,10 +986,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
             try {
               const restartOffer = await pc.createOffer({ iceRestart: true });
               await pc.setLocalDescription(restartOffer);
-              if (pc.localDescription) {
+              const sdp = pc.localDescription?.toJSON() ?? restartOffer;
+              if (dcRef.current?.readyState === "open") {
                 sendDataChannelPacket({
                   type: "renegotiate-offer",
-                  sdp: pc.localDescription.toJSON(),
+                  sdp,
+                });
+              } else if (sessionRef.current) {
+                await sendSignalPacket(peer.id, {
+                  callId: sessionRef.current.callId,
+                  type: "renegotiate-offer",
+                  sdp,
+                  ts: Date.now(),
                 });
               }
             } catch {
@@ -995,7 +1009,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
       return pc;
     },
-    [broadcastMyState, sendDataChannelPacket, soundsEnabled, stopRingingTimers, wireDataChannel],
+    [
+      broadcastMyState,
+      sendDataChannelPacket,
+      sendSignalPacket,
+      soundsEnabled,
+      stopRingingTimers,
+      wireDataChannel,
+    ],
   );
 
   // Detect local speaking level while in a call
@@ -1195,7 +1216,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setFacingMode("user");
       const defaultSpeaker = actualMode === "video" || !Capacitor.isNativePlatform();
       setIsSpeakerphone(defaultSpeaker);
-      void configureNativeCallAudio(true, defaultSpeaker);
+      void configureNativeCallAudio(true, defaultSpeaker, {
+        video: Boolean(camTrack),
+        title: peer.displayName,
+      });
       refreshLocalPreviewStream();
 
       const newSession: ActiveCallSession = {
@@ -1473,6 +1497,40 @@ export function CallProvider({ children }: { children: ReactNode }) {
               // Ignore duplicate answer.
             }
           }
+          continue;
+        }
+
+        if (env.type === "renegotiate-offer" && env.sdp) {
+          const pc = pcRef.current;
+          if (pc) {
+            try {
+              await pc.setRemoteDescription(env.sdp);
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              await waitForIceGathering(pc, 750);
+              const finalSdp = pc.localDescription?.toJSON() ?? answer;
+              if (dcRef.current?.readyState === "open") {
+                sendDataChannelPacket({ type: "renegotiate-answer", sdp: finalSdp });
+              } else {
+                await sendSignalPacket(session.peer.id, {
+                  callId: session.callId,
+                  type: "renegotiate-answer",
+                  sdp: finalSdp,
+                  ts: Date.now(),
+                });
+              }
+            } catch {
+              // Ignore renegotiation glare.
+            }
+          }
+          continue;
+        }
+
+        if (env.type === "renegotiate-answer" && env.sdp) {
+          const pc = pcRef.current;
+          if (pc && pc.signalingState === "have-local-offer") {
+            await pc.setRemoteDescription(env.sdp).catch(() => undefined);
+          }
         }
       }
     };
@@ -1504,6 +1562,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
     cleanupCallResources,
     me,
     readSignalEnvelope,
+    sendDataChannelPacket,
+    sendSignalPacket,
     session,
     soundsEnabled,
     stopRingingTimers,
@@ -1577,7 +1637,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
         setFacingMode("user");
         const defaultSpeaker = withVideo || cur.mode === "video" || !Capacitor.isNativePlatform();
         setIsSpeakerphone(defaultSpeaker);
-        void configureNativeCallAudio(true, defaultSpeaker);
+        void configureNativeCallAudio(true, defaultSpeaker, {
+          video: Boolean(camTrack),
+          title: cur.peer.displayName,
+        });
         refreshLocalPreviewStream();
 
         const pc = createConfiguredPeerConnection(cur.peer, false);
@@ -2008,8 +2071,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const toggleSpeakerphone = useCallback(async () => {
     const next = !isSpeakerphone;
     setIsSpeakerphone(next);
-    await configureNativeCallAudio(true, next);
-  }, [isSpeakerphone]);
+    await configureNativeCallAudio(true, next, {
+      video: !isCameraOff,
+      title: sessionRef.current?.peer.displayName,
+    });
+  }, [isCameraOff, isSpeakerphone]);
 
   const toggleStudioAudio = useCallback(() => {
     const rawMic = rawMicTrackRef.current;
@@ -2140,20 +2206,173 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   const reconnectIce = useCallback(async () => {
     const pc = pcRef.current;
-    if (!pc) return;
+    const cur = sessionRef.current;
+    if (!pc || !cur) return;
     try {
       const offer = await pc.createOffer({ iceRestart: true });
       await pc.setLocalDescription(offer);
-      if (pc.localDescription) {
+      await waitForIceGathering(pc, 750);
+      const sdp = pc.localDescription?.toJSON() ?? offer;
+      if (dcRef.current?.readyState === "open") {
         sendDataChannelPacket({
           type: "renegotiate-offer",
-          sdp: pc.localDescription.toJSON(),
+          sdp,
         });
+      } else {
+        await sendSignalPacket(cur.peer.id, {
+          callId: cur.callId,
+          type: "renegotiate-offer",
+          sdp,
+          ts: Date.now(),
+        });
+        window.setTimeout(() => {
+          void store
+            .fetchMessagesWithUser(cur.peer.id)
+            .then((latest) => {
+              for (const m of latest) {
+                if (
+                  m.senderId === me?.id &&
+                  isHiddenCallSignal(m.body) &&
+                  m.body.includes(cur.callId)
+                ) {
+                  void store.deleteMessageForMe(m.id).catch(() => undefined);
+                }
+              }
+            })
+            .catch(() => undefined);
+        }, 8000);
       }
     } catch {
       // Ignore if renegotiation already active.
     }
-  }, [sendDataChannelPacket]);
+  }, [me?.id, sendDataChannelPacket, sendSignalPacket, store]);
+
+  // Keep call alive across app switches / backgrounding & self-heal evicted audio/camera/ICE
+  useEffect(() => {
+    if (!session || session.phase === "incoming") return;
+
+    const resumeMediaAndConnection = async (becameVisible: boolean) => {
+      try {
+        const ctx = getCallAudioCtx();
+        if (ctx && ctx.state === "suspended") {
+          void ctx.resume().catch(() => undefined);
+        }
+        if (studioGraphRef.current?.ctx.state === "suspended") {
+          void studioGraphRef.current.ctx.resume().catch(() => undefined);
+        }
+        if (remoteAudioElementRef.current && !isDeafened) {
+          void remoteAudioElementRef.current.play().catch(() => undefined);
+        }
+      } catch {
+        // Ignore audio resume errors.
+      }
+
+      if (!becameVisible) return;
+
+      void configureNativeCallAudio(true, isSpeakerphone, {
+        video: !isCameraOff,
+        title: session.peer.displayName,
+      });
+
+      // If Android CameraService evicted the camera hardware while user was in another app, restore it!
+      if (
+        !isCameraOff &&
+        !isScreenSharing &&
+        (!cameraTrackRef.current || cameraTrackRef.current.readyState === "ended")
+      ) {
+        try {
+          const restored = await acquireSwitchedCameraTrack(cameraTrackRef.current, facingMode);
+          cameraTrackRef.current = restored;
+          if (videoSenderRef.current) {
+            await videoSenderRef.current.replaceTrack(restored);
+          }
+          refreshLocalPreviewStream();
+        } catch {
+          // Leave voice call running cleanly even if camera is busy.
+        }
+      }
+
+      const pc = pcRef.current;
+      if (
+        pc &&
+        session.phase === "connected" &&
+        (pc.connectionState === "failed" ||
+          pc.iceConnectionState === "failed" ||
+          pc.iceConnectionState === "disconnected")
+      ) {
+        void reconnectIce();
+      }
+    };
+
+    const onVisibility = () => {
+      void resumeMediaAndConnection(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    let appStateHandle: PluginListenerHandle | null = null;
+    if (Capacitor.isNativePlatform()) {
+      void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+        void resumeMediaAndConnection(isActive);
+      }).then((h) => {
+        appStateHandle = h;
+      });
+    }
+
+    const keepAliveTimer = window.setInterval(() => {
+      void resumeMediaAndConnection(false);
+    }, 3000);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(keepAliveTimer);
+      if (appStateHandle) {
+        void appStateHandle.remove();
+      }
+    };
+  }, [
+    facingMode,
+    isCameraOff,
+    isDeafened,
+    isScreenSharing,
+    isSpeakerphone,
+    reconnectIce,
+    refreshLocalPreviewStream,
+    session,
+  ]);
+
+  // Hydrate call history from existing call cards in opened DM conversations
+  useEffect(() => {
+    if (!me || !activeChatId || activeMessages.length === 0) return;
+    const friend = friends.find((f) => f.id === activeChatId);
+    if (!friend) return;
+    for (const msg of activeMessages) {
+      if (msg.unsentAt) continue;
+      const invite = parseCallInvite(msg.body);
+      if (!invite) continue;
+      const isLive = session?.callId === invite.callId;
+      const normalizedState: CallInviteState = isLive
+        ? invite.state
+        : invite.state === "connected"
+          ? "ended"
+          : invite.state === "ringing"
+            ? "missed"
+            : invite.state;
+      upsertCallHistoryEntry({
+        callId: invite.callId,
+        kind: "dm",
+        peerId: friend.id,
+        peerDisplayName: friend.displayName,
+        peerUsername: friend.username,
+        peerAvatarUrl: friend.avatarUrl,
+        peerAvatarColor: friend.avatarColor,
+        direction: msg.senderId === me.id ? "outgoing" : "incoming",
+        mode: invite.mode,
+        state: normalizedState,
+        durationSec: invite.durationSec,
+        timestamp: msg.createdAt || invite.ts || Date.now(),
+      });
+    }
+  }, [activeChatId, activeMessages, friends, me, session?.callId]);
 
   const canScreenShare =
     Capacitor.isNativePlatform() ||

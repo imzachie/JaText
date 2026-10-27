@@ -5,6 +5,8 @@ import android.app.NotificationManager;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.service.notification.StatusBarNotification;
 import android.webkit.WebView;
 import androidx.core.view.WindowCompat;
@@ -14,6 +16,7 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
 
     private static volatile boolean appInForeground = false;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     public static boolean isAppInForeground() {
         return appInForeground;
@@ -53,19 +56,26 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onPause() {
         super.onPause();
-        keepWebViewAliveForActiveScreenShare();
+        keepWebViewAliveForActiveMedia();
     }
 
     @Override
     public void onStop() {
         appInForeground = false;
         super.onStop();
-        keepWebViewAliveForActiveScreenShare();
+        keepWebViewAliveForActiveMedia();
+        // Re-assert WebView resume right after Android ViewRootImpl dispatches window-stop
+        mainHandler.postDelayed(this::keepWebViewAliveForActiveMedia, 140L);
+        mainHandler.postDelayed(this::keepWebViewAliveForActiveMedia, 480L);
     }
 
     @Override
     public void onDestroy() {
         appInForeground = false;
+        mainHandler.removeCallbacksAndMessages(null);
+        try {
+            stopService(new android.content.Intent(this, CallKeepAliveService.class));
+        } catch (Throwable ignored) {}
         super.onDestroy();
     }
 
@@ -78,8 +88,10 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
-    private void keepWebViewAliveForActiveScreenShare() {
-        if (!ScreenCaptureService.isCapturing()) return;
+    private void keepWebViewAliveForActiveMedia() {
+        if (!CallKeepAliveService.isCallActive() && !ScreenCaptureService.isCapturing()) {
+            return;
+        }
         try {
             if (getBridge() != null && getBridge().getWebView() != null) {
                 WebView webView = getBridge().getWebView();
@@ -97,11 +109,15 @@ public class MainActivity extends BridgeActivity {
                 StatusBarNotification[] active = nm.getActiveNotifications();
                 if (active != null) {
                     for (StatusBarNotification notif : active) {
-                        if (notif.getId() != ScreenCaptureService.NOTIFICATION_ID) {
+                        int id = notif.getId();
+                        if (
+                            id != ScreenCaptureService.NOTIFICATION_ID &&
+                            id != CallKeepAliveService.NOTIFICATION_ID
+                        ) {
                             if (notif.getTag() != null) {
-                                nm.cancel(notif.getTag(), notif.getId());
+                                nm.cancel(notif.getTag(), id);
                             } else {
-                                nm.cancel(notif.getId());
+                                nm.cancel(id);
                             }
                         }
                     }

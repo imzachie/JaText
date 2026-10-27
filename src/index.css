@@ -4278,7 +4278,10 @@ input:focus, textarea:focus {
 
 /* Animated X Close Button & Backdrop/Sheet Exit Animations */
 .animated-x-btn,
-.close-btn {
+.close-btn,
+.modal-close,
+.media-lightbox-close,
+.unsend-warning-dismiss {
   transition:
     transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
     background-color 150ms ease,
@@ -4286,13 +4289,33 @@ input:focus, textarea:focus {
 }
 
 .animated-x-btn:hover,
-.close-btn:hover {
+.close-btn:hover,
+.modal-close:hover,
+.media-lightbox-close:hover,
+.unsend-warning-dismiss:hover {
   transform: rotate(90deg) scale(1.06);
 }
 
 .animated-x-btn:active,
-.close-btn:active {
+.close-btn:active,
+.modal-close:active,
+.media-lightbox-close:active,
+.unsend-warning-dismiss:active {
   transform: rotate(90deg) scale(0.86) !important;
+}
+
+.reply-composer-preview,
+.attach-preview,
+.unsend-warning-banner,
+.call-Floating-tray,
+.call-screenshare-fullscreen {
+  animation: fadeSlideUp 190ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.call-Floating-tray.is-closing,
+.call-screenshare-fullscreen.is-closing {
+  animation: modalExitSpring 175ms cubic-bezier(0.4, 0, 1, 1) forwards !important;
+  pointer-events: none;
 }
 
 @keyframes backdropFadeIn {
