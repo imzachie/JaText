@@ -4,7 +4,11 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
 import { playMessageSound } from "../lib/alerts";
-import { copyImageUrlToClipboard } from "../lib/clipboard";
+import {
+  copyImageUrlToClipboard,
+  extractClipboardFile,
+  useChatImagePaste,
+} from "../lib/clipboard";
 import { syncComposerTextareaHeight } from "../lib/composerUtils";
 import { getSavedOutgoingBubbleStyle } from "../lib/chatCustomization";
 import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts";
@@ -305,6 +309,14 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
         rows={1}
         placeholder={isEditing ? "Edit message…" : "Message…"}
         aria-label="Community message"
+        onPaste={(event) => {
+          if (isEditing) return;
+          const pasted = extractClipboardFile(event.clipboardData);
+          if (pasted) {
+            event.preventDefault();
+            onSelectFile(pasted);
+          }
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -611,6 +623,37 @@ export function CommunityChatView({
     closeMessageMenu();
   }
 
+  const focusedEditIdRef = useRef<string | null>(null);
+  const inlineEditRefCallback = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      if (!el || !editingMessage) return;
+      if (focusedEditIdRef.current === editingMessage.id) return;
+      focusedEditIdRef.current = editingMessage.id;
+      window.requestAnimationFrame(() => {
+        el.focus({ preventScroll: true });
+        const end = el.value.length;
+        el.setSelectionRange(end, end);
+        el.scrollTop = el.scrollHeight;
+      });
+    },
+    [editingMessage],
+  );
+  useEffect(() => {
+    if (!editingMessage) {
+      focusedEditIdRef.current = null;
+    }
+  }, [editingMessage]);
+
+  const handlePastedCommunityFile = useCallback((pasted: File) => {
+    setFile(pasted);
+    window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
+  }, []);
+
+  useChatImagePaste(
+    handlePastedCommunityFile,
+    Boolean(store.communityPermissions.canModerate) && !editingMessage && !recordingVoiceNote,
+  );
+
   async function handleSubmitCommunityDraft(submittedBody: string) {
     if (editingMessage) {
       if (!submittedBody) return;
@@ -618,10 +661,10 @@ export function CommunityChatView({
       setError(null);
       setEditingMessage(null);
       setFile(null);
+      setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
       try {
         await store.editCommunityMessage(targetId, submittedBody);
       } catch (cause) {
-        setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: submittedBody }));
         setError(friendlyError(cause, "Could not edit the announcement."));
       }
       return;
@@ -899,9 +942,8 @@ export function CommunityChatView({
     setEditingMessage({ id: message.id, body: message.body });
     setReplyTo(null);
     setFile(null);
-    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: message.body }));
+    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
     closeMessageMenu();
-    window.setTimeout(() => composerRef.current?.focus(), 0);
   }
   async function copyMessage(message: CommunityMessage) {
     try {
@@ -1124,6 +1166,7 @@ export function CommunityChatView({
               {editingMessage?.id === message.id ? (
                 <form className="community-announcement-edit" onSubmit={(event) => void saveAnnouncement(event)}>
                   <textarea
+                    ref={inlineEditRefCallback}
                     value={editingMessage.body}
                     maxLength={4000}
                     onChange={(event) =>
@@ -1132,13 +1175,19 @@ export function CommunityChatView({
                       )
                     }
                     aria-label="Edit announcement"
-                    autoFocus
                   />
                   <div>
                     <button className="primary-btn" type="submit" disabled={busy || !editingMessage.body.trim()}>
                       Save
                     </button>
-                    <button className="ghost-btn" type="button" onClick={() => setEditingMessage(null)}>
+                    <button
+                      className="ghost-btn"
+                      type="button"
+                      onClick={() => {
+                        setEditingMessage(null);
+                        setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
+                      }}
+                    >
                       Cancel
                     </button>
                   </div>
@@ -1361,10 +1410,10 @@ export function CommunityChatView({
             </div>
           ) : (
             <CommunityChatComposer
-              key={`${editingMessage?.id ?? "new"}:${composerSeed.nonce}`}
-              initialDraft={editingMessage ? editingMessage.body : composerSeed.text}
+              key={`composer:${composerSeed.nonce}`}
+              initialDraft={composerSeed.text}
               hasFile={Boolean(file)}
-              isEditing={Boolean(editingMessage)}
+              isEditing={false}
               showPoll={showPoll}
               composerRef={composerRef}
               fileInputRef={fileInput}

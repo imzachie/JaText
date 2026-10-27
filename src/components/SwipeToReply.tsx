@@ -52,10 +52,21 @@ export function SwipeToReply({
     const track = trackRef.current;
     const icon = iconRef.current;
     if (track) {
+      if (px > 0) {
+        track.style.willChange = "transform";
+      }
       track.style.transition = animate
         ? "transform 240ms cubic-bezier(0.22, 1, 0.36, 1)"
         : "none";
       track.style.transform = px > 0 ? `translate3d(${px}px, 0, 0)` : "";
+      if (px === 0) {
+        window.setTimeout(() => {
+          if (trackRef.current && !gestureRef.current.active) {
+            trackRef.current.style.willChange = "auto";
+            trackRef.current.style.transition = "";
+          }
+        }, 260);
+      }
     }
     if (icon) {
       const progress = Math.min(1, px / TRIGGER_PX);

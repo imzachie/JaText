@@ -343,8 +343,32 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .greeting-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .greeting-title { font-size: 16px; font-weight: 800; line-height: 1.25; }
 .sidebar-tabs { flex: none; }
+.sidebar-tab-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-height: 0;
+  gap: 10px;
+  overflow: hidden;
+}
+.sidebar-tab-pane.add-panel {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
 .search-input { flex: none; }
-.friend-list { overflow-y: auto; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.friend-list {
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 0%;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
 .friend-row {
   display: flex; gap: 12px; align-items: center;
   padding: 10px; border-radius: 16px; cursor: pointer;
@@ -1080,12 +1104,13 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 .msg-row.mine { justify-content: flex-end; }
 .msg-col { display: flex; flex-direction: column; gap: 2px; max-width: min(68%, 520px); min-width: 0; }
 .msg-row.mine .msg-col { align-items: flex-end; }
-.bubble { border-radius: 20px; padding: 9px 13px; font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; max-width: 100%; min-width: 0; box-sizing: border-box; }
+.bubble { width: fit-content; border-radius: 20px; padding: 9px 13px; font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; max-width: 100%; min-width: 0; box-sizing: border-box; }
 .bubble p { margin: 0; white-space: pre-wrap; }
 .bubble.mine { background: var(--accent); color: #fff; border-bottom-right-radius: 6px; font-weight: 500; }
 .bubble.theirs { background: var(--panel-2); border: 1px solid var(--border); border-bottom-left-radius: 6px; }
 .image-message-button {
   display: block;
+  width: fit-content;
   max-width: 100%;
   padding: 0;
   overflow: hidden;
@@ -1094,7 +1119,16 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   border-radius: 14px;
   cursor: zoom-in;
 }
-.msg-image { max-width: min(420px, 100%); max-height: 420px; width: 100%; border-radius: 14px; display: block; object-fit: contain; margin-bottom: 4px; }
+.msg-image {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(420px, 100%);
+  max-height: 420px;
+  border-radius: 14px;
+  object-fit: contain;
+  margin-bottom: 4px;
+}
 .video-attachment { display: grid; gap: 7px; min-width: min(260px, 100%); }
 .msg-video { display: block; width: min(420px, 100%); max-height: 360px; background: #000; border-radius: 14px; }
 .video-speed-control { display: flex; flex-direction: row; align-items: center; gap: 7px; align-self: flex-end; color: var(--muted); font-size: 11px; }
@@ -1701,15 +1735,15 @@ input:focus, textarea:focus {
 .login-hero > :nth-child(4) { animation-delay: 210ms; }
 .login-card { animation: pop-in 520ms var(--ease-spring) 100ms both; }
 .onboarding-card { animation: fade-up 550ms var(--ease-out) both; }
-.app-shell { animation: fade-in 320ms ease-out both; }
-.sidebar { animation: slide-in-left 420ms var(--ease-out) both; }
-.greeting { animation: fade-up 450ms var(--ease-out) 100ms both; }
-.no-chat { animation: fade-up 450ms var(--ease-out) both; }
-.chat { animation: fade-in 280ms ease-out both; }
+.app-shell { animation: fade-in 320ms ease-out backwards; }
+.sidebar { animation: slide-in-left 420ms var(--ease-out) backwards; }
+.greeting { animation: fade-up 450ms var(--ease-out) 100ms backwards; }
+.no-chat { animation: fade-up 450ms var(--ease-out) backwards; }
+.chat { animation: fade-in 280ms ease-out backwards; }
 .chat.closing { animation: slide-out-right 160ms ease-in both; pointer-events: none; }
-.chat-header { animation: slide-in-down 360ms var(--ease-out) both; }
-.friend-row { animation: fade-up 300ms var(--ease-out) both; }
-.request-row { animation: fade-up 300ms var(--ease-out) both; }
+.chat-header { animation: slide-in-down 360ms var(--ease-out) backwards; }
+.friend-row { animation: fade-up 300ms var(--ease-out) backwards; }
+.request-row { animation: fade-up 300ms var(--ease-out) backwards; }
 .friend-row:hover, .request-row:hover { transform: translateY(-2px); }
 .avatar:hover, .pf-avatar-click:hover { transform: scale(1.045); }
 .logo-badge:not(.pulse) { transition: transform 240ms var(--ease-spring), box-shadow 240ms var(--ease-out); }
@@ -1718,16 +1752,16 @@ input:focus, textarea:focus {
 .tabs button { transition: color 180ms ease, background-color 220ms var(--ease-out), transform 180ms var(--ease-out); }
 .tabs button.active { box-shadow: 0 3px 12px rgba(155, 108, 255, 0.18); }
 .friend-row, .request-row, .empty-box, .add-panel > *, .success-box, .error-box, .hint-box {
-  animation: fade-up 320ms var(--ease-out) both;
+  animation: fade-up 320ms var(--ease-out) backwards;
 }
 .friend-row:nth-child(2), .request-row:nth-child(2) { animation-delay: 35ms; }
 .friend-row:nth-child(3), .request-row:nth-child(3) { animation-delay: 70ms; }
 .friend-row:nth-child(4), .request-row:nth-child(4) { animation-delay: 105ms; }
 .friend-row:nth-child(5), .request-row:nth-child(5) { animation-delay: 140ms; }
 
-.msg-row { animation: message-in 260ms var(--ease-out) both; }
-.bubble { transition: transform 200ms var(--ease-spring), filter 200ms ease; }
-.bubble:hover { filter: brightness(1.04); }
+.msg-row { animation: message-in 260ms var(--ease-out) backwards; }
+.bubble { transition: transform 200ms var(--ease-spring), background-color 180ms ease, border-color 180ms ease; }
+.bubble:hover { filter: none; }
 .attach-preview { animation: fade-up 220ms var(--ease-out) both; }
 .send-btn:hover:not(:disabled), .icon-btn:hover, .accept-btn:hover {
   transform: translateY(-2px) scale(1.04);
@@ -4203,7 +4237,7 @@ input:focus, textarea:focus {
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: none;
   }
 }
 
@@ -4218,27 +4252,25 @@ input:focus, textarea:focus {
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: none;
   }
 }
 
 .msg-row.mine,
 .group-msg-row.mine {
-  animation: msgSpringMine 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  backface-visibility: hidden;
+  animation: msgSpringMine 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
 .msg-row.theirs,
 .group-msg-row.theirs,
 .community-post {
-  animation: msgSpringTheirs 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  backface-visibility: hidden;
+  animation: msgSpringTheirs 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
 .friend-row,
 .request-row,
 .call-history-row {
-  animation: fadeSlideUp 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: fadeSlideUp 200ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
   transition:
     transform 150ms cubic-bezier(0.22, 1, 0.36, 1),
     background-color 150ms ease,
@@ -4252,7 +4284,7 @@ input:focus, textarea:focus {
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
+    transform: none;
   }
 }
 
@@ -4433,7 +4465,30 @@ input:focus, textarea:focus {
   flex-direction: column;
   max-width: 100%;
   min-width: 0;
-  will-change: transform;
+}
+
+.msg-row.mine .swipe-reply-content,
+.msg-row.mine .swipe-reply-track,
+.group-bubble-line.mine .swipe-reply-content,
+.group-bubble-line.mine .swipe-reply-track {
+  align-items: flex-end;
+}
+
+/* Keep JaText Community announcement cards centered and uniformly 760px wide */
+.community-chat .swipe-reply-wrap,
+.community-messages > .swipe-reply-wrap {
+  width: min(100%, 760px);
+  align-self: center;
+}
+
+.community-chat .swipe-reply-content,
+.community-messages > .swipe-reply-wrap > .swipe-reply-content {
+  width: 100%;
+}
+
+.community-chat .community-post {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .swipe-reply-indicator {
@@ -4482,10 +4537,14 @@ input:focus, textarea:focus {
 .calls-history-list {
   display: flex;
   flex-direction: column;
+  flex: 1 1 0%;
+  min-height: 0;
   gap: 8px;
   padding: 4px 2px 14px;
   overflow-y: auto;
   overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .call-history-row {
@@ -5304,5 +5363,51 @@ input:focus, textarea:focus {
   padding: 4px 10px !important;
   border-radius: 999px !important;
 }
+
+/* Group Chat "Seen by" Read-Receipt Mini PFP Indicators */
+.group-seen-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  padding: 2px 4px 0;
+  max-width: 100%;
+}
+
+.group-seen-avatars {
+  display: inline-flex;
+  align-items: center;
+  flex-direction: row-reverse;
+}
+
+.group-seen-avatar-wrap {
+  display: inline-flex;
+  border-radius: 50%;
+  margin-left: -4px;
+  box-shadow: 0 0 0 1.5px var(--bg);
+  background: var(--panel);
+  cursor: pointer;
+  transition: transform 140ms ease;
+}
+
+.group-seen-avatar-wrap:last-child {
+  margin-left: 0;
+}
+
+.group-seen-avatar-wrap:hover {
+  transform: translateY(-1px) scale(1.12);
+  z-index: 2;
+}
+
+.group-seen-overflow {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
 
 

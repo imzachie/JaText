@@ -4,7 +4,22 @@ export interface VoiceNoteMeta {
   transcript?: string;
 }
 
-const TRANSCRIPT_CACHE_KEY = "jatext-voice-transcripts-v1";
+const TRANSCRIPT_CACHE_KEY = "jatext-voice-transcripts-v2";
+
+const MUSIC_OUTPUT_TAG_RE =
+  /[[(✶*]\s*(?:music|singing|song|instrumental|melody|guitar|piano|drums|beat|beats|hip[- ]?hop|rap music|pop music|rock music|electronic music|upbeat music|sad music|dramatic music|background music|playing music|music playing|musical|chorus|vocalizing|humming)[^)\]*]*[\])✶*]/iu;
+const MUSIC_OUTPUT_NOTE_RE = /[♪♫♬♩🎵🎶]/u;
+
+export function isMusicTranscriptText(raw: string | undefined | null): boolean {
+  if (!raw) return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (trimmed === "(Music)") return true;
+  if (MUSIC_OUTPUT_NOTE_RE.test(trimmed)) return true;
+  if (MUSIC_OUTPUT_TAG_RE.test(trimmed)) return true;
+  if (/^\(?\s*music\s*\)?\.?$/i.test(trimmed)) return true;
+  return false;
+}
 const DEFAULT_WAVEFORM = [
   24, 38, 56, 42, 72, 85, 60, 46, 78, 92, 64, 48, 36, 70,
   88, 76, 52, 62, 84, 58, 44, 68, 74, 50, 38, 54, 40, 28,
@@ -286,7 +301,136 @@ async function runWorkerTranscription(
   });
 }
 
-async function decodeTo16kHzMono(url: string): Promise<Float32Array> {
+/**
+ * Fast pre-Whisper acoustic & stereo music detector.
+ * Detects mastered/stereo music tracks before Whisper even runs so we can
+ * immediately cancel transcription and output "(Music)" only.
+ */
+function detectMusicFromDecodedAudio(
+  decoded: AudioBuffer,
+  mono16k: Float32Array,
+): boolean {
+  const duration = decoded.duration;
+  if (!Number.isFinite(duration) || duration < 3.5) {
+    return false;
+  }
+
+  // 1) Stereo channel separation check:
+  // Microphone voice notes are mono or dual-mono (L ≈ R). Produced music files
+  // have genuine stereo panning/reverb separation (side/mid energy >= 0.085)
+  // combined with continuous active audio frames.
+  if (decoded.numberOfChannels >= 2 && decoded.length > 0) {
+    const chL = decoded.getChannelData(0);
+    const chR = decoded.getChannelData(1);
+    const stride = Math.max(1, Math.floor(decoded.sampleRate / 2000));
+    let midSq = 0;
+    let sideSq = 0;
+    for (let i = 0; i < chL.length; i += stride) {
+      const l = chL[i];
+      const r = chR[i];
+      const mid = 0.5 * (l + r);
+      const side = 0.5 * (l - r);
+      midSq += mid * mid;
+      sideSq += side * side;
+    }
+    if (midSq > 1e-6) {
+      const sideToMidRms = Math.sqrt(sideSq / midSq);
+      // Verify active frame continuity so stereo room noise on short speech isn't misclassified
+      const frameLen = 800; // 50ms at 16kHz
+      const rmsFrames: number[] = [];
+      for (let pos = 0; pos + frameLen <= mono16k.length; pos += frameLen) {
+        let sumSq = 0;
+        for (let k = 0; k < frameLen; k++) {
+          const s = mono16k[pos + k];
+          sumSq += s * s;
+        }
+        rmsFrames.push(Math.sqrt(sumSq / frameLen));
+      }
+      if (rmsFrames.length >= 40) {
+        const sorted = [...rmsFrames].sort((a, b) => a - b);
+        const p80 = sorted[Math.floor(sorted.length * 0.8)] ?? 0;
+        if (p80 > 0.008) {
+          const activeCount = rmsFrames.filter((v) => v >= p80 * 0.22).length;
+          const activeRatio = activeCount / rmsFrames.length;
+          if (sideToMidRms >= 0.09 && activeRatio >= 0.72) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  // 2) Continuous mastered musical envelope + harmonic periodicity check (works on mono music too):
+  // Natural speech >= 6.5s has syllable/word/breath dips; continuous music maintains
+  // uninterrupted energy across 50ms frames AND strong pitched autocorrelation.
+  if (duration >= 6.5 && mono16k.length >= 16_000 * 6) {
+    const frameLen = 800; // 50ms @ 16kHz
+    const rmsList: number[] = [];
+    for (let pos = 0; pos + frameLen <= mono16k.length; pos += frameLen) {
+      let sumSq = 0;
+      for (let k = 0; k < frameLen; k++) {
+        const s = mono16k[pos + k];
+        sumSq += s * s;
+      }
+      rmsList.push(Math.sqrt(sumSq / frameLen));
+    }
+
+    // Trim leading/trailing silence (up to 0.75s on each end)
+    let firstActive = 0;
+    let lastActive = rmsList.length - 1;
+    const globalSorted = [...rmsList].sort((a, b) => a - b);
+    const p80 = globalSorted[Math.floor(globalSorted.length * 0.8)] ?? 0;
+    if (p80 > 0.012) {
+      while (firstActive < rmsList.length && rmsList[firstActive] < p80 * 0.15) firstActive++;
+      while (lastActive > firstActive && rmsList[lastActive] < p80 * 0.15) lastActive--;
+      const core = rmsList.slice(firstActive, lastActive + 1);
+      if (core.length >= 100) {
+        const sustainedCount = core.filter((v) => v >= p80 * 0.34).length;
+        const quietPauseCount = core.filter((v) => v < p80 * 0.14).length;
+        const sustainedRatio = sustainedCount / core.length;
+        const pauseRatio = quietPauseCount / core.length;
+
+        if (sustainedRatio >= 0.93 && pauseRatio <= 0.025) {
+          // Confirm harmonic tonality (music) vs continuous fan/static noise
+          let tonalFrames = 0;
+          let checkedFrames = 0;
+          const stepFrames = Math.max(1, Math.floor(core.length / 24));
+          for (let fi = firstActive; fi <= lastActive; fi += stepFrames) {
+            const base = fi * frameLen;
+            if (base + frameLen > mono16k.length) break;
+            let e0 = 0;
+            for (let k = 0; k < 512; k++) {
+              const s = mono16k[base + k];
+              e0 += s * s;
+            }
+            if (e0 < 1e-5) continue;
+            checkedFrames++;
+            let bestCorr = 0;
+            // Pitch lags 40..220 samples @ 16kHz (~72Hz..400Hz musical fundamentals)
+            for (let lag = 40; lag <= 220; lag += 2) {
+              let c = 0;
+              for (let k = 0; k < 512 - lag; k++) {
+                c += mono16k[base + k] * mono16k[base + k + lag];
+              }
+              const norm = c / e0;
+              if (norm > bestCorr) bestCorr = norm;
+            }
+            if (bestCorr >= 0.42) tonalFrames++;
+          }
+          if (checkedFrames >= 8 && tonalFrames / checkedFrames >= 0.55) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+async function decodeTo16kHzMono(
+  url: string,
+): Promise<{ pcm: Float32Array; isMusic: boolean }> {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error("Could not load voice note audio.");
@@ -306,7 +450,8 @@ async function decodeTo16kHzMono(url: string): Promise<Float32Array> {
     // Copy out of AudioBuffer so the underlying buffer can be transferred cleanly to the Worker
     const out = new Float32Array(rendered.length);
     out.set(rendered.getChannelData(0));
-    return out;
+    const isMusic = detectMusicFromDecodedAudio(decoded, out);
+    return { pcm: out, isMusic };
   } finally {
     void audioCtx.close().catch(() => undefined);
   }
@@ -319,11 +464,16 @@ export async function resolveVoiceNoteTranscript(
   onProgress?: (percent: number, partialText?: string) => void,
 ): Promise<string> {
   if (embeddedTranscript?.trim()) {
-    saveCachedVoiceTranscript(messageId, embeddedTranscript.trim());
-    return embeddedTranscript.trim();
+    const normalizedEmbedded = isMusicTranscriptText(embeddedTranscript)
+      ? "(Music)"
+      : embeddedTranscript.trim();
+    saveCachedVoiceTranscript(messageId, normalizedEmbedded);
+    return normalizedEmbedded;
   }
   const cached = getCachedVoiceTranscript(messageId);
-  if (cached) return cached;
+  if (cached) {
+    return isMusicTranscriptText(cached) ? "(Music)" : cached;
+  }
 
   const existingJob = inFlightTranscripts.get(messageId);
   if (existingJob) return existingJob;
@@ -333,7 +483,12 @@ export async function resolveVoiceNoteTranscript(
       emitVoiceTranscriptEvent({ messageId, status: "progress", percent: 2 });
       onProgress?.(2);
 
-      const pcm16k = await decodeTo16kHzMono(audioUrl);
+      const { pcm: pcm16k, isMusic } = await decodeTo16kHzMono(audioUrl);
+      if (isMusic) {
+        // Music detected pre-Whisper -> cancel transcription immediately and output "(Music)" only!
+        saveCachedVoiceTranscript(messageId, "(Music)");
+        return "(Music)";
+      }
 
       let text: string;
       try {
@@ -341,14 +496,31 @@ export async function resolveVoiceNoteTranscript(
       } catch {
         // Graceful fallback if Worker fails in restricted WebView
         const transcriber = await getFallbackWhisperPipeline();
-        const output = await transcriber(pcm16k, {
+        const probeLen = Math.min(pcm16k.length, 16_000 * 12);
+        const probeOut = await transcriber(pcm16k.subarray(0, probeLen), {
           chunk_length_s: 30,
           stride_length_s: 5,
         });
-        text = (output.text ?? "").trim() || "No clear speech detected in this voice note.";
+        if (isMusicTranscriptText(probeOut.text)) {
+          saveCachedVoiceTranscript(messageId, "(Music)");
+          return "(Music)";
+        }
+        if (pcm16k.length <= probeLen) {
+          text = (probeOut.text ?? "").trim() || "No clear speech detected in this voice note.";
+        } else {
+          const output = await transcriber(pcm16k, {
+            chunk_length_s: 30,
+            stride_length_s: 5,
+          });
+          text = isMusicTranscriptText(output.text)
+            ? "(Music)"
+            : (output.text ?? "").trim() || "No clear speech detected in this voice note.";
+        }
       }
 
-      const finalText = text.trim() || "No clear speech detected in this voice note.";
+      const finalText = isMusicTranscriptText(text)
+        ? "(Music)"
+        : text.trim() || "No clear speech detected in this voice note.";
       saveCachedVoiceTranscript(messageId, finalText);
       return finalText;
     } catch (err) {
