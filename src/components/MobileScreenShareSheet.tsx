@@ -3,8 +3,7 @@ import { MonitorUp, Video, X } from "./CallIcons";
 import { AnimatedModal } from "./AnimatedModal";
 import { formatAudioDuration } from "../lib/voiceNotes";
 
-const APK_DOWNLOAD_URL =
-  "https://github.com/Ahad00010/JaText/releases/download/apk-latest/JaText-release.apk";
+const APK_DOWNLOAD_URL = "https://jatext.vercel.app/downloads/JaText-release.apk";
 
 export function MobileScreenShareSheet({
   open,
