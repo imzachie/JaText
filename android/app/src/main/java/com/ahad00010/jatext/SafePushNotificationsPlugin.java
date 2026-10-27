@@ -74,6 +74,23 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
                 return;
             }
             if (body != null) {
+                if (body.contains("__JATEXT_E2EE_V1__:")) {
+                    int markerIdx = body.indexOf("__JATEXT_E2EE_V1__:");
+                    String prefixLabel = body.substring(0, markerIdx)
+                        .replace("\u200B", "")
+                        .replace("\u200C", "")
+                        .replace("\u2063", "")
+                        .trim();
+                    body = prefixLabel.isEmpty()
+                        ? "🔒 Sent you a message · Tap to open"
+                        : prefixLabel;
+                } else {
+                    body = body
+                        .replace("\u200B", "")
+                        .replace("\u200C", "")
+                        .replace("\u2063", "")
+                        .trim();
+                }
                 if (body.startsWith("__JATEXT_CALL_SIG__:")) {
                     return;
                 }
@@ -89,7 +106,7 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
                     body = body.contains("\"mode\":\"video\"")
                         ? "📹 Incoming video call"
                         : "📞 Incoming voice call";
-                } else if (body.startsWith("__JATEXT_WALLPAPER__:")) {
+                } else if (body.startsWith("__JATEXT_WALLPAPER__:") || body.startsWith("__JATEXT_WP__:")) {
                     body = "🖼️ Updated the chat wallpaper";
                 }
             }

@@ -52,13 +52,24 @@ export const sendMessageNotification = internalAction({
       return;
     }
 
+    const rawNotificationBody = body
+      .replace(/__JATEXT_E2EE_V1__:[\s\S]*$/m, "")
+      .replace(/[\u200B\u200C\u2063]/g, "")
+      .trim()
+      .slice(0, 160);
+    const cleanNotificationBody =
+      rawNotificationBody ||
+      (body.includes("__JATEXT_E2EE_V1__:")
+        ? "🔒 Sent you a message · Tap to open"
+        : "Sent you an attachment");
+
     let response;
     try {
       response = await getMessaging(app).sendEachForMulticast({
         tokens: devices.map((device) => device.token),
         notification: {
           title: title ?? `New message from ${senderName}`,
-          body: body.trim().slice(0, 160) || "Sent you an attachment",
+          body: cleanNotificationBody,
         },
         data: {
           senderId,

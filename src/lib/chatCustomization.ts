@@ -65,6 +65,7 @@ export const BUBBLE_STYLES: readonly BubbleStyleMeta[] = [
 
 const BUBBLE_STYLE_STORAGE_KEY = "jatext-outgoing-bubble-style-v1";
 const BUBBLE_STYLE_EVENT = "jatext-bubble-style-updated";
+export const BUBBLE_STYLE_REMOTE_SYNC_EVENT = "jatext-bubble-style-sync-push";
 const ZW_BOOKEND = "\u2063";
 const ZW_ZERO = "\u200B";
 const ZW_ONE = "\u200C";
@@ -87,10 +88,17 @@ export function getSavedOutgoingBubbleStyle(): BubbleStyleId {
   return "default";
 }
 
-export function saveOutgoingBubbleStyle(styleId: BubbleStyleId): void {
+export function saveOutgoingBubbleStyle(
+  styleId: BubbleStyleId,
+  options?: { fromRemote?: boolean },
+): void {
   try {
+    const prev = localStorage.getItem(BUBBLE_STYLE_STORAGE_KEY);
     localStorage.setItem(BUBBLE_STYLE_STORAGE_KEY, styleId);
     window.dispatchEvent(new CustomEvent(BUBBLE_STYLE_EVENT, { detail: styleId }));
+    if (!options?.fromRemote && prev !== styleId) {
+      window.dispatchEvent(new CustomEvent(BUBBLE_STYLE_REMOTE_SYNC_EVENT, { detail: styleId }));
+    }
   } catch {
     // Ignore storage access errors.
   }

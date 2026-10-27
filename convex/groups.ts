@@ -474,11 +474,14 @@ export const toggleReaction = mutation({
       throw new ConvexError("This message cannot be reacted to.");
     await requireMembership(ctx, message.groupId, me._id);
     const reactions = message.reactions ?? [];
-    const existing = reactions.find((reaction) => reaction.userId === me._id);
-    const updated =
-      existing?.emoji === cleanEmoji
-        ? reactions.filter((reaction) => reaction.userId !== me._id)
-        : [...reactions.filter((reaction) => reaction.userId !== me._id), { userId: me._id, emoji: cleanEmoji }];
+    const hasSameEmoji = reactions.some(
+      (reaction) => reaction.userId === me._id && reaction.emoji === cleanEmoji,
+    );
+    const updated = hasSameEmoji
+      ? reactions.filter(
+          (reaction) => !(reaction.userId === me._id && reaction.emoji === cleanEmoji),
+        )
+      : [...reactions, { userId: me._id, emoji: cleanEmoji }];
     await ctx.db.patch(messageId, { reactions: updated });
   },
 });

@@ -13,6 +13,7 @@ interface ReactionEmojiPickerProps {
   x?: number;
   y?: number;
   currentEmoji?: string;
+  selectedEmojis?: string[];
   onSelect: (emoji: string) => void;
   onClose: () => void;
 }
@@ -21,9 +22,15 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
   x,
   y,
   currentEmoji,
+  selectedEmojis,
   onSelect,
   onClose,
 }: ReactionEmojiPickerProps) {
+  const selectedSet = useMemo(() => {
+    const s = new Set<string>(selectedEmojis ?? []);
+    if (currentEmoji) s.add(currentEmoji);
+    return s;
+  }, [currentEmoji, selectedEmojis]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<EmojiCategoryId>("smileys");
   const [closing, setClosing] = useState(false);
@@ -193,7 +200,7 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
               <button
                 key={emoji}
                 type="button"
-                className={`emoji-cell ${currentEmoji === emoji ? "selected" : ""}`}
+                className={`emoji-cell ${selectedSet.has(emoji) ? "selected" : ""}`}
                 onClick={() => handlePick(emoji)}
                 aria-label={`React with ${emoji}`}
               >

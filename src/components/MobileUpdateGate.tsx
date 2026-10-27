@@ -318,10 +318,10 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <h2>Welcome to {currentLabel} of JaText!</h2>
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
-              <li>🔒 Real Zero-Knowledge End-to-End Encryption (ECDH P-256 + AES-256-GCM)</li>
-              <li>🛡️ E2EE Safety Numbers &amp; Keys inside ⋮ → View Profile + Ciphertext Inspector</li>
-              <li>🔑 Encrypted Attachments, Group Epoch Keys &amp; Multi-Device Key Sync</li>
-              <li>🖼️ Native Gboard &amp; Clipboard Image/GIF Paste + Group &ldquo;Seen by&rdquo; PFPs</li>
+              <li>😍 Multi-Reactions on Messages — Add 2, 3, or More Emojis to Any Message</li>
+              <li>💬 Custom Chat Bubbles Fixed in DMs &amp; Groups + Live Sync Across Mobile &amp; PC</li>
+              <li>🔔 Clean Push Notifications for Encrypted Messages, Photos &amp; Voice Notes</li>
+              <li>✨ Smooth Group Settings Scrolling &amp; Sleek Compact Profile E2EE Card</li>
             </ul>
             <button
               type="button"

@@ -1291,6 +1291,24 @@ export function CommunityChatView({
                           </button>
                         );
                       })}
+                      {!message.unsentAt && (
+                        <button
+                          type="button"
+                          className="reaction-chip reaction-add-chip"
+                          onClick={(event) => {
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            setReactionTarget({
+                              x: rect.left + rect.width / 2,
+                              y: rect.top,
+                              message,
+                            });
+                          }}
+                          title="Add another reaction"
+                          aria-label="Add another reaction"
+                        >
+                          +
+                        </button>
+                      )}
                     </div>
                   )}
                 </>
@@ -1610,9 +1628,13 @@ export function CommunityChatView({
         <ReactionEmojiPicker
           x={reactionTarget.x}
           y={reactionTarget.y}
-          currentEmoji={
-            reactionTarget.message.reactions?.find((r) => r.userId === store.me?.id)?.emoji
-          }
+          selectedEmojis={(
+            store.communityMessages.find((m) => m.id === reactionTarget.message.id)?.reactions ??
+            reactionTarget.message.reactions ??
+            []
+          )
+            .filter((r) => r.userId === store.me?.id)
+            .map((r) => r.emoji)}
           onSelect={(emoji) => void reactToMessage(reactionTarget.message, emoji)}
           onClose={() => setReactionTarget(null)}
         />

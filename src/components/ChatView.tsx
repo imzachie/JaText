@@ -123,6 +123,7 @@ const ChatHistory = memo(function ChatHistory({
   onOpenMessageMenuAt,
   onOpenImage,
   onReactToMessage,
+  onOpenReactionPicker,
   onSwipeReply,
 }: {
   messages: ChatMessage[];
@@ -138,6 +139,7 @@ const ChatHistory = memo(function ChatHistory({
   onOpenMessageMenuAt: (x: number, y: number, message: ChatMessage) => void;
   onOpenImage: (url: string) => void;
   onReactToMessage: (message: ChatMessage, emoji: string) => void;
+  onOpenReactionPicker: (x: number, y: number, message: ChatMessage) => void;
   onSwipeReply: (message: ChatMessage) => void;
 }) {
   const longPressTimerRef = useRef<number | null>(null);
@@ -389,6 +391,24 @@ const ChatHistory = memo(function ChatHistory({
                           </button>
                         );
                       },
+                    )}
+                    {!message.unsentAt && (
+                      <button
+                        type="button"
+                        className="reaction-chip reaction-add-chip"
+                        onClick={(event) => {
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          onOpenReactionPicker(
+                            rect.left + rect.width / 2,
+                            rect.top,
+                            message,
+                          );
+                        }}
+                        title="Add another reaction"
+                        aria-label="Add another reaction"
+                      >
+                        +
+                      </button>
                     )}
                   </div>
                 )}
@@ -1365,6 +1385,7 @@ export function ChatView({
         onOpenMessageMenuAt={openMessageMenuAt}
         onOpenImage={openImagePreview}
         onReactToMessage={reactToMessage}
+        onOpenReactionPicker={(x, y, message) => setReactionTarget({ x, y, message })}
         onSwipeReply={(msg) => {
           setEditingMessage(null);
           setReplyTo(msg);
@@ -1631,9 +1652,13 @@ export function ChatView({
         <ReactionEmojiPicker
           x={reactionTarget.x}
           y={reactionTarget.y}
-          currentEmoji={
-            reactionTarget.message.reactions?.find((r) => r.userId === me.id)?.emoji
-          }
+          selectedEmojis={(
+            displayedMessages.find((m) => m.id === reactionTarget.message.id)?.reactions ??
+            reactionTarget.message.reactions ??
+            []
+          )
+            .filter((r) => r.userId === me.id)
+            .map((r) => r.emoji)}
           onSelect={(emoji) => void reactToMessage(reactionTarget.message, emoji)}
           onClose={() => setReactionTarget(null)}
         />

@@ -135,18 +135,41 @@ function AppContent() {
       return;
     }
 
-    const current = new Map(
-      previews.map((preview) => [
-        preview.friendId,
-        `${preview.createdAt}:${preview.senderId}`,
-      ]),
-    );
     const previous = previousPreviews.current;
+    const current = new Map<string, string>();
+    const now = Date.now();
+    let pendingHydration = false;
+
+    for (const preview of previews) {
+      const sig = `${preview.createdAt}:${preview.senderId}`;
+      const isPendingE2EE =
+        Boolean(previous) &&
+        previous?.get(preview.friendId) !== sig &&
+        preview.body.includes("__JATEXT_E2EE_V1__:") &&
+        now - preview.createdAt < 1800;
+      if (isPendingE2EE) {
+        pendingHydration = true;
+        const prevSig = previous?.get(preview.friendId);
+        if (prevSig !== undefined) current.set(preview.friendId, prevSig);
+      } else {
+        current.set(preview.friendId, sig);
+      }
+    }
+
     previousPreviews.current = current;
     if (!previous) return;
 
+    let fallbackTimer: number | null = null;
+    if (pendingHydration) {
+      // Re-evaluate if E2EE key vault is locked so notification still fires with clean fallback text
+      fallbackTimer = window.setTimeout(() => {
+        previousPreviews.current = new Map(current);
+      }, 1900);
+    }
+
     for (const preview of previews) {
-      if (previous.get(preview.friendId) === `${preview.createdAt}:${preview.senderId}`) {
+      const sig = `${preview.createdAt}:${preview.senderId}`;
+      if (previous.get(preview.friendId) === sig || current.get(preview.friendId) !== sig) {
         continue;
       }
       if (
@@ -194,6 +217,10 @@ function AppContent() {
         }
       }
     }
+
+    return () => {
+      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
+    };
   }, [
     friends,
     me,

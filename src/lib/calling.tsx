@@ -314,7 +314,14 @@ function stripMarkdownForPreview(text: string): string {
 }
 
 export function formatPreviewMessageText(body: string): string {
-  const clean = stripBubbleStyleFromText(body);
+  if (body.includes("__JATEXT_E2EE_V1__:")) {
+    const labelPart = body
+      .replace(/__JATEXT_E2EE_V1__:[\s\S]*$/m, "")
+      .replace(/[\u200B\u200C\u2063]/g, "")
+      .trim();
+    return labelPart || "🔒 Sent you a message · Tap to open";
+  }
+  const clean = stripBubbleStyleFromText(body).replace(/[\u200B\u200C\u2063]/g, "");
   if (isHiddenCallSignal(clean)) return "";
   if (clean.startsWith(GROUP_CALL_INVITE_PREFIX)) {
     try {

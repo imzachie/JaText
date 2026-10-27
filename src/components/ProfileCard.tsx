@@ -193,229 +193,234 @@ export function ProfileModal({
         >
           ✕
         </button>
-        <ProfileCard user={user} status={status} />
+        <div className="profile-modal-scroll">
+          <ProfileCard user={user} status={status} />
 
-        <section className="profile-e2ee-section" aria-label="End-to-End Encryption Key">
-          <div className="profile-e2ee-header">
-            <span className="profile-e2ee-title">
-              <LockIcon size={15} />
-              <strong>End-to-End Encryption</strong>
-            </span>
+          <section className="profile-e2ee-section" aria-label="End-to-End Encryption Key">
+            <div className="profile-e2ee-header">
+              <span className="profile-e2ee-title">
+                <LockIcon size={14} />
+                <strong>E2EE Key</strong>
+              </span>
+              {!isNotMe ? (
+                <span className="e2ee-pill active">
+                  {e2ee.ready ? `Active · P-256` : "Initializing…"}
+                </span>
+              ) : peerKey ? (
+                <span className={`e2ee-pill ${isVerifiedPeer ? "verified" : "active"}`}>
+                  {isVerifiedPeer ? "✓ Verified" : "Active · P-256"}
+                </span>
+              ) : (
+                <span className="e2ee-pill pending">Pending Key</span>
+              )}
+            </div>
+
             {!isNotMe ? (
-              <span className="e2ee-pill active">
-                {e2ee.ready ? `Active · P-256` : "Initializing…"}
-              </span>
-            ) : peerKey ? (
-              <span className={`e2ee-pill ${isVerifiedPeer ? "verified" : "active"}`}>
-                {isVerifiedPeer ? "✓ Verified" : "Active · P-256"}
-              </span>
-            ) : (
-              <span className="e2ee-pill pending">Pending Key</span>
-            )}
-          </div>
-
-          {!isNotMe ? (
-            e2ee.myFingerprint ? (
-              <>
-                <div className="profile-e2ee-sub">
-                  Your E2EE Key ID: <code>{e2ee.myKeyId}</code>
-                </div>
-                <code className="e2ee-fingerprint-code">{e2ee.myFingerprint}</code>
-                {showRawKey && e2ee.myDhPubB64 && (
-                  <div className="profile-e2ee-raw">
-                    <span className="muted small">ECDH P-256 Public Key:</span>
-                    <code>{e2ee.myDhPubB64}</code>
-                    {e2ee.mySigPubB64 && (
-                      <>
-                        <span className="muted small">ECDSA P-256 Signing Key:</span>
-                        <code>{e2ee.mySigPubB64}</code>
-                      </>
+              e2ee.myFingerprint ? (
+                <>
+                  <div className="profile-e2ee-compact-key">
+                    <span className="profile-e2ee-sub">
+                      ID <code>{e2ee.myKeyId}</code>
+                    </span>
+                    <code className="e2ee-fingerprint-code compact">{e2ee.myFingerprint}</code>
+                  </div>
+                  {showRawKey && e2ee.myDhPubB64 && (
+                    <div className="profile-e2ee-raw">
+                      <span className="muted small">ECDH P-256 Public Key:</span>
+                      <code>{e2ee.myDhPubB64}</code>
+                      {e2ee.mySigPubB64 && (
+                        <>
+                          <span className="muted small">ECDSA P-256 Signing Key:</span>
+                          <code>{e2ee.mySigPubB64}</code>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="profile-e2ee-btn-row">
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(
+                          `JaText E2EE Key (@${user.username} · ${e2ee.myKeyId})\nFingerprint: ${e2ee.myFingerprint}\nECDH-P256: ${e2ee.myDhPubB64 ?? ""}\nECDSA-P256: ${e2ee.mySigPubB64 ?? ""}`,
+                        );
+                        setCopiedE2ee(true);
+                        window.setTimeout(() => setCopiedE2ee(false), 1800);
+                      }}
+                    >
+                      {copiedE2ee ? "✓ Copied" : "Copy key"}
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      onClick={() => setShowRawKey((v) => !v)}
+                    >
+                      {showRawKey ? "Hide details" : "Details"}
+                    </button>
+                    {onOpenE2EEVault && (
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={onOpenE2EEVault}
+                      >
+                        Backup / Sync
+                      </button>
                     )}
                   </div>
+                </>
+              ) : (
+                <p className="muted small">Generating your on-device P-256 identity key…</p>
+              )
+            ) : peerKey ? (
+              <>
+                {peerKey.keyChangedAt && !isVerifiedPeer && (
+                  <div className="e2ee-key-changed-banner">
+                    ⚠️ @{user.username}&apos;s key changed recently — tap Safety # to verify.
+                  </div>
                 )}
+                <div className="profile-e2ee-compact-key">
+                  <span className="profile-e2ee-sub">
+                    ID <code>{peerKey.bundle.keyId}</code> · ECDSA P-256
+                  </span>
+                  <code className="e2ee-fingerprint-code compact">{peerKey.fingerprint}</code>
+                </div>
+
+                {showRawKey && (
+                  <div className="profile-e2ee-details-drawer">
+                    {safetyBlocks.length > 0 && (
+                      <div className="profile-safety-wrap">
+                        <span className="muted small">60-Digit Safety Number (matches on both screens)</span>
+                        <div className="profile-safety-grid">
+                          {safetyBlocks.map((block, idx) => (
+                            <span key={idx}>{block}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="profile-e2ee-raw">
+                      <span className="muted small">ECDH P-256 Public Key:</span>
+                      <code>{peerKey.bundle.dhPubB64}</code>
+                      <span className="muted small">ECDSA P-256 Signing Key:</span>
+                      <code>{peerKey.bundle.sigPubB64}</code>
+                    </div>
+                  </div>
+                )}
+
                 <div className="profile-e2ee-btn-row">
                   <button
                     type="button"
                     className="mini-btn"
                     onClick={() => {
                       void navigator.clipboard.writeText(
-                        `JaText E2EE Key (@${user.username} · ${e2ee.myKeyId})\nFingerprint: ${e2ee.myFingerprint}\nECDH-P256: ${e2ee.myDhPubB64 ?? ""}\nECDSA-P256: ${e2ee.mySigPubB64 ?? ""}`,
+                        `JaText E2EE Verification (@${user.username})\nKey ID: ${peerKey.bundle.keyId}\nFingerprint: ${peerKey.fingerprint}\nSafety Number: ${peerKey.safetyNumber}\nECDH-P256: ${peerKey.bundle.dhPubB64}`,
                       );
                       setCopiedE2ee(true);
                       window.setTimeout(() => setCopiedE2ee(false), 1800);
                     }}
                   >
-                    {copiedE2ee ? "✓ Copied" : "Copy E2EE key"}
+                    {copiedE2ee ? "✓ Copied" : "Copy key"}
                   </button>
                   <button
                     type="button"
                     className="mini-btn"
                     onClick={() => setShowRawKey((v) => !v)}
                   >
-                    {showRawKey ? "Hide raw key" : "View raw key"}
+                    {showRawKey ? "Hide safety #" : "Safety # & key"}
                   </button>
-                  {onOpenE2EEVault && (
-                    <button
-                      type="button"
-                      className="mini-btn"
-                      onClick={onOpenE2EEVault}
-                    >
-                      Backup / Sync
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className={`mini-btn ${isVerifiedPeer ? "verified-btn" : ""}`}
+                    onClick={() => void togglePeerVerified(user.id)}
+                  >
+                    {isVerifiedPeer ? "✓ Verified" : "Verify"}
+                  </button>
                 </div>
               </>
             ) : (
-              <p className="muted small">Generating your on-device P-256 identity key…</p>
-            )
-          ) : peerKey ? (
-            <>
-              {peerKey.keyChangedAt && !isVerifiedPeer && (
-                <div className="e2ee-key-changed-banner">
-                  ⚠️ @{user.username}&apos;s E2EE key changed recently. Verify their 60-digit
-                  security number below.
-                </div>
-              )}
-              <div className="profile-e2ee-sub">
-                @{user.username}&apos;s Key ID: <code>{peerKey.bundle.keyId}</code> · Signed ECDSA P-256
-              </div>
-              <code className="e2ee-fingerprint-code">{peerKey.fingerprint}</code>
+              <p className="muted small profile-e2ee-wait">
+                Waiting for @{user.username} to open JaText once to exchange signed P-256 keys.
+              </p>
+            )}
+          </section>
 
-              {safetyBlocks.length > 0 && (
-                <div className="profile-safety-wrap">
-                  <span className="muted small">60-Digit Safety Number (matches on both screens)</span>
-                  <div className="profile-safety-grid">
-                    {safetyBlocks.map((block, idx) => (
-                      <span key={idx}>{block}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {showRawKey && (
-                <div className="profile-e2ee-raw">
-                  <span className="muted small">ECDH P-256 Public Key:</span>
-                  <code>{peerKey.bundle.dhPubB64}</code>
-                  <span className="muted small">ECDSA P-256 Signing Key:</span>
-                  <code>{peerKey.bundle.sigPubB64}</code>
-                </div>
-              )}
-
-              <div className="profile-e2ee-btn-row">
-                <button
-                  type="button"
-                  className="mini-btn"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(
-                      `JaText E2EE Verification (@${user.username})\nKey ID: ${peerKey.bundle.keyId}\nFingerprint: ${peerKey.fingerprint}\nSafety Number: ${peerKey.safetyNumber}\nECDH-P256: ${peerKey.bundle.dhPubB64}`,
-                    );
-                    setCopiedE2ee(true);
-                    window.setTimeout(() => setCopiedE2ee(false), 1800);
-                  }}
-                >
-                  {copiedE2ee ? "✓ Copied" : "Copy E2EE key"}
-                </button>
-                <button
-                  type="button"
-                  className="mini-btn"
-                  onClick={() => setShowRawKey((v) => !v)}
-                >
-                  {showRawKey ? "Hide raw key" : "View raw key"}
-                </button>
-                <button
-                  type="button"
-                  className={`mini-btn ${isVerifiedPeer ? "verified-btn" : ""}`}
-                  onClick={() => void togglePeerVerified(user.id)}
-                >
-                  {isVerifiedPeer ? "✓ Verified" : "Mark verified"}
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="muted small profile-e2ee-wait">
-              Waiting for @{user.username} to open the latest JaText once to exchange signed P-256
-              keys. New messages will encrypt end-to-end automatically as soon as their key arrives.
-            </p>
-          )}
-        </section>
-
-        {isNotMe && (
-          <div className="profile-call-actions">
-            {isFriend && (
-              <>
-                <button
-                  type="button"
-                  className="ghost-btn profile-action-row"
-                  onClick={() => {
-                    setActiveChatId(user.id);
-                    animateClose();
-                  }}
-                >
-                  <span>💬</span>
-                  <span>Message</span>
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn profile-action-row"
-                  onClick={() => {
-                    animateClose();
-                    void startCall(user, "voice");
-                  }}
-                >
-                  <Phone size={16} />
-                  <span>Voice call</span>
-                </button>
-                <button
-                  type="button"
-                  className="primary-btn profile-action-row"
-                  onClick={() => {
-                    animateClose();
-                    void startCall(user, "video");
-                  }}
-                >
-                  <Video size={16} />
-                  <span>Video call</span>
-                </button>
-                {isMobileWallpaper && !isBlocked && (
+          {isNotMe && (
+            <div className="profile-call-actions">
+              {isFriend && (
+                <>
                   <button
                     type="button"
                     className="ghost-btn profile-action-row"
-                    onClick={() => setWallpaperOpen(true)}
-                  >
-                    <span>🖼️</span>
-                    <span>Chat wallpaper</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="ghost-btn danger profile-action-row"
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `Unfriend ${user.displayName} (@${user.username})? You will need to send a friend request again to chat.`,
-                      )
-                    ) {
-                      void store.removeFriend(user.id);
+                    onClick={() => {
+                      setActiveChatId(user.id);
                       animateClose();
-                    }
-                  }}
-                >
-                  <span>💔</span>
-                  <span>Unfriend</span>
-                </button>
-              </>
-            )}
-            <button
-              type="button"
-              className="ghost-btn danger profile-action-row"
-              disabled={blockBusy}
-              onClick={() => void handleToggleBlock()}
-            >
-              <span>{isBlocked ? "✓" : "🚫"}</span>
-              <span>{isBlocked ? "Unblock" : "Block"}</span>
-            </button>
-          </div>
-        )}
+                    }}
+                  >
+                    <span>💬</span>
+                    <span>Message</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-btn profile-action-row"
+                    onClick={() => {
+                      animateClose();
+                      void startCall(user, "voice");
+                    }}
+                  >
+                    <Phone size={16} />
+                    <span>Voice call</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-btn profile-action-row"
+                    onClick={() => {
+                      animateClose();
+                      void startCall(user, "video");
+                    }}
+                  >
+                    <Video size={16} />
+                    <span>Video call</span>
+                  </button>
+                  {isMobileWallpaper && !isBlocked && (
+                    <button
+                      type="button"
+                      className="ghost-btn profile-action-row"
+                      onClick={() => setWallpaperOpen(true)}
+                    >
+                      <span>🖼️</span>
+                      <span>Chat wallpaper</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="ghost-btn danger profile-action-row"
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Unfriend ${user.displayName} (@${user.username})? You will need to send a friend request again to chat.`,
+                        )
+                      ) {
+                        void store.removeFriend(user.id);
+                        animateClose();
+                      }
+                    }}
+                  >
+                    <span>💔</span>
+                    <span>Unfriend</span>
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="ghost-btn danger profile-action-row"
+                disabled={blockBusy}
+                onClick={() => void handleToggleBlock()}
+              >
+                <span>{isBlocked ? "✓" : "🚫"}</span>
+                <span>{isBlocked ? "Unblock" : "Block"}</span>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

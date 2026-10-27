@@ -11,13 +11,14 @@
  * - Safety Numbers: 5,200-round iterative SHA-512 symmetric 60-digit fingerprint
  */
 
-export const E2EE_WIRE_HEADER = "🔒 Encrypted\n__JATEXT_E2EE_V1__:";
+export const E2EE_WIRE_HEADER = "🔒 Sent you a message · Tap to open\n__JATEXT_E2EE_V1__:";
 export const E2EE_WIRE_MARKER = "__JATEXT_E2EE_V1__:";
 export const E2EE_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:";
 export const E2EE_VAULT_STICKER_NAME = "__jatext_e2ee_vault_v1__";
+export const E2EE_BUBBLE_PREF_PREFIX = "__jatext_pref_bubble_v1__:";
 export const E2EE_DEVSYNC_REQ_PREFIX = "__jatext_e2ee_devreq_v1__:";
 export const E2EE_DEVSYNC_RES_PREFIX = "__jatext_e2ee_devres_v1__:";
-export const E2EE_MAX_INLINE_WIRE_CHARS = 3400;
+export const E2EE_MAX_INLINE_WIRE_CHARS = 3200;
 
 const PBKDF2_ITERATIONS = 600_000;
 const SAFETY_NUMBER_ROUNDS = 5_200;
@@ -451,6 +452,8 @@ export interface E2EEPlainPayload {
   v: 1;
   /** Original message text / control body */
   b: string;
+  /** Optional custom outgoing bubble style ID */
+  bs?: string;
   /** Encrypted attachment descriptor when attachmentId holds AES-GCM ciphertext */
   att?: EncryptedBlobDescriptor;
   /** When text itself > 3,000 chars and no separate file was attached, attachmentId holds encrypted UTF-8 text */
@@ -537,13 +540,49 @@ export function parseEncryptedWireBody(body?: string | null): AnyEncryptedEnvelo
   }
 }
 
+export function derivePushNotificationLabel(payload?: E2EEPlainPayload): string {
+  if (!payload) return "🔒 Sent you a message · Tap to open";
+  if (payload.b.startsWith("__JATEXT_CALL_GRP__:")) {
+    return payload.b.includes('"mode":"video"')
+      ? "📹 Incoming group video call"
+      : "📞 Incoming group voice call";
+  }
+  if (payload.b.startsWith("__JATEXT_CALL__:")) {
+    return payload.b.includes('"mode":"video"')
+      ? "📹 Incoming video call"
+      : "📞 Incoming voice call";
+  }
+  if (payload.b.startsWith("__JATEXT_WP__:")) {
+    return "🖼️ Updated the chat wallpaper";
+  }
+  if (payload.stk) {
+    return "✨ Sent a sticker";
+  }
+  if (payload.att) {
+    const cleanMime = payload.att.t.replace(/;jbs=[a-z0-9-]+/gi, "").toLowerCase();
+    if (cleanMime.startsWith("audio/")) return "🎤 Sent a voice note";
+    if (cleanMime.startsWith("image/")) return "📷 Sent a photo";
+    if (cleanMime.startsWith("video/")) return "🎬 Sent a video";
+    return "📎 Sent an attachment";
+  }
+  return "🔒 Sent you a message · Tap to open";
+}
+
+export function buildPushSafeE2EEHeader(label = "🔒 Sent you a message · Tap to open"): string {
+  // Pad with invisible zero-width spaces (\u200B is NOT stripped by String.prototype.trim())
+  // so Convex's FCM `body.trim().slice(0, 160)` ONLY ever sends the clean human-readable label!
+  const padLen = Math.max(8, 168 - label.length);
+  return `${label}${"\u200B".repeat(padLen)}\n${E2EE_WIRE_MARKER}`;
+}
+
 export function serializeEncryptedWireBody(
   envelope: AnyEncryptedEnvelope,
   silentSignal = false,
+  pushLabel?: string,
 ): string {
   const prefix = silentSignal
     ? `${E2EE_SIGNAL_PREFIX}${E2EE_WIRE_MARKER}`
-    : E2EE_WIRE_HEADER;
+    : buildPushSafeE2EEHeader(pushLabel);
   return `${prefix}${JSON.stringify(envelope)}`;
 }
 
@@ -698,7 +737,8 @@ export async function encryptDmPayload(params: {
     ct: inlineCtB64,
     sig: sigB64,
   };
-  const inlineWire = serializeEncryptedWireBody(candidateEnvelope, silentSignal);
+  const pushLabel = derivePushNotificationLabel(payload);
+  const inlineWire = serializeEncryptedWireBody(candidateEnvelope, silentSignal, pushLabel);
 
   if (inlineWire.length <= E2EE_MAX_INLINE_WIRE_CHARS) {
     return inlineWire;
@@ -722,6 +762,7 @@ export async function encryptDmPayload(params: {
       sig: sigB64,
     },
     silentSignal,
+    pushLabel,
   );
 }
 
@@ -1162,7 +1203,8 @@ export async function encryptGroupPayload(params: {
     ct: inlineCtB64,
     sig: sigB64,
   };
-  const inlineWire = serializeEncryptedWireBody(candidate, silentSignal);
+  const pushLabel = derivePushNotificationLabel(payload);
+  const inlineWire = serializeEncryptedWireBody(candidate, silentSignal, pushLabel);
   if (inlineWire.length <= E2EE_MAX_INLINE_WIRE_CHARS) {
     return inlineWire;
   }
@@ -1183,6 +1225,7 @@ export async function encryptGroupPayload(params: {
       sig: sigB64,
     },
     silentSignal,
+    pushLabel,
   );
 }
 

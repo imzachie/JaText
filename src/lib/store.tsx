@@ -1134,14 +1134,14 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
           throw new Error("This message cannot be reacted to.");
         }
         const reactions = message.reactions ?? [];
-        const existing = reactions.find((reaction) => reaction.userId === me.id);
-        message.reactions =
-          existing?.emoji === emoji
-            ? reactions.filter((reaction) => reaction.userId !== me.id)
-            : [
-                ...reactions.filter((reaction) => reaction.userId !== me.id),
-                { userId: me.id, emoji },
-              ];
+        const hasSameEmoji = reactions.some(
+          (reaction) => reaction.userId === me.id && reaction.emoji === clean,
+        );
+        message.reactions = hasSameEmoji
+          ? reactions.filter(
+              (reaction) => !(reaction.userId === me.id && reaction.emoji === clean),
+            )
+          : [...reactions, { userId: me.id, emoji: clean }];
       });
     },
     [me, transact],
