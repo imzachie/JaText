@@ -11,6 +11,7 @@ import {
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import {
+  CALL_DEVICE_SESSION_ID,
   GROUP_CALL_INVITE_PREFIX,
   GROUP_CALL_SIGNAL_PREFIX,
   acquireSwitchedCameraTrack,
@@ -40,13 +41,10 @@ import type { GroupMessage, GroupSummary, JaUser } from "./types";
 const GROUP_RING_TIMEOUT_MS = 45_000;
 
 const ICE_SERVERS: RTCIceServer[] = [
-  {
-    urls: [
-      "stun:stun.l.google.com:19302",
-      "stun:stun1.l.google.com:19302",
-      "stun:stun.cloudflare.com:3478",
-    ],
-  },
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
 ];
 
 export interface GroupCallInvitePayload {
@@ -71,7 +69,8 @@ interface GroupSignalEnvelope {
   fromAvatarUrl?: string;
   fromAvatarColor: string;
   toId: string; // "*" for broadcast join/leave/ended, or specific peer userId
-  type: "join" | "offer" | "answer" | "leave" | "ended";
+  type: "join" | "offer" | "answer" | "leave" | "ended" | "claim-ring" | "decline-ring";
+  deviceSessionId?: string;
   joinSeq: number;
   durationSec?: number;
   sdp?: RTCSessionDescriptionInit;
@@ -272,7 +271,7 @@ export function resolveGroupCallLiveState(
   return { isEnded: false };
 }
 
-function waitForIceGathering(pc: RTCPeerConnection, maxWaitMs = 850): Promise<void> {
+function waitForIceGathering(pc: RTCPeerConnection, maxWaitMs = 2200): Promise<void> {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
@@ -294,8 +293,12 @@ function waitForIceGathering(pc: RTCPeerConnection, maxWaitMs = 850): Promise<vo
         finish();
         return;
       }
-      if (ev.candidate.candidate.includes(" typ srflx ") && srflxTimer === null) {
-        srflxTimer = window.setTimeout(finish, 180);
+      if (
+        (ev.candidate.candidate.includes(" typ srflx ") ||
+          ev.candidate.candidate.includes(" typ relay ")) &&
+        srflxTimer === null
+      ) {
+        srflxTimer = window.setTimeout(finish, 240);
       }
     };
     const hardTimer = window.setTimeout(finish, maxWaitMs);
@@ -595,24 +598,29 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
 
   const sendGroupSignal = useCallback(
     async (groupId: string, env: GroupSignalEnvelope) => {
+      const stamped: GroupSignalEnvelope = {
+        ...env,
+        deviceSessionId: env.deviceSessionId ?? CALL_DEVICE_SESSION_ID,
+      };
       const header = `${GROUP_CALL_SIGNAL_PREFIX}${JSON.stringify({
-        callId: env.callId,
-        groupId: env.groupId,
-        fromId: env.fromId,
-        fromName: env.fromName,
-        fromUsername: env.fromUsername,
-        fromAvatarUrl: env.fromAvatarUrl,
-        fromAvatarColor: env.fromAvatarColor,
-        toId: env.toId,
-        type: env.type,
-        joinSeq: env.joinSeq,
-        durationSec: env.durationSec,
-        cameraOff: env.cameraOff,
-        screenSharing: env.screenSharing,
-        ts: env.ts,
+        callId: stamped.callId,
+        groupId: stamped.groupId,
+        fromId: stamped.fromId,
+        fromName: stamped.fromName,
+        fromUsername: stamped.fromUsername,
+        fromAvatarUrl: stamped.fromAvatarUrl,
+        fromAvatarColor: stamped.fromAvatarColor,
+        toId: stamped.toId,
+        type: stamped.type,
+        deviceSessionId: stamped.deviceSessionId,
+        joinSeq: stamped.joinSeq,
+        durationSec: stamped.durationSec,
+        cameraOff: stamped.cameraOff,
+        screenSharing: stamped.screenSharing,
+        ts: stamped.ts,
       })}`;
-      if (env.sdp) {
-        const blobFile = new File([JSON.stringify(env)], `gcall-${env.type}.json`, {
+      if (stamped.sdp) {
+        const blobFile = new File([JSON.stringify(stamped)], `gcall-${stamped.type}.json`, {
           type: "application/x-jatext-gcall+json",
         });
         await store.sendGroupMessage(groupId, header, blobFile);
@@ -735,10 +743,14 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     (peerUser: JaUser, joinSeq: number, isOfferer: boolean): PeerMeshEntry => {
       removePeerEntry(peerUser.id);
 
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      const pc = new RTCPeerConnection({
+        iceServers: ICE_SERVERS,
+        iceCandidatePoolSize: 4,
+      });
       const remoteStream = new MediaStream();
       const audioEl = new Audio();
       audioEl.autoplay = true;
+      audioEl.setAttribute("playsinline", "true");
       audioEl.muted = isDeafenedRef.current;
 
       const entry: PeerMeshEntry = {
@@ -974,7 +986,81 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     }
   }, [activeGroupId, groupMessages, groupSession?.callId, me, store]);
 
-  // 20-second heartbeat while actively connected in a group call (edits our own single join signal row)
+  // While ringing on an incoming group call, watch for:
+  // 1) Multi-device dominance: our OWN account interacting (answering/joining or declining) on another device!
+  // 2) Call ending before we answer!
+  useEffect(() => {
+    if (!groupSession || groupSession.phase !== "incoming" || !me) return;
+    let cancelled = false;
+
+    const checkIncomingSignals = async (rows: GroupMessage[]) => {
+      if (cancelled) return;
+      for (const msg of rows) {
+        const invite = parseGroupCallInvite(msg.body);
+        if (invite && invite.callId === groupSession.callId && invite.state === "ended") {
+          handledInviteCallIdsRef.current.add(groupSession.callId);
+          cleanupAllGroupCallResources();
+          setGroupSession(null);
+          return;
+        }
+        if (!msg.body.startsWith(GROUP_CALL_SIGNAL_PREFIX)) continue;
+        const env = await readGroupSignalEnvelope(msg);
+        if (!env || env.callId !== groupSession.callId) continue;
+
+        if (env.type === "ended") {
+          handledInviteCallIdsRef.current.add(groupSession.callId);
+          cleanupAllGroupCallResources();
+          setGroupSession(null);
+          return;
+        }
+
+        // Another device logged into our same account already interacted (joined or declined)!
+        if (
+          msg.senderId === me.id &&
+          env.deviceSessionId &&
+          env.deviceSessionId !== CALL_DEVICE_SESSION_ID &&
+          (env.type === "join" || env.type === "claim-ring" || env.type === "decline-ring")
+        ) {
+          handledInviteCallIdsRef.current.add(groupSession.callId);
+          updateCallHistoryStatus(groupSession.callId, {
+            state: env.type === "decline-ring" ? "declined" : "connected",
+          });
+          cleanupAllGroupCallResources();
+          setGroupSession(null);
+          return;
+        }
+      }
+    };
+
+    if (activeGroupId === groupSession.group.id && groupMessages.length > 0) {
+      void checkIncomingSignals(groupMessages);
+    }
+    const poll = window.setInterval(() => {
+      void store
+        .fetchGroupMessages(groupSession.group.id)
+        .then((rows) => checkIncomingSignals(rows))
+        .catch(() => undefined);
+    }, 1000);
+    void store
+      .fetchGroupMessages(groupSession.group.id)
+      .then((rows) => checkIncomingSignals(rows))
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(poll);
+    };
+  }, [
+    activeGroupId,
+    cleanupAllGroupCallResources,
+    groupMessages,
+    groupSession,
+    me,
+    readGroupSignalEnvelope,
+    store,
+  ]);
+
+  // 15-second heartbeat while actively connected in a group call (edits our own single join signal row)
   useEffect(() => {
     if (!groupSession || groupSession.phase === "incoming" || !me) return;
     const heartbeat = window.setInterval(() => {
@@ -991,6 +1077,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         fromAvatarColor: me.avatarColor,
         toId: "*",
         type: "join",
+        deviceSessionId: CALL_DEVICE_SESSION_ID,
         joinSeq: myJoinSeqRef.current,
         cameraOff: stateRef.current.isCameraOff,
         screenSharing: stateRef.current.isScreenSharing,
@@ -999,7 +1086,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       if (sigId) {
         void store.editGroupMessage(sigId, header).catch(() => undefined);
       }
-    }, 20_000);
+    }, 15_000);
     return () => window.clearInterval(heartbeat);
   }, [groupSession, me, store]);
 
@@ -1007,22 +1094,121 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!groupSession || groupSession.phase === "incoming" || !me) return;
     let cancelled = false;
+    const fallbackTimers = new Map<string, number>();
+
+    const sendOfferToPeer = async (
+      peerUser: JaUser,
+      peerJoinSeq: number,
+      peerCameraOff: boolean,
+      peerScreenSharing: boolean,
+    ) => {
+      if (cancelled || !sessionRef.current || sessionRef.current.callId !== groupSession.callId) {
+        return;
+      }
+      try {
+        const entry = createMeshPeer(peerUser, peerJoinSeq, true);
+        entry.cameraOff = peerCameraOff;
+        entry.screenSharing = peerScreenSharing;
+
+        const activeAudio =
+          screenAudioMixerRef.current?.outputTrack ??
+          studioGraphRef.current?.processedTrack ??
+          rawMicTrackRef.current;
+        const activeVideo = screenTrackRef.current ?? cameraTrackRef.current;
+        const outbound = new MediaStream();
+        if (activeAudio) outbound.addTrack(activeAudio);
+        if (activeVideo) outbound.addTrack(activeVideo);
+
+        const audioTx = entry.pc.addTransceiver(activeAudio ?? "audio", {
+          direction: "sendrecv",
+          streams: [outbound],
+        });
+        const videoTx = entry.pc.addTransceiver(activeVideo ?? "video", {
+          direction: "sendrecv",
+          streams: [outbound],
+        });
+        entry.audioSender = audioTx.sender;
+        entry.videoSender = videoTx.sender;
+
+        const offer = await entry.pc.createOffer();
+        await entry.pc.setLocalDescription(offer);
+        await waitForIceGathering(entry.pc, 2200);
+
+        // Make sure another incoming offer didn't replace this peer entry while gathering ICE
+        if (peersRef.current.get(peerUser.id)?.pc !== entry.pc) {
+          return;
+        }
+
+        await sendGroupSignal(groupSession.group.id, {
+          callId: groupSession.callId,
+          groupId: groupSession.group.id,
+          fromId: me.id,
+          fromName: me.displayName,
+          fromUsername: me.username,
+          fromAvatarUrl: me.avatarUrl,
+          fromAvatarColor: me.avatarColor,
+          toId: peerUser.id,
+          type: "offer",
+          joinSeq: myJoinSeqRef.current,
+          sdp: entry.pc.localDescription?.toJSON() ?? offer,
+          cameraOff: stateRef.current.isCameraOff,
+          screenSharing: stateRef.current.isScreenSharing,
+          ts: Date.now(),
+        });
+      } catch {
+        // Ignore transient peer setup error.
+      }
+    };
 
     const inspectGroupMessages = async (rows: GroupMessage[]) => {
       if (cancelled) return;
+
+      // Build latest join/leave status per member so stale pre-leave "join" rows never trigger ghost offers!
+      const latestMemberState = new Map<string, { state: "joined" | "left"; ts: number; joinSeq: number }>();
+      for (const m of rows) {
+        if (!m.body.startsWith(GROUP_CALL_SIGNAL_PREFIX)) continue;
+        try {
+          const parsed = JSON.parse(m.body.slice(GROUP_CALL_SIGNAL_PREFIX.length)) as Partial<GroupSignalEnvelope>;
+          if (parsed.callId !== groupSession.callId || !parsed.fromId || !parsed.type) continue;
+          const sigTs = Math.max(parsed.ts ?? 0, m.editedAt ?? 0, m.createdAt ?? 0);
+          if (parsed.type === "join") {
+            const prev = latestMemberState.get(parsed.fromId);
+            if (!prev || sigTs >= prev.ts) {
+              latestMemberState.set(parsed.fromId, {
+                state: "joined",
+                ts: sigTs,
+                joinSeq: parsed.joinSeq ?? sigTs,
+              });
+            }
+          } else if (parsed.type === "leave" || parsed.type === "ended") {
+            const prev = latestMemberState.get(parsed.fromId);
+            if (!prev || sigTs >= prev.ts) {
+              latestMemberState.set(parsed.fromId, {
+                state: "left",
+                ts: sigTs,
+                joinSeq: parsed.joinSeq ?? sigTs,
+              });
+            }
+          }
+        } catch {
+          // Ignore malformed signal header.
+        }
+      }
+
       for (const msg of rows) {
         if (msg.senderId === me.id) continue;
         if (!msg.body.startsWith(GROUP_CALL_SIGNAL_PREFIX)) continue;
-        if (processedSignalIdsRef.current.has(msg.id)) continue;
+
+        // Allow edited heartbeat "join" messages to be re-inspected when editedAt changes so dropped peers auto-heal!
+        const sigKey = msg.editedAt ? `${msg.id}:${msg.editedAt}` : msg.id;
+        if (processedSignalIdsRef.current.has(sigKey)) continue;
 
         const env = await readGroupSignalEnvelope(msg);
         if (!env || env.callId !== groupSession.callId) continue;
         if (env.toId !== "*" && env.toId !== me.id) continue;
+        if (env.type === "claim-ring" || env.type === "decline-ring") continue;
 
-        processedSignalIdsRef.current.add(msg.id);
-        if (env.type === "offer" || env.type === "answer") {
-          void store.deleteGroupMessageForMe(msg.id).catch(() => undefined);
-        }
+        processedSignalIdsRef.current.add(sigKey);
 
         const peerUser: JaUser = {
           id: env.fromId,
@@ -1035,73 +1221,107 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
           onboardingComplete: true,
         };
 
-        if (env.type === "leave" || env.type === "ended") {
-          removePeerEntry(peerUser.id);
+        if (env.type === "leave") {
+          const curStatus = latestMemberState.get(peerUser.id);
+          if (!curStatus || curStatus.state === "left") {
+            const ft = fallbackTimers.get(peerUser.id);
+            if (ft !== undefined) {
+              window.clearTimeout(ft);
+              fallbackTimers.delete(peerUser.id);
+            }
+            removePeerEntry(peerUser.id);
+          }
+          continue;
+        }
+
+        if (env.type === "ended") {
+          // Only tear down a peer if nobody else is still joined; never drop our own live call!
+          const curStatus = latestMemberState.get(peerUser.id);
+          if (!curStatus || curStatus.state === "left") {
+            removePeerEntry(peerUser.id);
+          }
           continue;
         }
 
         if (env.type === "join") {
+          const curStatus = latestMemberState.get(peerUser.id);
+          const effectiveTs = Math.max(env.ts || 0, msg.editedAt || 0, msg.createdAt || 0);
+          // Skip if this member subsequently left or if their heartbeat is stale (>52s)
+          if (curStatus && (curStatus.state === "left" || env.joinSeq < curStatus.joinSeq)) {
+            continue;
+          }
+          if (Date.now() - effectiveTs > GROUP_CALL_HEARTBEAT_STALE_MS) {
+            continue;
+          }
+
           const existing = peersRef.current.get(peerUser.id);
-          const shouldOffer =
-            !existing ||
-            (env.joinSeq > existing.joinSeq &&
-              (existing.pc.connectionState === "connected" ||
-                me.id < peerUser.id ||
-                myJoinSeqRef.current < env.joinSeq));
-          if (!shouldOffer) continue;
+          const existingHealthy =
+            existing &&
+            existing.joinSeq === env.joinSeq &&
+            existing.pc.connectionState !== "failed" &&
+            existing.pc.connectionState !== "closed";
+          if (existingHealthy) {
+            existing.cameraOff = env.cameraOff !== false;
+            existing.screenSharing = Boolean(env.screenSharing);
+            syncParticipantsState();
+            continue;
+          }
 
-          try {
-            const entry = createMeshPeer(peerUser, env.joinSeq, true);
-            entry.cameraOff = env.cameraOff !== false;
-            entry.screenSharing = Boolean(env.screenSharing);
+          // Strict total order: ONLY the newer joiner initiates the offer immediately, preventing WebRTC glare!
+          const mySeq = myJoinSeqRef.current;
+          const amDesignatedOfferer =
+            mySeq > env.joinSeq || (mySeq === env.joinSeq && me.id > peerUser.id);
 
-            const activeAudio =
-              screenAudioMixerRef.current?.outputTrack ??
-              studioGraphRef.current?.processedTrack ??
-              rawMicTrackRef.current;
-            const activeVideo = screenTrackRef.current ?? cameraTrackRef.current;
-            const outbound = new MediaStream();
-            if (activeAudio) outbound.addTrack(activeAudio);
-            if (activeVideo) outbound.addTrack(activeVideo);
-
-            const audioTx = entry.pc.addTransceiver(activeAudio ?? "audio", {
-              direction: "sendrecv",
-              streams: [outbound],
-            });
-            const videoTx = entry.pc.addTransceiver(activeVideo ?? "video", {
-              direction: "sendrecv",
-              streams: [outbound],
-            });
-            entry.audioSender = audioTx.sender;
-            entry.videoSender = videoTx.sender;
-
-            const offer = await entry.pc.createOffer();
-            await entry.pc.setLocalDescription(offer);
-            await waitForIceGathering(entry.pc, 850);
-
-            await sendGroupSignal(groupSession.group.id, {
-              callId: groupSession.callId,
-              groupId: groupSession.group.id,
-              fromId: me.id,
-              fromName: me.displayName,
-              fromUsername: me.username,
-              fromAvatarUrl: me.avatarUrl,
-              fromAvatarColor: me.avatarColor,
-              toId: peerUser.id,
-              type: "offer",
-              joinSeq: myJoinSeqRef.current,
-              sdp: entry.pc.localDescription?.toJSON() ?? offer,
-              cameraOff: stateRef.current.isCameraOff,
-              screenSharing: stateRef.current.isScreenSharing,
-              ts: Date.now(),
-            });
-          } catch {
-            // Ignore transient peer setup error.
+          if (amDesignatedOfferer) {
+            const ft = fallbackTimers.get(peerUser.id);
+            if (ft !== undefined) {
+              window.clearTimeout(ft);
+              fallbackTimers.delete(peerUser.id);
+            }
+            await sendOfferToPeer(
+              peerUser,
+              env.joinSeq,
+              env.cameraOff !== false,
+              Boolean(env.screenSharing),
+            );
+          } else if (!fallbackTimers.has(peerUser.id)) {
+            // Safety fallback: if the newer joiner hasn't sent an offer within 4.2s, initiate from our side!
+            const timerId = window.setTimeout(() => {
+              fallbackTimers.delete(peerUser.id);
+              const curPeer = peersRef.current.get(peerUser.id);
+              if (
+                !curPeer ||
+                curPeer.pc.connectionState === "failed" ||
+                curPeer.pc.connectionState === "closed"
+              ) {
+                void sendOfferToPeer(
+                  peerUser,
+                  env.joinSeq,
+                  env.cameraOff !== false,
+                  Boolean(env.screenSharing),
+                );
+              }
+            }, 4200);
+            fallbackTimers.set(peerUser.id, timerId);
           }
           continue;
         }
 
         if (env.type === "offer" && env.sdp) {
+          const ft = fallbackTimers.get(peerUser.id);
+          if (ft !== undefined) {
+            window.clearTimeout(ft);
+            fallbackTimers.delete(peerUser.id);
+          }
+
+          // Polite/impolite glare resolution in case both sides ever offered simultaneously:
+          const existing = peersRef.current.get(peerUser.id);
+          const amPolite = me.id < peerUser.id;
+          if (existing && existing.pc.signalingState === "have-local-offer" && !amPolite) {
+            // Impolite peer keeps its outgoing offer and ignores the colliding offer!
+            continue;
+          }
+
           try {
             const entry = createMeshPeer(peerUser, env.joinSeq, false);
             entry.cameraOff = env.cameraOff !== false;
@@ -1129,7 +1349,11 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
 
             const answer = await entry.pc.createAnswer();
             await entry.pc.setLocalDescription(answer);
-            await waitForIceGathering(entry.pc, 800);
+            await waitForIceGathering(entry.pc, 2000);
+
+            if (peersRef.current.get(peerUser.id)?.pc !== entry.pc) {
+              continue;
+            }
 
             await sendGroupSignal(groupSession.group.id, {
               callId: groupSession.callId,
@@ -1175,7 +1399,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         .fetchGroupMessages(groupSession.group.id)
         .then((rows) => inspectGroupMessages(rows))
         .catch(() => undefined);
-    }, 1400);
+    }, 1200);
 
     void store
       .fetchGroupMessages(groupSession.group.id)
@@ -1185,6 +1409,10 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
       window.clearInterval(pollId);
+      for (const t of fallbackTimers.values()) {
+        window.clearTimeout(t);
+      }
+      fallbackTimers.clear();
     };
   }, [
     activeGroupId,
@@ -1455,6 +1683,23 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     async (withVideo: boolean) => {
       const cur = sessionRef.current;
       if (!cur || cur.phase !== "incoming") return;
+      if (me) {
+        // Immediately notify sibling devices logged into our account so they stop ringing right away!
+        void sendGroupSignal(cur.group.id, {
+          callId: cur.callId,
+          groupId: cur.group.id,
+          fromId: me.id,
+          fromName: me.displayName,
+          fromUsername: me.username,
+          fromAvatarUrl: me.avatarUrl,
+          fromAvatarColor: me.avatarColor,
+          toId: me.id,
+          type: "claim-ring",
+          deviceSessionId: CALL_DEVICE_SESSION_ID,
+          joinSeq: Date.now(),
+          ts: Date.now(),
+        }).catch(() => undefined);
+      }
       await joinGroupCall(
         {
           v: 1,
@@ -1470,7 +1715,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         withVideo,
       );
     },
-    [joinGroupCall],
+    [joinGroupCall, me, sendGroupSignal],
   );
 
   const declineIncomingGroupCall = useCallback(() => {
@@ -1480,7 +1725,24 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     updateCallHistoryStatus(cur.callId, { state: "declined" });
     cleanupAllGroupCallResources();
     setGroupSession(null);
-  }, [cleanupAllGroupCallResources]);
+    if (me) {
+      // Broadcast decline-ring targeted to our own userId so any other device logged into our account cancels ringing!
+      void sendGroupSignal(cur.group.id, {
+        callId: cur.callId,
+        groupId: cur.group.id,
+        fromId: me.id,
+        fromName: me.displayName,
+        fromUsername: me.username,
+        fromAvatarUrl: me.avatarUrl,
+        fromAvatarColor: me.avatarColor,
+        toId: me.id,
+        type: "decline-ring",
+        deviceSessionId: CALL_DEVICE_SESSION_ID,
+        joinSeq: Date.now(),
+        ts: Date.now(),
+      }).catch(() => undefined);
+    }
+  }, [cleanupAllGroupCallResources, me, sendGroupSignal]);
 
   const leaveGroupCall = useCallback(async () => {
     const cur = sessionRef.current;
@@ -1517,50 +1779,80 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     }).catch(() => undefined);
 
     if (remainingPeers === 0) {
-      // Broadcast persistent "ended" marker so EVERY client immediately shows "GC VC Ended"
-      // and hides the active banner, even when the last person leaving wasn't the original host!
-      await sendGroupSignal(cur.group.id, {
-        callId: cur.callId,
-        groupId: cur.group.id,
-        fromId: me.id,
-        fromName: me.displayName,
-        fromUsername: me.username,
-        fromAvatarUrl: me.avatarUrl,
-        fromAvatarColor: me.avatarColor,
-        toId: "*",
-        type: "ended",
-        joinSeq: myJoinSeqRef.current,
-        durationSec: durationSec > 0 ? durationSec : undefined,
-        ts: Date.now(),
-      }).catch(() => undefined);
-
-      if (cur.hostId === me.id) {
-        let targetInviteMsgId = cur.inviteMessageId;
-        if (!targetInviteMsgId) {
-          const rows = await store.fetchGroupMessages(cur.group.id).catch(() => []);
-          const found = [...rows]
-            .reverse()
-            .find((m) => parseGroupCallInvite(m.body)?.callId === cur.callId);
-          targetInviteMsgId = found?.id;
+      // Double-check live group signals so we NEVER mark the call "ended" if another member is still joined!
+      const latestRows = await store.fetchGroupMessages(cur.group.id).catch(() => []);
+      const otherMemberStatus = new Map<string, { state: "joined" | "left"; ts: number }>();
+      for (const m of latestRows) {
+        if (!m.body.startsWith(GROUP_CALL_SIGNAL_PREFIX)) continue;
+        try {
+          const parsed = JSON.parse(m.body.slice(GROUP_CALL_SIGNAL_PREFIX.length)) as Partial<GroupSignalEnvelope>;
+          if (parsed.callId !== cur.callId || !parsed.fromId || parsed.fromId === me.id) continue;
+          const sigTs = Math.max(parsed.ts ?? 0, m.editedAt ?? 0, m.createdAt ?? 0);
+          if (parsed.type === "join") {
+            const prev = otherMemberStatus.get(parsed.fromId);
+            if (!prev || sigTs >= prev.ts) otherMemberStatus.set(parsed.fromId, { state: "joined", ts: sigTs });
+          } else if (parsed.type === "leave" || parsed.type === "ended") {
+            const prev = otherMemberStatus.get(parsed.fromId);
+            if (!prev || sigTs >= prev.ts) otherMemberStatus.set(parsed.fromId, { state: "left", ts: sigTs });
+          }
+        } catch {
+          // Ignore malformed signal.
         }
-        if (targetInviteMsgId) {
-          await store
-            .editGroupMessage(
-              targetInviteMsgId,
-              serializeGroupCallInvite({
-                v: 1,
-                callId: cur.callId,
-                groupId: cur.group.id,
-                groupName: cur.group.name,
-                mode: cur.mode,
-                hostId: cur.hostId,
-                hostName: cur.hostName,
-                state: "ended",
-                durationSec: durationSec > 0 ? durationSec : undefined,
-                ts: Date.now(),
-              }),
-            )
-            .catch(() => undefined);
+      }
+      let anyOtherStillJoined = false;
+      const nowTs = Date.now();
+      for (const st of otherMemberStatus.values()) {
+        if (st.state === "joined" && nowTs - st.ts < GROUP_CALL_HEARTBEAT_STALE_MS) {
+          anyOtherStillJoined = true;
+          break;
+        }
+      }
+
+      if (!anyOtherStillJoined) {
+        // Broadcast persistent "ended" marker so EVERY client immediately shows "GC VC Ended"
+        // and hides the active banner, even when the last person leaving wasn't the original host!
+        await sendGroupSignal(cur.group.id, {
+          callId: cur.callId,
+          groupId: cur.group.id,
+          fromId: me.id,
+          fromName: me.displayName,
+          fromUsername: me.username,
+          fromAvatarUrl: me.avatarUrl,
+          fromAvatarColor: me.avatarColor,
+          toId: "*",
+          type: "ended",
+          joinSeq: myJoinSeqRef.current,
+          durationSec: durationSec > 0 ? durationSec : undefined,
+          ts: Date.now(),
+        }).catch(() => undefined);
+
+        if (cur.hostId === me.id) {
+          let targetInviteMsgId = cur.inviteMessageId;
+          if (!targetInviteMsgId) {
+            const found = [...latestRows]
+              .reverse()
+              .find((m) => parseGroupCallInvite(m.body)?.callId === cur.callId);
+            targetInviteMsgId = found?.id;
+          }
+          if (targetInviteMsgId) {
+            await store
+              .editGroupMessage(
+                targetInviteMsgId,
+                serializeGroupCallInvite({
+                  v: 1,
+                  callId: cur.callId,
+                  groupId: cur.group.id,
+                  groupName: cur.group.name,
+                  mode: cur.mode,
+                  hostId: cur.hostId,
+                  hostName: cur.hostName,
+                  state: "ended",
+                  durationSec: durationSec > 0 ? durationSec : undefined,
+                  ts: Date.now(),
+                }),
+              )
+              .catch(() => undefined);
+          }
         }
       }
     }

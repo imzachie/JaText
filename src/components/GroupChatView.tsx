@@ -16,7 +16,16 @@ import {
 import { playMessageSound } from "../lib/alerts";
 import { upsertCallHistoryEntry } from "../lib/callHistory";
 import { formatCallDuration, formatPreviewMessageText, isHiddenCallSignal } from "../lib/calling";
-import { copyImageUrlToClipboard } from "../lib/clipboard";
+import {
+  copyImageUrlToClipboard,
+  extractClipboardFile,
+  useChatImagePaste,
+} from "../lib/clipboard";
+import {
+  computeGroupSeenMap,
+  serializeGroupSeenSignal,
+  type GroupSeenReader,
+} from "../lib/groupSeenSignals";
 import { syncComposerTextareaHeight } from "../lib/composerUtils";
 import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts";
 import {
@@ -158,6 +167,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onJoinGroupCall,
   activeCallId,
   groupCallStatesById,
+  seenByMessageId,
 }: {
   messages: GroupMessage[];
   messagesReady: boolean;
@@ -178,6 +188,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onJoinGroupCall: (invite: NonNullable<ReturnType<typeof parseGroupCallInvite>>, messageId: string) => void;
   activeCallId: string | null;
   groupCallStatesById: Record<string, { isEnded: boolean; durationSec?: number }>;
+  seenByMessageId: Map<string, GroupSeenReader[]>;
 }) {
   const memberById = useMemo(
     () => new Map(members.map((member) => [member.id, member])),
@@ -574,6 +585,46 @@ const GroupChatHistory = memo(function GroupChatHistory({
                     {fmtTime(message.createdAt)}
                     {!groupCallInvite && message.editedAt ? " · Edited" : ""}
                   </span>
+                  {(() => {
+                    const seenReaders = seenByMessageId.get(message.id);
+                    if (!seenReaders || seenReaders.length === 0) return null;
+                    const namesLabel = `Seen by ${seenReaders.map((r) => r.displayName).join(", ")}`;
+                    return (
+                      <div
+                        className="group-seen-row"
+                        title={namesLabel}
+                        aria-label={namesLabel}
+                      >
+                        <div className="group-seen-avatars">
+                          {seenReaders.slice(0, 6).map((reader) => (
+                            <span
+                              key={reader.id}
+                              className="group-seen-avatar-wrap"
+                              onClick={() =>
+                                onOpenProfile({
+                                  id: reader.id,
+                                  displayName: reader.displayName,
+                                  username: reader.username,
+                                  bio: "",
+                                  pronouns: "",
+                                  avatarColor: reader.avatarColor,
+                                  avatarUrl: reader.avatarUrl,
+                                  onboardingComplete: true,
+                                })
+                              }
+                            >
+                              <Avatar user={reader} size={16} ringWidth={1} />
+                            </span>
+                          ))}
+                        </div>
+                        {seenReaders.length > 6 && (
+                          <span className="group-seen-overflow">
+                            +{seenReaders.length - 6}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -642,6 +693,19 @@ const GroupChatComposer = memo(function GroupChatComposer({
     syncComposerTextareaHeight(composerRef.current, 0, seed);
     prevLenRef.current = seed.length;
   }, [composerRef, draftKey, initialDraft, isEditing]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    const el = composerRef.current;
+    if (!el) return;
+    const raf = window.requestAnimationFrame(() => {
+      el.focus({ preventScroll: true });
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [composerRef, isEditing]);
 
   const activeMentionMatch = useMemo(() => {
     const match = detectMentionQuery(draft, cursorPos);
@@ -731,10 +795,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
 
   function onComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     if (isEditing) return;
-    const items = Array.from(event.clipboardData?.items ?? []);
-    const fileItem = items.find((item) => item.kind === "file");
-    if (!fileItem) return;
-    const pasted = fileItem.getAsFile();
+    const pasted = extractClipboardFile(event.clipboardData);
     if (pasted) {
       event.preventDefault();
       onSelectFile(pasted);
@@ -1075,6 +1136,74 @@ export function GroupChatView({
     }
     return out;
   }, [activeGroupCallId, callStateTick, conversationMessages, rawGroupMessages]);
+
+  const groupSeenData = useMemo(
+    () =>
+      computeGroupSeenMap(
+        rawGroupMessages,
+        conversationMessages,
+        group?.members ?? EMPTY_GROUP_MEMBERS,
+        store.me?.id,
+      ),
+    [conversationMessages, group?.members, rawGroupMessages, store.me?.id],
+  );
+
+  const seenSyncInFlightRef = useRef(false);
+  const lastPublishedSeenTsRef = useRef<Record<string, number>>({});
+
+  // Publish / update our single in-place seen cursor row when viewing new group messages
+  useEffect(() => {
+    if (!groupId || !store.me || conversationMessages.length === 0) return;
+
+    const maybePublishSeen = () => {
+      if (document.visibilityState === "hidden") return;
+      if (seenSyncInFlightRef.current) return;
+
+      let latestVisible: GroupMessage | null = null;
+      for (let i = conversationMessages.length - 1; i >= 0; i -= 1) {
+        if (!conversationMessages[i].unsentAt) {
+          latestVisible = conversationMessages[i];
+          break;
+        }
+      }
+      if (!latestVisible || latestVisible.senderId === store.me?.id) return;
+
+      const prevPublished = lastPublishedSeenTsRef.current[groupId] ?? 0;
+      const effectiveKnownSeen = Math.max(groupSeenData.mySeenUpToTs, prevPublished);
+      if (latestVisible.createdAt <= effectiveKnownSeen) return;
+
+      seenSyncInFlightRef.current = true;
+      lastPublishedSeenTsRef.current[groupId] = latestVisible.createdAt;
+      const payload = serializeGroupSeenSignal({
+        v: 1,
+        messageId: latestVisible.id,
+        seenUpToTs: latestVisible.createdAt,
+        ts: Date.now(),
+      });
+
+      const op = groupSeenData.myCursorMessageId
+        ? store.editGroupMessage(groupSeenData.myCursorMessageId, payload)
+        : store.sendGroupMessage(groupId, payload);
+
+      void op
+        .catch(() => {
+          lastPublishedSeenTsRef.current[groupId] = groupSeenData.mySeenUpToTs;
+        })
+        .finally(() => {
+          seenSyncInFlightRef.current = false;
+        });
+    };
+
+    maybePublishSeen();
+    document.addEventListener("visibilitychange", maybePublishSeen);
+    return () => document.removeEventListener("visibilitychange", maybePublishSeen);
+  }, [
+    conversationMessages,
+    groupId,
+    groupSeenData.myCursorMessageId,
+    groupSeenData.mySeenUpToTs,
+    store,
+  ]);
 
   // Hydrate group call history entries cleanly into Calls tab (normalized to ended when nobody is in the call)
   useEffect(() => {
@@ -1487,6 +1616,16 @@ export function GroupChatView({
     [groupId, replyTo, sendGroupSticker, soundsEnabled],
   );
 
+  const handlePastedGroupFile = useCallback((pasted: File) => {
+    setFile(pasted);
+    window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
+  }, []);
+
+  useChatImagePaste(
+    handlePastedGroupFile,
+    Boolean(groupId) && !editingMessage && !recordingVoiceNote,
+  );
+
   async function handleSubmitDraft(submittedBody: string) {
     if (!groupId) return;
     if (editingMessage) {
@@ -1494,6 +1633,7 @@ export function GroupChatView({
       const targetId = editingMessage.id;
       setError(null);
       setEditingMessage(null);
+      setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
       try {
         await store.editGroupMessage(targetId, submittedBody);
       } catch (err) {
@@ -1737,9 +1877,8 @@ export function GroupChatView({
     setEditingMessage(message);
     setReplyTo(null);
     setFile(null);
-    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: message.body }));
+    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
     closeMessageMenu();
-    window.setTimeout(() => composerRef.current?.focus(), 0);
   }
 
   function cancelEditingMessage() {
@@ -2139,6 +2278,7 @@ export function GroupChatView({
         }
         activeCallId={activeGroupCallId}
         groupCallStatesById={groupCallStatesById}
+        seenByMessageId={groupSeenData.seenByMessageId}
       />
 
       {error && (

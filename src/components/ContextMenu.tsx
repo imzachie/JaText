@@ -17,6 +17,9 @@ export function ContextMenu({
   children: ReactNode;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const openedAtRef = useRef<number>(Date.now());
+  const backdropPressedAfterOpenRef = useRef(false);
+  const menuPressedAfterOpenRef = useRef(false);
   const [position, setPosition] = useState({ left: x, top: y });
   const [closing, setClosing] = useState(false);
 
@@ -27,6 +30,12 @@ export function ContextMenu({
       onClose();
     }, 165);
   }, [closing, onClose]);
+
+  useEffect(() => {
+    openedAtRef.current = Date.now();
+    backdropPressedAfterOpenRef.current = false;
+    menuPressedAfterOpenRef.current = false;
+  }, []);
 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
@@ -54,9 +63,32 @@ export function ContextMenu({
   return createPortal(
     <div
       className={`context-menu-backdrop ${closing ? "is-closing" : ""}`}
-      onClick={requestClose}
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) {
+          backdropPressedAfterOpenRef.current = true;
+        }
+      }}
+      onTouchStart={(event) => {
+        if (event.target === event.currentTarget) {
+          backdropPressedAfterOpenRef.current = true;
+        }
+      }}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          backdropPressedAfterOpenRef.current = true;
+        }
+      }}
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return;
+        // Ignore synthetic click emitted when lifting the initial mobile long-press finger!
+        if (!backdropPressedAfterOpenRef.current) return;
+        requestClose();
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
+        event.stopPropagation();
+        // Ignore Android WebView's delayed 500ms native contextmenu event from the opening hold!
+        if (Date.now() - openedAtRef.current < 450) return;
         requestClose();
       }}
     >
@@ -66,7 +98,31 @@ export function ContextMenu({
         role="menu"
         aria-label={label}
         style={{ left: position.left, top: position.top }}
+        onPointerDownCapture={() => {
+          menuPressedAfterOpenRef.current = true;
+        }}
+        onTouchStartCapture={() => {
+          menuPressedAfterOpenRef.current = true;
+        }}
+        onMouseDownCapture={() => {
+          menuPressedAfterOpenRef.current = true;
+        }}
+        onClickCapture={(event) => {
+          // Allow keyboard activation (detail === 0), block synthetic click on finger release after hold
+          if (
+            event.detail !== 0 &&
+            !menuPressedAfterOpenRef.current &&
+            Date.now() - openedAtRef.current < 1200
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
         onClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
       >
         {children}
       </div>

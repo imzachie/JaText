@@ -18,7 +18,11 @@ import {
   parseCallInvite,
   useCall,
 } from "../lib/calling";
-import { copyImageUrlToClipboard } from "../lib/clipboard";
+import {
+  copyImageUrlToClipboard,
+  extractClipboardFile,
+  useChatImagePaste,
+} from "../lib/clipboard";
 import { syncComposerTextareaHeight } from "../lib/composerUtils";
 import {
   getCachedWallpaper,
@@ -445,6 +449,19 @@ const DirectChatComposer = memo(function DirectChatComposer({
     prevLenRef.current = startText.length;
   }, [composerRef, draftKey, initialDraft, isEditing]);
 
+  useEffect(() => {
+    if (!isEditing) return;
+    const el = composerRef.current;
+    if (!el) return;
+    const raf = window.requestAnimationFrame(() => {
+      el.focus({ preventScroll: true });
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [composerRef, isEditing]);
+
   function handleChange(next: string) {
     const prevLen = prevLenRef.current;
     prevLenRef.current = next.length;
@@ -524,6 +541,14 @@ const DirectChatComposer = memo(function DirectChatComposer({
         aria-label={`Message @${friendUsername}`}
         disabled={isFriendBlocked}
         rows={1}
+        onPaste={(e) => {
+          if (isFriendBlocked || isEditing) return;
+          const pasted = extractClipboardFile(e.clipboardData);
+          if (pasted) {
+            e.preventDefault();
+            onSelectFile(pasted);
+          }
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
@@ -951,6 +976,16 @@ export function ChatView({
     [publishTyping],
   );
 
+  const handlePastedChatFile = useCallback((pasted: File) => {
+    setFile(pasted);
+    window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
+  }, []);
+
+  useChatImagePaste(
+    handlePastedChatFile,
+    !isFriendBlocked && !editingMessage && !recordingVoiceNote,
+  );
+
   const handleSubmitDraft = useCallback(
     async (submittedBody: string) => {
       if (editingMessage) {
@@ -958,6 +993,7 @@ export function ChatView({
         const targetId = editingMessage.id;
         setError(null);
         setEditingMessage(null);
+        setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
         try {
           await editMessage(targetId, submittedBody);
         } catch (err) {
@@ -1177,9 +1213,8 @@ export function ChatView({
     setEditingMessage(message);
     setReplyTo(null);
     setFile(null);
-    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: message.body }));
+    setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
     closeMessageMenu();
-    window.setTimeout(() => composerRef.current?.focus(), 0);
   }
 
   function cancelEditingMessage() {

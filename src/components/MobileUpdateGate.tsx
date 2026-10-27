@@ -318,10 +318,10 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <h2>Welcome to {currentLabel} of JaText!</h2>
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
-              <li>🚀 Instant One-Tap Self-Updater via public CDN (while source stays Private)</li>
-              <li>🔊 Screen Sharing WITH Audio on Mobile &amp; Desktop calls</li>
-              <li>📞 Polished Group Call cards, live GC VC Ended status &amp; Call history</li>
-              <li>🎙️ Lag-free background Voice Note Transcription + Volume controls</li>
+              <li>🖼️ Native Gboard &amp; Clipboard Image/GIF Paste across all chats</li>
+              <li>👀 Group Chat &ldquo;Seen by&rdquo; mini PFP indicators &amp; rock-solid Group Calls</li>
+              <li>📱 Dominant first-device Multi-Device Calling (Mobile + Desktop sync)</li>
+              <li>🎵 Smart Music Detection in Voice Notes + crisp UI &amp; smooth scrolling</li>
             </ul>
             <button
               type="button"

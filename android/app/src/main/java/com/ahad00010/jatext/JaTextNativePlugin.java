@@ -96,6 +96,16 @@ public class JaTextNativePlugin extends Plugin {
         inst.notifyListeners("screenCaptureStopped", payload);
     }
 
+    public static void emitRichContentPaste(String base64Data, String mimeType, String fileName) {
+        JaTextNativePlugin inst = activeInstance;
+        if (inst == null || base64Data == null || base64Data.isEmpty()) return;
+        JSObject payload = new JSObject();
+        payload.put("base64", base64Data);
+        payload.put("mimeType", mimeType != null ? mimeType : "image/png");
+        payload.put("fileName", fileName != null ? fileName : ("pasted-" + System.currentTimeMillis() + ".png"));
+        inst.notifyListeners("richContentPaste", payload);
+    }
+
     public static boolean isFirebaseConfigured(Context ctx) {
         if (ctx == null) {
             return false;
@@ -125,8 +135,8 @@ public class JaTextNativePlugin extends Plugin {
         Context ctx = getContext();
         JSObject result = new JSObject();
         if (ctx == null) {
-            result.put("versionName", "2.2");
-            result.put("versionCode", 13);
+            result.put("versionName", "2.3");
+            result.put("versionCode", 14);
             result.put("canInstallPackages", true);
             call.resolve(result);
             return;

@@ -1,4 +1,5 @@
-import { Capacitor } from "@capacitor/core";
+import { useEffect, useRef } from "react";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { JaTextNative } from "./nativeBridge";
 
 async function blobToPngBlob(blob: Blob): Promise<Blob> {
@@ -88,7 +89,6 @@ export async function copyImageUrlToClipboard(url: string): Promise<void> {
       await JaTextNative.copyImageBase64({ base64 });
       return;
     } catch {
-      // Fall back to WebView Clipboard API if native bridge fails.
       if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
         await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
         return;
@@ -105,7 +105,6 @@ export async function copyImageUrlToClipboard(url: string): Promise<void> {
   try {
     await navigator.clipboard.write([new ClipboardItem({ "image/png": pngPromise })]);
   } catch (err) {
-    // Older browsers only accept a resolved Blob in ClipboardItem rather than Promise<Blob>.
     if (err instanceof TypeError) {
       const pngBlob = await pngPromise;
       await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
@@ -113,4 +112,139 @@ export async function copyImageUrlToClipboard(url: string): Promise<void> {
     }
     throw err;
   }
+}
+
+function normalizePastedFile(rawFile: File): File {
+  const mime = rawFile.type || "image/png";
+  const ext =
+    mime === "image/jpeg" || mime === "image/jpg"
+      ? "jpg"
+      : mime === "image/gif"
+        ? "gif"
+        : mime === "image/webp"
+          ? "webp"
+          : mime.startsWith("image/")
+            ? "png"
+            : "";
+  const needsFreshName =
+    !rawFile.name ||
+    rawFile.name === "image.png" ||
+    rawFile.name === "image.jpg" ||
+    rawFile.name === "blob";
+  if (!needsFreshName) {
+    return rawFile;
+  }
+  const generatedName = ext ? `pasted-${Date.now()}.${ext}` : `pasted-${Date.now()}`;
+  return new File([rawFile], generatedName, {
+    type: mime,
+    lastModified: Date.now(),
+  });
+}
+
+export function extractClipboardFile(
+  clipboardData: DataTransfer | null | undefined,
+): File | null {
+  if (!clipboardData) return null;
+
+  const items = Array.from(clipboardData.items ?? []);
+  const imageItem = items.find(
+    (item) => item.kind === "file" && item.type.startsWith("image/"),
+  );
+  if (imageItem) {
+    const f = imageItem.getAsFile();
+    if (f) return normalizePastedFile(f);
+  }
+
+  const anyFileItem = items.find((item) => item.kind === "file");
+  if (anyFileItem) {
+    const f = anyFileItem.getAsFile();
+    if (f) return normalizePastedFile(f);
+  }
+
+  const files = Array.from(clipboardData.files ?? []);
+  const imageFile = files.find((f) => f.type.startsWith("image/")) ?? files[0];
+  return imageFile ? normalizePastedFile(imageFile) : null;
+}
+
+export function base64ToFile(
+  base64: string,
+  mimeType: string,
+  fileName: string,
+): File {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new File([bytes], fileName || `pasted-${Date.now()}.png`, {
+    type: mimeType || "image/png",
+    lastModified: Date.now(),
+  });
+}
+
+/**
+ * Listens for both:
+ * 1) Android Gboard / native keyboard rich-content image commits (via JaTextWebView -> JaTextNative)
+ * 2) Global PC / Mobile Web paste events when viewing the active chat (even if the composer textarea
+ *    wasn't explicitly focused before pressing Ctrl+V / Cmd+V).
+ */
+export function useChatImagePaste(
+  onPasteFile: (file: File) => void,
+  enabled = true,
+): void {
+  const callbackRef = useRef(onPasteFile);
+  useEffect(() => {
+    callbackRef.current = onPasteFile;
+  }, [onPasteFile]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let nativeHandle: PluginListenerHandle | null = null;
+    let cancelled = false;
+
+    if (Capacitor.isNativePlatform()) {
+      void JaTextNative.addListener("richContentPaste", (ev) => {
+        if (cancelled || !ev?.base64) return;
+        try {
+          const file = base64ToFile(ev.base64, ev.mimeType, ev.fileName);
+          callbackRef.current(file);
+        } catch {
+          // Ignore malformed clipboard payload
+        }
+      })
+        .then((handle) => {
+          if (cancelled) {
+            void handle.remove();
+          } else {
+            nativeHandle = handle;
+          }
+        })
+        .catch(() => undefined);
+    }
+
+    const handleWindowPaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return;
+      const file = extractClipboardFile(event.clipboardData);
+      if (!file) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA") &&
+        target.closest(".modal-card, .sidebar")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      callbackRef.current(file);
+    };
+
+    window.addEventListener("paste", handleWindowPaste);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("paste", handleWindowPaste);
+      if (nativeHandle) {
+        void nativeHandle.remove();
+      }
+    };
+  }, [enabled]);
 }

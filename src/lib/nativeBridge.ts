@@ -26,6 +26,12 @@ export interface ApkDownloadProgressEvent {
   totalBytes: number;
 }
 
+export interface RichContentPasteEvent {
+  base64: string;
+  mimeType: string;
+  fileName: string;
+}
+
 export interface AppVersionInfo {
   versionName: string;
   versionCode: number;
@@ -79,6 +85,10 @@ export interface JaTextNativePlugin {
   addListener(
     eventName: "apkDownloadProgress",
     listenerFunc: (event: ApkDownloadProgressEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "richContentPaste",
+    listenerFunc: (event: RichContentPasteEvent) => void,
   ): Promise<PluginListenerHandle>;
 }
 

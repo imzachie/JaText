@@ -33,6 +33,7 @@ public class MainActivity extends BridgeActivity {
             getBridge().registerPlugin(SafePushNotificationsPlugin.class);
             if (getBridge().getWebView() != null) {
                 getBridge().getWebView().getSettings().setMediaPlaybackRequiresUserGesture(false);
+                JaTextWebView.installReceiveContentSupport(getBridge().getWebView());
             }
         }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);

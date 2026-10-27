@@ -31,6 +31,7 @@ export const CALL_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:";
 export const GROUP_CALL_INVITE_PREFIX = "__JATEXT_CALL_GRP__:";
 export const GROUP_CALL_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:GRP:";
 const CALL_RING_TIMEOUT_MS = 42_000;
+export const CALL_DEVICE_SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 
 export async function acquireSwitchedCameraTrack(
   oldTrack: MediaStreamTrack | null,
@@ -123,7 +124,15 @@ export interface CallInvitePayload {
 
 interface SignalEnvelope {
   callId: string;
-  type: "offer" | "answer" | "decline" | "hangup" | "renegotiate-offer" | "renegotiate-answer";
+  type:
+    | "claim"
+    | "offer"
+    | "answer"
+    | "decline"
+    | "hangup"
+    | "renegotiate-offer"
+    | "renegotiate-answer";
+  deviceSessionId?: string;
   mode?: CallMode;
   sdp?: RTCSessionDescriptionInit;
   cameraOff?: boolean;
@@ -354,7 +363,7 @@ export function formatPreviewMessageText(body: string): string {
   return stripMarkdownForPreview(clean);
 }
 
-function waitForIceGathering(pc: RTCPeerConnection, maxWaitMs = 950): Promise<void> {
+function waitForIceGathering(pc: RTCPeerConnection, maxWaitMs = 2000): Promise<void> {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
@@ -376,8 +385,12 @@ function waitForIceGathering(pc: RTCPeerConnection, maxWaitMs = 950): Promise<vo
         finish();
         return;
       }
-      if (event.candidate.candidate.includes(" typ srflx ") && srflxTimer === null) {
-        srflxTimer = window.setTimeout(finish, 180);
+      if (
+        (event.candidate.candidate.includes(" typ srflx ") ||
+          event.candidate.candidate.includes(" typ relay ")) &&
+        srflxTimer === null
+      ) {
+        srflxTimer = window.setTimeout(finish, 240);
       }
     };
     const hardTimer = window.setTimeout(finish, maxWaitMs);
@@ -608,6 +621,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const handledCallIdsRef = useRef(new Set<string>());
   const processedSignalIdsRef = useRef(new Set<string>());
+  const myInteractionTsRef = useRef<number | null>(null);
+  const dominantPeerDeviceRef = useRef<string | null>(null);
   const ringIntervalRef = useRef<number | null>(null);
   const ringTimeoutRef = useRef<number | null>(null);
   const prevBytesRef = useRef<{ bytes: number; ts: number } | null>(null);
@@ -803,18 +818,25 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setReactions([]);
     setCaptions([]);
     prevBytesRef.current = null;
+    myInteractionTsRef.current = null;
+    dominantPeerDeviceRef.current = null;
   }, [stopCaptionCapture, stopNativeScreenShareInternal, stopRingingTimers]);
 
   const sendSignalPacket = useCallback(
     async (receiverId: string, packet: SignalEnvelope) => {
+      const stamped: SignalEnvelope = {
+        ...packet,
+        deviceSessionId: packet.deviceSessionId ?? CALL_DEVICE_SESSION_ID,
+      };
       const header = `${CALL_SIGNAL_PREFIX}${JSON.stringify({
-        callId: packet.callId,
-        type: packet.type,
-        cameraOff: packet.cameraOff,
-        ts: packet.ts,
+        callId: stamped.callId,
+        type: stamped.type,
+        deviceSessionId: stamped.deviceSessionId,
+        cameraOff: stamped.cameraOff,
+        ts: stamped.ts,
       })}`;
-      if (packet.sdp) {
-        const file = new File([JSON.stringify(packet)], "call-signal.json", {
+      if (stamped.sdp) {
+        const file = new File([JSON.stringify(stamped)], "call-signal.json", {
           type: "application/x-jatext-call+json",
         });
         await store.sendMessage(receiverId, header, file);
@@ -1436,12 +1458,55 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const inspectMessages = async (messages: ChatMessage[]) => {
       if (cancelled) return;
       for (const msg of messages) {
-        if (msg.senderId === me.id) continue;
+        // Multi-device dominance: inspect signals emitted by ANOTHER device logged into our same account!
+        if (msg.senderId === me.id) {
+          if (!isHiddenCallSignal(msg.body) || processedSignalIdsRef.current.has(msg.id)) {
+            continue;
+          }
+          const ownEnv = await readSignalEnvelope(msg);
+          if (!ownEnv || ownEnv.callId !== session.callId) continue;
+          processedSignalIdsRef.current.add(msg.id);
 
-        // Check if caller updated the invite card to missed/ended while we were ringing
+          if (ownEnv.deviceSessionId && ownEnv.deviceSessionId !== CALL_DEVICE_SESSION_ID) {
+            if (
+              ownEnv.type === "claim" ||
+              ownEnv.type === "answer" ||
+              ownEnv.type === "decline" ||
+              ownEnv.type === "hangup"
+            ) {
+              const myTs = myInteractionTsRef.current;
+              const otherDominates =
+                session.phase === "incoming" ||
+                (session.phase === "outgoing" && ownEnv.type === "hangup") ||
+                myTs === null ||
+                ownEnv.ts < myTs ||
+                (ownEnv.ts === myTs && ownEnv.deviceSessionId < CALL_DEVICE_SESSION_ID);
+
+              if (otherDominates) {
+                handledCallIdsRef.current.add(session.callId);
+                updateCallHistoryStatus(session.callId, {
+                  state: ownEnv.type === "decline" ? "declined" : "connected",
+                });
+                cleanupCallResources();
+                setSession(null);
+                return;
+              }
+            }
+          }
+          continue;
+        }
+
+        // Check if caller updated the invite card to missed/ended/connected while we were ringing
         const invite = parseCallInvite(msg.body);
         if (invite && invite.callId === session.callId) {
           if (invite.state === "missed" || invite.state === "ended" || invite.state === "declined") {
+            cleanupCallResources();
+            setSession(null);
+            return;
+          }
+          if (invite.state === "connected" && session.phase === "incoming") {
+            // Another device on our account already answered and connected this call!
+            handledCallIdsRef.current.add(session.callId);
             cleanupCallResources();
             setSession(null);
             return;
@@ -1455,10 +1520,37 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (!env || env.callId !== session.callId) continue;
 
         processedSignalIdsRef.current.add(msg.id);
-        // Hide processed helper signal from our chat history
-        void store.deleteMessageForMe(msg.id).catch(() => undefined);
+        // Defer deleting signal for 45s so any sibling devices logged into our account also see it!
+        window.setTimeout(() => {
+          void store.deleteMessageForMe(msg.id).catch(() => undefined);
+        }, 45_000);
+
+        if (env.type === "claim" && session.isCaller) {
+          if (!dominantPeerDeviceRef.current && env.deviceSessionId) {
+            dominantPeerDeviceRef.current = env.deviceSessionId;
+          }
+          continue;
+        }
 
         if (env.type === "decline" || env.type === "hangup") {
+          // Ignore non-dominant secondary device decline if another device already claimed/answered!
+          if (
+            env.type === "decline" &&
+            dominantPeerDeviceRef.current &&
+            env.deviceSessionId &&
+            env.deviceSessionId !== dominantPeerDeviceRef.current
+          ) {
+            continue;
+          }
+          if (
+            env.type === "hangup" &&
+            session.phase === "connected" &&
+            dominantPeerDeviceRef.current &&
+            env.deviceSessionId &&
+            env.deviceSessionId !== dominantPeerDeviceRef.current
+          ) {
+            continue;
+          }
           const durationSec = session.startedAt
             ? Math.max(1, Math.round((Date.now() - session.startedAt) / 1000))
             : 0;
@@ -1491,6 +1583,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
         }
 
         if (env.type === "answer" && session.isCaller && env.sdp) {
+          if (
+            dominantPeerDeviceRef.current &&
+            env.deviceSessionId &&
+            env.deviceSessionId !== dominantPeerDeviceRef.current
+          ) {
+            continue;
+          }
+          if (env.deviceSessionId) {
+            dominantPeerDeviceRef.current = env.deviceSessionId;
+          }
           const pc = pcRef.current;
           if (pc && pc.signalingState === "have-local-offer") {
             stopRingingTimers();
@@ -1593,9 +1695,20 @@ export function CallProvider({ children }: { children: ReactNode }) {
     async (withVideo: boolean) => {
       const cur = sessionRef.current;
       if (!cur || cur.phase !== "incoming") return;
+      const claimTs = Date.now();
+      myInteractionTsRef.current = claimTs;
       stopRingingTimers();
       setCallError(null);
       setSession({ ...cur, phase: "connecting" });
+
+      // Broadcast immediate multi-device dominance claim so any other device logged into our
+      // account stops ringing right away (before getUserMedia + ICE finishes)!
+      void sendSignalPacket(cur.peer.id, {
+        callId: cur.callId,
+        type: "claim",
+        deviceSessionId: CALL_DEVICE_SESSION_ID,
+        ts: claimTs,
+      }).catch(() => undefined);
 
       const permitted = await ensureNativeMediaPermissions(withVideo);
       if (!permitted) {
@@ -1697,7 +1810,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
         updateCallHistoryStatus(cur.callId, { state: "connected" });
 
-        // Hide our own transient answer signal message ONLY for us (NEVER unsendMessage, which creates "This message was unsent"!)
+        // Defer cleanup 45s so sibling devices logged into our account observe the answer signal first
         window.setTimeout(() => {
           void store
             .fetchMessagesWithUser(cur.peer.id)
@@ -1709,7 +1822,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
               }
             })
             .catch(() => undefined);
-        }, 8000);
+        }, 45_000);
       } catch {
         cleanupCallResources();
         setSession(null);
@@ -1730,6 +1843,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const declineIncomingCall = useCallback(async () => {
     const cur = sessionRef.current;
     if (!cur) return;
+    const declineTs = Date.now();
+    myInteractionTsRef.current = declineTs;
     handledCallIdsRef.current.add(cur.callId);
     updateCallHistoryStatus(cur.callId, { state: "declined" });
     cleanupCallResources();
@@ -1738,7 +1853,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
       await sendSignalPacket(cur.peer.id, {
         callId: cur.callId,
         type: "decline",
-        ts: Date.now(),
+        deviceSessionId: CALL_DEVICE_SESSION_ID,
+        ts: declineTs,
       });
       window.setTimeout(() => {
         void store
@@ -1751,7 +1867,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
             }
           })
           .catch(() => undefined);
-      }, 6000);
+      }, 45_000);
     } catch {
       // Ignore signal cleanup error.
     }
