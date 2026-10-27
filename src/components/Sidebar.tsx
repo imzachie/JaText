@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
+import { AnimatedModal } from "./AnimatedModal";
+import { Phone, Video } from "./CallIcons";
 import { ContextMenu } from "./ContextMenu";
-import { formatPreviewMessageText } from "../lib/calling";
+import {
+  formatCallDuration,
+  formatPreviewMessageText,
+  parseCallInvite,
+  useCall,
+} from "../lib/calling";
+import { useCallHistoryEntries, type CallHistoryEntry } from "../lib/callHistory";
+import { useDraftsMap } from "../lib/drafts";
+import { useGroupCall } from "../lib/groupCalling";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "../lib/types";
@@ -31,8 +41,12 @@ export function Sidebar({
   onOpenSettings: () => void;
 }) {
   const store = useJaText();
+  const { startCall } = useCall();
+  const { startGroupCall } = useGroupCall();
+  const draftsMap = useDraftsMap();
+  const storedCallHistory = useCallHistoryEntries();
   const { me, friends, incoming, outgoing, previews, activeChatId, setActiveChatId } = store;
-  const [tab, setTab] = useState<"chats" | "add">("chats");
+  const [tab, setTab] = useState<"chats" | "calls" | "add">("chats");
   const [search, setSearch] = useState("");
   const [addName, setAddName] = useState("");
   const [addMsg, setAddMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -63,6 +77,54 @@ export function Sidebar({
     [previews],
   );
 
+  const friendById = useMemo(
+    () => new Map(friends.map((f) => [f.id, f])),
+    [friends],
+  );
+
+  // Combine persisted call history + any DM preview call invites not yet in storage
+  const combinedCalls = useMemo<CallHistoryEntry[]>(() => {
+    if (!me) return [];
+    const byCallId = new Map<string, CallHistoryEntry>();
+    for (const item of storedCallHistory) {
+      const liveFriend = item.kind === "dm" ? friendById.get(item.peerId) : undefined;
+      byCallId.set(item.callId, {
+        ...item,
+        ...(liveFriend
+          ? {
+              peerDisplayName: liveFriend.displayName,
+              peerUsername: liveFriend.username,
+              peerAvatarUrl: liveFriend.avatarUrl,
+              peerAvatarColor: liveFriend.avatarColor,
+            }
+          : {}),
+      });
+    }
+
+    for (const preview of previews) {
+      const invite = parseCallInvite(preview.body);
+      if (!invite || byCallId.has(invite.callId)) continue;
+      const friend = friendById.get(preview.friendId);
+      if (!friend) continue;
+      byCallId.set(invite.callId, {
+        callId: invite.callId,
+        kind: "dm",
+        peerId: friend.id,
+        peerDisplayName: friend.displayName,
+        peerUsername: friend.username,
+        peerAvatarUrl: friend.avatarUrl,
+        peerAvatarColor: friend.avatarColor,
+        direction: preview.senderId === me.id ? "outgoing" : "incoming",
+        mode: invite.mode,
+        state: invite.state,
+        durationSec: invite.durationSec,
+        timestamp: preview.createdAt || invite.ts,
+      });
+    }
+
+    return Array.from(byCallId.values()).sort((a, b) => b.timestamp - a.timestamp);
+  }, [friendById, me, previews, storedCallHistory]);
+
   const sortedFriends = useMemo(() => {
     const filtered = friends.filter(
       (f) =>
@@ -72,9 +134,9 @@ export function Sidebar({
     return filtered
       .filter((friend) => (previewByFriend.get(friend.id)?.isArchived ?? false) === showArchived)
       .sort(
-      (a, b) =>
-        (previewByFriend.get(b.id)?.createdAt ?? 0) -
-        (previewByFriend.get(a.id)?.createdAt ?? 0),
+        (a, b) =>
+          (previewByFriend.get(b.id)?.createdAt ?? 0) -
+          (previewByFriend.get(a.id)?.createdAt ?? 0),
       );
   }, [friends, previewByFriend, search, showArchived]);
   const archivedCount = friends.filter(
@@ -91,10 +153,16 @@ export function Sidebar({
     setAddMsg(null);
     try {
       await store.sendFriendRequest(username);
-      setAddMsg({ ok: true, text: `Friend request sent to @${username}! They'll need to accept before you can chat.` });
+      setAddMsg({
+        ok: true,
+        text: `Friend request sent to @${username}! They'll need to accept before you can chat.`,
+      });
       setAddName("");
     } catch (err) {
-      setAddMsg({ ok: false, text: friendlyError(err, "Could not send the friend request. Please try again.") });
+      setAddMsg({
+        ok: false,
+        text: friendlyError(err, "Could not send the friend request. Please try again."),
+      });
     } finally {
       setAddBusy(false);
     }
@@ -108,19 +176,35 @@ export function Sidebar({
   }
 
   async function updateChat(
-    action: "archive" | "unarchive" | "mute" | "unmute" | "delete" | "block" | "unblock",
+    action: "archive" | "unarchive" | "mute" | "unmute" | "delete" | "block" | "unblock" | "unfriend",
   ) {
     if (!chatMenu) return;
     const { friend } = chatMenu;
     try {
+      if (action === "unfriend") {
+        if (
+          !window.confirm(
+            `Unfriend ${friend.displayName} (@${friend.username})? You will need to send a friend request again to chat.`,
+          )
+        ) {
+          setChatMenu(null);
+          return;
+        }
+        await store.removeFriend(friend.id);
+        setChatMenu(null);
+        return;
+      }
       if (action === "archive" || action === "unarchive") {
         await store.setConversationArchived(friend.id, action === "archive");
       } else if (action === "mute" || action === "unmute") {
         await store.setConversationMuted(friend.id, action === "mute");
       } else if (action === "block" || action === "unblock") {
-        if (action === "block" && !window.confirm(
-          `Block ${friend.displayName}? They can still send messages, but their messages won't appear to you and will stay marked Delivered.`,
-        )) {
+        if (
+          action === "block" &&
+          !window.confirm(
+            `Block ${friend.displayName}? They can still send messages, but their messages won't appear to you and will stay marked Delivered.`,
+          )
+        ) {
           setChatMenu(null);
           return;
         }
@@ -144,6 +228,8 @@ export function Sidebar({
     }
   }
 
+  const communityDraft = draftsMap["community"];
+
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
@@ -160,7 +246,13 @@ export function Sidebar({
         <Avatar
           user={me}
           size={52}
-          status={me.statusPreference === "offline" ? "offline" : me.statusPreference === "dnd" ? "dnd" : "online"}
+          status={
+            me.statusPreference === "offline"
+              ? "offline"
+              : me.statusPreference === "dnd"
+                ? "dnd"
+                : "online"
+          }
           onClick={() => onOpenProfile(me)}
         />
         <div className="greeting-text">
@@ -175,14 +267,17 @@ export function Sidebar({
         <button className={tab === "chats" ? "active" : ""} onClick={() => setTab("chats")}>
           💬 Chats
         </button>
+        <button className={tab === "calls" ? "active" : ""} onClick={() => setTab("calls")}>
+          📞 Calls
+        </button>
         <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}>
-          ➕ Add friends
+          ➕ Add
           {incoming.length > 0 && <span className="badge">{incoming.length}</span>}
         </button>
       </div>
 
       {tab === "chats" && (
-        <>
+        <div className="sidebar-tab-pane" key="pane-chats">
           <input
             className="search-input"
             placeholder="Search friends…"
@@ -197,7 +292,9 @@ export function Sidebar({
             {showArchived ? "← Chats" : `📦 Archived${archivedCount ? ` (${archivedCount})` : ""}`}
           </button>
           {chatActionError && (
-            <div className="error-box sidebar-error" role="alert">{chatActionError}</div>
+            <div className="error-box sidebar-error" role="alert">
+              {chatActionError}
+            </div>
           )}
           <div className="friend-list">
             {!showArchived && (
@@ -210,54 +307,84 @@ export function Sidebar({
                   <div className="friend-row-top">
                     <strong>JaText Community</strong>
                     <span className="friend-row-badges">
-                      <span className="verified-badge" title="Verified">✓</span>
+                      <span className="verified-badge" title="Verified">
+                        ✓
+                      </span>
                       <span className="official-badge">Official</span>
                     </span>
                   </div>
-                  <span className="muted small friend-preview">Official JaText announcements</span>
-                </div>
-              </div>
-            )}
-            {!showArchived && store.groups
-              .filter((group) => !search.trim() || group.name.toLowerCase().includes(search.toLowerCase()))
-              .map((group) => (
-              <div
-                className={`friend-row group-list-row ${store.activeGroupId === group.id ? "active" : ""}`}
-                key={group.id}
-                onClick={() => store.setActiveGroupId(group.id)}
-              >
-                {group.avatarUrl ? (
-                  <img
-                    className="group-avatar sidebar-group-avatar"
-                    src={group.avatarUrl}
-                    alt=""
-                    referrerPolicy="no-referrer"
-                    decoding="async"
-                    loading="lazy"
-                  />
-                ) : (
-                  <div className="group-avatar sidebar-group-avatar group-avatar-fallback" aria-hidden="true">👥</div>
-                )}
-                <div className="friend-row-text">
-                  <div className="friend-row-top">
-                    <strong>{group.name}</strong>
-                    <span className="friend-row-badges">
-                      {group.lastMentionedMe && store.activeGroupId !== group.id && (
-                        <span className="badge mention-badge" title="You were mentioned">@</span>
-                      )}
-                      {group.lastMessageAt ? (
-                        <span className="muted small">{fmtTime(group.lastMessageAt)}</span>
-                      ) : null}
-                    </span>
-                  </div>
                   <span className="muted small friend-preview">
-                    {group.lastMessage
-                      ? `${group.lastSenderId === me.id ? "You: " : group.lastSenderName ? `${group.lastSenderName}: ` : ""}${formatPreviewMessageText(group.lastMessage)}`
-                      : `${group.memberCount} members`}
+                    {communityDraft ? (
+                      <>
+                        <span className="draft-pill">Draft:</span> {communityDraft}
+                      </>
+                    ) : (
+                      "Official JaText announcements"
+                    )}
                   </span>
                 </div>
               </div>
-            ))}
+            )}
+            {!showArchived &&
+              store.groups
+                .filter(
+                  (group) =>
+                    !search.trim() || group.name.toLowerCase().includes(search.toLowerCase()),
+                )
+                .map((group) => {
+                  const groupDraft = draftsMap[`group:${group.id}`];
+                  return (
+                    <div
+                      className={`friend-row group-list-row ${store.activeGroupId === group.id ? "active" : ""}`}
+                      key={group.id}
+                      onClick={() => store.setActiveGroupId(group.id)}
+                    >
+                      {group.avatarUrl ? (
+                        <img
+                          className="group-avatar sidebar-group-avatar"
+                          src={group.avatarUrl}
+                          alt=""
+                          referrerPolicy="no-referrer"
+                          decoding="async"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div
+                          className="group-avatar sidebar-group-avatar group-avatar-fallback"
+                          aria-hidden="true"
+                        >
+                          👥
+                        </div>
+                      )}
+                      <div className="friend-row-text">
+                        <div className="friend-row-top">
+                          <strong>{group.name}</strong>
+                          <span className="friend-row-badges">
+                            {group.lastMentionedMe && store.activeGroupId !== group.id && (
+                              <span className="badge mention-badge" title="You were mentioned">
+                                @
+                              </span>
+                            )}
+                            {group.lastMessageAt ? (
+                              <span className="muted small">{fmtTime(group.lastMessageAt)}</span>
+                            ) : null}
+                          </span>
+                        </div>
+                        <span className="muted small friend-preview">
+                          {groupDraft ? (
+                            <>
+                              <span className="draft-pill">Draft:</span> {groupDraft}
+                            </>
+                          ) : group.lastMessage ? (
+                            `${group.lastSenderId === me.id ? "You: " : group.lastSenderName ? `${group.lastSenderName}: ` : ""}${formatPreviewMessageText(group.lastMessage)}`
+                          ) : (
+                            `${group.memberCount} members`
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
             {sortedFriends.length === 0 && friends.length > 0 && (
               <div className="empty-box">
                 <p>{showArchived ? "No archived chats." : "No chats match your search."}</p>
@@ -267,8 +394,8 @@ export function Sidebar({
               <div className="empty-box">
                 <p>No friends yet 🥲</p>
                 <p className="muted small">
-                  Head to <strong>Add friends</strong> and add someone by their
-                  username. Once they accept, you can start texting!
+                  Head to <strong>Add</strong> and add someone by their username. Once they accept,
+                  you can start texting!
                 </p>
                 <button className="primary-btn" onClick={() => setTab("add")}>
                   Add a friend
@@ -277,6 +404,7 @@ export function Sidebar({
             )}
             {sortedFriends.map((friend) => {
               const preview = previewByFriend.get(friend.id);
+              const dmDraft = draftsMap[`dm:${friend.id}`];
               return (
                 <div
                   key={friend.id}
@@ -287,7 +415,10 @@ export function Sidebar({
                   <Avatar
                     user={friend}
                     size={48}
-                    status={store.friendActivities.find((activity) => activity.userId === friend.id)?.status}
+                    status={
+                      store.friendActivities.find((activity) => activity.userId === friend.id)
+                        ?.status
+                    }
                     onClick={(e) => {
                       e.stopPropagation();
                       onOpenProfile(friend);
@@ -305,20 +436,164 @@ export function Sidebar({
                       </span>
                     </div>
                     <span className="muted small friend-preview">
-                      {preview?.createdAt
-                        ? `${preview.senderId === me.id ? "You: " : ""}${formatPreviewMessageText(preview.body)}`
-                        : `@${friend.username} — say hi! 👋`}
+                      {dmDraft ? (
+                        <>
+                          <span className="draft-pill">Draft:</span> {dmDraft}
+                        </>
+                      ) : preview?.createdAt ? (
+                        `${preview.senderId === me.id ? "You: " : ""}${formatPreviewMessageText(preview.body)}`
+                      ) : (
+                        `@${friend.username} — say hi! 👋`
+                      )}
                     </span>
                   </div>
                 </div>
               );
             })}
           </div>
-        </>
+        </div>
+      )}
+
+      {tab === "calls" && (
+        <div className="sidebar-tab-pane calls-tab-pane" key="pane-calls">
+          {combinedCalls.length === 0 ? (
+            <div className="empty-box">
+              <p>No calls yet 📞</p>
+              <p className="muted small">
+                Start a voice or video call with a friend or group — your incoming and outgoing call
+                history will show right here.
+              </p>
+            </div>
+          ) : (
+            <div className="calls-history-list">
+              {combinedCalls.map((entry) => {
+                const liveFriend = entry.kind === "dm" ? friendById.get(entry.peerId) : undefined;
+                const liveGroup =
+                  entry.kind === "group"
+                    ? store.groups.find((g) => g.id === (entry.groupId ?? entry.peerId))
+                    : undefined;
+                const callPeerUser: JaUser = liveFriend ?? {
+                  id: entry.peerId,
+                  displayName: entry.peerDisplayName,
+                  username: entry.peerUsername,
+                  bio: "",
+                  pronouns: "",
+                  avatarColor: entry.peerAvatarColor || "purple",
+                  avatarUrl: entry.peerAvatarUrl,
+                  onboardingComplete: true,
+                };
+                const isMissed = entry.state === "missed" || entry.state === "declined";
+                const dirArrow = entry.direction === "outgoing" ? "↗" : "↙";
+                const dirLabel = entry.direction === "outgoing" ? "Outgoing" : "Incoming";
+                const stateLabel =
+                  entry.state === "missed"
+                    ? "Missed"
+                    : entry.state === "declined"
+                      ? "Declined"
+                      : entry.durationSec
+                        ? formatCallDuration(entry.durationSec)
+                        : entry.state === "connected"
+                          ? "In call"
+                          : "Ended";
+
+                return (
+                  <div
+                    key={entry.callId}
+                    className="call-history-row"
+                    onClick={() => {
+                      if (entry.kind === "group" && liveGroup) {
+                        store.setActiveGroupId(liveGroup.id);
+                      } else if (liveFriend) {
+                        setActiveChatId(liveFriend.id);
+                      }
+                    }}
+                  >
+                    {entry.kind === "group" ? (
+                      liveGroup?.avatarUrl || entry.groupAvatarUrl ? (
+                        <img
+                          className="group-avatar sidebar-group-avatar"
+                          src={liveGroup?.avatarUrl ?? entry.groupAvatarUrl}
+                          alt=""
+                        />
+                      ) : (
+                        <div className="group-avatar sidebar-group-avatar group-avatar-fallback">
+                          👥
+                        </div>
+                      )
+                    ) : (
+                      <Avatar
+                        user={callPeerUser}
+                        size={46}
+                        status={
+                          store.friendActivities.find((a) => a.userId === callPeerUser.id)?.status
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenProfile(callPeerUser);
+                        }}
+                      />
+                    )}
+
+                    <div className="call-history-meta">
+                      <div className="call-history-name-line">
+                        <strong>{entry.peerDisplayName}</strong>
+                        <span className="muted small">{fmtTime(entry.timestamp)}</span>
+                      </div>
+                      <div className="call-history-handle">
+                        {entry.kind === "group" ? "Group call" : `@${entry.peerUsername}`}
+                      </div>
+                      <div className={`call-history-sub ${isMissed ? "missed" : ""}`}>
+                        <span className={`call-dir-badge ${entry.direction}`}>
+                          {dirArrow} {dirLabel}
+                        </span>
+                        <span>
+                          · {entry.mode === "video" ? "Video" : "Voice"} · {stateLabel}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="call-history-actions" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        className="icon-btn call-back-btn"
+                        title={`Voice call ${entry.peerDisplayName}`}
+                        aria-label={`Voice call ${entry.peerDisplayName}`}
+                        onClick={() => {
+                          if (entry.kind === "group" && liveGroup) {
+                            void startGroupCall(liveGroup, "voice");
+                          } else if (liveFriend) {
+                            void startCall(liveFriend, "voice");
+                          }
+                        }}
+                      >
+                        <Phone size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn call-back-btn video"
+                        title={`Video call ${entry.peerDisplayName}`}
+                        aria-label={`Video call ${entry.peerDisplayName}`}
+                        onClick={() => {
+                          if (entry.kind === "group" && liveGroup) {
+                            void startGroupCall(liveGroup, "video");
+                          } else if (liveFriend) {
+                            void startCall(liveFriend, "video");
+                          }
+                        }}
+                      >
+                        <Video size={16} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {tab === "add" && (
-        <div className="add-panel">
+        <div className="add-panel sidebar-tab-pane" key="pane-add">
           <h3>Add by username</h3>
           <form onSubmit={onAdd} className="add-form">
             <div className="username-input">
@@ -333,9 +608,7 @@ export function Sidebar({
               {addBusy ? "Sending…" : "Send friend request"}
             </button>
           </form>
-          {addMsg && (
-            <div className={addMsg.ok ? "success-box" : "error-box"}>{addMsg.text}</div>
-          )}
+          {addMsg && <div className={addMsg.ok ? "success-box" : "error-box"}>{addMsg.text}</div>}
 
           <section className="groups-add-section">
             <div className="groups-section-heading">
@@ -349,92 +622,128 @@ export function Sidebar({
                   setGroupError(null);
                   setShowGroupDialog(true);
                 }}
-              >Add group chat…</button>
+              >
+                Add group chat…
+              </button>
             </div>
             {store.groups.length === 0 ? (
-              <p className="muted small">Create a group with people you’re already friends with.</p>
-            ) : store.groups.map((group) => (
-              <button
-                type="button"
-                className="group-add-row"
-                key={group.id}
-                onClick={() => store.setActiveGroupId(group.id)}
-              >
-                <span>
-                  {group.avatarUrl ? (
-                    <img
-                      className="group-avatar sidebar-group-avatar"
-                      src={group.avatarUrl}
-                      alt=""
-                      referrerPolicy="no-referrer"
-                      decoding="async"
-                      loading="lazy"
-                    />
-                  ) : (
-                    "👥"
-                  )}
-                </span>
-                <span><strong>{group.name}</strong><small className="muted">{group.memberCount} members</small></span>
-              </button>
-            ))}
+              <p className="muted small">
+                Create a group with people you&apos;re already friends with.
+              </p>
+            ) : (
+              store.groups.map((group) => (
+                <button
+                  type="button"
+                  className="group-add-row"
+                  key={group.id}
+                  onClick={() => store.setActiveGroupId(group.id)}
+                >
+                  <span>
+                    {group.avatarUrl ? (
+                      <img
+                        className="group-avatar sidebar-group-avatar"
+                        src={group.avatarUrl}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        decoding="async"
+                        loading="lazy"
+                      />
+                    ) : (
+                      "👥"
+                    )}
+                  </span>
+                  <span>
+                    <strong>{group.name}</strong>
+                    <small className="muted">{group.memberCount} members</small>
+                  </span>
+                </button>
+              ))
+            )}
           </section>
 
           {store.mode === "demo" && (
             <div className="hint-box">
-              🧪 <strong>Demo tip:</strong> try adding <code>@maya</code>,{" "}
-              <code>@kai.codes</code> or <code>@Nova</code> — they accept after a
-              couple of seconds and will text you back. You can also create a
-              second real account (sign out, sign up) and add each other.
+              🧪 <strong>Demo tip:</strong> try adding <code>@maya</code>, <code>@kai.codes</code>{" "}
+              or <code>@Nova</code> — they accept after a couple of seconds and will text you back.
             </div>
           )}
+
           {showGroupDialog && (
-            <div className="modal-backdrop" onClick={() => setShowGroupDialog(false)}>
-              <section className="modal-card create-group-dialog" onClick={(event) => event.stopPropagation()}>
-                <button className="modal-close" onClick={() => setShowGroupDialog(false)} aria-label="Close">×</button>
-                <h2>Create group chat</h2>
-                <p className="muted small">You can add people you’re already friends with.</p>
-                <label>
-                  Group name
-                  <input value={groupName} maxLength={60} onChange={(event) => setGroupName(event.target.value)} />
-                </label>
-                <div className="create-group-members">
-                  {friends.map((friend) => (
-                    <label className="community-directory-person" key={friend.id}>
-                      <input
-                        type="checkbox"
-                        checked={groupMemberIds.includes(friend.id)}
-                        onChange={(event) =>
-                          setGroupMemberIds((current) =>
-                            event.target.checked
-                              ? [...current, friend.id]
-                              : current.filter((id) => id !== friend.id),
-                          )
-                        }
-                      />
-                      <Avatar user={friend} size={32} />
-                      <span><strong>{friend.displayName}</strong> <span className="muted small">@{friend.username}</span></span>
-                    </label>
-                  ))}
-                  {friends.length === 0 && <p className="muted small">Add and accept a friend before creating a group.</p>}
-                </div>
-                {groupError && <div className="error-box" role="alert">{groupError}</div>}
-                <button
-                  type="button"
-                  className="primary-btn"
-                  disabled={groupBusy || !groupName.trim() || groupMemberIds.length === 0}
-                  onClick={() => {
-                    setGroupBusy(true);
-                    setGroupError(null);
-                    void store.createGroup(groupName, groupMemberIds).then((id) => {
-                      setShowGroupDialog(false);
-                      store.setActiveGroupId(id);
-                    }).catch((error: unknown) => {
-                      setGroupError(friendlyError(error, "Could not create the group."));
-                    }).finally(() => setGroupBusy(false));
-                  }}
-                >{groupBusy ? "Creating…" : "Create group"}</button>
-              </section>
-            </div>
+            <AnimatedModal
+              onClose={() => setShowGroupDialog(false)}
+              cardClassName="modal-card create-group-dialog"
+              closeLabel="Close"
+            >
+              {(requestClose) => (
+                <>
+                  <h2>Create group chat</h2>
+                  <p className="muted small">
+                    You can add people you&apos;re already friends with.
+                  </p>
+                  <label>
+                    Group name
+                    <input
+                      value={groupName}
+                      maxLength={60}
+                      onChange={(event) => setGroupName(event.target.value)}
+                    />
+                  </label>
+                  <div className="create-group-members">
+                    {friends.map((friend) => (
+                      <label className="community-directory-person" key={friend.id}>
+                        <input
+                          type="checkbox"
+                          checked={groupMemberIds.includes(friend.id)}
+                          onChange={(event) =>
+                            setGroupMemberIds((current) =>
+                              event.target.checked
+                                ? [...current, friend.id]
+                                : current.filter((id) => id !== friend.id),
+                            )
+                          }
+                        />
+                        <Avatar user={friend} size={32} />
+                        <span>
+                          <strong>{friend.displayName}</strong>{" "}
+                          <span className="muted small">@{friend.username}</span>
+                        </span>
+                      </label>
+                    ))}
+                    {friends.length === 0 && (
+                      <p className="muted small">
+                        Add and accept a friend before creating a group.
+                      </p>
+                    )}
+                  </div>
+                  {groupError && (
+                    <div className="error-box" role="alert">
+                      {groupError}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    disabled={groupBusy || !groupName.trim() || groupMemberIds.length === 0}
+                    onClick={() => {
+                      setGroupBusy(true);
+                      setGroupError(null);
+                      void store
+                        .createGroup(groupName, groupMemberIds)
+                        .then((id) => {
+                          requestClose();
+                          store.setActiveGroupId(id);
+                        })
+                        .catch((error: unknown) => {
+                          setGroupError(friendlyError(error, "Could not create the group."));
+                        })
+                        .finally(() => setGroupBusy(false));
+                    }}
+                  >
+                    {groupBusy ? "Creating…" : "Create group"}
+                  </button>
+                </>
+              )}
+            </AnimatedModal>
           )}
 
           {incoming.length > 0 && (
@@ -524,7 +833,17 @@ export function Sidebar({
           <button
             type="button"
             role="menuitem"
-            className={store.blockedUserIds.includes(chatMenu.friend.id) ? "" : "destructive-menu-item"}
+            className="destructive-menu-item"
+            onClick={() => void updateChat("unfriend")}
+          >
+            <span>💔</span> Unfriend
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={
+              store.blockedUserIds.includes(chatMenu.friend.id) ? "" : "destructive-menu-item"
+            }
             onClick={() =>
               void updateChat(
                 store.blockedUserIds.includes(chatMenu.friend.id) ? "unblock" : "block",

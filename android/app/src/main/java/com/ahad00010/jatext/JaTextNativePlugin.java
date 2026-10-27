@@ -6,12 +6,15 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -32,6 +35,9 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -52,6 +58,7 @@ public class JaTextNativePlugin extends Plugin {
     private SpeechRecognizer speechRecognizer;
     private volatile boolean speechCaptureActive = false;
     private final StringBuilder accumulatedSpeech = new StringBuilder();
+    private volatile File pendingUpdateApkFile = null;
 
     @Override
     public void load() {
@@ -98,6 +105,229 @@ public class JaTextNativePlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("firebaseConfigured", isFirebaseConfigured(getContext()));
         call.resolve(result);
+    }
+
+    @PluginMethod
+    @SuppressWarnings("deprecation")
+    public void getAppVersionInfo(PluginCall call) {
+        Context ctx = getContext();
+        JSObject result = new JSObject();
+        if (ctx == null) {
+            result.put("versionName", "1.9");
+            result.put("versionCode", 10);
+            result.put("canInstallPackages", true);
+            call.resolve(result);
+            return;
+        }
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            PackageInfo info = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                ? pm.getPackageInfo(ctx.getPackageName(), PackageManager.PackageInfoFlags.of(0))
+                : pm.getPackageInfo(ctx.getPackageName(), 0);
+            long versionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? info.getLongVersionCode()
+                : info.versionCode;
+            boolean canInstall = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || pm.canRequestPackageInstalls();
+            result.put("versionName", info.versionName != null ? info.versionName : "1.9");
+            result.put("versionCode", (int) versionCode);
+            result.put("canInstallPackages", canInstall);
+            call.resolve(result);
+        } catch (Throwable err) {
+            result.put("versionName", "1.9");
+            result.put("versionCode", 10);
+            result.put("canInstallPackages", true);
+            call.resolve(result);
+        }
+    }
+
+    @PluginMethod
+    public void openUnknownSourcesSettings(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.resolve();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                Intent settingsIntent = new Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + ctx.getPackageName())
+                );
+                startActivityForResult(call, settingsIntent, "handleUnknownSourcesResult");
+                return;
+            } catch (Throwable ignored) {}
+        }
+        JSObject res = new JSObject();
+        res.put("canInstallPackages", true);
+        call.resolve(res);
+    }
+
+    @ActivityCallback
+    private void handleUnknownSourcesResult(PluginCall call, ActivityResult result) {
+        Context ctx = getContext();
+        boolean canInstall = ctx == null ||
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+            ctx.getPackageManager().canRequestPackageInstalls();
+
+        if (canInstall && pendingUpdateApkFile != null && pendingUpdateApkFile.exists() && ctx != null) {
+            File apk = pendingUpdateApkFile;
+            pendingUpdateApkFile = null;
+            launchPackageInstaller(ctx, apk);
+        }
+
+        if (call != null) {
+            JSObject res = new JSObject();
+            res.put("canInstallPackages", canInstall);
+            res.put("launchedInstaller", canInstall);
+            call.resolve(res);
+        }
+    }
+
+    @PluginMethod
+    public void downloadAndInstallApk(PluginCall call) {
+        final String downloadUrl = call.getString("url");
+        final Context ctx = getContext();
+        if (ctx == null || downloadUrl == null || downloadUrl.trim().isEmpty()) {
+            call.reject("Missing update APK URL.");
+            return;
+        }
+
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                File updatesDir = new File(ctx.getCacheDir(), "updates");
+                if (!updatesDir.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    updatesDir.mkdirs();
+                }
+                File outApk = new File(updatesDir, "JaText-release-update.apk");
+
+                String currentUrl = downloadUrl.trim();
+                for (int redirects = 0; redirects < 8; redirects++) {
+                    URL url = new URL(currentUrl);
+                    conn = (HttpURLConnection) url.openConnection();
+                    conn.setInstanceFollowRedirects(true);
+                    conn.setConnectTimeout(20000);
+                    conn.setReadTimeout(45000);
+                    conn.setRequestProperty("User-Agent", "JaText-Android-Updater");
+                    conn.setRequestProperty("Accept", "application/octet-stream,*/*");
+                    conn.connect();
+
+                    int status = conn.getResponseCode();
+                    if (
+                        status == HttpURLConnection.HTTP_MOVED_PERM ||
+                        status == HttpURLConnection.HTTP_MOVED_TEMP ||
+                        status == HttpURLConnection.HTTP_SEE_OTHER ||
+                        status == 307 ||
+                        status == 308
+                    ) {
+                        String location = conn.getHeaderField("Location");
+                        conn.disconnect();
+                        if (location == null || location.isEmpty()) {
+                            throw new Exception("Redirect missing Location header");
+                        }
+                        currentUrl = location;
+                        continue;
+                    }
+                    if (status < 200 || status >= 300) {
+                        throw new Exception("Download failed (HTTP " + status + ")");
+                    }
+                    break;
+                }
+
+                long totalBytes = conn != null ? conn.getContentLengthLong() : -1L;
+                long downloadedBytes = 0L;
+                int lastPercent = -1;
+
+                try (
+                    InputStream in = conn.getInputStream();
+                    FileOutputStream out = new FileOutputStream(outApk, false)
+                ) {
+                    byte[] buffer = new byte[16384];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                        downloadedBytes += read;
+                        int percent = totalBytes > 0
+                            ? (int) Math.min(100L, (downloadedBytes * 100L) / totalBytes)
+                            : -1;
+                        if (percent != lastPercent) {
+                            lastPercent = percent;
+                            JSObject prog = new JSObject();
+                            prog.put("percent", percent);
+                            prog.put("downloadedBytes", downloadedBytes);
+                            prog.put("totalBytes", totalBytes);
+                            notifyListeners("apkDownloadProgress", prog);
+                        }
+                    }
+                    out.flush();
+                }
+
+                boolean canInstall = Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+                    ctx.getPackageManager().canRequestPackageInstalls();
+
+                Activity activity = getActivity();
+                if (!canInstall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity != null) {
+                    pendingUpdateApkFile = outApk;
+                    activity.runOnUiThread(() -> {
+                        try {
+                            Intent settingsIntent = new Intent(
+                                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:" + ctx.getPackageName())
+                            );
+                            startActivityForResult(call, settingsIntent, "handleUnknownSourcesResult");
+                        } catch (Throwable err) {
+                            JSObject res = new JSObject();
+                            res.put("needsUnknownSourcesPermission", true);
+                            res.put("launchedInstaller", false);
+                            call.resolve(res);
+                        }
+                    });
+                    return;
+                }
+
+                pendingUpdateApkFile = null;
+                if (activity != null) {
+                    activity.runOnUiThread(() -> launchPackageInstaller(ctx, outApk));
+                } else {
+                    launchPackageInstaller(ctx, outApk);
+                }
+
+                JSObject res = new JSObject();
+                res.put("needsUnknownSourcesPermission", false);
+                res.put("launchedInstaller", true);
+                call.resolve(res);
+            } catch (Throwable err) {
+                call.reject(
+                    "Could not download update: " +
+                    (err.getMessage() != null ? err.getMessage() : err.toString())
+                );
+            } finally {
+                if (conn != null) {
+                    try {
+                        conn.disconnect();
+                    } catch (Throwable ignored) {}
+                }
+            }
+        }, "JaTextApkUpdater").start();
+    }
+
+    private void launchPackageInstaller(Context ctx, File apkFile) {
+        try {
+            Uri apkUri = FileProvider.getUriForFile(
+                ctx,
+                ctx.getPackageName() + ".fileprovider",
+                apkFile
+            );
+            Intent installIntent = new Intent(Intent.ACTION_VIEW);
+            installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+            installIntent.addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                Intent.FLAG_ACTIVITY_NEW_TASK |
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+            );
+            ctx.startActivity(installIntent);
+        } catch (Throwable ignored) {}
     }
 
     @PluginMethod

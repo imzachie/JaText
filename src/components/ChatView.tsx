@@ -25,8 +25,10 @@ import {
   getSavedOutgoingBubbleStyle,
   parseWallpaperSignal,
   saveCachedWallpaper,
+  serializeWallpaperSignal,
   useIsMobileWallpaperSupported,
 } from "../lib/chatCustomization";
+import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts";
 import { isVoiceNoteOrAudio, saveCachedVoiceTranscript, decodeVoiceNoteMime } from "../lib/voiceNotes";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
@@ -34,6 +36,8 @@ import { CallMessageCard } from "./CallMessageCard";
 import { ContextMenu } from "./ContextMenu";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
+import { SwipeToReply } from "./SwipeToReply";
+import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { StickerPicker } from "./StickerPicker";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
@@ -113,6 +117,7 @@ const ChatHistory = memo(function ChatHistory({
   onOpenMessageMenuAt,
   onOpenImage,
   onReactToMessage,
+  onSwipeReply,
 }: {
   messages: ChatMessage[];
   friend: JaUser;
@@ -127,6 +132,7 @@ const ChatHistory = memo(function ChatHistory({
   onOpenMessageMenuAt: (x: number, y: number, message: ChatMessage) => void;
   onOpenImage: (url: string) => void;
   onReactToMessage: (message: ChatMessage, emoji: string) => void;
+  onSwipeReply: (message: ChatMessage) => void;
 }) {
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -232,21 +238,25 @@ const ChatHistory = memo(function ChatHistory({
                     ↗ Forwarded from {message.forwardedFrom}
                   </span>
                 )}
-                <DecoratedMessageBubble
-                  styleId={callInvite ? "default" : (message.bubbleStyle ?? "default")}
-                  mine={mine}
-                  unsent={Boolean(message.unsentAt)}
-                  className={mine ? "mine" : "theirs"}
-                  onContextMenu={
-                    message.id.startsWith("pending-")
-                      ? undefined
-                      : (event) => onOpenMessageMenu(event, message)
-                  }
-                  onTouchStart={(event) => startBubbleTouchHold(event, message)}
-                  onTouchMove={moveBubbleTouchHold}
-                  onTouchEnd={cancelBubbleTouchHold}
-                  onTouchCancel={cancelBubbleTouchHold}
+                <SwipeToReply
+                  disabled={Boolean(message.unsentAt) || message.id.startsWith("pending-")}
+                  onReply={() => onSwipeReply(message)}
                 >
+                  <DecoratedMessageBubble
+                    styleId={callInvite ? "default" : (message.bubbleStyle ?? "default")}
+                    mine={mine}
+                    unsent={Boolean(message.unsentAt)}
+                    className={mine ? "mine" : "theirs"}
+                    onContextMenu={
+                      message.id.startsWith("pending-")
+                        ? undefined
+                        : (event) => onOpenMessageMenu(event, message)
+                    }
+                    onTouchStart={(event) => startBubbleTouchHold(event, message)}
+                    onTouchMove={moveBubbleTouchHold}
+                    onTouchEnd={cancelBubbleTouchHold}
+                    onTouchCancel={cancelBubbleTouchHold}
+                  >
                   {message.replyTo && (
                     <button
                       type="button"
@@ -353,7 +363,8 @@ const ChatHistory = memo(function ChatHistory({
                       {message.body && <MessageMarkdown text={message.body} mine={mine} />}
                     </>
                   )}
-                </DecoratedMessageBubble>
+                  </DecoratedMessageBubble>
+                </SwipeToReply>
                 {!!message.reactions?.length && (
                   <div className="message-reactions">
                     {Array.from(new Set(message.reactions.map((reaction) => reaction.emoji))).map(
@@ -376,7 +387,8 @@ const ChatHistory = memo(function ChatHistory({
                   </div>
                 )}
                 <span className="msg-time">
-                  {fmtTime(message.createdAt)}{message.editedAt ? " · Edited" : ""}
+                  {fmtTime(message.createdAt)}
+                  {!callInvite && message.editedAt ? " · Edited" : ""}
                 </span>
                 {mine && !message.unsentAt && message.deliveryStatus && (
                   <span className="message-delivery-status">
@@ -423,18 +435,23 @@ const DirectChatComposer = memo(function DirectChatComposer({
   onTypingSignal: (hasText: boolean) => void;
   onSubmitDraft: (body: string) => void;
 }) {
-  const [draft, setDraft] = useState(initialDraft);
-  const prevLenRef = useRef(initialDraft.length);
+  const draftKey = `dm:${friendId}`;
+  const [draft, setDraft] = useState(() => (isEditing ? initialDraft : initialDraft || getDraft(draftKey)));
+  const prevLenRef = useRef(draft.length);
 
   useLayoutEffect(() => {
-    syncComposerTextareaHeight(composerRef.current, 0, initialDraft);
-    prevLenRef.current = initialDraft.length;
-  }, [composerRef, initialDraft]);
+    const startText = isEditing ? initialDraft : initialDraft || getDraft(draftKey);
+    syncComposerTextareaHeight(composerRef.current, 0, startText);
+    prevLenRef.current = startText.length;
+  }, [composerRef, draftKey, initialDraft, isEditing]);
 
   function handleChange(next: string) {
     const prevLen = prevLenRef.current;
     prevLenRef.current = next.length;
     setDraft(next);
+    if (!isEditing) {
+      saveStoredDraft(draftKey, next);
+    }
     syncComposerTextareaHeight(composerRef.current, prevLen, next);
     if (!isEditing) {
       onTypingSignal(Boolean(next.trim()));
@@ -449,6 +466,9 @@ const DirectChatComposer = memo(function DirectChatComposer({
     const keepFocus = document.activeElement === composerRef.current;
     prevLenRef.current = 0;
     setDraft("");
+    if (!isEditing) {
+      clearDraft(draftKey);
+    }
     syncComposerTextareaHeight(composerRef.current, trimmed.length, "");
     onSubmitDraft(trimmed);
     if (keepFocus) {
@@ -566,6 +586,8 @@ export function ChatView({
     message: ChatMessage;
   } | null>(null);
   const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
+  const [wallpaperModalOpen, setWallpaperModalOpen] = useState(false);
+  const [headerMoreMenu, setHeaderMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const isMobileWallpaper = useIsMobileWallpaperSupported();
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
   const [forwardClosing, setForwardClosing] = useState(false);
@@ -1253,9 +1275,12 @@ export function ChatView({
           <button
             type="button"
             className="icon-btn chat-more-btn"
-            title="Contact info & options"
-            aria-label="Contact info and options"
-            onClick={() => onOpenProfile(friend)}
+            title="More options"
+            aria-label="More options"
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setHeaderMoreMenu({ x: rect.right - 8, y: rect.bottom + 6 });
+            }}
           >
             ⋮
           </button>
@@ -1299,6 +1324,11 @@ export function ChatView({
         onOpenMessageMenuAt={openMessageMenuAt}
         onOpenImage={openImagePreview}
         onReactToMessage={reactToMessage}
+        onSwipeReply={(msg) => {
+          setEditingMessage(null);
+          setReplyTo(msg);
+          window.setTimeout(() => composerRef.current?.focus(), 40);
+        }}
       />
 
       {error && <div className="error-box chat-error">{error}</div>}
@@ -1559,6 +1589,128 @@ export function ChatView({
       )}
       {bubbleStyleOpen && (
         <BubbleStyleModal onClose={() => setBubbleStyleOpen(false)} />
+      )}
+      {wallpaperModalOpen && (
+        <WallpaperModal
+          currentWallpaperUrl={activeWallpaperUrl}
+          onApply={async (choice: WallpaperChoice) => {
+            const scopeKey = `dm:${friend.id}`;
+            if (choice.kind === "none") {
+              await store.sendMessage(
+                friend.id,
+                serializeWallpaperSignal({ v: 1, kind: "none", actorName: me.displayName }),
+              );
+              saveCachedWallpaper(scopeKey, null);
+            } else if (choice.kind === "preset" && choice.url) {
+              await store.sendMessage(
+                friend.id,
+                serializeWallpaperSignal({
+                  v: 1,
+                  kind: "preset",
+                  presetId: choice.presetId,
+                  url: choice.url,
+                  actorName: me.displayName,
+                }),
+              );
+              saveCachedWallpaper(scopeKey, choice.url);
+            } else if (choice.kind === "custom" && choice.file) {
+              await store.sendMessage(
+                friend.id,
+                serializeWallpaperSignal({ v: 1, kind: "custom", actorName: me.displayName }),
+                choice.file,
+              );
+            }
+          }}
+          onClose={() => setWallpaperModalOpen(false)}
+        />
+      )}
+      {headerMoreMenu && (
+        <ContextMenu
+          x={headerMoreMenu.x}
+          y={headerMoreMenu.y}
+          label={`Options for ${friend.displayName}`}
+          className="message-context-menu conversation-context-menu"
+          onClose={() => setHeaderMoreMenu(null)}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setHeaderMoreMenu(null);
+              onOpenProfile(friend);
+            }}
+          >
+            <span>👤</span> View profile
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setHeaderMoreMenu(null);
+              setBubbleStyleOpen(true);
+            }}
+          >
+            <span>💬</span> Bubble style
+          </button>
+          {isMobileWallpaper && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setHeaderMoreMenu(null);
+                setWallpaperModalOpen(true);
+              }}
+            >
+              <span>🖼️</span> Chat wallpaper
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const curMuted =
+                store.previews.find((p) => p.friendId === friend.id)?.isMuted ?? false;
+              setHeaderMoreMenu(null);
+              void store.setConversationMuted(friend.id, !curMuted);
+            }}
+          >
+            <span>
+              {store.previews.find((p) => p.friendId === friend.id)?.isMuted ? "🔔" : "🔕"}
+            </span>
+            {store.previews.find((p) => p.friendId === friend.id)?.isMuted
+              ? "Unmute chat"
+              : "Mute chat"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="destructive-menu-item"
+            onClick={() => {
+              setHeaderMoreMenu(null);
+              if (
+                window.confirm(
+                  `Unfriend ${friend.displayName} (@${friend.username})? You will need to send a friend request again to chat.`,
+                )
+              ) {
+                void store.removeFriend(friend.id);
+              }
+            }}
+          >
+            <span>💔</span> Unfriend
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={isFriendBlocked ? "" : "destructive-menu-item"}
+            onClick={() => {
+              setHeaderMoreMenu(null);
+              void store.setUserBlocked(friend.id, !isFriendBlocked);
+            }}
+          >
+            <span>{isFriendBlocked ? "🔓" : "🚫"}</span>
+            {isFriendBlocked ? "Unblock" : "Block"}
+          </button>
+        </ContextMenu>
       )}
       {imagePreview && (
         <div

@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { useJaText } from "../lib/store";
+import { AnimatedModal } from "./AnimatedModal";
+import { LegalModal, type LegalTab } from "./LegalModal";
 import { ProfileForm } from "./ProfileForm";
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
@@ -22,6 +24,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [customStatus, setCustomStatus] = useState(me?.customStatus ?? "");
   const [activityError, setActivityError] = useState<string | null>(null);
   const [notificationError, setNotificationError] = useState<string | null>(null);
+  const [legalTab, setLegalTab] = useState<LegalTab | null>(null);
 
   if (!me) return null;
 
@@ -83,12 +86,15 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card wide" onClick={(e) => e.stopPropagation()}>
-        <button className="modal-close" onClick={onClose} aria-label="Close settings">
-          ✕
-        </button>
-        <h2 className="settings-title">⚙️ Settings</h2>
+    <>
+      <AnimatedModal
+        onClose={onClose}
+        cardClassName="modal-card wide"
+        closeLabel="Close settings"
+      >
+        {(requestClose) => (
+          <>
+            <h2 className="settings-title">⚙️ Settings</h2>
         <p className="muted">
           Signed in as <strong>{me.email ?? `@${me.username}`}</strong>
           {mode === "demo" ? " · Demo mode (browser storage)" : ""}
@@ -183,26 +189,50 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         {saved && <div className="success-box">✅ Profile saved!</div>}
 
-        <ProfileForm
-          initial={me}
-          submitLabel="Save changes"
-          onDone={() => {
-            setSaved(true);
-            setTimeout(onClose, 700);
-          }}
-        />
+            <ProfileForm
+              initial={me}
+              submitLabel="Save changes"
+              onDone={() => {
+                setSaved(true);
+                setTimeout(requestClose, 650);
+              }}
+            />
 
-        <hr className="settings-hr" />
-        <button
-          className="danger-btn"
-          onClick={() => {
-            onClose();
-            void signOut();
-          }}
-        >
-          sign out
-        </button>
-      </div>
-    </div>
+            <hr className="settings-hr" />
+            <section className="legal-settings-section">
+              <h3>📜 Legal &amp; Policies</h3>
+              <div className="legal-links-row">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setLegalTab("terms")}
+                >
+                  Terms of Service
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setLegalTab("privacy")}
+                >
+                  Privacy Policy
+                </button>
+              </div>
+            </section>
+
+            <hr className="settings-hr" />
+            <button
+              className="danger-btn"
+              onClick={() => {
+                requestClose();
+                void signOut();
+              }}
+            >
+              sign out
+            </button>
+          </>
+        )}
+      </AnimatedModal>
+      {legalTab && <LegalModal initialTab={legalTab} onClose={() => setLegalTab(null)} />}
+    </>
   );
 }

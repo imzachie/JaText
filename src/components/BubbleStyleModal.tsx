@@ -9,25 +9,32 @@ import { BubblePreviewThumb } from "./BubbleStyleArtwork";
 export function BubbleStyleModal({ onClose }: { onClose: () => void }) {
   const [savedStyle, saveStyle] = useOutgoingBubbleStyle();
   const [selected, setSelected] = useState<BubbleStyleId>(savedStyle);
+  const [closing, setClosing] = useState(false);
+
+  function animateClose() {
+    if (closing) return;
+    setClosing(true);
+    window.setTimeout(onClose, 185);
+  }
 
   function handleSave() {
     saveStyle(selected);
-    onClose();
+    animateClose();
   }
 
   return (
     <div
-      className="modal-backdrop bubble-style-backdrop"
-      onClick={onClose}
+      className={`modal-backdrop bubble-style-backdrop ${closing ? "is-closing" : ""}`}
+      onClick={animateClose}
       role="dialog"
       aria-modal="true"
       aria-label="Bubble style"
     >
       <div
-        className="bubble-style-sheet"
+        className={`bubble-style-sheet ${closing ? "is-closing" : ""}`}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="bubble-style-handle-wrap" onClick={onClose}>
+        <div className="bubble-style-handle-wrap" onClick={animateClose}>
           <span className="bubble-style-handle" />
         </div>
 
@@ -64,7 +71,7 @@ export function BubbleStyleModal({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             className="bubble-style-cancel-btn"
-            onClick={onClose}
+            onClick={animateClose}
           >
             Cancel
           </button>

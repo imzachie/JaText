@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { updateCallHistoryStatus, upsertCallHistoryEntry } from "./callHistory";
 import { parseWallpaperSignal, stripBubbleStyleFromText } from "./chatCustomization";
 import { JaTextNative, configureNativeCallAudio, ensureNativeMediaPermissions } from "./nativeBridge";
 import { useJaText } from "./store";
@@ -16,7 +17,86 @@ import type { ChatMessage, JaUser } from "./types";
 
 export const CALL_INVITE_PREFIX = "__JATEXT_CALL__:";
 export const CALL_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:";
+export const GROUP_CALL_INVITE_PREFIX = "__JATEXT_CALL_GRP__:";
+export const GROUP_CALL_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:GRP:";
 const CALL_RING_TIMEOUT_MS = 42_000;
+
+export async function acquireSwitchedCameraTrack(
+  oldTrack: MediaStreamTrack | null,
+  nextFacing: "user" | "environment",
+): Promise<MediaStreamTrack> {
+  const prevSettings = oldTrack?.getSettings?.();
+  const prevDeviceId = prevSettings?.deviceId;
+
+  // CRITICAL on Android WebView / Camera2 HAL: release active hardware camera FIRST!
+  if (oldTrack) {
+    try {
+      oldTrack.stop();
+    } catch {
+      // Ignore.
+    }
+    if (Capacitor.isNativePlatform()) {
+      await new Promise((resolve) => window.setTimeout(resolve, 90));
+    }
+  }
+
+  const attempts: MediaStreamConstraints[] = [
+    {
+      video: {
+        facingMode: { exact: nextFacing },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    },
+  ];
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter((d) => d.kind === "videoinput" && d.deviceId);
+    if (cams.length > 1) {
+      const hintRegex =
+        nextFacing === "environment" ? /back|rear|environment|0/i : /front|user|selfie|1/i;
+      const otherCams = prevDeviceId
+        ? cams.filter((d) => d.deviceId !== prevDeviceId)
+        : cams;
+      const preferred = otherCams.find((d) => hintRegex.test(d.label)) ?? otherCams[0];
+      if (preferred?.deviceId) {
+        attempts.push({
+          video: {
+            deviceId: { exact: preferred.deviceId },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        });
+      }
+    }
+  } catch {
+    // Ignore enumerateDevices failure and continue with facingMode fallback.
+  }
+
+  attempts.push(
+    {
+      video: {
+        facingMode: nextFacing,
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    },
+    { video: true },
+  );
+
+  let lastErr: unknown = null;
+  for (const constraint of attempts) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraint);
+      const track = stream.getVideoTracks()[0];
+      if (track) return track;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr ?? new Error("Could not switch cameras on this device.");
+}
 
 export type CallMode = "voice" | "video";
 export type CallInviteState = "ringing" | "connected" | "ended" | "missed" | "declined";
@@ -144,7 +224,9 @@ const RTC_CONFIG: RTCConfiguration = {
 };
 
 export function isHiddenCallSignal(body?: string | null): boolean {
-  return Boolean(body?.startsWith(CALL_SIGNAL_PREFIX));
+  return Boolean(
+    body?.startsWith(CALL_SIGNAL_PREFIX) || body?.startsWith(GROUP_CALL_SIGNAL_PREFIX),
+  );
 }
 
 export function parseCallInvite(body?: string | null): CallInvitePayload | null {
@@ -209,6 +291,24 @@ function stripMarkdownForPreview(text: string): string {
 export function formatPreviewMessageText(body: string): string {
   const clean = stripBubbleStyleFromText(body);
   if (isHiddenCallSignal(clean)) return "";
+  if (clean.startsWith(GROUP_CALL_INVITE_PREFIX)) {
+    try {
+      const parsed = JSON.parse(clean.slice(GROUP_CALL_INVITE_PREFIX.length)) as {
+        mode?: string;
+        state?: string;
+        durationSec?: number;
+      };
+      const icon = parsed.mode === "video" ? "📹" : "📞";
+      const label = parsed.mode === "video" ? "Group video call" : "Group voice call";
+      if (parsed.state === "active") return `${icon} ${label} · Join call`;
+      if (parsed.durationSec && parsed.durationSec > 0) {
+        return `${icon} ${label} · ${formatCallDuration(parsed.durationSec)}`;
+      }
+      return `${icon} ${label} ended`;
+    } catch {
+      return "📞 Group call";
+    }
+  }
   const wp = parseWallpaperSignal(clean);
   if (wp) {
     return wp.kind === "none" ? "🖼️ Reset the chat wallpaper" : "🖼️ Changed the chat wallpaper";
@@ -346,7 +446,7 @@ export function playSynthesizedSoundboard(effectId: SoundboardEffectId): void {
   }
 }
 
-function playCallRingChime(kind: "incoming" | "outgoing" | "connected" | "ended"): void {
+export function playCallRingChime(kind: "incoming" | "outgoing" | "connected" | "ended"): void {
   const ctx = getCallAudioCtx();
   if (!ctx) return;
   const now = ctx.currentTime;
@@ -793,6 +893,29 @@ export function CallProvider({ children }: { children: ReactNode }) {
             const current = sessionRef.current;
             if (current) {
               handledCallIdsRef.current.add(current.callId);
+              const durationSec = current.startedAt
+                ? Math.max(1, Math.round((Date.now() - current.startedAt) / 1000))
+                : 0;
+              const wasConnected = current.phase === "connected" || current.startedAt !== null;
+              updateCallHistoryStatus(current.callId, {
+                state: wasConnected ? "ended" : "missed",
+                durationSec: wasConnected ? durationSec : undefined,
+              });
+              if (current.isCaller && current.inviteMessageId) {
+                void store
+                  .editMessage(
+                    current.inviteMessageId,
+                    serializeCallInvite({
+                      v: 1,
+                      callId: current.callId,
+                      mode: current.mode,
+                      state: wasConnected ? "ended" : "missed",
+                      durationSec: wasConnected ? durationSec : undefined,
+                      ts: Date.now(),
+                    }),
+                  )
+                  .catch(() => undefined);
+              }
               if (soundsEnabled) playCallRingChime("ended");
               cleanupCallResources();
               setSession(null);
@@ -1085,6 +1208,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
       };
       setSession(newSession);
       setMinimized(false);
+      upsertCallHistoryEntry({
+        callId,
+        kind: "dm",
+        peerId: peer.id,
+        peerDisplayName: peer.displayName,
+        peerUsername: peer.username,
+        peerAvatarUrl: peer.avatarUrl,
+        peerAvatarColor: peer.avatarColor,
+        direction: "outgoing",
+        mode: actualMode,
+        state: "ringing",
+        timestamp: Date.now(),
+      });
 
       const pc = createConfiguredPeerConnection(peer, true);
       const outbound = new MediaStream();
@@ -1216,6 +1352,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
         startedAt: null,
       });
       setMinimized(false);
+      upsertCallHistoryEntry({
+        callId: invite.callId,
+        kind: "dm",
+        peerId: caller.id,
+        peerDisplayName: caller.displayName,
+        peerUsername: caller.username,
+        peerAvatarUrl: caller.avatarUrl,
+        peerAvatarColor: caller.avatarColor,
+        direction: "incoming",
+        mode: invite.mode,
+        state: "ringing",
+        timestamp: invite.ts || Date.now(),
+      });
 
       if (soundsEnabled && !preview.isMuted && me.statusPreference !== "dnd") {
         playCallRingChime("incoming");
@@ -1227,6 +1376,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       ringTimeoutRef.current = window.setTimeout(() => {
         const cur = sessionRef.current;
         if (cur && cur.callId === invite.callId && cur.phase === "incoming") {
+          updateCallHistoryStatus(invite.callId, { state: "missed" });
           cleanupCallResources();
           setSession(null);
         }
@@ -1266,7 +1416,17 @@ export function CallProvider({ children }: { children: ReactNode }) {
         void store.deleteMessageForMe(msg.id).catch(() => undefined);
 
         if (env.type === "decline" || env.type === "hangup") {
-          if (session.isCaller && session.inviteMessageId && env.type === "decline") {
+          const durationSec = session.startedAt
+            ? Math.max(1, Math.round((Date.now() - session.startedAt) / 1000))
+            : 0;
+          const wasConnected = session.phase === "connected" || session.startedAt !== null;
+          const finalState: CallInviteState =
+            env.type === "decline" ? "declined" : wasConnected ? "ended" : "missed";
+          updateCallHistoryStatus(session.callId, {
+            state: finalState,
+            durationSec: finalState === "ended" ? durationSec : undefined,
+          });
+          if (session.isCaller && session.inviteMessageId) {
             void store
               .editMessage(
                 session.inviteMessageId,
@@ -1274,7 +1434,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
                   v: 1,
                   callId: session.callId,
                   mode: session.mode,
-                  state: "declined",
+                  state: finalState,
+                  durationSec: finalState === "ended" ? durationSec : undefined,
                   ts: Date.now(),
                 }),
               )
@@ -1452,14 +1613,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
           ts: Date.now(),
         });
 
-        // Clean up our own transient answer signal message once caller has had time to read it
+        updateCallHistoryStatus(cur.callId, { state: "connected" });
+
+        // Hide our own transient answer signal message ONLY for us (NEVER unsendMessage, which creates "This message was unsent"!)
         window.setTimeout(() => {
           void store
             .fetchMessagesWithUser(cur.peer.id)
             .then((latest) => {
               for (const m of latest) {
                 if (m.senderId === me?.id && isHiddenCallSignal(m.body) && m.body.includes(cur.callId)) {
-                  void store.unsendMessage(m.id).catch(() => store.deleteMessageForMe(m.id));
+                  void store.deleteMessageForMe(m.id).catch(() => undefined);
                 }
               }
             })
@@ -1486,6 +1649,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const cur = sessionRef.current;
     if (!cur) return;
     handledCallIdsRef.current.add(cur.callId);
+    updateCallHistoryStatus(cur.callId, { state: "declined" });
     cleanupCallResources();
     setSession(null);
     try {
@@ -1500,7 +1664,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
           .then((latest) => {
             for (const m of latest) {
               if (m.senderId === me?.id && isHiddenCallSignal(m.body) && m.body.includes(cur.callId)) {
-                void store.unsendMessage(m.id).catch(() => store.deleteMessageForMe(m.id));
+                void store.deleteMessageForMe(m.id).catch(() => undefined);
               }
             }
           })
@@ -1523,6 +1687,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const inviteMsgId = cur.inviteMessageId;
     const wasCaller = cur.isCaller;
     const wasConnected = cur.phase === "connected" || cur.startedAt !== null;
+    updateCallHistoryStatus(cur.callId, {
+      state: wasConnected ? "ended" : "missed",
+      durationSec: wasConnected ? durationSec : undefined,
+    });
 
     cleanupCallResources();
     setSession(null);
@@ -1555,7 +1723,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         .then((latest) => {
           for (const m of latest) {
             if (m.senderId === me?.id && isHiddenCallSignal(m.body) && m.body.includes(cur.callId)) {
-              void store.unsendMessage(m.id).catch(() => store.deleteMessageForMe(m.id));
+              void store.deleteMessageForMe(m.id).catch(() => undefined);
             }
           }
         })
@@ -1619,30 +1787,41 @@ export function CallProvider({ children }: { children: ReactNode }) {
   }, [broadcastMyState, facingMode, isCameraOff, isScreenSharing, refreshLocalPreviewStream]);
 
   const flipCamera = useCallback(async () => {
-    const nextFacing = facingMode === "user" ? "environment" : "user";
-    setFacingMode(nextFacing);
-    if (isCameraOff || isScreenSharing) return;
+    const prevFacing = facingMode;
+    const nextFacing = prevFacing === "user" ? "environment" : "user";
+    if (isCameraOff || isScreenSharing) {
+      setFacingMode(nextFacing);
+      return;
+    }
+    setCallError(null);
+    const oldTrack = cameraTrackRef.current;
+    cameraTrackRef.current = null;
+
     try {
-      const camStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: nextFacing },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      });
-      const newTrack = camStream.getVideoTracks()[0];
-      if (!newTrack) return;
-      const oldTrack = cameraTrackRef.current;
+      const newTrack = await acquireSwitchedCameraTrack(oldTrack, nextFacing);
       cameraTrackRef.current = newTrack;
+      setFacingMode(nextFacing);
       if (videoSenderRef.current) {
         await videoSenderRef.current.replaceTrack(newTrack);
       }
-      oldTrack?.stop();
       refreshLocalPreviewStream();
+      broadcastMyState({ isCameraOff: false });
     } catch {
+      // Recover previous camera so user doesn't lose video
+      try {
+        const fallback = await acquireSwitchedCameraTrack(null, prevFacing);
+        cameraTrackRef.current = fallback;
+        if (videoSenderRef.current) {
+          await videoSenderRef.current.replaceTrack(fallback);
+        }
+        refreshLocalPreviewStream();
+      } catch {
+        setIsCameraOff(true);
+        refreshLocalPreviewStream();
+      }
       setCallError("Could not switch cameras on this device.");
     }
-  }, [facingMode, isCameraOff, isScreenSharing, refreshLocalPreviewStream]);
+  }, [broadcastMyState, facingMode, isCameraOff, isScreenSharing, refreshLocalPreviewStream]);
 
   const toggleScreenShare = useCallback(async () => {
     if (isScreenSharing) {

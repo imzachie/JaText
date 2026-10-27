@@ -14,9 +14,11 @@ import {
   type UIEvent,
 } from "react";
 import { playMessageSound } from "../lib/alerts";
-import { formatPreviewMessageText } from "../lib/calling";
+import { formatPreviewMessageText, isHiddenCallSignal } from "../lib/calling";
 import { copyImageUrlToClipboard } from "../lib/clipboard";
 import { syncComposerTextareaHeight } from "../lib/composerUtils";
+import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts";
+import { parseGroupCallInvite, useGroupCall } from "../lib/groupCalling";
 import {
   getCachedWallpaper,
   getSavedOutgoingBubbleStyle,
@@ -32,6 +34,7 @@ import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { ContextMenu } from "./ContextMenu";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
+import { SwipeToReply } from "./SwipeToReply";
 import { Avatar } from "./Avatar";
 import { StickerPicker } from "./StickerPicker";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
@@ -145,6 +148,9 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onOpenMessageMenu,
   onOpenMessageMenuAt,
   onReactToMessage,
+  onSwipeReply,
+  onJoinGroupCall,
+  activeCallId,
 }: {
   messages: GroupMessage[];
   messagesReady: boolean;
@@ -161,6 +167,9 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onOpenMessageMenu: (event: MouseEvent, message: GroupMessage) => void;
   onOpenMessageMenuAt: (x: number, y: number, message: GroupMessage) => void;
   onReactToMessage: (message: GroupMessage, emoji: string) => void;
+  onSwipeReply: (message: GroupMessage) => void;
+  onJoinGroupCall: (invite: NonNullable<ReturnType<typeof parseGroupCallInvite>>, messageId: string) => void;
+  activeCallId: string | null;
 }) {
   const memberById = useMemo(
     () => new Map(members.map((member) => [member.id, member])),
@@ -265,6 +274,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
             </Fragment>
           );
         }
+        const groupCallInvite = !message.unsentAt ? parseGroupCallInvite(message.body) : null;
         const isAudioNote = isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
         const isImage =
           !isAudioNote &&
@@ -336,40 +346,83 @@ const GroupChatHistory = memo(function GroupChatHistory({
                       onClick={() => onOpenProfile(senderUser)}
                     />
                   )}
-                  <DecoratedMessageBubble
-                    styleId={message.bubbleStyle ?? "default"}
-                    mine={mine}
-                    unsent={Boolean(message.unsentAt)}
-                    className={`${mine ? "mine" : "theirs"} ${mentionedMe ? "bubble-mentioned" : ""}`}
-                    onContextMenu={
-                      message.id.startsWith("pending-")
-                        ? undefined
-                        : (event) => onOpenMessageMenu(event, message)
-                    }
-                    onTouchStart={(event) => startBubbleTouchHold(event, message)}
-                    onTouchMove={moveBubbleTouchHold}
-                    onTouchEnd={cancelBubbleTouchHold}
-                    onTouchCancel={cancelBubbleTouchHold}
+                  <SwipeToReply
+                    disabled={Boolean(message.unsentAt) || message.id.startsWith("pending-")}
+                    onReply={() => onSwipeReply(message)}
                   >
-                    {message.replyTo && (
-                      <button
-                        type="button"
-                        className="reply-quote"
-                        onClick={() =>
-                          document
-                            .getElementById(`group-message-${message.replyTo?.id}`)
-                            ?.scrollIntoView({ behavior: "smooth", block: "center" })
-                        }
-                      >
-                        <strong>
-                          {message.replyTo.senderId === me.id ? "You" : message.replyTo.senderName}
-                        </strong>
-                        <span>{formatPreviewMessageText(message.replyTo.body) || "📎 Attachment"}</span>
-                      </button>
-                    )}
-                    {message.unsentAt ? (
-                      <p className="unsent-copy">This message was unsent</p>
-                    ) : (
+                    <DecoratedMessageBubble
+                      styleId={groupCallInvite ? "default" : (message.bubbleStyle ?? "default")}
+                      mine={mine}
+                      unsent={Boolean(message.unsentAt)}
+                      className={`${mine ? "mine" : "theirs"} ${mentionedMe ? "bubble-mentioned" : ""}`}
+                      onContextMenu={
+                        message.id.startsWith("pending-")
+                          ? undefined
+                          : (event) => onOpenMessageMenu(event, message)
+                      }
+                      onTouchStart={(event) => startBubbleTouchHold(event, message)}
+                      onTouchMove={moveBubbleTouchHold}
+                      onTouchEnd={cancelBubbleTouchHold}
+                      onTouchCancel={cancelBubbleTouchHold}
+                    >
+                      {message.replyTo && (
+                        <button
+                          type="button"
+                          className="reply-quote"
+                          onClick={() =>
+                            document
+                              .getElementById(`group-message-${message.replyTo?.id}`)
+                              ?.scrollIntoView({ behavior: "smooth", block: "center" })
+                          }
+                        >
+                          <strong>
+                            {message.replyTo.senderId === me.id ? "You" : message.replyTo.senderName}
+                          </strong>
+                          <span>{formatPreviewMessageText(message.replyTo.body) || "📎 Attachment"}</span>
+                        </button>
+                      )}
+                      {message.unsentAt ? (
+                        <p className="unsent-copy">This message was unsent</p>
+                      ) : groupCallInvite ? (
+                        <div className={`call-invite-card group-call-card state-${groupCallInvite.state}`}>
+                          <div className="call-invite-card-top">
+                            <span className="call-invite-icon" aria-hidden="true">
+                              {groupCallInvite.mode === "video" ? "📹" : "📞"}
+                            </span>
+                            <div className="call-invite-meta">
+                              <strong>
+                                {groupCallInvite.mode === "video" ? "Group Video Call" : "Group Voice Call"}
+                              </strong>
+                              <span>
+                                {groupCallInvite.state === "ended"
+                                  ? `Call ended${
+                                      groupCallInvite.durationSec
+                                        ? ` · ${Math.floor(groupCallInvite.durationSec / 60)}:${String(
+                                            groupCallInvite.durationSec % 60,
+                                          ).padStart(2, "0")}`
+                                        : ""
+                                    }`
+                                  : activeCallId === groupCallInvite.callId
+                                    ? "You are in this call"
+                                    : `${groupCallInvite.hostName} started a call`}
+                              </span>
+                            </div>
+                          </div>
+                          {groupCallInvite.state !== "ended" &&
+                            Date.now() - message.createdAt < 4 * 60 * 60 * 1000 &&
+                            activeCallId !== groupCallInvite.callId && (
+                              <div className="call-invite-actions">
+                                <button
+                                  type="button"
+                                  className="call-card-btn accept"
+                                  onClick={() => onJoinGroupCall(groupCallInvite, message.id)}
+                                >
+                                  Join Call
+                                </button>
+                              </div>
+                            )}
+                        </div>
+                      ) : (
                       <>
                         {message.attachmentUrl &&
                           (isAudioNote ? (
@@ -471,7 +524,8 @@ const GroupChatHistory = memo(function GroupChatHistory({
                         )}
                       </>
                     )}
-                  </DecoratedMessageBubble>
+                    </DecoratedMessageBubble>
+                  </SwipeToReply>
                 </div>
                 <div className={`group-message-sub ${mine ? "mine" : "theirs"}`}>
                   {!!message.reactions?.length && (
@@ -494,7 +548,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                   )}
                   <span className="msg-time">
                     {fmtTime(message.createdAt)}
-                    {message.editedAt ? " · Edited" : ""}
+                    {!groupCallInvite && message.editedAt ? " · Edited" : ""}
                   </span>
                 </div>
               </div>
@@ -507,6 +561,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
 });
 
 const GroupChatComposer = memo(function GroupChatComposer({
+  groupId,
   initialDraft,
   members,
   summaryMemberCount,
@@ -528,6 +583,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
   onTypingSignal,
   onSubmitDraft,
 }: {
+  groupId: string;
   initialDraft: string;
   members: GroupMember[];
   summaryMemberCount: number;
@@ -549,16 +605,19 @@ const GroupChatComposer = memo(function GroupChatComposer({
   onTypingSignal: (hasText: boolean) => void;
   onSubmitDraft: (body: string) => void;
 }) {
-  const [draft, setDraft] = useState(initialDraft);
-  const [cursorPos, setCursorPos] = useState(initialDraft.length);
+  const draftKey = `group:${groupId}`;
+  const startText = isEditing ? initialDraft : initialDraft || getDraft(draftKey);
+  const [draft, setDraft] = useState(startText);
+  const [cursorPos, setCursorPos] = useState(startText.length);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionDismissedAt, setMentionDismissedAt] = useState<number | null>(null);
-  const prevLenRef = useRef(initialDraft.length);
+  const prevLenRef = useRef(startText.length);
 
   useLayoutEffect(() => {
-    syncComposerTextareaHeight(composerRef.current, 0, initialDraft);
-    prevLenRef.current = initialDraft.length;
-  }, [composerRef, initialDraft]);
+    const seed = isEditing ? initialDraft : initialDraft || getDraft(draftKey);
+    syncComposerTextareaHeight(composerRef.current, 0, seed);
+    prevLenRef.current = seed.length;
+  }, [composerRef, draftKey, initialDraft, isEditing]);
 
   const activeMentionMatch = useMemo(() => {
     const match = detectMentionQuery(draft, cursorPos);
@@ -615,6 +674,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
     const prevLen = prevLenRef.current;
     prevLenRef.current = nextDraft.length;
     setDraft(nextDraft);
+    if (!isEditing) saveStoredDraft(draftKey, nextDraft);
     setCursorPos(nextCursor);
     setMentionIndex(0);
     setMentionDismissedAt(null);
@@ -632,6 +692,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
     const prevLen = prevLenRef.current;
     prevLenRef.current = value.length;
     setDraft(value);
+    if (!isEditing) saveStoredDraft(draftKey, value);
     // Only update cursor/mention state when '@' is present so normal typing does 1 state update!
     if (value.includes("@") || activeMentionMatch !== null) {
       setCursorPos(selectionStart ?? value.length);
@@ -663,6 +724,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
     const keepFocus = document.activeElement === composerRef.current;
     prevLenRef.current = 0;
     setDraft("");
+    if (!isEditing) clearDraft(draftKey);
     setCursorPos(0);
     setMentionIndex(0);
     setMentionDismissedAt(null);
@@ -874,6 +936,7 @@ export function GroupChatView({
   const toggleGroupReaction = store.toggleGroupReaction;
   const sendGroupSticker = store.sendGroupSticker;
   const soundsEnabled = store.soundsEnabled;
+  const groupCall = useGroupCall();
   const summary = store.groups.find((entry) => entry.id === groupId);
   const group = store.groupDetails?.id === groupId ? store.groupDetails : null;
 
@@ -943,7 +1006,24 @@ export function GroupChatView({
   const lastTypingUpdate = useRef(0);
 
   const typingNames = store.groupTypingUsers.map((user) => user.displayName || user.username);
-  const conversationMessages = groupId ? store.groupMessages : EMPTY_GROUP_MESSAGES;
+  const conversationMessages = useMemo(
+    () =>
+      (groupId ? store.groupMessages : EMPTY_GROUP_MESSAGES).filter(
+        (m) => !isHiddenCallSignal(m.body),
+      ),
+    [groupId, store.groupMessages],
+  );
+  const activeGroupCallMessage = useMemo(() => {
+    for (let i = conversationMessages.length - 1; i >= 0; i -= 1) {
+      const msg = conversationMessages[i];
+      if (msg.unsentAt || Date.now() - msg.createdAt > 4 * 60 * 60 * 1000) continue;
+      const invite = parseGroupCallInvite(msg.body);
+      if (invite && invite.state !== "ended") {
+        return { invite, messageId: msg.id };
+      }
+    }
+    return null;
+  }, [conversationMessages]);
   const conversationReady = Boolean(groupId) && store.groupMessagesReady;
   const isMuted = group?.members.find((member) => member.id === store.me?.id)?.muted ?? false;
 
@@ -1807,6 +1887,54 @@ export function GroupChatView({
           </span>
         </button>
         <div className="chat-header-actions">
+          <button
+            type="button"
+            className="icon-btn call-header-btn"
+            title="Start group voice call"
+            aria-label="Start group voice call"
+            disabled={Boolean(groupCall.groupSession)}
+            onClick={() => {
+              if (!groupId) return;
+              const groupSummary =
+                summary ?? {
+                  id: groupId,
+                  name: group?.name ?? "Group chat",
+                  avatarUrl: group?.avatarUrl,
+                  ownerId: group?.ownerId ?? store.me?.id ?? "",
+                  role: "member" as const,
+                  memberCount: group?.members.length ?? 2,
+                  lastMessage: "",
+                  lastMessageAt: Date.now(),
+                };
+              void groupCall.startGroupCall(groupSummary, "voice");
+            }}
+          >
+            📞
+          </button>
+          <button
+            type="button"
+            className="icon-btn call-header-btn"
+            title="Start group video call"
+            aria-label="Start group video call"
+            disabled={Boolean(groupCall.groupSession)}
+            onClick={() => {
+              if (!groupId) return;
+              const groupSummary =
+                summary ?? {
+                  id: groupId,
+                  name: group?.name ?? "Group chat",
+                  avatarUrl: group?.avatarUrl,
+                  ownerId: group?.ownerId ?? store.me?.id ?? "",
+                  role: "member" as const,
+                  memberCount: group?.members.length ?? 2,
+                  lastMessage: "",
+                  lastMessageAt: Date.now(),
+                };
+              void groupCall.startGroupCall(groupSummary, "video");
+            }}
+          >
+            📹
+          </button>
           <button type="button" className="ghost-btn" onClick={openManageModal}>
             Manage
           </button>
@@ -1821,6 +1949,37 @@ export function GroupChatView({
           </button>
         </div>
       </header>
+
+      {activeGroupCallMessage &&
+        groupCall.groupSession?.callId !== activeGroupCallMessage.invite.callId && (
+          <div className="group-call-active-banner" role="region" aria-label="Active group call">
+            <div className="group-call-active-banner-info">
+              <span className="group-call-live-dot" aria-hidden="true" />
+              <strong>
+                {activeGroupCallMessage.invite.mode === "video"
+                  ? "Group Video Call"
+                  : "Group Voice Call"}{" "}
+                in progress
+              </strong>
+              <span className="muted small">
+                Started by {activeGroupCallMessage.invite.hostName}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="primary-btn small-btn"
+              onClick={() =>
+                void groupCall.joinGroupCall(
+                  activeGroupCallMessage.invite,
+                  activeGroupCallMessage.invite.mode === "video",
+                  activeGroupCallMessage.messageId,
+                )
+              }
+            >
+              Join Call
+            </button>
+          </div>
+        )}
 
       {showUnsendWarning && (
         <div className="unsend-warning-banner" role="status">
@@ -1855,6 +2014,16 @@ export function GroupChatView({
         onOpenMessageMenu={openMessageMenu}
         onOpenMessageMenuAt={openMessageMenuAt}
         onReactToMessage={reactToMessage}
+        onSwipeReply={(msg) => {
+          setEditingMessage(null);
+          setForwardedMessage(null);
+          setReplyTo(msg);
+          window.setTimeout(() => composerRef.current?.focus(), 40);
+        }}
+        onJoinGroupCall={(invite, messageId) =>
+          void groupCall.joinGroupCall(invite, invite.mode === "video", messageId)
+        }
+        activeCallId={groupCall.groupSession?.callId ?? null}
       />
 
       {error && (
@@ -1928,6 +2097,7 @@ export function GroupChatView({
       ) : (
         <GroupChatComposer
           key={`${groupId}:${editingMessage?.id ?? "new"}:${composerSeed.nonce}`}
+          groupId={groupId ?? "unknown"}
           initialDraft={editingMessage ? editingMessage.body : composerSeed.text}
           members={group?.members ?? EMPTY_GROUP_MEMBERS}
           summaryMemberCount={summary?.memberCount ?? 0}

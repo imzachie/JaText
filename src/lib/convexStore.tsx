@@ -143,10 +143,28 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     | JaUser
     | null
     | undefined;
-  const friends = (useQuery(
+  const rawFriends = (useQuery(
     api.friends.listFriends,
     isAuthenticated ? {} : "skip",
   ) ?? []) as JaUser[];
+  const [localUnfriendedIds, setLocalUnfriendedIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("jatext:unfriended:v1");
+      return saved ? (JSON.parse(saved) as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const previews = previewsQuery ?? [];
+  const friends = useMemo(() => {
+    const hiddenSet = new Set(localUnfriendedIds);
+    for (const p of previews) {
+      if (p.body === "__JATEXT_CALL_SIG__:{\"kind\":\"unfriend\"}") {
+        hiddenSet.add(p.friendId);
+      }
+    }
+    return rawFriends.filter((f) => !hiddenSet.has(f.id));
+  }, [localUnfriendedIds, previews, rawFriends]);
   const incoming = (useQuery(
     api.friends.listIncoming,
     isAuthenticated ? {} : "skip",
@@ -155,7 +173,6 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     api.friends.listOutgoing,
     isAuthenticated ? {} : "skip",
   ) ?? []) as FriendRequest[];
-  const previews = previewsQuery ?? [];
   const friendActivities = (useQuery(
     api.friends.activity,
     isAuthenticated ? {} : "skip",
@@ -1145,9 +1162,27 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const sendFriendRequest = useCallback<JaTextStore["sendFriendRequest"]>(
     async (username) => {
-      await sendRequestMut({ username: username.trim().toLowerCase().replace(/^@/, "") });
+      const clean = username.trim().toLowerCase().replace(/^@/, "");
+      const matched = rawFriends.find((u) => u.username.toLowerCase() === clean);
+      if (matched) {
+        setLocalUnfriendedIds((prev) => {
+          const next = prev.filter((id) => id !== matched.id);
+          try {
+            localStorage.setItem("jatext:unfriended:v1", JSON.stringify(next));
+          } catch {
+            // Ignore.
+          }
+          return next;
+        });
+        await sendMessageMut({
+          receiverId: matched.id as Id<"users">,
+          body: "__JATEXT_CALL_SIG__:{\"kind\":\"refriend\"}",
+        }).catch(() => undefined);
+        return;
+      }
+      await sendRequestMut({ username: clean });
     },
-    [sendRequestMut],
+    [rawFriends, sendMessageMut, sendRequestMut],
   );
 
   const respondRequest = useCallback<JaTextStore["respondRequest"]>(
@@ -1158,6 +1193,39 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       });
     },
     [respondMut],
+  );
+
+  const removeFriend = useCallback<JaTextStore["removeFriend"]>(
+    async (friendId) => {
+      // Optimistically remove immediately + persist local fallback
+      setLocalUnfriendedIds((prev) => {
+        if (prev.includes(friendId)) return prev;
+        const next = [...prev, friendId];
+        try {
+          localStorage.setItem("jatext:unfriended:v1", JSON.stringify(next));
+        } catch {
+          // Ignore.
+        }
+        return next;
+      });
+      if (activeChatId === friendId) {
+        setActiveChatIdForStore(null);
+      }
+
+      // Try native server mutation first; fall back to symmetric control signal if server hasn't redeployed yet
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await convex.mutation("friends:remove" as any, {
+          friendId: friendId as Id<"users">,
+        });
+      } catch {
+        await sendMessageMut({
+          receiverId: friendId as Id<"users">,
+          body: "__JATEXT_CALL_SIG__:{\"kind\":\"unfriend\"}",
+        }).catch(() => undefined);
+      }
+    },
+    [activeChatId, convex, sendMessageMut, setActiveChatIdForStore],
   );
 
   const sendMessage = useCallback<JaTextStore["sendMessage"]>(
@@ -1489,6 +1557,29 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [convex, isAuthenticated],
   );
 
+  const fetchGroupMessages = useCallback<JaTextStore["fetchGroupMessages"]>(
+    async (groupId) => {
+      if (!isAuthenticated || !groupId) return [];
+      const rows = await convex.query(api.groups.listMessages, {
+        groupId: groupId as Id<"groups">,
+      });
+      return foldReactionSignals(((rows ?? []) as GroupMessage[]).map(normalizeGroupMessage))
+        .messages;
+    },
+    [convex, isAuthenticated],
+  );
+
+  const fetchGroupDetails = useCallback<JaTextStore["fetchGroupDetails"]>(
+    async (groupId) => {
+      if (!isAuthenticated || !groupId) return null;
+      const details = await convex.query(api.groups.get, {
+        groupId: groupId as Id<"groups">,
+      });
+      return (details ?? null) as GroupDetails | null;
+    },
+    [convex, isAuthenticated],
+  );
+
   const value: JaTextStore = {
     mode: "convex",
     loading: authLoading || (isAuthenticated && me === undefined),
@@ -1531,6 +1622,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     saveProfile,
     sendFriendRequest,
     respondRequest,
+    removeFriend,
     sendMessage,
     fetchMessagesWithUser,
     forwardMessage,
@@ -1569,6 +1661,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     createGroup,
     addGroupMembers,
     sendGroupMessage,
+    fetchGroupMessages,
+    fetchGroupDetails,
     sendGroupSticker,
     setGroupTyping,
     toggleGroupReaction,

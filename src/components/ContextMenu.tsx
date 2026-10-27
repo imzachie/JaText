@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 export function ContextMenu({
@@ -18,6 +18,26 @@ export function ContextMenu({
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
+  const [closing, setClosing] = useState(false);
+
+  const requestClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    window.setTimeout(() => {
+      onClose();
+    }, 165);
+  }, [closing, onClose]);
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        requestClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [requestClose]);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -33,13 +53,16 @@ export function ContextMenu({
 
   return createPortal(
     <div
-      className="context-menu-backdrop"
-      onClick={onClose}
-      onContextMenu={(event) => event.preventDefault()}
+      className={`context-menu-backdrop ${closing ? "is-closing" : ""}`}
+      onClick={requestClose}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        requestClose();
+      }}
     >
       <div
         ref={menuRef}
-        className={className}
+        className={`${className} ${closing ? "is-closing closing" : ""}`}
         role="menu"
         aria-label={label}
         style={{ left: position.left, top: position.top }}

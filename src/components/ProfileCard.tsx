@@ -79,6 +79,13 @@ export function ProfileModal({
   const isMobileWallpaper = useIsMobileWallpaperSupported();
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
   const [blockBusy, setBlockBusy] = useState(false);
+  const [closing, setClosing] = useState(false);
+
+  function animateClose() {
+    if (closing) return;
+    setClosing(true);
+    window.setTimeout(onClose, 185);
+  }
 
   const color = colorById(user.avatarColor);
   const isNotMe = Boolean(me && me.id !== user.id);
@@ -159,13 +166,20 @@ export function ProfileModal({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div
+      className={`modal-backdrop ${closing ? "is-closing" : ""}`}
+      onClick={animateClose}
+    >
       <div
-        className="modal-card profile-modal-card"
+        className={`modal-card profile-modal-card ${closing ? "is-closing" : ""}`}
         style={{ "--profile-outline": color.hex } as CSSProperties}
         onClick={(e) => e.stopPropagation()}
       >
-        <button className="modal-close" onClick={onClose} aria-label="Close profile">
+        <button
+          className="modal-close animated-x-btn"
+          onClick={animateClose}
+          aria-label="Close profile"
+        >
           ✕
         </button>
         <ProfileCard user={user} status={status} />
@@ -178,7 +192,7 @@ export function ProfileModal({
                   className="ghost-btn profile-action-row"
                   onClick={() => {
                     setActiveChatId(user.id);
-                    onClose();
+                    animateClose();
                   }}
                 >
                   <span>💬</span>
@@ -188,7 +202,7 @@ export function ProfileModal({
                   type="button"
                   className="ghost-btn profile-action-row"
                   onClick={() => {
-                    onClose();
+                    animateClose();
                     void startCall(user, "voice");
                   }}
                 >
@@ -199,7 +213,7 @@ export function ProfileModal({
                   type="button"
                   className="primary-btn profile-action-row"
                   onClick={() => {
-                    onClose();
+                    animateClose();
                     void startCall(user, "video");
                   }}
                 >
@@ -216,6 +230,23 @@ export function ProfileModal({
                     <span>Chat wallpaper</span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="ghost-btn danger profile-action-row"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `Unfriend ${user.displayName} (@${user.username})? You will need to send a friend request again to chat.`,
+                      )
+                    ) {
+                      void store.removeFriend(user.id);
+                      animateClose();
+                    }
+                  }}
+                >
+                  <span>💔</span>
+                  <span>Unfriend</span>
+                </button>
               </>
             )}
             <button

@@ -15,8 +15,29 @@ export interface ScreenCaptureStoppedEvent {
   stopped: boolean;
 }
 
+export interface ApkDownloadProgressEvent {
+  percent: number;
+  downloadedBytes: number;
+  totalBytes: number;
+}
+
+export interface AppVersionInfo {
+  versionName: string;
+  versionCode: number;
+  canInstallPackages: boolean;
+}
+
 export interface JaTextNativePlugin {
   checkPushSupport(): Promise<{ firebaseConfigured: boolean }>;
+  getAppVersionInfo(): Promise<AppVersionInfo>;
+  openUnknownSourcesSettings(): Promise<{
+    canInstallPackages?: boolean;
+    launchedInstaller?: boolean;
+  }>;
+  downloadAndInstallApk(options: { url: string }): Promise<{
+    needsUnknownSourcesPermission: boolean;
+    launchedInstaller: boolean;
+  }>;
   copyImageBase64(options: { base64: string }): Promise<{ copied: boolean }>;
   requestMediaPermissions(options: { video: boolean }): Promise<{ granted: boolean }>;
   setCallAudioRoute(options: { active: boolean; speaker: boolean }): Promise<{ speaker: boolean }>;
@@ -35,6 +56,10 @@ export interface JaTextNativePlugin {
   addListener(
     eventName: "screenCaptureStopped",
     listenerFunc: (event: ScreenCaptureStoppedEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "apkDownloadProgress",
+    listenerFunc: (event: ApkDownloadProgressEvent) => void,
   ): Promise<PluginListenerHandle>;
 }
 

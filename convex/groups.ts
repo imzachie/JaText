@@ -131,7 +131,9 @@ export const listMine = query({
           .take(40);
         const lastMessage =
           recentGroupMessages.find(
-            (m) => !m.body.startsWith("__JATEXT_CALL_SIG__:"),
+            (m) =>
+              !m.body.startsWith("__JATEXT_CALL_SIG__:") &&
+              !m.body.startsWith("__JATEXT_REACT__:"),
           ) ?? null;
         const lastSender = lastMessage ? await ctx.db.get(lastMessage.senderId) : null;
         const previewBody = lastMessage?.hiddenFor?.includes(me._id) || lastMessage?.unsentAt

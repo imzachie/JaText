@@ -246,6 +246,7 @@ export interface JaTextStore {
 
   sendFriendRequest: (username: string) => Promise<void>;
   respondRequest: (requestId: string, accept: boolean) => Promise<void>;
+  removeFriend: (friendId: string) => Promise<void>;
 
   sendMessage: (receiverId: string, body: string, file?: File, replyToId?: string) => Promise<void>;
   fetchMessagesWithUser: (otherId: string) => Promise<ChatMessage[]>;
@@ -285,6 +286,8 @@ export interface JaTextStore {
   createGroup: (name: string, memberIds: string[]) => Promise<string>;
   addGroupMembers: (groupId: string, memberIds: string[]) => Promise<void>;
   sendGroupMessage: (groupId: string, body: string, file?: File, replyToId?: string, forwardedFromId?: string) => Promise<void>;
+  fetchGroupMessages: (groupId: string) => Promise<GroupMessage[]>;
+  fetchGroupDetails: (groupId: string) => Promise<GroupDetails | null>;
   sendGroupSticker: (groupId: string, sticker: StickerMedia, replyToId?: string) => Promise<void>;
   setGroupTyping: (groupId: string, isTyping: boolean) => Promise<void>;
   toggleGroupReaction: (messageId: string, emoji: string) => Promise<void>;

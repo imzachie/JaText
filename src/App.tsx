@@ -3,9 +3,11 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { ChatView } from "./components/ChatView";
 import { CallOverlay } from "./components/CallOverlay";
+import { GroupCallOverlay } from "./components/GroupCallOverlay";
 import { CommunityChatView } from "./components/CommunityChatView";
 import { GroupChatView } from "./components/GroupChatView";
 import { LoginPage } from "./components/LoginPage";
+import { MobileUpdateGate } from "./components/MobileUpdateGate";
 import { Onboarding } from "./components/Onboarding";
 import { NotificationWelcome } from "./components/NotificationWelcome";
 import { ProfileModal } from "./components/ProfileCard";
@@ -18,6 +20,7 @@ import {
   parseCallInvite,
   useCall,
 } from "./lib/calling";
+import { GroupCallProvider, useGroupCall } from "./lib/groupCalling";
 import { useJaText } from "./lib/store";
 import { playMessageSound } from "./lib/alerts";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
@@ -27,15 +30,30 @@ const NOTIFICATION_WELCOME_KEY = "jatext-notification-welcome-seen-v1";
 export default function App() {
   return (
     <CallProvider>
-      <AppContent />
+      <GroupCallProvider>
+        <AppContent />
+        <MobileUpdateHost />
+      </GroupCallProvider>
     </CallProvider>
   );
+}
+
+function MobileUpdateHost() {
+  const store = useJaText();
+  if (!Capacitor.isNativePlatform()) return null;
+  const readyForWelcome = !store.loading && Boolean(store.me?.onboardingComplete);
+  return <MobileUpdateGate readyForWelcome={readyForWelcome} />;
 }
 
 function AppContent() {
   const store = useJaText();
   const { session: callSession, minimized: callMinimized, setMinimized: setCallMinimized } =
     useCall();
+  const {
+    groupSession: groupCallSession,
+    minimized: groupCallMinimized,
+    setMinimized: setGroupCallMinimized,
+  } = useGroupCall();
   const {
     activeChatId,
     activeGroupId,
@@ -63,6 +81,7 @@ function AppContent() {
     hasProfile: Boolean(profileUser),
     settingsOpen,
     callFullScreen: false,
+    groupCallFullScreen: false,
   });
 
   useEffect(() => {
@@ -261,14 +280,26 @@ function AppContent() {
       callFullScreen: Boolean(
         callSession && !callMinimized && callSession.phase !== "incoming",
       ),
+      groupCallFullScreen: Boolean(groupCallSession && !groupCallMinimized),
     };
-  }, [activeChatId, activeGroupId, callMinimized, callSession, profileUser, settingsOpen]);
+  }, [
+    activeChatId,
+    activeGroupId,
+    callMinimized,
+    callSession,
+    groupCallMinimized,
+    groupCallSession,
+    profileUser,
+    settingsOpen,
+  ]);
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     const listener = CapacitorApp.addListener("backButton", ({ canGoBack }) => {
       const navigation = navigationStateRef.current;
-      if (navigation.callFullScreen) {
+      if (navigation.groupCallFullScreen) {
+        setGroupCallMinimized(true);
+      } else if (navigation.callFullScreen) {
         setCallMinimized(true);
       } else if (navigation.settingsOpen) {
         setSettingsOpen(false);
@@ -287,7 +318,7 @@ function AppContent() {
     return () => {
       void listener.then((handle) => handle.remove());
     };
-  }, [setActiveChatId, setActiveGroupId, setCallMinimized]);
+  }, [setActiveChatId, setActiveGroupId, setCallMinimized, setGroupCallMinimized]);
 
   useEffect(() => {
     const preventNativeContextMenu = (event: MouseEvent) => event.preventDefault();
@@ -363,6 +394,7 @@ function AppContent() {
       )}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       <CallOverlay />
+      <GroupCallOverlay />
     </div>
   );
 }

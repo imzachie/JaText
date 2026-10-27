@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useJaText } from "../lib/store";
+import { LegalModal, type LegalTab } from "./LegalModal";
 
 function GoogleIcon() {
   return (
@@ -22,6 +23,7 @@ export function LoginPage() {
   const [showDemoGoogle, setShowDemoGoogle] = useState(false);
   const [gName, setGName] = useState("Alex Google");
   const [gEmail, setGEmail] = useState("Alex@example.com");
+  const [legalTab, setLegalTab] = useState<LegalTab | null>(null);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -148,7 +150,21 @@ export function LoginPage() {
             lives in this browser. Add <code>VITE_CONVEX_URL</code> to go live on Convex.
           </p>
         ) : null}
+
+        <div className="login-legal-footer">
+          <span className="muted small">By continuing, you agree to JaText&apos;s</span>
+          <div className="legal-inline-btns">
+            <button type="button" className="inline-link-btn" onClick={() => setLegalTab("terms")}>
+              Terms of Service
+            </button>
+            <span className="muted small">·</span>
+            <button type="button" className="inline-link-btn" onClick={() => setLegalTab("privacy")}>
+              Privacy Policy
+            </button>
+          </div>
+        </div>
       </section>
+      {legalTab && <LegalModal initialTab={legalTab} onClose={() => setLegalTab(null)} />}
     </div>
   );
 }

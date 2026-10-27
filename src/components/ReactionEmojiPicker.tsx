@@ -26,9 +26,18 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
 }: ReactionEmojiPickerProps) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<EmojiCategoryId>("smileys");
+  const [closing, setClosing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const animateAndClose = () => {
+    if (closing) return;
+    setClosing(true);
+    window.setTimeout(() => {
+      onClose();
+    }, 175);
+  };
   const canAnchor =
     typeof window !== "undefined" &&
     window.innerWidth > 680 &&
@@ -48,11 +57,11 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") animateAndClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  });
 
   useLayoutEffect(() => {
     if (!canAnchor || x === undefined || y === undefined) return;
@@ -91,13 +100,13 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
 
   return createPortal(
     <div
-      className="emoji-picker-backdrop"
-      onClick={onClose}
+      className={`emoji-picker-backdrop ${closing ? "is-closing" : ""}`}
+      onClick={animateAndClose}
       onContextMenu={(event) => event.preventDefault()}
     >
       <section
         ref={panelRef}
-        className={`emoji-picker-menu ${pos ? "anchored" : "sheet"}`}
+        className={`emoji-picker-menu ${pos ? "anchored" : "sheet"} ${closing ? "is-closing" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label="Choose a reaction emoji"
@@ -140,8 +149,8 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
           </div>
           <button
             type="button"
-            className="emoji-picker-close"
-            onClick={onClose}
+            className="emoji-picker-close animated-x-btn"
+            onClick={animateAndClose}
             aria-label="Close emoji picker"
           >
             ✕
