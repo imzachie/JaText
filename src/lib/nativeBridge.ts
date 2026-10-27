@@ -11,6 +11,11 @@ export interface ScreenCaptureFrameEvent {
   height: number;
 }
 
+export interface ScreenCaptureAudioEvent {
+  pcm: string;
+  sampleRate: number;
+}
+
 export interface ScreenCaptureStoppedEvent {
   stopped: boolean;
 }
@@ -57,6 +62,10 @@ export interface JaTextNativePlugin {
   addListener(
     eventName: "screenCaptureFrame",
     listenerFunc: (event: ScreenCaptureFrameEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "screenCaptureAudio",
+    listenerFunc: (event: ScreenCaptureAudioEvent) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     eventName: "screenCaptureStopped",

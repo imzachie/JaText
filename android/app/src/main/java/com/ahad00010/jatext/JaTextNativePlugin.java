@@ -76,6 +76,15 @@ public class JaTextNativePlugin extends Plugin {
         inst.notifyListeners("screenCaptureFrame", payload);
     }
 
+    public static void emitScreenAudio(String base64Pcm, int sampleRate) {
+        JaTextNativePlugin inst = activeInstance;
+        if (inst == null) return;
+        JSObject payload = new JSObject();
+        payload.put("pcm", base64Pcm);
+        payload.put("sampleRate", sampleRate);
+        inst.notifyListeners("screenCaptureAudio", payload);
+    }
+
     public static void emitScreenCaptureStopped() {
         JaTextNativePlugin inst = activeInstance;
         if (inst == null) return;
@@ -113,8 +122,8 @@ public class JaTextNativePlugin extends Plugin {
         Context ctx = getContext();
         JSObject result = new JSObject();
         if (ctx == null) {
-            result.put("versionName", "2.0");
-            result.put("versionCode", 11);
+            result.put("versionName", "2.1");
+            result.put("versionCode", 12);
             result.put("canInstallPackages", true);
             call.resolve(result);
             return;
@@ -128,13 +137,13 @@ public class JaTextNativePlugin extends Plugin {
                 ? info.getLongVersionCode()
                 : info.versionCode;
             boolean canInstall = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || pm.canRequestPackageInstalls();
-            result.put("versionName", info.versionName != null ? info.versionName : "2.0");
+            result.put("versionName", info.versionName != null ? info.versionName : "2.1");
             result.put("versionCode", (int) versionCode);
             result.put("canInstallPackages", canInstall);
             call.resolve(result);
         } catch (Throwable err) {
-            result.put("versionName", "2.0");
-            result.put("versionCode", 11);
+            result.put("versionName", "2.1");
+            result.put("versionCode", 12);
             result.put("canInstallPackages", true);
             call.resolve(result);
         }

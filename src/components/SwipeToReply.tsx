@@ -1,10 +1,10 @@
-import { useRef, type ReactNode, type TouchEvent } from "react";
+import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from "react";
 import { Capacitor } from "@capacitor/core";
 
-const SWIPE_TRIGGER_PX = 52;
-const MAX_PULL_PX = 78;
+const TRIGGER_PX = 56;
+const MAX_PULL_PX = 84;
 
-function isMobileTouchEnvironment(): boolean {
+function isMobileTouchDevice(): boolean {
   if (Capacitor.isNativePlatform()) return true;
   if (typeof window === "undefined") return false;
   return (
@@ -22,109 +22,142 @@ export function SwipeToReply({
   onReply: () => void;
   children: ReactNode;
 }) {
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  const badgeRef = useRef<HTMLDivElement | null>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const iconRef = useRef<HTMLDivElement>(null);
+  const [isMobile, setIsMobile] = useState<boolean>(() => isMobileTouchDevice());
   const gestureRef = useRef<{
+    active: boolean;
+    lockedAxis: "none" | "x" | "y";
     startX: number;
     startY: number;
-    locked: "none" | "horizontal" | "vertical";
-    offset: number;
-    armed: boolean;
-  } | null>(null);
+    dx: number;
+    hapticFired: boolean;
+  }>({
+    active: false,
+    lockedAxis: "none",
+    startX: 0,
+    startY: 0,
+    dx: 0,
+    hapticFired: false,
+  });
 
-  const handleTouchStart = (e: TouchEvent<HTMLDivElement>) => {
-    if (disabled || e.touches.length !== 1 || !isMobileTouchEnvironment()) {
-      gestureRef.current = null;
-      return;
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const update = () => setIsMobile(isMobileTouchDevice());
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  function applyOffset(px: number, animate: boolean) {
+    const track = trackRef.current;
+    const icon = iconRef.current;
+    if (track) {
+      track.style.transition = animate
+        ? "transform 240ms cubic-bezier(0.22, 1, 0.36, 1)"
+        : "none";
+      track.style.transform = px > 0 ? `translate3d(${px}px, 0, 0)` : "";
     }
-    const t = e.touches[0];
+    if (icon) {
+      const progress = Math.min(1, px / TRIGGER_PX);
+      icon.style.transition = animate
+        ? "opacity 200ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1)"
+        : "none";
+      icon.style.opacity = px > 4 ? `${progress}` : "0";
+      icon.style.transform = `translate3d(${Math.min(14, px * 0.22) - 8}px, 0, 0) scale(${
+        0.5 + progress * 0.5
+      })`;
+      icon.classList.toggle("armed", px >= TRIGGER_PX);
+    }
+  }
+
+  function handleTouchStart(event: TouchEvent<HTMLDivElement>) {
+    if (disabled || !isMobileTouchDevice() || event.touches.length !== 1) return;
+    const t = event.touches[0];
     gestureRef.current = {
+      active: true,
+      lockedAxis: "none",
       startX: t.clientX,
       startY: t.clientY,
-      locked: "none",
-      offset: 0,
-      armed: false,
+      dx: 0,
+      hapticFired: false,
     };
-    if (contentRef.current) {
-      contentRef.current.style.transition = "none";
-    }
-  };
+  }
 
-  const handleTouchMove = (e: TouchEvent<HTMLDivElement>) => {
+  function handleTouchMove(event: TouchEvent<HTMLDivElement>) {
     const g = gestureRef.current;
-    if (!g || e.touches.length !== 1) return;
-    const t = e.touches[0];
-    const dx = t.clientX - g.startX;
-    const dy = t.clientY - g.startY;
+    if (!g.active || event.touches.length !== 1) return;
+    const t = event.touches[0];
+    const rawDx = t.clientX - g.startX;
+    const rawDy = t.clientY - g.startY;
 
-    if (g.locked === "none") {
-      if (Math.abs(dy) > 12 && Math.abs(dy) >= Math.abs(dx)) {
-        g.locked = "vertical";
-        return;
-      }
-      if (dx > 13 && dx > Math.abs(dy) * 1.45) {
-        g.locked = "horizontal";
+    if (g.lockedAxis === "none") {
+      if (Math.abs(rawDx) < 8 && Math.abs(rawDy) < 8) return;
+      if (rawDx > 0 && Math.abs(rawDx) > Math.abs(rawDy) * 1.25) {
+        g.lockedAxis = "x";
       } else {
+        g.lockedAxis = "y";
+        g.active = false;
         return;
       }
     }
 
-    if (g.locked !== "horizontal") return;
+    if (g.lockedAxis !== "x") return;
 
-    const clamped = Math.max(0, Math.min(MAX_PULL_PX, dx * 0.72));
-    g.offset = clamped;
-    const armed = clamped >= SWIPE_TRIGGER_PX;
-    g.armed = armed;
-
-    if (contentRef.current) {
-      contentRef.current.style.transform = `translate3d(${clamped}px, 0, 0)`;
-    }
-    if (badgeRef.current) {
-      const progress = Math.min(1, clamped / SWIPE_TRIGGER_PX);
-      badgeRef.current.style.opacity = `${progress}`;
-      badgeRef.current.style.transform = `translateY(-50%) scale(${0.55 + progress * 0.45})`;
-      badgeRef.current.classList.toggle("armed", armed);
-    }
-  };
-
-  const finishGesture = () => {
-    const g = gestureRef.current;
-    gestureRef.current = null;
-    if (!g || g.locked !== "horizontal") return;
-
-    if (contentRef.current) {
-      contentRef.current.style.transition = "transform 240ms cubic-bezier(0.22, 1, 0.36, 1)";
-      contentRef.current.style.transform = "translate3d(0px, 0, 0)";
-    }
-    if (badgeRef.current) {
-      badgeRef.current.style.transition = "opacity 180ms ease, transform 200ms ease";
-      badgeRef.current.style.opacity = "0";
-      badgeRef.current.style.transform = "translateY(-50%) scale(0.5)";
-      badgeRef.current.classList.remove("armed");
-    }
-
-    if (g.armed) {
+    const clamped = Math.max(
+      0,
+      Math.min(
+        MAX_PULL_PX,
+        rawDx <= TRIGGER_PX
+          ? rawDx
+          : TRIGGER_PX + (rawDx - TRIGGER_PX) * 0.34,
+      ),
+    );
+    g.dx = clamped;
+    if (clamped >= TRIGGER_PX && !g.hapticFired) {
+      g.hapticFired = true;
       try {
         navigator.vibrate?.(12);
       } catch {
-        // Ignore if vibration unsupported.
+        // Ignore on unsupported browsers
       }
+    } else if (clamped < TRIGGER_PX - 6) {
+      g.hapticFired = false;
+    }
+    applyOffset(clamped, false);
+  }
+
+  function finishGesture(trigger: boolean) {
+    const g = gestureRef.current;
+    if (!g.active) return;
+    const shouldReply = trigger && g.lockedAxis === "x" && g.dx >= TRIGGER_PX;
+    g.active = false;
+    g.lockedAxis = "none";
+    g.dx = 0;
+    applyOffset(0, true);
+    if (shouldReply) {
       onReply();
     }
-  };
+  }
 
   return (
     <div
       className="swipe-reply-wrap"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
-      onTouchEnd={finishGesture}
-      onTouchCancel={finishGesture}
+      onTouchEnd={() => finishGesture(true)}
+      onTouchCancel={() => finishGesture(false)}
     >
-      <div ref={badgeRef} className="swipe-reply-indicator" aria-hidden="true">
-        ↩
-      </div>
-      <div ref={contentRef} className="swipe-reply-content">
+      {isMobile && !disabled && (
+        <div
+          ref={iconRef}
+          className="swipe-reply-indicator"
+          aria-hidden="true"
+          style={{ opacity: 0, transform: "translate3d(-8px, 0, 0) scale(0.5)" }}
+        >
+          <span className="swipe-reply-badge">↩</span>
+        </div>
+      )}
+      <div ref={trackRef} className="swipe-reply-content">
         {children}
       </div>
     </div>

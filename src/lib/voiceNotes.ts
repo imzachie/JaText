@@ -126,6 +126,26 @@ export function getCachedVoiceTranscript(messageId: string): string | undefined 
   return map[messageId];
 }
 
+export const VOICE_TRANSCRIPT_EVENT = "jatext:voice-transcript";
+
+export interface VoiceTranscriptEventDetail {
+  messageId: string;
+  status: "progress" | "done" | "error";
+  percent?: number;
+  partialText?: string;
+  text?: string;
+  error?: string;
+}
+
+function emitVoiceTranscriptEvent(detail: VoiceTranscriptEventDetail): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new CustomEvent<VoiceTranscriptEventDetail>(VOICE_TRANSCRIPT_EVENT, { detail }));
+  } catch {
+    // Ignore dispatch errors in non-DOM contexts.
+  }
+}
+
 export function saveCachedVoiceTranscript(messageId: string, transcript: string): void {
   try {
     const map = loadTranscriptCache();
@@ -135,6 +155,12 @@ export function saveCachedVoiceTranscript(messageId: string, transcript: string)
   } catch {
     // Ignore storage quota errors.
   }
+  emitVoiceTranscriptEvent({
+    messageId,
+    status: "done",
+    percent: 100,
+    text: transcript,
+  });
 }
 
 type AsrCallable = (
@@ -144,22 +170,120 @@ type AsrCallable = (
 
 let cachedAsrPipelinePromise: Promise<AsrCallable> | null = null;
 
-async function getWhisperPipeline(): Promise<AsrCallable> {
+async function getFallbackWhisperPipeline(): Promise<AsrCallable> {
   if (!cachedAsrPipelinePromise) {
     const cdnUrl = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.4.0/+esm";
     cachedAsrPipelinePromise = import(/* @vite-ignore */ cdnUrl)
-      .then(async (mod: { pipeline: (task: string, model: string, opts?: Record<string, unknown>) => Promise<AsrCallable>; env?: { allowLocalModels?: boolean } }) => {
-        if (mod.env) mod.env.allowLocalModels = false;
-        return mod.pipeline("automatic-speech-recognition", "onnx-community/whisper-tiny.en", {
-          dtype: "q8",
-        });
-      })
+      .then(
+        async (mod: {
+          pipeline: (
+            task: string,
+            model: string,
+            opts?: Record<string, unknown>,
+          ) => Promise<AsrCallable>;
+          env?: { allowLocalModels?: boolean };
+        }) => {
+          if (mod.env) mod.env.allowLocalModels = false;
+          return mod.pipeline("automatic-speech-recognition", "onnx-community/whisper-tiny.en", {
+            dtype: "q8",
+          });
+        },
+      )
       .catch((error: unknown) => {
         cachedAsrPipelinePromise = null;
         throw error;
       });
   }
   return cachedAsrPipelinePromise;
+}
+
+interface PendingWorkerJob {
+  messageId: string;
+  resolve: (text: string) => void;
+  reject: (err: Error) => void;
+  onProgress?: (percent: number, partialText?: string) => void;
+}
+
+let sharedWorker: Worker | null = null;
+let sharedWorkerFailed = false;
+const pendingWorkerJobs = new Map<string, PendingWorkerJob>();
+const inFlightTranscripts = new Map<string, Promise<string>>();
+
+function getOrCreateTranscriptWorker(): Worker | null {
+  if (sharedWorkerFailed || typeof Worker === "undefined") return null;
+  if (sharedWorker) return sharedWorker;
+  try {
+    const worker = new Worker(new URL("./voiceTranscriptWorker.ts", import.meta.url), {
+      type: "module",
+    });
+    worker.onmessage = (
+      event: MessageEvent<
+        | { type: "progress"; id: string; percent: number; partialText?: string }
+        | { type: "done"; id: string; text: string }
+        | { type: "error"; id: string; message: string }
+      >,
+    ) => {
+      const msg = event.data;
+      if (!msg || !msg.id) return;
+      const job = pendingWorkerJobs.get(msg.id);
+      if (!job) return;
+
+      if (msg.type === "progress") {
+        job.onProgress?.(msg.percent, msg.partialText);
+        emitVoiceTranscriptEvent({
+          messageId: job.messageId,
+          status: "progress",
+          percent: msg.percent,
+          partialText: msg.partialText,
+        });
+      } else if (msg.type === "done") {
+        pendingWorkerJobs.delete(msg.id);
+        job.resolve(msg.text);
+      } else if (msg.type === "error") {
+        pendingWorkerJobs.delete(msg.id);
+        job.reject(new Error(msg.message || "Transcription failed."));
+      }
+    };
+    worker.onerror = () => {
+      sharedWorkerFailed = true;
+      sharedWorker = null;
+      for (const [id, job] of pendingWorkerJobs.entries()) {
+        pendingWorkerJobs.delete(id);
+        job.reject(new Error("Worker transcription unavailable."));
+      }
+    };
+    sharedWorker = worker;
+    return worker;
+  } catch {
+    sharedWorkerFailed = true;
+    return null;
+  }
+}
+
+async function runWorkerTranscription(
+  messageId: string,
+  pcm16k: Float32Array,
+  onProgress?: (percent: number, partialText?: string) => void,
+): Promise<string> {
+  const worker = getOrCreateTranscriptWorker();
+  if (!worker) {
+    throw new Error("Worker unavailable");
+  }
+  const jobId = `${messageId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const transferablePcm = new Float32Array(pcm16k.length);
+  transferablePcm.set(pcm16k);
+
+  return new Promise<string>((resolve, reject) => {
+    pendingWorkerJobs.set(jobId, { messageId, resolve, reject, onProgress });
+    worker.postMessage(
+      {
+        type: "transcribe",
+        id: jobId,
+        pcm: transferablePcm,
+      },
+      [transferablePcm.buffer],
+    );
+  });
 }
 
 async function decodeTo16kHzMono(url: string): Promise<Float32Array> {
@@ -179,7 +303,10 @@ async function decodeTo16kHzMono(url: string): Promise<Float32Array> {
     source.connect(offline.destination);
     source.start(0);
     const rendered = await offline.startRendering();
-    return rendered.getChannelData(0);
+    // Copy out of AudioBuffer so the underlying buffer can be transferred cleanly to the Worker
+    const out = new Float32Array(rendered.length);
+    out.set(rendered.getChannelData(0));
+    return out;
   } finally {
     void audioCtx.close().catch(() => undefined);
   }
@@ -189,6 +316,7 @@ export async function resolveVoiceNoteTranscript(
   messageId: string,
   audioUrl: string,
   embeddedTranscript?: string,
+  onProgress?: (percent: number, partialText?: string) => void,
 ): Promise<string> {
   if (embeddedTranscript?.trim()) {
     saveCachedVoiceTranscript(messageId, embeddedTranscript.trim());
@@ -197,13 +325,44 @@ export async function resolveVoiceNoteTranscript(
   const cached = getCachedVoiceTranscript(messageId);
   if (cached) return cached;
 
-  const pcm16k = await decodeTo16kHzMono(audioUrl);
-  const transcriber = await getWhisperPipeline();
-  const output = await transcriber(pcm16k, {
-    chunk_length_s: 30,
-    stride_length_s: 5,
-  });
-  const text = (output.text ?? "").trim() || "No clear speech detected in this voice note.";
-  saveCachedVoiceTranscript(messageId, text);
-  return text;
+  const existingJob = inFlightTranscripts.get(messageId);
+  if (existingJob) return existingJob;
+
+  const jobPromise = (async () => {
+    try {
+      emitVoiceTranscriptEvent({ messageId, status: "progress", percent: 2 });
+      onProgress?.(2);
+
+      const pcm16k = await decodeTo16kHzMono(audioUrl);
+
+      let text: string;
+      try {
+        text = await runWorkerTranscription(messageId, pcm16k, onProgress);
+      } catch {
+        // Graceful fallback if Worker fails in restricted WebView
+        const transcriber = await getFallbackWhisperPipeline();
+        const output = await transcriber(pcm16k, {
+          chunk_length_s: 30,
+          stride_length_s: 5,
+        });
+        text = (output.text ?? "").trim() || "No clear speech detected in this voice note.";
+      }
+
+      const finalText = text.trim() || "No clear speech detected in this voice note.";
+      saveCachedVoiceTranscript(messageId, finalText);
+      return finalText;
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message
+          ? err.message
+          : "Couldn't transcribe this voice note right now.";
+      emitVoiceTranscriptEvent({ messageId, status: "error", error: msg });
+      throw err;
+    } finally {
+      inFlightTranscripts.delete(messageId);
+    }
+  })();
+
+  inFlightTranscripts.set(messageId, jobPromise);
+  return jobPromise;
 }

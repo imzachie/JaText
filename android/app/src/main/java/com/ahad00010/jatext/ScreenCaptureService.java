@@ -1,5 +1,6 @@
 package com.ahad00010.jatext;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -8,11 +9,16 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioPlaybackCaptureConfiguration;
+import android.media.AudioRecord;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.projection.MediaProjection;
@@ -27,6 +33,7 @@ import android.util.DisplayMetrics;
 import android.view.WindowManager;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 
@@ -38,7 +45,9 @@ public class ScreenCaptureService extends Service {
     public static final String EXTRA_RESULT_DATA = "resultData";
     public static final int NOTIFICATION_ID = 9412;
     private static final String CHANNEL_ID = "screen_share";
-    private static final long MIN_FRAME_INTERVAL_MS = 72L;
+    private static final long MIN_FRAME_INTERVAL_MS = 66L;
+    private static final long STATIC_FRAME_HEARTBEAT_MS = 320L;
+    private static final int AUDIO_SAMPLE_RATE = 16000;
 
     private static volatile boolean capturing = false;
 
@@ -47,11 +56,34 @@ public class ScreenCaptureService extends Service {
     private ImageReader imageReader;
     private HandlerThread workerThread;
     private Handler workerHandler;
+    private AudioRecord playbackAudioRecord;
+    private Thread audioCaptureThread;
+    private volatile boolean audioCapturing = false;
     private PowerManager.WakeLock wakeLock;
-    private long lastFrameSentAt = 0L;
+    private volatile long lastFrameSentAt = 0L;
+    private volatile String lastFrameBase64 = null;
     private int captureWidth = 540;
     private int captureHeight = 960;
     private int captureDpi = 240;
+
+    private final Runnable staticFrameHeartbeat = new Runnable() {
+        @Override
+        public void run() {
+            if (!capturing) return;
+            try {
+                long now = System.currentTimeMillis();
+                String cached = lastFrameBase64;
+                if (cached != null && now - lastFrameSentAt >= STATIC_FRAME_HEARTBEAT_MS) {
+                    lastFrameSentAt = now;
+                    JaTextNativePlugin.emitScreenFrame(cached, captureWidth, captureHeight);
+                }
+            } catch (Throwable ignored) {}
+            Handler h = workerHandler;
+            if (capturing && h != null) {
+                h.postDelayed(this, STATIC_FRAME_HEARTBEAT_MS);
+            }
+        }
+    };
 
     public static boolean isCapturing() {
         return capturing;
@@ -180,6 +212,96 @@ public class ScreenCaptureService extends Service {
         );
 
         capturing = true;
+        workerHandler.postDelayed(staticFrameHeartbeat, STATIC_FRAME_HEARTBEAT_MS);
+
+        // Start Android 10+ internal device audio capture alongside screen video
+        startPlaybackAudioCapture(mediaProjection);
+    }
+
+    private void startPlaybackAudioCapture(MediaProjection projection) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || projection == null) {
+            return;
+        }
+        if (
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return;
+        }
+        try {
+            AudioPlaybackCaptureConfiguration playbackConfig =
+                new AudioPlaybackCaptureConfiguration.Builder(projection)
+                    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                    .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                    .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                    .build();
+
+            AudioFormat audioFormat = new AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(AUDIO_SAMPLE_RATE)
+                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                .build();
+
+            int minBuf = AudioRecord.getMinBufferSize(
+                AUDIO_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            );
+            // ~60ms PCM frames (1920 bytes = 960 16-bit samples at 16kHz)
+            int chunkBytes = 1920;
+            int bufferSize = Math.max(minBuf > 0 ? minBuf * 2 : 4096, chunkBytes * 4);
+
+            AudioRecord record = new AudioRecord.Builder()
+                .setAudioFormat(audioFormat)
+                .setBufferSizeInBytes(bufferSize)
+                .setAudioPlaybackCaptureConfig(playbackConfig)
+                .build();
+
+            if (record.getState() != AudioRecord.STATE_INITIALIZED) {
+                try {
+                    record.release();
+                } catch (Throwable ignored) {}
+                return;
+            }
+
+            playbackAudioRecord = record;
+            audioCapturing = true;
+            record.startRecording();
+
+            audioCaptureThread = new Thread(
+                () -> {
+                    byte[] pcmBuf = new byte[chunkBytes];
+                    while (audioCapturing && capturing) {
+                        try {
+                            int read = record.read(pcmBuf, 0, pcmBuf.length);
+                            if (read > 0) {
+                                // Skip completely silent chunks to save bridge overhead
+                                boolean nonZero = false;
+                                for (int i = 0; i < read; i += 4) {
+                                    if (pcmBuf[i] != 0 || (i + 1 < read && pcmBuf[i + 1] != 0)) {
+                                        nonZero = true;
+                                        break;
+                                    }
+                                }
+                                if (nonZero) {
+                                    String b64 = Base64.encodeToString(pcmBuf, 0, read, Base64.NO_WRAP);
+                                    JaTextNativePlugin.emitScreenAudio(b64, AUDIO_SAMPLE_RATE);
+                                }
+                            } else if (read < 0) {
+                                break;
+                            }
+                        } catch (Throwable err) {
+                            break;
+                        }
+                    }
+                },
+                "JaTextScreenAudio"
+            );
+            audioCaptureThread.setDaemon(true);
+            audioCaptureThread.start();
+        } catch (Throwable ignored) {
+            // If OEM restricts internal audio capture, keep video screen sharing running cleanly.
+        }
     }
 
     private void processImageFrame(Image image) {
@@ -203,10 +325,11 @@ public class ScreenCaptureService extends Service {
         }
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream(40960);
-        cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 68, baos);
+        cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos);
         cleanBitmap.recycle();
 
         String base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+        lastFrameBase64 = base64;
         JaTextNativePlugin.emitScreenFrame(base64, captureWidth, captureHeight);
     }
 
@@ -283,8 +406,8 @@ public class ScreenCaptureService extends Service {
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.presence_video_online)
-            .setContentTitle("JaText screen share active")
-            .setContentText("Your screen is being shared in the call")
+            .setContentTitle("JaText screen & audio share active")
+            .setContentText("Your screen and media audio are being shared in the call")
             .setOngoing(true)
             .setSilent(true)
             .setContentIntent(openPi)
@@ -294,6 +417,23 @@ public class ScreenCaptureService extends Service {
 
     private void cleanupProjectionResources() {
         capturing = false;
+        audioCapturing = false;
+        lastFrameBase64 = null;
+        try {
+            if (workerHandler != null) {
+                workerHandler.removeCallbacks(staticFrameHeartbeat);
+            }
+        } catch (Throwable ignored) {}
+        try {
+            if (playbackAudioRecord != null) {
+                try {
+                    playbackAudioRecord.stop();
+                } catch (Throwable ignored) {}
+                playbackAudioRecord.release();
+                playbackAudioRecord = null;
+            }
+        } catch (Throwable ignored) {}
+        audioCaptureThread = null;
         try {
             if (virtualDisplay != null) {
                 virtualDisplay.release();

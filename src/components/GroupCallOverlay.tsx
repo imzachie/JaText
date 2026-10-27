@@ -24,6 +24,7 @@ import { formatCallDuration, type SoundboardEffectId } from "../lib/calling";
 import { useGroupCall } from "../lib/groupCalling";
 import { useJaText } from "../lib/store";
 import { Avatar } from "./Avatar";
+import { MobileScreenShareSheet, SharedMediaPlaybackBar } from "./MobileScreenShareSheet";
 
 const CALL_REACTIONS = ["❤️", "😂", "🔥", "👏", "🎉", "👍"];
 const SOUNDBOARD_ITEMS: Array<{ id: SoundboardEffectId; emoji: string; label: string }> = [
@@ -50,7 +51,22 @@ function GroupStreamVideo({
     const el = ref.current;
     if (!el) return;
     if (el.srcObject !== stream) el.srcObject = stream;
-    if (stream) void el.play().catch(() => undefined);
+    if (!stream) return;
+    const ensurePlay = () => {
+      void el.play().catch(() => undefined);
+    };
+    ensurePlay();
+    const vTracks = stream.getVideoTracks();
+    for (const vt of vTracks) {
+      vt.addEventListener("unmute", ensurePlay);
+    }
+    stream.addEventListener("addtrack", ensurePlay);
+    return () => {
+      for (const vt of vTracks) {
+        vt.removeEventListener("unmute", ensurePlay);
+      }
+      stream.removeEventListener("addtrack", ensurePlay);
+    };
   }, [stream]);
 
   return (
@@ -85,6 +101,8 @@ export function GroupCallOverlay() {
     captions,
     callError,
     canScreenShare,
+    mobileSharePickerOpen,
+    sharedMediaVideoElement,
     acceptIncomingGroupCall,
     declineIncomingGroupCall,
     leaveGroupCall,
@@ -93,6 +111,9 @@ export function GroupCallOverlay() {
     toggleCamera,
     flipCamera,
     toggleScreenShare,
+    startMobileVideoShare,
+    startMobileCameraShare,
+    closeMobileSharePicker,
     toggleSpeakerphone,
     toggleStudioAudio,
     toggleCaptions,
@@ -715,6 +736,20 @@ export function GroupCallOverlay() {
           </button>
         )}
       </div>
+
+      {isScreenSharing && sharedMediaVideoElement && (
+        <SharedMediaPlaybackBar
+          videoEl={sharedMediaVideoElement}
+          onStop={() => void toggleScreenShare()}
+        />
+      )}
+
+      <MobileScreenShareSheet
+        open={mobileSharePickerOpen}
+        onClose={closeMobileSharePicker}
+        onSelectVideoFile={(file) => void startMobileVideoShare(file)}
+        onSelectLiveCameraPresentation={() => void startMobileCameraShare()}
+      />
 
       <footer className="call-primary-dock">
         <button

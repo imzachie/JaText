@@ -14,11 +14,17 @@ import {
   type UIEvent,
 } from "react";
 import { playMessageSound } from "../lib/alerts";
-import { formatPreviewMessageText, isHiddenCallSignal } from "../lib/calling";
+import { upsertCallHistoryEntry } from "../lib/callHistory";
+import { formatCallDuration, formatPreviewMessageText, isHiddenCallSignal } from "../lib/calling";
 import { copyImageUrlToClipboard } from "../lib/clipboard";
 import { syncComposerTextareaHeight } from "../lib/composerUtils";
 import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts";
-import { parseGroupCallInvite, useGroupCall } from "../lib/groupCalling";
+import {
+  parseGroupCallInvite,
+  resolveGroupCallLiveState,
+  useGroupCall,
+} from "../lib/groupCalling";
+import { Phone, Video } from "./CallIcons";
 import {
   getCachedWallpaper,
   getSavedOutgoingBubbleStyle,
@@ -151,6 +157,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onSwipeReply,
   onJoinGroupCall,
   activeCallId,
+  groupCallStatesById,
 }: {
   messages: GroupMessage[];
   messagesReady: boolean;
@@ -170,6 +177,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onSwipeReply: (message: GroupMessage) => void;
   onJoinGroupCall: (invite: NonNullable<ReturnType<typeof parseGroupCallInvite>>, messageId: string) => void;
   activeCallId: string | null;
+  groupCallStatesById: Record<string, { isEnded: boolean; durationSec?: number }>;
 }) {
   const memberById = useMemo(
     () => new Map(members.map((member) => [member.id, member])),
@@ -384,44 +392,60 @@ const GroupChatHistory = memo(function GroupChatHistory({
                       {message.unsentAt ? (
                         <p className="unsent-copy">This message was unsent</p>
                       ) : groupCallInvite ? (
-                        <div className={`call-invite-card group-call-card state-${groupCallInvite.state}`}>
-                          <div className="call-invite-card-top">
-                            <span className="call-invite-icon" aria-hidden="true">
-                              {groupCallInvite.mode === "video" ? "📹" : "📞"}
-                            </span>
-                            <div className="call-invite-meta">
-                              <strong>
-                                {groupCallInvite.mode === "video" ? "Group Video Call" : "Group Voice Call"}
-                              </strong>
-                              <span>
-                                {groupCallInvite.state === "ended"
-                                  ? `Call ended${
-                                      groupCallInvite.durationSec
-                                        ? ` · ${Math.floor(groupCallInvite.durationSec / 60)}:${String(
-                                            groupCallInvite.durationSec % 60,
-                                          ).padStart(2, "0")}`
-                                        : ""
-                                    }`
-                                  : activeCallId === groupCallInvite.callId
-                                    ? "You are in this call"
-                                    : `${groupCallInvite.hostName} started a call`}
-                              </span>
-                            </div>
-                          </div>
-                          {groupCallInvite.state !== "ended" &&
-                            Date.now() - message.createdAt < 4 * 60 * 60 * 1000 &&
-                            activeCallId !== groupCallInvite.callId && (
-                              <div className="call-invite-actions">
+                        (() => {
+                          const resolvedState = groupCallStatesById[groupCallInvite.callId];
+                          const isCallEnded =
+                            groupCallInvite.state === "ended" || Boolean(resolvedState?.isEnded);
+                          const finalDurationSec =
+                            resolvedState?.durationSec ?? groupCallInvite.durationSec;
+                          const isUserInCall = !isCallEnded && activeCallId === groupCallInvite.callId;
+                          const isVideoCall = groupCallInvite.mode === "video";
+
+                          return (
+                            <div
+                              className={`call-msg-card group-call-msg-card ${
+                                isCallEnded ? "ended" : "live"
+                              }`}
+                            >
+                              <div className={`call-msg-icon ${isCallEnded ? "ended" : "live"}`}>
+                                {isVideoCall ? <Video size={18} /> : <Phone size={18} />}
+                              </div>
+                              <div className="call-msg-info">
+                                <div className="call-msg-title">
+                                  {isCallEnded
+                                    ? "GC VC Ended"
+                                    : isVideoCall
+                                      ? "Group Video Call"
+                                      : "Group Voice Call"}
+                                </div>
+                                <div className="call-msg-sub">
+                                  {isCallEnded
+                                    ? `${
+                                        finalDurationSec
+                                          ? `${formatCallDuration(finalDurationSec)} · `
+                                          : ""
+                                      }Started by ${groupCallInvite.hostName}`
+                                    : isUserInCall
+                                      ? "Live · You're in this call"
+                                      : `Live · ${groupCallInvite.hostName} started a call`}
+                                </div>
+                              </div>
+                              {!isCallEnded && !isUserInCall && (
                                 <button
                                   type="button"
-                                  className="call-card-btn accept"
-                                  onClick={() => onJoinGroupCall(groupCallInvite, message.id)}
+                                  className="call-msg-action-btn group-join-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onJoinGroupCall(groupCallInvite, message.id);
+                                  }}
                                 >
-                                  Join Call
+                                  {isVideoCall ? <Video size={13} /> : <Phone size={13} />}
+                                  <span>Join</span>
                                 </button>
-                              </div>
-                            )}
-                        </div>
+                              )}
+                            </div>
+                          );
+                        })()
                       ) : (
                       <>
                         {message.attachmentUrl &&
@@ -1007,24 +1031,107 @@ export function GroupChatView({
   const lastTypingUpdate = useRef(0);
 
   const typingNames = store.groupTypingUsers.map((user) => user.displayName || user.username);
-  const conversationMessages = useMemo(
-    () =>
-      (groupId ? store.groupMessages : EMPTY_GROUP_MESSAGES).filter(
-        (m) => !isHiddenCallSignal(m.body),
-      ),
+  const rawGroupMessages = useMemo(
+    () => (groupId ? store.groupMessages : EMPTY_GROUP_MESSAGES),
     [groupId, store.groupMessages],
   );
+  const conversationMessages = useMemo(
+    () => rawGroupMessages.filter((m) => !isHiddenCallSignal(m.body)),
+    [rawGroupMessages],
+  );
+
+  const [callStateTick, setCallStateTick] = useState(0);
+  useEffect(() => {
+    const hasPotentialActiveInvite = conversationMessages.some((m) => {
+      if (m.unsentAt) return false;
+      const inv = parseGroupCallInvite(m.body);
+      return Boolean(inv && inv.state !== "ended");
+    });
+    if (!hasPotentialActiveInvite) return;
+    const timer = window.setInterval(() => {
+      setCallStateTick((t) => t + 1);
+    }, 8_000);
+    return () => window.clearInterval(timer);
+  }, [conversationMessages]);
+
+  const activeGroupCallId =
+    groupCall.groupSession && groupCall.groupSession.phase !== "incoming"
+      ? groupCall.groupSession.callId
+      : null;
+
+  const groupCallStatesById = useMemo(() => {
+    void callStateTick;
+    const out: Record<string, { isEnded: boolean; durationSec?: number }> = {};
+    for (const msg of conversationMessages) {
+      if (msg.unsentAt) continue;
+      const inv = parseGroupCallInvite(msg.body);
+      if (!inv) continue;
+      out[inv.callId] = resolveGroupCallLiveState(
+        inv,
+        rawGroupMessages,
+        activeGroupCallId,
+        msg.createdAt,
+      );
+    }
+    return out;
+  }, [activeGroupCallId, callStateTick, conversationMessages, rawGroupMessages]);
+
+  // Hydrate group call history entries cleanly into Calls tab (normalized to ended when nobody is in the call)
+  useEffect(() => {
+    if (!groupId || !store.me || conversationMessages.length === 0) return;
+    const grpName = group?.name ?? summary?.name ?? "Group chat";
+    const grpAvatar = group?.avatarUrl ?? summary?.avatarUrl;
+    const memberCount = group?.members.length ?? summary?.memberCount ?? 2;
+    for (const msg of conversationMessages) {
+      if (msg.unsentAt) continue;
+      const inv = parseGroupCallInvite(msg.body);
+      if (!inv) continue;
+      const stateInfo = groupCallStatesById[inv.callId];
+      const isEnded = inv.state === "ended" || Boolean(stateInfo?.isEnded);
+      upsertCallHistoryEntry({
+        callId: inv.callId,
+        kind: "group",
+        peerId: groupId,
+        peerDisplayName: grpName,
+        peerUsername: `${memberCount} members`,
+        peerAvatarUrl: grpAvatar,
+        peerAvatarColor: "purple",
+        groupId,
+        groupName: grpName,
+        groupAvatarUrl: grpAvatar,
+        direction: msg.senderId === store.me.id ? "outgoing" : "incoming",
+        mode: inv.mode,
+        state: isEnded ? "ended" : "connected",
+        durationSec: stateInfo?.durationSec ?? inv.durationSec,
+        timestamp: msg.createdAt || inv.ts || Date.now(),
+      });
+    }
+  }, [
+    conversationMessages,
+    group?.avatarUrl,
+    group?.members.length,
+    group?.name,
+    groupCallStatesById,
+    groupId,
+    store.me,
+    summary?.avatarUrl,
+    summary?.memberCount,
+    summary?.name,
+  ]);
+
   const activeGroupCallMessage = useMemo(() => {
     for (let i = conversationMessages.length - 1; i >= 0; i -= 1) {
       const msg = conversationMessages[i];
-      if (msg.unsentAt || Date.now() - msg.createdAt > 4 * 60 * 60 * 1000) continue;
+      if (msg.unsentAt) continue;
       const invite = parseGroupCallInvite(msg.body);
-      if (invite && invite.state !== "ended") {
+      if (!invite) continue;
+      const resolved = groupCallStatesById[invite.callId];
+      if (!resolved?.isEnded && invite.state !== "ended") {
         return { invite, messageId: msg.id };
       }
     }
     return null;
-  }, [conversationMessages]);
+  }, [conversationMessages, groupCallStatesById]);
   const conversationReady = Boolean(groupId) && store.groupMessagesReady;
   const isMuted = group?.members.find((member) => member.id === store.me?.id)?.muted ?? false;
 
@@ -2030,7 +2137,8 @@ export function GroupChatView({
         onJoinGroupCall={(invite, messageId) =>
           void groupCall.joinGroupCall(invite, invite.mode === "video", messageId)
         }
-        activeCallId={groupCall.groupSession?.callId ?? null}
+        activeCallId={activeGroupCallId}
+        groupCallStatesById={groupCallStatesById}
       />
 
       {error && (
