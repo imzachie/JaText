@@ -10,7 +10,6 @@ import {
   type ClipboardEvent,
   type FormEvent,
   type MouseEvent,
-  type ReactNode,
   type RefObject,
   type UIEvent,
 } from "react";
@@ -31,6 +30,7 @@ import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { ContextMenu } from "./ContextMenu";
+import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { Avatar } from "./Avatar";
 import { StickerPicker } from "./StickerPicker";
@@ -97,48 +97,6 @@ function detectMentionQuery(text: string, cursor: number): { start: number; quer
     start: match.index + match[1].length,
     query: match[2],
   };
-}
-
-function renderBodyWithMentions(
-  body: string,
-  memberByUsername: Map<string, GroupMember>,
-  myUsername: string,
-  mine: boolean,
-  onOpenProfile: (user: JaUser) => void,
-): ReactNode {
-  const parts = body.split(/(@everyone|@[a-z0-9._]{3,20})\b/gi);
-  if (parts.length === 1) return body;
-
-  return parts.map((part, index) => {
-    if (!part.startsWith("@")) return <Fragment key={index}>{part}</Fragment>;
-    const handle = part.slice(1).toLowerCase();
-    if (handle === "everyone") {
-      return (
-        <span
-          key={index}
-          className={`mention-pill mention-everyone ${mine ? "in-mine" : "mention-me"}`}
-        >
-          {part}
-        </span>
-      );
-    }
-    const member = memberByUsername.get(handle);
-    const isMe = Boolean(myUsername && handle === myUsername.toLowerCase());
-    if (!member && !isMe) return <Fragment key={index}>{part}</Fragment>;
-    return (
-      <button
-        key={index}
-        type="button"
-        className={`mention-pill ${isMe && !mine ? "mention-me" : ""} ${mine ? "in-mine" : ""}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          if (member) onOpenProfile(member);
-        }}
-      >
-        {part}
-      </button>
-    );
-  });
 }
 
 function getConversationMessages(
@@ -211,6 +169,14 @@ const GroupChatHistory = memo(function GroupChatHistory({
   const memberByUsername = useMemo(
     () => new Map(members.map((member) => [member.username.toLowerCase(), member])),
     [members],
+  );
+  const mentionContext = useMemo(
+    () => ({
+      memberByUsername,
+      myUsername: me.username,
+      onOpenProfile,
+    }),
+    [memberByUsername, me.username, onOpenProfile],
   );
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -497,15 +463,11 @@ const GroupChatHistory = memo(function GroupChatHistory({
                           </button>
                         )}
                         {message.body && (
-                          <p>
-                            {renderBodyWithMentions(
-                              message.body,
-                              memberByUsername,
-                              me.username,
-                              mine,
-                              onOpenProfile,
-                            )}
-                          </p>
+                          <MessageMarkdown
+                            text={message.body}
+                            mine={mine}
+                            mentionContext={mentionContext}
+                          />
                         )}
                       </>
                     )}

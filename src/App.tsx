@@ -22,13 +22,6 @@ import { useJaText } from "./lib/store";
 import { playMessageSound } from "./lib/alerts";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
 
-interface MessageToast {
-  friendId?: string;
-  groupId?: string;
-  title: string;
-  body: string;
-}
-
 const NOTIFICATION_WELCOME_KEY = "jatext-notification-welcome-seen-v1";
 
 export default function App() {
@@ -58,14 +51,12 @@ function AppContent() {
   } = store;
   const [profileUser, setProfileUser] = useState<JaUser | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [messageToast, setMessageToast] = useState<MessageToast | null>(null);
-  const [toastClosing, setToastClosing] = useState(false);
   const [notificationWelcomeSeen, setNotificationWelcomeSeen] = useState(
     () => localStorage.getItem(NOTIFICATION_WELCOME_KEY) === "true",
   );
+  const isNativeActiveRef = useRef(true);
   const previousPreviews = useRef<Map<string, string> | null>(null);
   const previousGroups = useRef<Map<string, string> | null>(null);
-  const toastTimer = useRef<number | null>(null);
   const navigationStateRef = useRef({
     activeChatId,
     activeGroupId,
@@ -73,6 +64,16 @@ function AppContent() {
     settingsOpen,
     callFullScreen: false,
   });
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const listener = CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+      isNativeActiveRef.current = isActive;
+    });
+    return () => {
+      void listener.then((handle) => handle.remove());
+    };
+  }, []);
 
   const activeFriend = useMemo(
     () => store.friends.find((f) => f.id === store.activeChatId) ?? null,
@@ -140,40 +141,26 @@ function AppContent() {
 
       const friend = friends.find((user) => user.id === preview.friendId);
       if (!friend) continue;
-      if (soundsEnabled) playMessageSound("received");
 
-      const focusedOnThisChat =
-        document.visibilityState === "visible" &&
-        document.hasFocus() &&
-        activeChatId === friend.id;
-      if (focusedOnThisChat) continue;
+      const appInForeground = Capacitor.isNativePlatform()
+        ? isNativeActiveRef.current && document.visibilityState === "visible"
+        : document.visibilityState === "visible";
 
-      const formattedBody = formatPreviewMessageText(preview.body);
-      setToastClosing(false);
-      setMessageToast({
-        friendId: friend.id,
-        title: `New message from ${friend.displayName}`,
-        body: formattedBody,
-      });
-      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-      toastTimer.current = window.setTimeout(() => {
-        setToastClosing(true);
-        toastTimer.current = window.setTimeout(() => {
-          setMessageToast(null);
-          setToastClosing(false);
-        }, 180);
-      }, 4_500);
+      if (soundsEnabled && appInForeground) {
+        playMessageSound("received");
+      }
 
+      // Only show system notifications when the app/tab is minimized or hidden — NEVER while in the app!
       if (
         !Capacitor.isNativePlatform() &&
         notificationsEnabled &&
+        !appInForeground &&
         "Notification" in window &&
-        Notification.permission === "granted" &&
-        (document.visibilityState !== "visible" || !document.hasFocus())
+        Notification.permission === "granted"
       ) {
         try {
           const notification = new Notification(`Message from ${friend.displayName}`, {
-            body: preview.body,
+            body: formatPreviewMessageText(preview.body) || "Sent you an attachment",
             tag: `jatext-${friend.id}`,
           });
           notification.onclick = () => {
@@ -187,7 +174,6 @@ function AppContent() {
       }
     }
   }, [
-    activeChatId,
     friends,
     me,
     notificationsEnabled,
@@ -224,39 +210,23 @@ function AppContent() {
         continue;
       }
 
-      if (soundsEnabled) playMessageSound("received");
+      const appInForeground = Capacitor.isNativePlatform()
+        ? isNativeActiveRef.current && document.visibilityState === "visible"
+        : document.visibilityState === "visible";
 
-      const focusedOnThisGroup =
-        document.visibilityState === "visible" &&
-        document.hasFocus() &&
-        activeGroupId === group.id;
-      if (focusedOnThisGroup) continue;
+      if (soundsEnabled && appInForeground) {
+        playMessageSound("received");
+      }
 
       const senderLabel = group.lastSenderName || "Someone";
       const title = `${senderLabel} mentioned you in ${group.name}`;
-      window.setTimeout(() => {
-        setToastClosing(false);
-        setMessageToast({
-          groupId: group.id,
-          title,
-          body: formatPreviewMessageText(group.lastMessage) || "Tap to open group chat",
-        });
-      }, 0);
-      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-      toastTimer.current = window.setTimeout(() => {
-        setToastClosing(true);
-        toastTimer.current = window.setTimeout(() => {
-          setMessageToast(null);
-          setToastClosing(false);
-        }, 180);
-      }, 5_000);
 
       if (
         !Capacitor.isNativePlatform() &&
         notificationsEnabled &&
+        !appInForeground &&
         "Notification" in window &&
-        Notification.permission === "granted" &&
-        (document.visibilityState !== "visible" || !document.hasFocus())
+        Notification.permission === "granted"
       ) {
         try {
           const notification = new Notification(title, {
@@ -274,7 +244,6 @@ function AppContent() {
       }
     }
   }, [
-    activeGroupId,
     groups,
     me,
     notificationsEnabled,
@@ -282,13 +251,6 @@ function AppContent() {
     setActiveGroupId,
     soundsEnabled,
   ]);
-
-  useEffect(
-    () => () => {
-      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    },
-    [],
-  );
 
   useLayoutEffect(() => {
     navigationStateRef.current = {
@@ -401,26 +363,6 @@ function AppContent() {
       )}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       <CallOverlay />
-      {messageToast && (
-        <button
-          className={`message-toast ${toastClosing ? "closing" : ""}`}
-          type="button"
-          aria-live="polite"
-          onClick={() => {
-            if (messageToast.groupId) store.setActiveGroupId(messageToast.groupId);
-            else if (messageToast.friendId) store.setActiveChatId(messageToast.friendId);
-            setToastClosing(true);
-            if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-            toastTimer.current = window.setTimeout(() => {
-              setMessageToast(null);
-              setToastClosing(false);
-            }, 180);
-          }}
-        >
-          <strong>{messageToast.title}</strong>
-          <span>{messageToast.body}</span>
-        </button>
-      )}
     </div>
   );
 }

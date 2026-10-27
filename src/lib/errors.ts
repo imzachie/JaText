@@ -26,7 +26,7 @@ export function friendlyError(error: unknown, fallback: string): string {
 
   if (
     !cleaned ||
-    /^(server error|internal server error|unknown error)\b/i.test(cleaned) ||
+    /^(server error|internal server error|unknown error|called by client)\b/i.test(cleaned) ||
     /\[CONVEX |request id:/i.test(cleaned)
   ) {
     return fallback;

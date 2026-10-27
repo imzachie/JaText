@@ -12,6 +12,7 @@ import { friendlyError } from "../lib/errors";
 import { Avatar } from "./Avatar";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
+import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { StickerPicker } from "./StickerPicker";
 import { ContextMenu } from "./ContextMenu";
@@ -1191,10 +1192,18 @@ export function CommunityChatView({
                             mine={message.senderId === store.me?.id}
                             className="community-styled-bubble"
                           >
-                            <p className="community-post-body">{message.body}</p>
+                            <MessageMarkdown
+                              text={message.body}
+                              mine={message.senderId === store.me?.id}
+                              className="community-post-body"
+                            />
                           </DecoratedMessageBubble>
                         ) : (
-                          <p className="community-post-body">{message.body}</p>
+                          <MessageMarkdown
+                            text={message.body}
+                            mine={message.senderId === store.me?.id}
+                            className="community-post-body"
+                          />
                         ))}
                     </>
                   )}

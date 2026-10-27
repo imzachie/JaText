@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
+import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -15,13 +16,17 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.util.Base64;
+import android.util.DisplayMetrics;
 import android.view.WindowManager;
+import androidx.activity.result.ActivityResult;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
@@ -42,9 +47,35 @@ import java.util.List;
 )
 public class JaTextNativePlugin extends Plugin {
 
+    private static volatile JaTextNativePlugin activeInstance;
+
     private SpeechRecognizer speechRecognizer;
     private volatile boolean speechCaptureActive = false;
     private final StringBuilder accumulatedSpeech = new StringBuilder();
+
+    @Override
+    public void load() {
+        super.load();
+        activeInstance = this;
+    }
+
+    public static void emitScreenFrame(String base64Jpeg, int width, int height) {
+        JaTextNativePlugin inst = activeInstance;
+        if (inst == null) return;
+        JSObject payload = new JSObject();
+        payload.put("frame", base64Jpeg);
+        payload.put("width", width);
+        payload.put("height", height);
+        inst.notifyListeners("screenCaptureFrame", payload);
+    }
+
+    public static void emitScreenCaptureStopped() {
+        JaTextNativePlugin inst = activeInstance;
+        if (inst == null) return;
+        JSObject payload = new JSObject();
+        payload.put("stopped", true);
+        inst.notifyListeners("screenCaptureStopped", payload);
+    }
 
     public static boolean isFirebaseConfigured(Context ctx) {
         if (ctx == null) {
@@ -67,6 +98,89 @@ public class JaTextNativePlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("firebaseConfigured", isFirebaseConfigured(getContext()));
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void startScreenCapture(PluginCall call) {
+        Context ctx = getContext();
+        Activity activity = getActivity();
+        if (ctx == null || activity == null) {
+            JSObject result = new JSObject();
+            result.put("started", false);
+            call.resolve(result);
+            return;
+        }
+        try {
+            MediaProjectionManager mgr =
+                (MediaProjectionManager) ctx.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+            if (mgr == null) {
+                JSObject result = new JSObject();
+                result.put("started", false);
+                call.resolve(result);
+                return;
+            }
+            Intent captureIntent = mgr.createScreenCaptureIntent();
+            startActivityForResult(call, captureIntent, "handleScreenCaptureResult");
+        } catch (Throwable err) {
+            call.reject("Could not start screen sharing: " + err.getMessage());
+        }
+    }
+
+    @ActivityCallback
+    @SuppressWarnings("deprecation")
+    private void handleScreenCaptureResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        Context ctx = getContext();
+        if (ctx == null || result == null || result.getResultCode() != Activity.RESULT_OK || result.getData() == null) {
+            JSObject res = new JSObject();
+            res.put("started", false);
+            call.resolve(res);
+            return;
+        }
+        try {
+            DisplayMetrics metrics = new DisplayMetrics();
+            WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
+            if (wm != null && wm.getDefaultDisplay() != null) {
+                wm.getDefaultDisplay().getRealMetrics(metrics);
+            } else {
+                metrics = ctx.getResources().getDisplayMetrics();
+            }
+            int rawW = Math.max(320, metrics.widthPixels);
+            int rawH = Math.max(320, metrics.heightPixels);
+            int maxEdge = Math.max(rawW, rawH);
+            double scale = maxEdge > 720 ? (720.0 / maxEdge) : 1.0;
+            int w = Math.max(240, (int) Math.round(rawW * scale)) & ~1;
+            int h = Math.max(240, (int) Math.round(rawH * scale)) & ~1;
+
+            Intent serviceIntent = new Intent(ctx, ScreenCaptureService.class);
+            serviceIntent.setAction(ScreenCaptureService.ACTION_START);
+            serviceIntent.putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.getResultCode());
+            serviceIntent.putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, result.getData());
+            ContextCompat.startForegroundService(ctx, serviceIntent);
+
+            JSObject res = new JSObject();
+            res.put("started", true);
+            res.put("width", w);
+            res.put("height", h);
+            call.resolve(res);
+        } catch (Throwable err) {
+            call.reject("Could not initialize screen capture: " + err.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void stopScreenCapture(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx != null) {
+            try {
+                Intent stopIntent = new Intent(ctx, ScreenCaptureService.class);
+                stopIntent.setAction(ScreenCaptureService.ACTION_STOP);
+                ctx.stopService(stopIntent);
+            } catch (Throwable ignored) {}
+        }
+        JSObject res = new JSObject();
+        res.put("stopped", true);
+        call.resolve(res);
     }
 
     @PluginMethod
@@ -343,6 +457,9 @@ public class JaTextNativePlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        if (activeInstance == this) {
+            activeInstance = null;
+        }
         speechCaptureActive = false;
         stopRecognizerInternal();
         super.handleOnDestroy();

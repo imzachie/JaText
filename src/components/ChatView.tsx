@@ -32,6 +32,7 @@ import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { CallMessageCard } from "./CallMessageCard";
 import { ContextMenu } from "./ContextMenu";
+import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { StickerPicker } from "./StickerPicker";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
@@ -349,7 +350,7 @@ const ChatHistory = memo(function ChatHistory({
                             📎 {message.attachmentName ?? "Attachment"}
                           </a>
                         ))}
-                      {message.body && <p>{message.body}</p>}
+                      {message.body && <MessageMarkdown text={message.body} mine={mine} />}
                     </>
                   )}
                 </DecoratedMessageBubble>

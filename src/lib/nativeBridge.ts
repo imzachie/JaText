@@ -5,16 +5,36 @@ export interface SpeechTranscriptEvent {
   isFinal: boolean;
 }
 
+export interface ScreenCaptureFrameEvent {
+  frame: string;
+  width: number;
+  height: number;
+}
+
+export interface ScreenCaptureStoppedEvent {
+  stopped: boolean;
+}
+
 export interface JaTextNativePlugin {
   checkPushSupport(): Promise<{ firebaseConfigured: boolean }>;
   copyImageBase64(options: { base64: string }): Promise<{ copied: boolean }>;
   requestMediaPermissions(options: { video: boolean }): Promise<{ granted: boolean }>;
   setCallAudioRoute(options: { active: boolean; speaker: boolean }): Promise<{ speaker: boolean }>;
+  startScreenCapture(): Promise<{ started: boolean; width?: number; height?: number }>;
+  stopScreenCapture(): Promise<{ stopped: boolean }>;
   startSpeechCapture(): Promise<{ started: boolean }>;
   stopSpeechCapture(): Promise<{ transcript: string }>;
   addListener(
     eventName: "speechTranscript",
     listenerFunc: (event: SpeechTranscriptEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "screenCaptureFrame",
+    listenerFunc: (event: ScreenCaptureFrameEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "screenCaptureStopped",
+    listenerFunc: (event: ScreenCaptureStoppedEvent) => void,
   ): Promise<PluginListenerHandle>;
 }
 
