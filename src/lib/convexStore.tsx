@@ -20,17 +20,23 @@ import {
   loadLocalCommunityReactions,
   saveLocalCommunityReaction,
   serializeReactionSignal,
+  type LocalUserReactionState,
   type ReactionSignalOp,
 } from "./reactionSignals";
 import {
+  BUBBLE_STYLE_REMOTE_SYNC_EVENT,
   WALLPAPER_PREFIX,
   attachBubbleStyleToFile,
   attachBubbleStyleToOutgoing,
   extractMessageBubbleStyle,
   getSavedOutgoingBubbleStyle,
+  isValidBubbleStyleId,
+  saveOutgoingBubbleStyle,
   stripBubbleStyleFromText,
+  type BubbleStyleId,
 } from "./chatCustomization";
 import {
+  E2EE_BUBBLE_PREF_PREFIX,
   E2EE_DEVSYNC_REQ_PREFIX,
   E2EE_DEVSYNC_RES_PREFIX,
   E2EE_VAULT_STICKER_NAME,
@@ -112,7 +118,7 @@ function normalizeDirectMessage(raw: ChatMessage): ChatMessage {
   return {
     ...raw,
     body: cleanBody,
-    bubbleStyle,
+    bubbleStyle: bubbleStyle !== "default" ? bubbleStyle : (raw.bubbleStyle ?? "default"),
     attachmentType: cleanAttachmentMime(raw.attachmentType),
     replyTo: raw.replyTo
       ? { ...raw.replyTo, body: stripBubbleStyleFromText(raw.replyTo.body) }
@@ -125,7 +131,7 @@ function normalizeGroupMessage(raw: GroupMessage): GroupMessage {
   return {
     ...raw,
     body: cleanBody,
-    bubbleStyle,
+    bubbleStyle: bubbleStyle !== "default" ? bubbleStyle : (raw.bubbleStyle ?? "default"),
     attachmentType: cleanAttachmentMime(raw.attachmentType),
     replyTo: raw.replyTo
       ? { ...raw.replyTo, body: stripBubbleStyleFromText(raw.replyTo.body) }
@@ -173,15 +179,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const [pushRegistrationStatus, setPushRegistrationStatus] =
     useState<JaTextStore["pushRegistrationStatus"]>("idle");
   const [optimisticReactions, setOptimisticReactions] = useState<
-    Record<string, { userId: string; emoji: string | null }>
+    Record<string, LocalUserReactionState>
   >({});
   const [localCommunityReactions, setLocalCommunityReactions] = useState(
     loadLocalCommunityReactions,
   );
-  const serverSupportsExtendedReactionsRef = useRef<boolean | null>(null);
   const e2eeServerSupportedRef = useRef<boolean | null>(null);
   const announcedDmKeysRef = useRef(new Set<string>());
   const announcedGroupKeysRef = useRef(new Set<string>());
+  const lastAppliedRemoteBubbleRef = useRef<BubbleStyleId | null>(null);
+  const seededInitialBubbleSyncRef = useRef(false);
+  const stickerFavoritesRef = useRef<StickerMedia[]>([]);
   const localDeviceSyncRef = useRef<LocalDeviceSyncKeypair | null>(null);
   const [activeDeviceSyncCode, setActiveDeviceSyncCode] = useState<string | null>(null);
   const [pendingDeviceSyncRequests, setPendingDeviceSyncRequests] = useState<DeviceSyncRequest[]>([]);
@@ -708,23 +716,32 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       const cleanEmoji = emoji.trim();
       if (!cleanEmoji || !me) return;
       const targetMsg = communityFold.messages.find((m) => m.id === messageId);
-      const currentMyEmoji = targetMsg?.reactions?.find((r) => r.userId === me.id)?.emoji;
-      const shouldRemove = currentMyEmoji === cleanEmoji;
-      const nextEmoji = shouldRemove ? null : cleanEmoji;
+      const currentMyEmojis = Array.from(
+        new Set(
+          (targetMsg?.reactions ?? [])
+            .filter((r) => r.userId === me.id)
+            .map((r) => r.emoji),
+        ),
+      );
+      const shouldRemove = currentMyEmojis.includes(cleanEmoji);
+      const nextMyEmojis = shouldRemove
+        ? currentMyEmojis.filter((e) => e !== cleanEmoji)
+        : [...currentMyEmojis, cleanEmoji];
       const key = `${messageId}:${me.id}`;
       const existingSignal = communityFold.signalsByTargetUser.get(key);
-      const nativeEmoji = communityFold.nativeReactionsByTargetUser.get(key);
+      const nativeEmojis = communityFold.nativeReactionsByTargetUser.get(key) ?? [];
 
       setOptimisticReactions((prev) => ({
         ...prev,
-        [messageId]: { userId: me.id, emoji: nextEmoji },
+        [messageId]: { userId: me.id, emojis: nextMyEmojis },
       }));
 
-      const writeSignal = async (op: ReactionSignalOp, sigEmoji: string) => {
+      const writeSignal = async (op: ReactionSignalOp, sigEmojis: string[]) => {
         const body = serializeReactionSignal({
           kind: "reaction",
           targetId: messageId,
-          emoji: sigEmoji,
+          emoji: sigEmojis[0] ?? "",
+          emojis: sigEmojis,
           op,
           ts: Date.now(),
         });
@@ -743,65 +760,56 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       };
 
       try {
-        if (LEGACY_SERVER_REACTION_EMOJIS.has(cleanEmoji)) {
-          if (shouldRemove) {
-            if (nativeEmoji === cleanEmoji) {
+        // Single legacy reaction (0 or 1 emoji) with no multi-emoji needed:
+        if (
+          nextMyEmojis.length <= 1 &&
+          (nextMyEmojis.length === 0 || LEGACY_SERVER_REACTION_EMOJIS.has(nextMyEmojis[0])) &&
+          !existingSignal
+        ) {
+          const single = nextMyEmojis[0] ?? null;
+          if (single === null) {
+            if (nativeEmojis.includes(cleanEmoji)) {
               await toggleCommunityReactionMut({
                 messageId: messageId as Id<"communityMessages">,
                 emoji: cleanEmoji,
               });
-            }
-            if (existingSignal && existingSignal.op === "set" && communityPermissions.canModerate) {
-              await writeSignal("clear", "");
             }
             setLocalCommunityReactions(saveLocalCommunityReaction(messageId, me.id, null));
           } else {
-            if (nativeEmoji !== cleanEmoji) {
+            if (!nativeEmojis.includes(single)) {
               await toggleCommunityReactionMut({
                 messageId: messageId as Id<"communityMessages">,
-                emoji: cleanEmoji,
+                emoji: single,
               });
-            }
-            if (existingSignal && existingSignal.op !== "native" && communityPermissions.canModerate) {
-              await writeSignal("native", "");
             }
             setLocalCommunityReactions(saveLocalCommunityReaction(messageId, me.id, null));
           }
           return;
         }
 
-        if (serverSupportsExtendedReactionsRef.current !== false) {
-          try {
-            await toggleCommunityReactionMut({
-              messageId: messageId as Id<"communityMessages">,
-              emoji: cleanEmoji,
-            });
-            serverSupportsExtendedReactionsRef.current = true;
-            if (existingSignal && existingSignal.op !== "native" && communityPermissions.canModerate) {
-              await writeSignal("native", "");
-            }
-            setLocalCommunityReactions(saveLocalCommunityReaction(messageId, me.id, null));
-            return;
-          } catch {
-            serverSupportsExtendedReactionsRef.current = false;
-          }
-        }
-
-        if (nativeEmoji) {
+        // Keep at most 1 legacy reaction synced on the native row for un-updated clients
+        const firstLegacy = nextMyEmojis.find((e) => LEGACY_SERVER_REACTION_EMOJIS.has(e));
+        if (firstLegacy && !nativeEmojis.includes(firstLegacy)) {
           await toggleCommunityReactionMut({
             messageId: messageId as Id<"communityMessages">,
-            emoji: nativeEmoji,
+            emoji: firstLegacy,
+          }).catch(() => undefined);
+        } else if (!firstLegacy && nativeEmojis.length === 1) {
+          await toggleCommunityReactionMut({
+            messageId: messageId as Id<"communityMessages">,
+            emoji: nativeEmojis[0],
           }).catch(() => undefined);
         }
 
         if (communityPermissions.canModerate) {
-          if (shouldRemove) {
-            await writeSignal("clear", "");
+          if (nextMyEmojis.length === 0) {
+            await writeSignal("clear", []);
           } else {
-            await writeSignal("set", cleanEmoji);
+            await writeSignal("set", nextMyEmojis);
           }
+          setLocalCommunityReactions(saveLocalCommunityReaction(messageId, me.id, null));
         } else {
-          setLocalCommunityReactions(saveLocalCommunityReaction(messageId, me.id, nextEmoji));
+          setLocalCommunityReactions(saveLocalCommunityReaction(messageId, me.id, nextMyEmojis));
         }
       } catch (err) {
         setOptimisticReactions((prev) => {
@@ -1065,10 +1073,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const sendGroupSticker = useCallback<JaTextStore["sendGroupSticker"]>(
     async (groupId, sticker, replyToId) => {
+      const style = getSavedOutgoingBubbleStyle();
+      const stickerBody = style === "default" ? "" : attachBubbleStyleToOutgoing("", style);
       await ensureGroupEpochReadyForSend(groupId);
       const enc = await prepareOutgoingGroupEncrypted({
         groupId,
-        wireBody: "",
+        wireBody: stickerBody,
         sticker,
         uploadFile: upload,
       });
@@ -1111,31 +1121,50 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       if (!cleanEmoji || !me) return;
       const targetMsg = groupFold.messages.find((m) => m.id === messageId);
       const targetGroupId = activeGroupId;
-      const currentMyEmoji = targetMsg?.reactions?.find((r) => r.userId === me.id)?.emoji;
-      const shouldRemove = currentMyEmoji === cleanEmoji;
-      const nextEmoji = shouldRemove ? null : cleanEmoji;
+      const currentMyEmojis = Array.from(
+        new Set(
+          (targetMsg?.reactions ?? [])
+            .filter((r) => r.userId === me.id)
+            .map((r) => r.emoji),
+        ),
+      );
+      const shouldRemove = currentMyEmojis.includes(cleanEmoji);
+      const nextMyEmojis = shouldRemove
+        ? currentMyEmojis.filter((e) => e !== cleanEmoji)
+        : [...currentMyEmojis, cleanEmoji];
       const key = `${messageId}:${me.id}`;
       const existingSignal = groupFold.signalsByTargetUser.get(key);
-      const nativeEmoji = groupFold.nativeReactionsByTargetUser.get(key);
+      const nativeEmojis = groupFold.nativeReactionsByTargetUser.get(key) ?? [];
 
       setOptimisticReactions((prev) => ({
         ...prev,
-        [messageId]: { userId: me.id, emoji: nextEmoji },
+        [messageId]: { userId: me.id, emojis: nextMyEmojis },
       }));
 
-      const writeSignal = async (op: ReactionSignalOp, sigEmoji: string) => {
-        const body = serializeReactionSignal({
+      const writeSignal = async (op: ReactionSignalOp, sigEmojis: string[]) => {
+        const plainSignal = serializeReactionSignal({
           kind: "reaction",
           targetId: messageId,
-          emoji: sigEmoji,
+          emoji: sigEmojis[0] ?? "",
+          emojis: sigEmojis,
           op,
           ts: Date.now(),
         });
+        let wireSignal = plainSignal;
+        if (targetGroupId) {
+          await ensureGroupEpochReadyForSend(targetGroupId);
+          const enc = await prepareOutgoingGroupEncrypted({
+            groupId: targetGroupId,
+            wireBody: plainSignal,
+            uploadFile: upload,
+          });
+          if (enc) wireSignal = enc.wireBody;
+        }
         if (existingSignal) {
           try {
             await editGroupMut({
               messageId: existingSignal.rowId as Id<"groupMessages">,
-              body,
+              body: wireSignal,
             });
             return;
           } catch {
@@ -1145,64 +1174,45 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         if (targetGroupId) {
           await sendGroupMessageMut({
             groupId: targetGroupId as Id<"groups">,
-            body,
+            body: wireSignal,
           });
         }
       };
 
       try {
-        if (LEGACY_SERVER_REACTION_EMOJIS.has(cleanEmoji)) {
-          if (shouldRemove) {
-            if (nativeEmoji === cleanEmoji) {
+        if (
+          nextMyEmojis.length <= 1 &&
+          (nextMyEmojis.length === 0 || LEGACY_SERVER_REACTION_EMOJIS.has(nextMyEmojis[0])) &&
+          !existingSignal
+        ) {
+          const single = nextMyEmojis[0] ?? null;
+          if (single === null) {
+            if (nativeEmojis.includes(cleanEmoji)) {
               await toggleGroupReactionMut({
                 messageId: messageId as Id<"groupMessages">,
                 emoji: cleanEmoji,
               });
             }
-            if (existingSignal && existingSignal.op === "set") {
-              await writeSignal("clear", "");
-            }
-          } else {
-            if (nativeEmoji !== cleanEmoji) {
-              await toggleGroupReactionMut({
-                messageId: messageId as Id<"groupMessages">,
-                emoji: cleanEmoji,
-              });
-            }
-            if (existingSignal && existingSignal.op !== "native") {
-              await writeSignal("native", "");
-            }
+          } else if (!nativeEmojis.includes(single)) {
+            await toggleGroupReactionMut({
+              messageId: messageId as Id<"groupMessages">,
+              emoji: single,
+            });
           }
           return;
         }
 
-        if (serverSupportsExtendedReactionsRef.current !== false) {
-          try {
-            await toggleGroupReactionMut({
-              messageId: messageId as Id<"groupMessages">,
-              emoji: cleanEmoji,
-            });
-            serverSupportsExtendedReactionsRef.current = true;
-            if (existingSignal && existingSignal.op !== "native") {
-              await writeSignal("native", "");
-            }
-            return;
-          } catch {
-            serverSupportsExtendedReactionsRef.current = false;
-          }
-        }
-
-        if (nativeEmoji) {
+        if (nextMyEmojis.length === 0 && nativeEmojis.length === 1) {
           await toggleGroupReactionMut({
             messageId: messageId as Id<"groupMessages">,
-            emoji: nativeEmoji,
+            emoji: nativeEmojis[0],
           }).catch(() => undefined);
         }
 
-        if (shouldRemove) {
-          await writeSignal("clear", "");
+        if (nextMyEmojis.length === 0) {
+          await writeSignal("clear", []);
         } else {
-          await writeSignal("set", cleanEmoji);
+          await writeSignal("set", nextMyEmojis);
         }
       } catch (err) {
         setOptimisticReactions((prev) => {
@@ -1219,10 +1229,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       activeGroupId,
       clearOptimisticReactionLater,
       editGroupMut,
+      ensureGroupEpochReadyForSend,
       groupFold,
       me,
       sendGroupMessageMut,
       toggleGroupReactionMut,
+      upload,
     ],
   );
   const deleteGroupMessageForMe = useCallback<JaTextStore["deleteGroupMessageForMe"]>(
@@ -1804,9 +1816,11 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const sendSticker = useCallback<JaTextStore["sendSticker"]>(
     async (receiverId, sticker) => {
+      const style = getSavedOutgoingBubbleStyle();
+      const stickerBody = style === "default" ? "" : attachBubbleStyleToOutgoing("", style);
       const enc = await prepareOutgoingDmEncrypted({
         receiverId,
-        wireBody: "",
+        wireBody: stickerBody,
         sticker,
         uploadFile: upload,
       });
@@ -1911,31 +1925,49 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           ? targetMsg.receiverId
           : targetMsg.senderId
         : activeChatId;
-      const currentMyEmoji = targetMsg?.reactions?.find((r) => r.userId === me.id)?.emoji;
-      const shouldRemove = currentMyEmoji === cleanEmoji;
-      const nextEmoji = shouldRemove ? null : cleanEmoji;
+      const currentMyEmojis = Array.from(
+        new Set(
+          (targetMsg?.reactions ?? [])
+            .filter((r) => r.userId === me.id)
+            .map((r) => r.emoji),
+        ),
+      );
+      const shouldRemove = currentMyEmojis.includes(cleanEmoji);
+      const nextMyEmojis = shouldRemove
+        ? currentMyEmojis.filter((e) => e !== cleanEmoji)
+        : [...currentMyEmojis, cleanEmoji];
       const key = `${messageId}:${me.id}`;
       const existingSignal = dmFold.signalsByTargetUser.get(key);
-      const nativeEmoji = dmFold.nativeReactionsByTargetUser.get(key);
+      const nativeEmojis = dmFold.nativeReactionsByTargetUser.get(key) ?? [];
 
       setOptimisticReactions((prev) => ({
         ...prev,
-        [messageId]: { userId: me.id, emoji: nextEmoji },
+        [messageId]: { userId: me.id, emojis: nextMyEmojis },
       }));
 
-      const writeSignal = async (op: ReactionSignalOp, sigEmoji: string) => {
-        const body = serializeReactionSignal({
+      const writeSignal = async (op: ReactionSignalOp, sigEmojis: string[]) => {
+        const plainSignal = serializeReactionSignal({
           kind: "reaction",
           targetId: messageId,
-          emoji: sigEmoji,
+          emoji: sigEmojis[0] ?? "",
+          emojis: sigEmojis,
           op,
           ts: Date.now(),
         });
+        let wireSignal = plainSignal;
+        if (otherUserId && otherUserId !== OFFICIAL_COMMUNITY_ID) {
+          const enc = await prepareOutgoingDmEncrypted({
+            receiverId: otherUserId,
+            wireBody: plainSignal,
+            uploadFile: upload,
+          });
+          if (enc) wireSignal = enc.wireBody;
+        }
         if (existingSignal) {
           try {
             await editMessageMut({
               messageId: existingSignal.rowId as Id<"messages">,
-              body,
+              body: wireSignal,
             });
             return;
           } catch {
@@ -1945,64 +1977,45 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         if (otherUserId && otherUserId !== OFFICIAL_COMMUNITY_ID) {
           await sendMessageMut({
             receiverId: otherUserId as Id<"users">,
-            body,
+            body: wireSignal,
           });
         }
       };
 
       try {
-        if (LEGACY_SERVER_REACTION_EMOJIS.has(cleanEmoji)) {
-          if (shouldRemove) {
-            if (nativeEmoji === cleanEmoji) {
+        if (
+          nextMyEmojis.length <= 1 &&
+          (nextMyEmojis.length === 0 || LEGACY_SERVER_REACTION_EMOJIS.has(nextMyEmojis[0])) &&
+          !existingSignal
+        ) {
+          const single = nextMyEmojis[0] ?? null;
+          if (single === null) {
+            if (nativeEmojis.includes(cleanEmoji)) {
               await toggleReactionMut({
                 messageId: messageId as Id<"messages">,
                 emoji: cleanEmoji,
               });
             }
-            if (existingSignal && existingSignal.op === "set") {
-              await writeSignal("clear", "");
-            }
-          } else {
-            if (nativeEmoji !== cleanEmoji) {
-              await toggleReactionMut({
-                messageId: messageId as Id<"messages">,
-                emoji: cleanEmoji,
-              });
-            }
-            if (existingSignal && existingSignal.op !== "native") {
-              await writeSignal("native", "");
-            }
+          } else if (!nativeEmojis.includes(single)) {
+            await toggleReactionMut({
+              messageId: messageId as Id<"messages">,
+              emoji: single,
+            });
           }
           return;
         }
 
-        if (serverSupportsExtendedReactionsRef.current !== false) {
-          try {
-            await toggleReactionMut({
-              messageId: messageId as Id<"messages">,
-              emoji: cleanEmoji,
-            });
-            serverSupportsExtendedReactionsRef.current = true;
-            if (existingSignal && existingSignal.op !== "native") {
-              await writeSignal("native", "");
-            }
-            return;
-          } catch {
-            serverSupportsExtendedReactionsRef.current = false;
-          }
-        }
-
-        if (nativeEmoji) {
+        if (nextMyEmojis.length === 0 && nativeEmojis.length === 1) {
           await toggleReactionMut({
             messageId: messageId as Id<"messages">,
-            emoji: nativeEmoji,
+            emoji: nativeEmojis[0],
           }).catch(() => undefined);
         }
 
-        if (shouldRemove) {
-          await writeSignal("clear", "");
+        if (nextMyEmojis.length === 0) {
+          await writeSignal("clear", []);
         } else {
-          await writeSignal("set", cleanEmoji);
+          await writeSignal("set", nextMyEmojis);
         }
       } catch (err) {
         setOptimisticReactions((prev) => {
@@ -2023,6 +2036,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       me,
       sendMessageMut,
       toggleReactionMut,
+      upload,
     ],
   );
 
@@ -2501,6 +2515,77 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [isAuthenticated, me?.id, setStickerFavoriteMut, stickerLibrary]);
+
+  // Sync outgoing custom chat bubble style across Mobile <-> Web/PC via private stickerLibrary
+  const pushBubbleStyleToRemote = useCallback(
+    async (styleId: BubbleStyleId) => {
+      if (!isAuthenticated || !me?.id) return;
+      const prefKey = `${E2EE_BUBBLE_PREF_PREFIX}${styleId}`;
+      lastAppliedRemoteBubbleRef.current = styleId;
+      await setStickerFavoriteMut({
+        mediaKey: prefKey,
+        url: "https://klipy.com/pref/bubble",
+        name: prefKey,
+        mediaType: "sticker",
+        source: "klipy",
+        isFavorite: true,
+      }).catch(() => undefined);
+
+      const stalePrefs = stickerFavoritesRef.current.filter(
+        (item) => item.name.startsWith(E2EE_BUBBLE_PREF_PREFIX) && item.name !== prefKey,
+      );
+      for (const oldItem of stalePrefs) {
+        await setStickerFavoriteMut({
+          mediaKey: oldItem.key,
+          url: oldItem.url || "https://klipy.com/pref/bubble",
+          name: oldItem.name,
+          mediaType: oldItem.mediaType === "gif" ? "gif" : "sticker",
+          source: oldItem.source,
+          isFavorite: false,
+        }).catch(() => undefined);
+      }
+    },
+    [isAuthenticated, me?.id, setStickerFavoriteMut],
+  );
+
+  useEffect(() => {
+    if (!stickerLibrary) return;
+    stickerFavoritesRef.current = stickerLibrary.favorites;
+    if (!isAuthenticated || !me?.id) return;
+
+    const prefItem = stickerLibrary.favorites.find((item) =>
+      item.name.startsWith(E2EE_BUBBLE_PREF_PREFIX),
+    );
+    if (prefItem) {
+      seededInitialBubbleSyncRef.current = true;
+      const rawStyle = prefItem.name.slice(E2EE_BUBBLE_PREF_PREFIX.length);
+      if (isValidBubbleStyleId(rawStyle) && lastAppliedRemoteBubbleRef.current !== rawStyle) {
+        lastAppliedRemoteBubbleRef.current = rawStyle;
+        if (getSavedOutgoingBubbleStyle() !== rawStyle) {
+          saveOutgoingBubbleStyle(rawStyle, { fromRemote: true });
+        }
+      }
+    } else if (!seededInitialBubbleSyncRef.current) {
+      seededInitialBubbleSyncRef.current = true;
+      const existingLocal = getSavedOutgoingBubbleStyle();
+      if (existingLocal !== "default") {
+        void pushBubbleStyleToRemote(existingLocal);
+      }
+    }
+  }, [isAuthenticated, me?.id, pushBubbleStyleToRemote, stickerLibrary]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !me?.id) return;
+    const onLocalBubbleChange = (event: Event) => {
+      const detail = (event as CustomEvent<BubbleStyleId>).detail;
+      const nextStyle = detail && isValidBubbleStyleId(detail) ? detail : getSavedOutgoingBubbleStyle();
+      void pushBubbleStyleToRemote(nextStyle);
+    };
+    window.addEventListener(BUBBLE_STYLE_REMOTE_SYNC_EVENT, onLocalBubbleChange);
+    return () => {
+      window.removeEventListener(BUBBLE_STYLE_REMOTE_SYNC_EVENT, onLocalBubbleChange);
+    };
+  }, [isAuthenticated, me?.id, pushBubbleStyleToRemote]);
 
   const saveE2EEVaultBackup = useCallback<NonNullable<JaTextStore["saveE2EEVaultBackup"]>>(
     async (passphrase) => {

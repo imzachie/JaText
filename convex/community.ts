@@ -332,11 +332,14 @@ export const toggleReaction = mutation({
     const message = await ctx.db.get(messageId);
     if (!message || message.hiddenFor?.includes(me._id) || message.unsentAt) throw new Error("This message cannot be reacted to.");
     const reactions = message.reactions ?? [];
-    const existing = reactions.find((reaction) => reaction.userId === me._id);
-    const updated =
-      existing?.emoji === cleanEmoji
-        ? reactions.filter((reaction) => reaction.userId !== me._id)
-        : [...reactions.filter((reaction) => reaction.userId !== me._id), { userId: me._id, emoji: cleanEmoji }];
+    const hasSameEmoji = reactions.some(
+      (reaction) => reaction.userId === me._id && reaction.emoji === cleanEmoji,
+    );
+    const updated = hasSameEmoji
+      ? reactions.filter(
+          (reaction) => !(reaction.userId === me._id && reaction.emoji === cleanEmoji),
+        )
+      : [...reactions, { userId: me._id, emoji: cleanEmoji }];
     await ctx.db.patch(messageId, { reactions: updated });
   },
 });

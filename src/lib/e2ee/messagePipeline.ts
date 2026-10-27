@@ -1,6 +1,11 @@
-import { extractMessageBubbleStyle, stripBubbleStyleFromText } from "../chatCustomization";
+import {
+  extractMessageBubbleStyle,
+  isValidBubbleStyleId,
+  stripBubbleStyleFromText,
+} from "../chatCustomization";
 import type { ChatMessage, ChatPreview, GroupDetails, GroupMessage, GroupSummary, StickerMedia } from "../types";
 import {
+  E2EE_BUBBLE_PREF_PREFIX,
   E2EE_DEVSYNC_REQ_PREFIX,
   E2EE_DEVSYNC_RES_PREFIX,
   E2EE_MAX_INLINE_WIRE_CHARS,
@@ -32,6 +37,7 @@ export function isInternalE2EEStickerName(name?: string | null): boolean {
   if (!name) return false;
   return (
     name === E2EE_VAULT_STICKER_NAME ||
+    name.startsWith(E2EE_BUBBLE_PREF_PREFIX) ||
     name.startsWith(E2EE_DEVSYNC_REQ_PREFIX) ||
     name.startsWith(E2EE_DEVSYNC_RES_PREFIX)
   );
@@ -137,9 +143,12 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
     }
   }
 
+  const outgoingStyle = extractMessageBubbleStyle(wireBody, file?.type).bubbleStyle;
+
   let payload: E2EEPlainPayload = {
     v: 1,
     b: wireBody,
+    ...(outgoingStyle !== "default" ? { bs: outgoingStyle } : {}),
     ...(attDescriptor ? { att: attDescriptor } : {}),
     ...(stkPayload ? { stk: stkPayload } : {}),
   };
@@ -159,6 +168,7 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
     payload = {
       v: 1,
       b: "",
+      ...(outgoingStyle !== "default" ? { bs: outgoingStyle } : {}),
       msgBlob: descriptor,
       ...(stkPayload ? { stk: stkPayload } : {}),
     };
@@ -256,9 +266,12 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
     }
   }
 
+  const outgoingGroupStyle = extractMessageBubbleStyle(wireBody, file?.type).bubbleStyle;
+
   let payload: E2EEPlainPayload = {
     v: 1,
     b: wireBody,
+    ...(outgoingGroupStyle !== "default" ? { bs: outgoingGroupStyle } : {}),
     ...(attDescriptor ? { att: attDescriptor } : {}),
     ...(stkPayload ? { stk: stkPayload } : {}),
   };
@@ -277,6 +290,7 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
     payload = {
       v: 1,
       b: "",
+      ...(outgoingGroupStyle !== "default" ? { bs: outgoingGroupStyle } : {}),
       msgBlob: descriptor,
       ...(stkPayload ? { stk: stkPayload } : {}),
     };
@@ -491,13 +505,17 @@ export function hydrateDecryptedDmMessage(
     }
   }
 
-  const { cleanBody, bubbleStyle } = extractMessageBubbleStyle(resolvedBody, attachmentType);
+  const { cleanBody, bubbleStyle: markerStyle } = extractMessageBubbleStyle(resolvedBody, attachmentType);
+  const explicitStyle =
+    payload.bs && isValidBubbleStyleId(payload.bs) ? payload.bs : undefined;
+  const resolvedStyle =
+    explicitStyle ?? (markerStyle !== "default" ? markerStyle : withReply.bubbleStyle);
   const cleanedMime = attachmentType ? attachmentType.replace(/;jbs=[a-z0-9-]+/gi, "") : undefined;
 
   return {
     ...withReply,
     body: cleanBody,
-    bubbleStyle: bubbleStyle ?? withReply.bubbleStyle,
+    bubbleStyle: resolvedStyle,
     attachmentUrl,
     attachmentName,
     attachmentType: cleanedMime,
@@ -659,14 +677,18 @@ export function hydrateDecryptedGroupMessage(
     }
   }
 
-  const { cleanBody, bubbleStyle } = extractMessageBubbleStyle(resolvedBody, attachmentType);
+  const { cleanBody, bubbleStyle: markerStyle } = extractMessageBubbleStyle(resolvedBody, attachmentType);
+  const explicitStyle =
+    payload.bs && isValidBubbleStyleId(payload.bs) ? payload.bs : undefined;
+  const resolvedStyle =
+    explicitStyle ?? (markerStyle !== "default" ? markerStyle : withReply.bubbleStyle);
   const cleanedMime = attachmentType ? attachmentType.replace(/;jbs=[a-z0-9-]+/gi, "") : undefined;
   const mentions = extractClientMentions(cleanBody, raw.senderId, groupDetails);
 
   return {
     ...withReply,
     body: cleanBody,
-    bubbleStyle: bubbleStyle ?? withReply.bubbleStyle,
+    bubbleStyle: resolvedStyle,
     attachmentUrl,
     attachmentName,
     attachmentType: cleanedMime,

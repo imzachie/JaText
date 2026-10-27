@@ -134,7 +134,9 @@ export function MessageEncryptionModal({
                 {copied ? "✓ Copied" : "Copy raw payload"}
               </button>
             </div>
-            <pre className="e2ee-wire-box">{proof.rawWireBody}</pre>
+            <pre className="e2ee-wire-box">
+              {proof.rawWireBody.replace(/[\u200B]+/g, "")}
+            </pre>
           </div>
 
           <div className="e2ee-modal-footer">

@@ -165,6 +165,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onOpenMessageMenu,
   onOpenMessageMenuAt,
   onReactToMessage,
+  onOpenReactionPicker,
   onSwipeReply,
   onJoinGroupCall,
   activeCallId,
@@ -186,6 +187,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onOpenMessageMenu: (event: MouseEvent, message: GroupMessage) => void;
   onOpenMessageMenuAt: (x: number, y: number, message: GroupMessage) => void;
   onReactToMessage: (message: GroupMessage, emoji: string) => void;
+  onOpenReactionPicker: (x: number, y: number, message: GroupMessage) => void;
   onSwipeReply: (message: GroupMessage) => void;
   onJoinGroupCall: (invite: NonNullable<ReturnType<typeof parseGroupCallInvite>>, messageId: string) => void;
   activeCallId: string | null;
@@ -581,6 +583,24 @@ const GroupChatHistory = memo(function GroupChatHistory({
                           </button>
                         );
                       })}
+                      {!message.unsentAt && (
+                        <button
+                          type="button"
+                          className="reaction-chip reaction-add-chip"
+                          onClick={(event) => {
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            onOpenReactionPicker(
+                              rect.left + rect.width / 2,
+                              rect.top,
+                              message,
+                            );
+                          }}
+                          title="Add another reaction"
+                          aria-label="Add another reaction"
+                        >
+                          +
+                        </button>
+                      )}
                     </div>
                   )}
                   <span className="msg-time">
@@ -1415,13 +1435,20 @@ export function GroupChatView({
     });
   }, [conversationReady, groupId, scrollToBottom]);
 
+  const prevDisplayedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    prevDisplayedKeyRef.current = null;
+  }, [groupId]);
+
   // Keep pinned to bottom when new messages arrive or when you send a message
   useLayoutEffect(() => {
     if (!conversationReady || !lastDisplayedKey) return;
+    const isNewTailMessage = prevDisplayedKeyRef.current !== lastDisplayedKey;
+    prevDisplayedKeyRef.current = lastDisplayedKey;
     if (
       initialScrollAllowedRef.current ||
       wasPinnedRef.current ||
-      lastDisplayedSenderId === store.me?.id
+      (isNewTailMessage && lastDisplayedSenderId === store.me?.id)
     ) {
       scrollToBottom();
     }
@@ -2283,6 +2310,7 @@ export function GroupChatView({
         onOpenMessageMenu={openMessageMenu}
         onOpenMessageMenuAt={openMessageMenuAt}
         onReactToMessage={reactToMessage}
+        onOpenReactionPicker={(x, y, message) => setReactionTarget({ x, y, message })}
         onSwipeReply={(msg) => {
           setEditingMessage(null);
           setForwardedMessage(null);
@@ -2639,9 +2667,13 @@ export function GroupChatView({
         <ReactionEmojiPicker
           x={reactionTarget.x}
           y={reactionTarget.y}
-          currentEmoji={
-            reactionTarget.message.reactions?.find((r) => r.userId === store.me?.id)?.emoji
-          }
+          selectedEmojis={(
+            displayedMessages.find((m) => m.id === reactionTarget.message.id)?.reactions ??
+            reactionTarget.message.reactions ??
+            []
+          )
+            .filter((r) => r.userId === store.me?.id)
+            .map((r) => r.emoji)}
           onSelect={(emoji) => void reactToMessage(reactionTarget.message, emoji)}
           onClose={() => setReactionTarget(null)}
         />
