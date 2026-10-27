@@ -22,6 +22,7 @@ dist-ssr
 /android/keystore.properties
 /android/*.jks
 /*.apk
+!/release-cdn/*.apk
 
 # Editor directories and files
 .vscode/*

@@ -33,11 +33,14 @@ import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -122,8 +125,8 @@ public class JaTextNativePlugin extends Plugin {
         Context ctx = getContext();
         JSObject result = new JSObject();
         if (ctx == null) {
-            result.put("versionName", "2.1");
-            result.put("versionCode", 12);
+            result.put("versionName", "2.2");
+            result.put("versionCode", 13);
             result.put("canInstallPackages", true);
             call.resolve(result);
             return;
@@ -137,13 +140,13 @@ public class JaTextNativePlugin extends Plugin {
                 ? info.getLongVersionCode()
                 : info.versionCode;
             boolean canInstall = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || pm.canRequestPackageInstalls();
-            result.put("versionName", info.versionName != null ? info.versionName : "2.1");
+            result.put("versionName", info.versionName != null ? info.versionName : "2.2");
             result.put("versionCode", (int) versionCode);
             result.put("canInstallPackages", canInstall);
             call.resolve(result);
         } catch (Throwable err) {
-            result.put("versionName", "2.1");
-            result.put("versionCode", 12);
+            result.put("versionName", "2.2");
+            result.put("versionCode", 13);
             result.put("canInstallPackages", true);
             call.resolve(result);
         }
@@ -190,6 +193,90 @@ public class JaTextNativePlugin extends Plugin {
             res.put("launchedInstaller", canInstall);
             call.resolve(res);
         }
+    }
+
+    @PluginMethod
+    public void fetchUpdateManifest(PluginCall call) {
+        final String manifestUrl = call.getString("url");
+        if (manifestUrl == null || manifestUrl.trim().isEmpty()) {
+            call.reject("Missing manifest URL.");
+            return;
+        }
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                String currentUrl = manifestUrl.trim();
+                for (int redirects = 0; redirects < 6; redirects++) {
+                    URL url = new URL(currentUrl);
+                    conn = (HttpURLConnection) url.openConnection();
+                    conn.setInstanceFollowRedirects(true);
+                    conn.setUseCaches(false);
+                    conn.setConnectTimeout(12000);
+                    conn.setReadTimeout(15000);
+                    conn.setRequestProperty("User-Agent", "JaText-Android-Updater");
+                    conn.setRequestProperty("Accept", "application/json,*/*");
+                    conn.setRequestProperty("Cache-Control", "no-cache");
+                    conn.connect();
+
+                    int status = conn.getResponseCode();
+                    if (
+                        status == HttpURLConnection.HTTP_MOVED_PERM ||
+                        status == HttpURLConnection.HTTP_MOVED_TEMP ||
+                        status == HttpURLConnection.HTTP_SEE_OTHER ||
+                        status == 307 ||
+                        status == 308
+                    ) {
+                        String location = conn.getHeaderField("Location");
+                        conn.disconnect();
+                        if (location == null || location.isEmpty()) {
+                            break;
+                        }
+                        currentUrl = location;
+                        continue;
+                    }
+
+                    JSObject res = new JSObject();
+                    res.put("status", status);
+                    if (status >= 200 && status < 300) {
+                        try (
+                            InputStream in = conn.getInputStream();
+                            ByteArrayOutputStream baos = new ByteArrayOutputStream()
+                        ) {
+                            byte[] buf = new byte[4096];
+                            int r;
+                            while ((r = in.read(buf)) != -1) {
+                                baos.write(buf, 0, r);
+                                if (baos.size() > 262144) break;
+                            }
+                            res.put("ok", true);
+                            res.put("body", new String(baos.toByteArray(), StandardCharsets.UTF_8));
+                        }
+                    } else {
+                        res.put("ok", false);
+                        res.put("body", "");
+                    }
+                    call.resolve(res);
+                    return;
+                }
+                JSObject fail = new JSObject();
+                fail.put("ok", false);
+                fail.put("status", 0);
+                fail.put("body", "");
+                call.resolve(fail);
+            } catch (Throwable err) {
+                JSObject fail = new JSObject();
+                fail.put("ok", false);
+                fail.put("status", 0);
+                fail.put("body", "");
+                call.resolve(fail);
+            } finally {
+                if (conn != null) {
+                    try {
+                        conn.disconnect();
+                    } catch (Throwable ignored) {}
+                }
+            }
+        }, "JaTextUpdateCheck").start();
     }
 
     @PluginMethod
@@ -270,6 +357,24 @@ public class JaTextNativePlugin extends Plugin {
                         }
                     }
                     out.flush();
+                }
+
+                // Verify the downloaded file is a genuine APK archive (PK\x03\x04) and not an HTML fallback page
+                if (!outApk.exists() || outApk.length() < 512 * 1024L) {
+                    throw new Exception("Downloaded update file was incomplete (" + outApk.length() + " bytes).");
+                }
+                byte[] magic = new byte[4];
+                try (FileInputStream fis = new FileInputStream(outApk)) {
+                    int mRead = fis.read(magic);
+                    if (
+                        mRead < 4 ||
+                        magic[0] != 0x50 ||
+                        magic[1] != 0x4B ||
+                        magic[2] != 0x03 ||
+                        magic[3] != 0x04
+                    ) {
+                        throw new Exception("Update file is not a valid Android APK package.");
+                    }
                 }
 
                 boolean canInstall = Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||

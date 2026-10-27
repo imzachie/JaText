@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - "arena/**"
+    paths-ignore:
+      - "release-cdn/**"
   workflow_dispatch:
 
 permissions:
@@ -92,10 +94,37 @@ jobs:
         run: |
           VERSION_CODE=$(grep -oP 'versionCode\s+\K\d+' android/app/build.gradle | head -n 1)
           VERSION_NAME=$(grep -oP 'versionName\s+"\K[^"]+' android/app/build.gradle | head -n 1)
-          base64 -w 0 JaText-release.apk > apk.b64
+          cp JaText-release.apk /tmp/JaText-release.apk
+          base64 -w 0 /tmp/JaText-release.apk > apk.b64
           jq -Rs '{content: ., encoding: "base64"}' apk.b64 > blob_payload.json
           BLOB_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --input blob_payload.json --jq .sha)
           gh release delete apk-latest --cleanup-tag --yes || true
-          gh release create apk-latest JaText-release.apk \
+          gh release create apk-latest /tmp/JaText-release.apk \
             --title "JaText v${VERSION_NAME} (build ${VERSION_CODE})" \
             --notes "Signed Release APK built from commit ${GITHUB_SHA}. VersionName: ${VERSION_NAME}. VersionCode: ${VERSION_CODE}. Convex: ${CONVEX_SYNCED}. Blob: ${BLOB_SHA}"
+
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            AUTHOR_NAME=$(git log -1 --format='%an')
+            AUTHOR_EMAIL=$(git log -1 --format='%ae')
+            git config user.name "${AUTHOR_NAME:-Ahad00010}"
+            git config user.email "${AUTHOR_EMAIL:-Ahad00010@users.noreply.github.com}"
+            git checkout -- .
+            git fetch origin main
+            git checkout -B main origin/main
+            mkdir -p release-cdn
+            cp /tmp/JaText-release.apk release-cdn/JaText-release.apk
+            PUBLISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            jq -n \
+              --arg vn "${VERSION_NAME}" \
+              --argjson vc "${VERSION_CODE}" \
+              --arg url "https://jatext.vercel.app/downloads/JaText-release.apk" \
+              --arg sha "${GITHUB_SHA}" \
+              --arg at "${PUBLISHED_AT}" \
+              '{versionName: $vn, versionCode: $vc, downloadUrl: $url, commitSha: $sha, publishedAt: $at}' \
+              > release-cdn/apk-version.json
+            git add -f release-cdn/apk-version.json release-cdn/JaText-release.apk
+            if ! git diff --cached --quiet; then
+              git commit -m "Publish signed Release APK v${VERSION_NAME} (build ${VERSION_CODE}) to public CDN"
+              git push origin HEAD:main || true
+            fi
+          fi

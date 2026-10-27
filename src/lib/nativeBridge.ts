@@ -35,6 +35,11 @@ export interface AppVersionInfo {
 export interface JaTextNativePlugin {
   checkPushSupport(): Promise<{ firebaseConfigured: boolean }>;
   getAppVersionInfo(): Promise<AppVersionInfo>;
+  fetchUpdateManifest(options: { url: string }): Promise<{
+    ok: boolean;
+    status: number;
+    body: string;
+  }>;
   openUnknownSourcesSettings(): Promise<{
     canInstallPackages?: boolean;
     launchedInstaller?: boolean;

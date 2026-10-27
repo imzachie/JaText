@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
+import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { JaTextNative, type AppVersionInfo } from "../lib/nativeBridge";
 import { AnimatedModal } from "./AnimatedModal";
 
 const WELCOMED_VERSION_KEY = "jatext:welcomed-mobile-build:v1";
+const PUBLIC_UPDATE_MANIFEST_URL = "https://jatext.vercel.app/apk-version.json";
+const PUBLIC_APK_DOWNLOAD_URL = "https://jatext.vercel.app/downloads/JaText-release.apk";
 const GITHUB_RELEASE_API = "https://api.github.com/repos/Ahad00010/JaText/releases/tags/apk-latest";
-const FALLBACK_APK_URL =
+const FALLBACK_GITHUB_APK_URL =
   "https://github.com/Ahad00010/JaText/releases/download/apk-latest/JaText-release.apk";
 
 interface RemoteReleaseInfo {
@@ -17,6 +20,91 @@ interface RemoteReleaseInfo {
 function formatBuildLabel(versionName: string, versionCode: number): string {
   const cleanName = versionName.replace(/^v/i, "");
   return `v${cleanName} (build ${versionCode})`;
+}
+
+async function fetchPublicManifestJson(): Promise<RemoteReleaseInfo | null> {
+  const bustUrl = `${PUBLIC_UPDATE_MANIFEST_URL}?t=${Date.now()}`;
+
+  // 1. Native Android HTTP (zero CORS / zero WebView cache, works while GitHub repo is Private!)
+  try {
+    const nativeRes = await JaTextNative.fetchUpdateManifest({ url: bustUrl });
+    if (nativeRes.ok && nativeRes.body) {
+      const parsed = JSON.parse(nativeRes.body) as {
+        versionName?: string;
+        versionCode?: number | string;
+        downloadUrl?: string;
+      };
+      const code =
+        typeof parsed.versionCode === "number"
+          ? parsed.versionCode
+          : Number.parseInt(String(parsed.versionCode ?? ""), 10);
+      if (Number.isFinite(code) && code > 0) {
+        return {
+          versionName: String(parsed.versionName ?? code),
+          versionCode: code,
+          downloadUrl: parsed.downloadUrl || PUBLIC_APK_DOWNLOAD_URL,
+        };
+      }
+    }
+  } catch {
+    // Fall through to standard fetch
+  }
+
+  // 2. Standard fetch against public jatext.vercel.app CDN
+  try {
+    const webRes = await fetch(bustUrl, { cache: "no-store" });
+    if (webRes.ok) {
+      const parsed = (await webRes.json()) as {
+        versionName?: string;
+        versionCode?: number | string;
+        downloadUrl?: string;
+      };
+      const code =
+        typeof parsed.versionCode === "number"
+          ? parsed.versionCode
+          : Number.parseInt(String(parsed.versionCode ?? ""), 10);
+      if (Number.isFinite(code) && code > 0) {
+        return {
+          versionName: String(parsed.versionName ?? code),
+          versionCode: code,
+          downloadUrl: parsed.downloadUrl || PUBLIC_APK_DOWNLOAD_URL,
+        };
+      }
+    }
+  } catch {
+    // Fall through to GitHub Releases fallback
+  }
+
+  // 3. Optional fallback to GitHub Releases API (if repository is public)
+  try {
+    const res = await fetch(GITHUB_RELEASE_API, {
+      headers: { Accept: "application/vnd.github+json" },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      name?: string;
+      body?: string;
+      assets?: Array<{ name?: string; browser_download_url?: string }>;
+    };
+    const textToScan = `${json.body ?? ""}\n${json.name ?? ""}`;
+    const codeMatch =
+      /VersionCode:\s*(\d+)/i.exec(textToScan) ?? /\(build\s+(\d+)\)/i.exec(textToScan);
+    const nameMatch =
+      /VersionName:\s*([0-9]+(?:\.[0-9]+)*)/i.exec(textToScan) ??
+      /JaText\s+v([0-9]+(?:\.[0-9]+)*)/i.exec(textToScan);
+    if (!codeMatch) return null;
+    const remoteCode = Number.parseInt(codeMatch[1], 10);
+    const remoteName = nameMatch ? nameMatch[1] : `${remoteCode}`;
+    const apkAsset = json.assets?.find((a) => a.name?.endsWith(".apk"));
+    return {
+      versionName: remoteName,
+      versionCode: remoteCode,
+      downloadUrl: apkAsset?.browser_download_url || FALLBACK_GITHUB_APK_URL,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean }) {
@@ -34,6 +122,7 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
     if (!isNative) return;
     let cancelled = false;
     let progressHandle: PluginListenerHandle | null = null;
+    let appStateHandle: PluginListenerHandle | null = null;
 
     void JaTextNative.addListener("apkDownloadProgress", (ev) => {
       if (!cancelled) {
@@ -43,10 +132,10 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
       progressHandle = h;
     });
 
-    void (async () => {
+    const runUpdateCheck = async () => {
       const info = await JaTextNative.getAppVersionInfo().catch(() => ({
-        versionName: "2.1",
-        versionCode: 12,
+        versionName: "2.2",
+        versionCode: 13,
         canInstallPackages: true,
       }));
       if (cancelled) return;
@@ -58,47 +147,30 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
         setShowWelcome(true);
       }
 
-      try {
-        const res = await fetch(GITHUB_RELEASE_API, {
-          headers: { Accept: "application/vnd.github+json" },
-          cache: "no-store",
-        });
-        if (!res.ok || cancelled) return;
-        const json = (await res.json()) as {
-          name?: string;
-          body?: string;
-          assets?: Array<{ name?: string; browser_download_url?: string }>;
-        };
-        const textToScan = `${json.body ?? ""}\n${json.name ?? ""}`;
-        const codeMatch =
-          /VersionCode:\s*(\d+)/i.exec(textToScan) ??
-          /\(build\s+(\d+)\)/i.exec(textToScan);
-        const nameMatch =
-          /VersionName:\s*([0-9]+(?:\.[0-9]+)*)/i.exec(textToScan) ??
-          /JaText\s+v([0-9]+(?:\.[0-9]+)*)/i.exec(textToScan);
-
-        if (!codeMatch) return;
-        const remoteCode = Number.parseInt(codeMatch[1], 10);
-        const remoteName = nameMatch ? nameMatch[1] : `${remoteCode}`;
-        const apkAsset = json.assets?.find((a) => a.name?.endsWith(".apk"));
-        const downloadUrl = apkAsset?.browser_download_url || FALLBACK_APK_URL;
-
-        if (!cancelled && Number.isFinite(remoteCode) && remoteCode > info.versionCode) {
-          setRemoteUpdate({
-            versionName: remoteName,
-            versionCode: remoteCode,
-            downloadUrl,
-          });
-        }
-      } catch {
-        // Offline or GitHub API unreachable — skip update check silently.
+      const remote = await fetchPublicManifestJson();
+      if (!cancelled && remote && remote.versionCode > info.versionCode) {
+        setDismissedUpdate(false);
+        setRemoteUpdate(remote);
       }
-    })();
+    };
+
+    void runUpdateCheck();
+
+    void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+      if (isActive && !cancelled) {
+        void runUpdateCheck();
+      }
+    }).then((h) => {
+      appStateHandle = h;
+    });
 
     return () => {
       cancelled = true;
       if (progressHandle) {
         void progressHandle.remove();
+      }
+      if (appStateHandle) {
+        void appStateHandle.remove();
       }
     };
   }, [isNative]);
@@ -125,7 +197,7 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
       setUpdateError(
         err instanceof Error && err.message
           ? err.message
-          : "Could not download the update from GitHub. Please check your connection and try again.",
+          : "Could not download the update. Please check your connection and try again.",
       );
     } finally {
       setDownloading(false);
@@ -144,7 +216,7 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
     }
   };
 
-  // Priority 1: Newer APK available on GitHub -> Show Update Prompt
+  // Priority 1: Newer APK available on public release CDN -> Show Update Prompt
   if (remoteUpdate && !dismissedUpdate) {
     const latestLabel = formatBuildLabel(remoteUpdate.versionName, remoteUpdate.versionCode);
     return (
@@ -167,8 +239,8 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
               is <strong>{latestLabel}</strong>!
             </p>
             <p className="muted small">
-              Tap <strong>Update now</strong> to download the latest APK directly from GitHub. If
-              prompted by Android, enable <em>Allow from this source</em> to install the update.
+              Tap <strong>Update now</strong> to download and install the latest signed JaText APK.
+              If prompted by Android, enable <em>Allow from this source</em> to install the update.
             </p>
 
             {downloading && (
@@ -183,8 +255,8 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
                 </div>
                 <span className="muted small">
                   {downloadPercent !== null
-                    ? `Downloading from GitHub… ${downloadPercent}%`
-                    : "Downloading update from GitHub…"}
+                    ? `Downloading update… ${downloadPercent}%`
+                    : "Downloading update…"}
                 </span>
               </div>
             )}
@@ -246,10 +318,10 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <h2>Welcome to {currentLabel} of JaText!</h2>
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
+              <li>🚀 Instant One-Tap Self-Updater via public CDN (while source stays Private)</li>
               <li>🔊 Screen Sharing WITH Audio on Mobile &amp; Desktop calls</li>
               <li>📞 Polished Group Call cards, live GC VC Ended status &amp; Call history</li>
               <li>🎙️ Lag-free background Voice Note Transcription + Volume controls</li>
-              <li>✨ Fixed mobile reply bubbles, 60 FPS animations &amp; Soundboard w/ Bruh</li>
             </ul>
             <button
               type="button"
