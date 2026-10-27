@@ -113,8 +113,8 @@ public class JaTextNativePlugin extends Plugin {
         Context ctx = getContext();
         JSObject result = new JSObject();
         if (ctx == null) {
-            result.put("versionName", "1.9");
-            result.put("versionCode", 10);
+            result.put("versionName", "2.0");
+            result.put("versionCode", 11);
             result.put("canInstallPackages", true);
             call.resolve(result);
             return;
@@ -128,13 +128,13 @@ public class JaTextNativePlugin extends Plugin {
                 ? info.getLongVersionCode()
                 : info.versionCode;
             boolean canInstall = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || pm.canRequestPackageInstalls();
-            result.put("versionName", info.versionName != null ? info.versionName : "1.9");
+            result.put("versionName", info.versionName != null ? info.versionName : "2.0");
             result.put("versionCode", (int) versionCode);
             result.put("canInstallPackages", canInstall);
             call.resolve(result);
         } catch (Throwable err) {
-            result.put("versionName", "1.9");
-            result.put("versionCode", 10);
+            result.put("versionName", "2.0");
+            result.put("versionCode", 11);
             result.put("canInstallPackages", true);
             call.resolve(result);
         }
@@ -482,9 +482,31 @@ public class JaTextNativePlugin extends Plugin {
     public void setCallAudioRoute(PluginCall call) {
         boolean active = Boolean.TRUE.equals(call.getBoolean("active", false));
         boolean speaker = Boolean.TRUE.equals(call.getBoolean("speaker", true));
+        boolean video = Boolean.TRUE.equals(call.getBoolean("video", false));
+        String title = call.getString("title", "JaText Call");
         try {
             Context ctx = getContext();
             if (ctx != null) {
+                if (active) {
+                    try {
+                        Intent svcIntent = new Intent(ctx, CallKeepAliveService.class);
+                        svcIntent.setAction(CallKeepAliveService.ACTION_START);
+                        svcIntent.putExtra(CallKeepAliveService.EXTRA_TITLE, title);
+                        svcIntent.putExtra(CallKeepAliveService.EXTRA_VIDEO, video);
+                        if (MainActivity.isAppInForeground()) {
+                            ContextCompat.startForegroundService(ctx, svcIntent);
+                        } else if (CallKeepAliveService.isCallActive()) {
+                            ctx.startService(svcIntent);
+                        }
+                    } catch (Throwable ignored) {}
+                } else {
+                    try {
+                        Intent stopIntent = new Intent(ctx, CallKeepAliveService.class);
+                        stopIntent.setAction(CallKeepAliveService.ACTION_STOP);
+                        ctx.stopService(stopIntent);
+                    } catch (Throwable ignored) {}
+                }
+
                 AudioManager audioManager = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
                 if (audioManager != null) {
                     if (active) {
@@ -615,12 +637,20 @@ public class JaTextNativePlugin extends Plugin {
 
                     @Override
                     public void onError(int error) {
-                        if (speechCaptureActive && error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                        if (
+                            speechCaptureActive &&
+                            MainActivity.isAppInForeground() &&
+                            error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+                        ) {
                             Activity act = getActivity();
-                            if (act != null) {
+                            if (act != null && act.getWindow() != null) {
                                 act.getWindow()
                                     .getDecorView()
-                                    .postDelayed(() -> startRecognizerPass(ctx), 350);
+                                    .postDelayed(() -> {
+                                        if (speechCaptureActive && MainActivity.isAppInForeground()) {
+                                            startRecognizerPass(ctx);
+                                        }
+                                    }, 450);
                             }
                         }
                     }

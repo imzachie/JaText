@@ -10,8 +10,20 @@ interface CallMessageCardProps {
 
 export function CallMessageCard({ invite, isMine, peer }: CallMessageCardProps) {
   const { session, startCall, setMinimized } = useCall();
-  const isMissedOrDeclined = invite.state === "missed" || invite.state === "declined";
   const isLiveThisCall = session?.callId === invite.callId;
+  const ageMs = invite.ts > 0 ? Date.now() - invite.ts : 120_000;
+
+  // In a 1-on-1 DM call, if this user is NOT currently in `invite.callId`,
+  // a historical `"connected"` card is finished ("ended") and a stale `"ringing"` card is unanswered/missed!
+  const effectiveState = isLiveThisCall
+    ? invite.state
+    : invite.state === "connected"
+      ? "ended"
+      : invite.state === "ringing" && (isMine || ageMs > 50_000)
+        ? "missed"
+        : invite.state;
+
+  const isMissedOrDeclined = effectiveState === "missed" || effectiveState === "declined";
 
   const title =
     invite.mode === "video"
@@ -28,15 +40,15 @@ export function CallMessageCard({ invite, isMine, peer }: CallMessageCardProps) 
 
   const subtitle = isLiveThisCall
     ? "Tap to return to active call"
-    : invite.state === "ringing"
+    : effectiveState === "ringing"
       ? isMine
         ? "Ringing…"
         : "Incoming call…"
-      : invite.state === "connected"
+      : effectiveState === "connected"
         ? "In progress"
-        : invite.state === "declined"
+        : effectiveState === "declined"
           ? "Declined"
-          : invite.state === "missed"
+          : effectiveState === "missed"
             ? isMine
               ? "No answer"
               : "Tap to call back"

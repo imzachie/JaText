@@ -953,6 +953,7 @@ export function GroupChatView({
 
   // Advanced Group Settings modal state
   const [showManage, setShowManage] = useState(false);
+  const [manageClosing, setManageClosing] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [groupAvatarState, setGroupAvatarState] = useState<GroupAvatarEditState>({ kind: "keep" });
   const [manageSaved, setManageSaved] = useState(false);
@@ -1129,13 +1130,19 @@ export function GroupChatView({
     setMemberSearch("");
     setShowAddMembers(false);
     setAddMemberIds([]);
+    setManageClosing(false);
     setShowManage(true);
   }
 
   function closeManageModal() {
-    if (groupAvatarState.kind === "new") URL.revokeObjectURL(groupAvatarState.preview);
-    setGroupAvatarState({ kind: "keep" });
-    setShowManage(false);
+    if (manageClosing) return;
+    setManageClosing(true);
+    window.setTimeout(() => {
+      if (groupAvatarState.kind === "new") URL.revokeObjectURL(groupAvatarState.preview);
+      setGroupAvatarState({ kind: "keep" });
+      setShowManage(false);
+      setManageClosing(false);
+    }, 185);
   }
 
   useEffect(() => {
@@ -2419,12 +2426,19 @@ export function GroupChatView({
       )}
 
       {showManage && group && (
-        <div className="modal-backdrop" onClick={closeManageModal}>
+        <div
+          className={`modal-backdrop ${manageClosing ? "is-closing" : ""}`}
+          onClick={closeManageModal}
+        >
           <section
-            className="modal-card wide group-manage-dialog"
+            className={`modal-card wide group-manage-dialog ${manageClosing ? "is-closing" : ""}`}
             onClick={(event) => event.stopPropagation()}
           >
-            <button className="modal-close" onClick={closeManageModal} aria-label="Close">
+            <button
+              className="modal-close animated-x-btn"
+              onClick={closeManageModal}
+              aria-label="Close"
+            >
               ×
             </button>
             <h2>Group settings</h2>

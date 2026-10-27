@@ -40,7 +40,12 @@ export interface JaTextNativePlugin {
   }>;
   copyImageBase64(options: { base64: string }): Promise<{ copied: boolean }>;
   requestMediaPermissions(options: { video: boolean }): Promise<{ granted: boolean }>;
-  setCallAudioRoute(options: { active: boolean; speaker: boolean }): Promise<{ speaker: boolean }>;
+  setCallAudioRoute(options: {
+    active: boolean;
+    speaker: boolean;
+    video?: boolean;
+    title?: string;
+  }): Promise<{ speaker: boolean }>;
   startScreenCapture(): Promise<{ started: boolean; width?: number; height?: number }>;
   stopScreenCapture(): Promise<{ stopped: boolean }>;
   startSpeechCapture(): Promise<{ started: boolean }>;
@@ -75,10 +80,19 @@ export async function ensureNativeMediaPermissions(video: boolean): Promise<bool
   }
 }
 
-export async function configureNativeCallAudio(active: boolean, speaker: boolean): Promise<void> {
+export async function configureNativeCallAudio(
+  active: boolean,
+  speaker: boolean,
+  options?: { video?: boolean; title?: string },
+): Promise<void> {
   if (!Capacitor.isNativePlatform()) return;
   try {
-    await JaTextNative.setCallAudioRoute({ active, speaker });
+    await JaTextNative.setCallAudioRoute({
+      active,
+      speaker,
+      video: options?.video,
+      title: options?.title,
+    });
   } catch {
     // Ignore on platforms that don't support native audio routing.
   }

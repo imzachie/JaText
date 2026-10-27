@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import {
   GROUP_CALL_INVITE_PREFIX,
@@ -965,8 +966,9 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     syncParticipantsState,
   ]);
 
-  const acquireLocalMediaForGroupCall = useCallback(async (withVideo: boolean) => {
-    const permitted = await ensureNativeMediaPermissions(withVideo);
+  const acquireLocalMediaForGroupCall = useCallback(
+    async (withVideo: boolean, groupTitle?: string) => {
+      const permitted = await ensureNativeMediaPermissions(withVideo);
     if (!permitted) {
       throw new Error("Allow microphone and camera permissions to join the group call.");
     }
@@ -1009,7 +1011,10 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     setFacingMode("user");
     const defaultSpeaker = withVideo || !Capacitor.isNativePlatform();
     setIsSpeakerphone(defaultSpeaker);
-    void configureNativeCallAudio(true, defaultSpeaker);
+    void configureNativeCallAudio(true, defaultSpeaker, {
+      video: Boolean(camTrack),
+      title: groupTitle || "Group Call",
+    });
     refreshLocalPreviewStream();
     return { micTrack, camTrack };
   }, [refreshLocalPreviewStream]);
@@ -1023,7 +1028,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       }
       setCallError(null);
       try {
-        const { camTrack } = await acquireLocalMediaForGroupCall(mode === "video");
+        const { camTrack } = await acquireLocalMediaForGroupCall(mode === "video", group.name);
         const actualMode: CallMode = mode === "video" && camTrack ? "video" : mode === "video" ? "voice" : "voice";
         const callId = `grp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
         const joinSeq = Date.now();
@@ -1136,7 +1141,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
 
       const wantVideo = withVideo ?? invite.mode === "video";
       try {
-        const { camTrack } = await acquireLocalMediaForGroupCall(wantVideo);
+        const { camTrack } = await acquireLocalMediaForGroupCall(wantVideo, groupObj.name);
         const joinSeq = Date.now();
         myJoinSeqRef.current = joinSeq;
         handledInviteCallIdsRef.current.add(invite.callId);
@@ -1553,8 +1558,11 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   const toggleSpeakerphone = useCallback(async () => {
     const next = !isSpeakerphone;
     setIsSpeakerphone(next);
-    await configureNativeCallAudio(true, next);
-  }, [isSpeakerphone]);
+    await configureNativeCallAudio(true, next, {
+      video: !isCameraOff,
+      title: sessionRef.current?.group.name || "Group Call",
+    });
+  }, [isCameraOff, isSpeakerphone]);
 
   const toggleStudioAudio = useCallback(() => {
     const rawMic = rawMicTrackRef.current;
@@ -1625,6 +1633,83 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     },
     [broadcastMeshData],
   );
+
+  // Keep group call alive across app switches / backgrounding & restore evicted camera/audio
+  useEffect(() => {
+    if (!groupSession || groupSession.phase === "incoming") return;
+
+    const resumeGroupMedia = async (becameVisible: boolean) => {
+      try {
+        if (studioGraphRef.current?.ctx.state === "suspended") {
+          void studioGraphRef.current.ctx.resume().catch(() => undefined);
+        }
+        if (!isDeafened) {
+          for (const entry of peersRef.current.values()) {
+            void entry.audioEl.play().catch(() => undefined);
+          }
+        }
+      } catch {
+        // Ignore audio resume errors.
+      }
+
+      if (!becameVisible) return;
+
+      void configureNativeCallAudio(true, isSpeakerphone, {
+        video: !isCameraOff,
+        title: groupSession.group.name,
+      });
+
+      if (
+        !isCameraOff &&
+        !isScreenSharing &&
+        (!cameraTrackRef.current || cameraTrackRef.current.readyState === "ended")
+      ) {
+        try {
+          const restored = await acquireSwitchedCameraTrack(cameraTrackRef.current, facingMode);
+          cameraTrackRef.current = restored;
+          await replaceMeshVideoTrack(restored);
+          refreshLocalPreviewStream();
+        } catch {
+          // Keep group voice active if camera stays unavailable.
+        }
+      }
+    };
+
+    const onVisibility = () => {
+      void resumeGroupMedia(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    let appStateHandle: PluginListenerHandle | null = null;
+    if (Capacitor.isNativePlatform()) {
+      void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+        void resumeGroupMedia(isActive);
+      }).then((h) => {
+        appStateHandle = h;
+      });
+    }
+
+    const keepAliveTimer = window.setInterval(() => {
+      void resumeGroupMedia(false);
+    }, 3000);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(keepAliveTimer);
+      if (appStateHandle) {
+        void appStateHandle.remove();
+      }
+    };
+  }, [
+    facingMode,
+    groupSession,
+    isCameraOff,
+    isDeafened,
+    isScreenSharing,
+    isSpeakerphone,
+    refreshLocalPreviewStream,
+    replaceMeshVideoTrack,
+  ]);
 
   const canScreenShare =
     Capacitor.isNativePlatform() ||

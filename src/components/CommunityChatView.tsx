@@ -10,6 +10,7 @@ import { getSavedOutgoingBubbleStyle } from "../lib/chatCustomization";
 import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts";
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { friendlyError } from "../lib/errors";
+import { AnimatedModal } from "./AnimatedModal";
 import { Avatar } from "./Avatar";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
@@ -98,52 +99,56 @@ function CommunityVoterDialog({
   });
   const voters = voterQuery ?? [];
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <section
-        className="modal-card community-voters-dialog"
-        aria-label={`Voters for ${poll.body}`}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <button className="modal-close" type="button" onClick={onClose} aria-label="Close voter list">×</button>
-        <h2>Who voted</h2>
-        <p className="muted small">{poll.body}</p>
-        <div className="community-voter-options">
-          {poll.pollOptions.map((option, optionIndex) => {
-            const optionVoters = voters.filter((vote) => vote.optionIndex === optionIndex);
-            return (
-              <section className="community-voter-option" key={`${poll.id}-voters-${optionIndex}`}>
-                <h3>Option {optionIndex + 1}: {option} <span className="muted">({optionVoters.length})</span></h3>
-                {voterQuery === undefined ? (
-                  <p className="muted small">Loading voters…</p>
-                ) : optionVoters.length > 0 ? (
-                  <div className="community-voter-list">
-                    {optionVoters.map((voter) => (
-                      <div className="community-voter" key={voter.userId}>
-                        <Avatar
-                          user={{
-                            displayName: voter.displayName,
-                            username: voter.username,
-                            avatarColor: voter.avatarColor,
-                            avatarUrl: voter.avatarUrl,
-                          }}
-                          size={36}
-                        />
-                        <span>
-                          <strong>{voter.displayName || voter.username}</strong>
-                          <small className="muted">@{voter.username}</small>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="muted small">No votes yet.</p>
-                )}
-              </section>
-            );
-          })}
-        </div>
-      </section>
-    </div>
+    <AnimatedModal
+      onClose={onClose}
+      cardClassName="modal-card community-voters-dialog"
+      closeLabel="Close voter list"
+    >
+      {() => (
+        <>
+          <h2>Who voted</h2>
+          <p className="muted small">{poll.body}</p>
+          <div className="community-voter-options">
+            {poll.pollOptions.map((option, optionIndex) => {
+              const optionVoters = voters.filter((vote) => vote.optionIndex === optionIndex);
+              return (
+                <section className="community-voter-option" key={`${poll.id}-voters-${optionIndex}`}>
+                  <h3>
+                    Option {optionIndex + 1}: {option}{" "}
+                    <span className="muted">({optionVoters.length})</span>
+                  </h3>
+                  {voterQuery === undefined ? (
+                    <p className="muted small">Loading voters…</p>
+                  ) : optionVoters.length > 0 ? (
+                    <div className="community-voter-list">
+                      {optionVoters.map((voter) => (
+                        <div className="community-voter" key={voter.userId}>
+                          <Avatar
+                            user={{
+                              displayName: voter.displayName,
+                              username: voter.username,
+                              avatarColor: voter.avatarColor,
+                              avatarUrl: voter.avatarUrl,
+                            }}
+                            size={36}
+                          />
+                          <span>
+                            <strong>{voter.displayName || voter.username}</strong>
+                            <small className="muted">@{voter.username}</small>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted small">No votes yet.</p>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </AnimatedModal>
   );
 }
 
@@ -1377,33 +1382,37 @@ export function CommunityChatView({
       )}
 
       {showModerators && (
-        <div className="modal-backdrop" onClick={() => setShowModerators(false)}>
-          <section className="modal-card community-moderator-dialog" onClick={(event) => event.stopPropagation()}>
-            <button className="modal-close" onClick={() => setShowModerators(false)} aria-label="Close">×</button>
-            <h2>Elect People …</h2>
-            <p className="muted small">Accounts are shown from oldest to newest. Selected people can post messages and polls.</p>
-            <div className="community-directory-search-row">
-              {directorySearchOpen && (
-                <input ref={directorySearchInput} className="search-input community-directory-search" value={directorySearch} onChange={(event) => setDirectorySearch(event.target.value)} placeholder="Search people…" aria-label="Search registered people" autoFocus />
-              )}
-              <button type="button" className="icon-btn community-directory-search-toggle" aria-label={directorySearchOpen ? "Close people search" : "Search registered people"} title={directorySearchOpen ? "Close search" : "Search people"} onClick={() => { setDirectorySearchOpen((open) => !open); if (directorySearchOpen) setDirectorySearch(""); else window.setTimeout(() => directorySearchInput.current?.focus(), 0); }}>
-                {directorySearchOpen ? "×" : (<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 5 5" /></svg>)}
-              </button>
-            </div>
-            <div className="community-directory">
-              {filteredDirectory.map(({ person, index }) => (
-                <label className="community-directory-person" key={person.id}>
-                  <input type="checkbox" checked={selectedModerators.includes(person.id)} disabled={person.username === "imzachie"} onChange={(event) => setSelectedModerators((current) => event.target.checked ? [...current, person.id] : current.filter((id) => id !== person.id))} />
-                  <Avatar user={{ displayName: person.displayName, username: person.username, avatarColor: person.avatarColor, avatarUrl: person.avatarUrl }} size={34} />
-                  <span>{index + 1}. <strong>{person.displayName}</strong> @{person.username}</span>
-                  <time className="muted small">{new Date(person.createdAt).toLocaleDateString()}</time>
-                </label>
-              ))}
-              {filteredDirectory.length === 0 && <p className="muted">{store.communityDirectory.length === 0 ? "No registered usernames were found." : "No accounts match your search."}</p>}
-            </div>
-            <button className="primary-btn" disabled={busy} onClick={() => void saveModerators()}>Save moderators</button>
-          </section>
-        </div>
+        <AnimatedModal
+          onClose={() => setShowModerators(false)}
+          cardClassName="modal-card community-moderator-dialog"
+        >
+          {() => (
+            <>
+              <h2>Elect People …</h2>
+              <p className="muted small">Accounts are shown from oldest to newest. Selected people can post messages and polls.</p>
+              <div className="community-directory-search-row">
+                {directorySearchOpen && (
+                  <input ref={directorySearchInput} className="search-input community-directory-search" value={directorySearch} onChange={(event) => setDirectorySearch(event.target.value)} placeholder="Search people…" aria-label="Search registered people" autoFocus />
+                )}
+                <button type="button" className="icon-btn community-directory-search-toggle" aria-label={directorySearchOpen ? "Close people search" : "Search registered people"} title={directorySearchOpen ? "Close search" : "Search people"} onClick={() => { setDirectorySearchOpen((open) => !open); if (directorySearchOpen) setDirectorySearch(""); else window.setTimeout(() => directorySearchInput.current?.focus(), 0); }}>
+                  {directorySearchOpen ? "×" : (<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 5 5" /></svg>)}
+                </button>
+              </div>
+              <div className="community-directory">
+                {filteredDirectory.map(({ person, index }) => (
+                  <label className="community-directory-person" key={person.id}>
+                    <input type="checkbox" checked={selectedModerators.includes(person.id)} disabled={person.username === "imzachie"} onChange={(event) => setSelectedModerators((current) => event.target.checked ? [...current, person.id] : current.filter((id) => id !== person.id))} />
+                    <Avatar user={{ displayName: person.displayName, username: person.username, avatarColor: person.avatarColor, avatarUrl: person.avatarUrl }} size={34} />
+                    <span>{index + 1}. <strong>{person.displayName}</strong> @{person.username}</span>
+                    <time className="muted small">{new Date(person.createdAt).toLocaleDateString()}</time>
+                  </label>
+                ))}
+                {filteredDirectory.length === 0 && <p className="muted">{store.communityDirectory.length === 0 ? "No registered usernames were found." : "No accounts match your search."}</p>}
+              </div>
+              <button className="primary-btn" disabled={busy} onClick={() => void saveModerators()}>Save moderators</button>
+            </>
+          )}
+        </AnimatedModal>
       )}
       {voterPoll && store.mode === "convex" && <CommunityVoterDialog poll={voterPoll} onClose={() => setVoterPollId(null)} />}
 

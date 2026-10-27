@@ -653,13 +653,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           ts: Date.now(),
         });
         if (existingSignal) {
-          await editCommunityMessageMut({
-            messageId: existingSignal.rowId as Id<"communityMessages">,
-            body,
-          });
-        } else {
-          await sendCommunityTextMut({ body });
+          try {
+            await editCommunityMessageMut({
+              messageId: existingSignal.rowId as Id<"communityMessages">,
+              body,
+            });
+            return;
+          } catch {
+            // Fall through to inserting a fresh signal row if prior row is no longer editable.
+          }
         }
+        await sendCommunityTextMut({ body });
       };
 
       try {
@@ -855,11 +859,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           ts: Date.now(),
         });
         if (existingSignal) {
-          await editGroupMut({
-            messageId: existingSignal.rowId as Id<"groupMessages">,
-            body,
-          });
-        } else if (targetGroupId) {
+          try {
+            await editGroupMut({
+              messageId: existingSignal.rowId as Id<"groupMessages">,
+              body,
+            });
+            return;
+          } catch {
+            // Fall through to inserting a fresh signal row if prior row is no longer editable.
+          }
+        }
+        if (targetGroupId) {
           await sendGroupMessageMut({
             groupId: targetGroupId as Id<"groups">,
             body,
@@ -1355,11 +1365,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           ts: Date.now(),
         });
         if (existingSignal) {
-          await editMessageMut({
-            messageId: existingSignal.rowId as Id<"messages">,
-            body,
-          });
-        } else if (otherUserId && otherUserId !== OFFICIAL_COMMUNITY_ID) {
+          try {
+            await editMessageMut({
+              messageId: existingSignal.rowId as Id<"messages">,
+              body,
+            });
+            return;
+          } catch {
+            // Fall through to inserting a fresh signal row if prior row is no longer editable.
+          }
+        }
+        if (otherUserId && otherUserId !== OFFICIAL_COMMUNITY_ID) {
           await sendMessageMut({
             receiverId: otherUserId as Id<"users">,
             body,
