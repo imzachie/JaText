@@ -124,11 +124,17 @@ export const listMine = query({
           .query("groupMembers")
           .withIndex("by_group", (q) => q.eq("groupId", group._id))
           .collect();
-        const lastMessage = await ctx.db
+        const recentGroupMessages = await ctx.db
           .query("groupMessages")
           .withIndex("by_group", (q) => q.eq("groupId", group._id))
           .order("desc")
-          .first();
+          .take(40);
+        const lastMessage =
+          recentGroupMessages.find(
+            (m) =>
+              !m.body.startsWith("__JATEXT_CALL_SIG__:") &&
+              !m.body.startsWith("__JATEXT_REACT__:"),
+          ) ?? null;
         const lastSender = lastMessage ? await ctx.db.get(lastMessage.senderId) : null;
         const previewBody = lastMessage?.hiddenFor?.includes(me._id) || lastMessage?.unsentAt
           ? lastMessage?.unsentAt

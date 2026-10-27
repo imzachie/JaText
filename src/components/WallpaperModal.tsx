@@ -78,7 +78,14 @@ export function WallpaperModal({
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function animateClose() {
+    if (busy || closing) return;
+    setClosing(true);
+    window.setTimeout(onClose, 185);
+  }
   const [customPreview, setCustomPreview] = useState<{ file: File; previewUrl: string } | null>(
     null,
   );
@@ -136,14 +143,14 @@ export function WallpaperModal({
 
   return (
     <div
-      className="modal-backdrop wallpaper-backdrop"
-      onClick={() => !busy && onClose()}
+      className={`modal-backdrop wallpaper-backdrop ${closing ? "is-closing" : ""}`}
+      onClick={animateClose}
       role="dialog"
       aria-modal="true"
       aria-label="Chat wallpaper"
     >
-      <div className="wallpaper-sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="bubble-style-handle-wrap" onClick={() => !busy && onClose()}>
+      <div className={`wallpaper-sheet ${closing ? "is-closing" : ""}`} onClick={(e) => e.stopPropagation()}>
+        <div className="bubble-style-handle-wrap" onClick={animateClose}>
           <span className="bubble-style-handle" />
         </div>
 
@@ -247,7 +254,7 @@ export function WallpaperModal({
             type="button"
             className="bubble-style-cancel-btn"
             disabled={busy}
-            onClick={onClose}
+            onClick={animateClose}
           >
             Cancel
           </button>

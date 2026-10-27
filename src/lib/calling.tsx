@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { updateCallHistoryStatus, upsertCallHistoryEntry } from "./callHistory";
 import { parseWallpaperSignal, stripBubbleStyleFromText } from "./chatCustomization";
 import { JaTextNative, configureNativeCallAudio, ensureNativeMediaPermissions } from "./nativeBridge";
 import { useJaText } from "./store";
@@ -16,7 +17,86 @@ import type { ChatMessage, JaUser } from "./types";
 
 export const CALL_INVITE_PREFIX = "__JATEXT_CALL__:";
 export const CALL_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:";
+export const GROUP_CALL_INVITE_PREFIX = "__JATEXT_CALL_GRP__:";
+export const GROUP_CALL_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:GRP:";
 const CALL_RING_TIMEOUT_MS = 42_000;
+
+export async function acquireSwitchedCameraTrack(
+  oldTrack: MediaStreamTrack | null,
+  nextFacing: "user" | "environment",
+): Promise<MediaStreamTrack> {
+  const prevSettings = oldTrack?.getSettings?.();
+  const prevDeviceId = prevSettings?.deviceId;
+
+  // CRITICAL on Android WebView / Camera2 HAL: release active hardware camera FIRST!
+  if (oldTrack) {
+    try {
+      oldTrack.stop();
+    } catch {
+      // Ignore.
+    }
+    if (Capacitor.isNativePlatform()) {
+      await new Promise((resolve) => window.setTimeout(resolve, 90));
+    }
+  }
+
+  const attempts: MediaStreamConstraints[] = [
+    {
+      video: {
+        facingMode: { exact: nextFacing },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    },
+  ];
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter((d) => d.kind === "videoinput" && d.deviceId);
+    if (cams.length > 1) {
+      const hintRegex =
+        nextFacing === "environment" ? /back|rear|environment|0/i : /front|user|selfie|1/i;
+      const otherCams = prevDeviceId
+        ? cams.filter((d) => d.deviceId !== prevDeviceId)
+        : cams;
+      const preferred = otherCams.find((d) => hintRegex.test(d.label)) ?? otherCams[0];
+      if (preferred?.deviceId) {
+        attempts.push({
+          video: {
+            deviceId: { exact: preferred.deviceId },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        });
+      }
+    }
+  } catch {
+    // Ignore enumerateDevices failure and continue with facingMode fallback.
+  }
+
+  attempts.push(
+    {
+      video: {
+        facingMode: nextFacing,
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    },
+    { video: true },
+  );
+
+  let lastErr: unknown = null;
+  for (const constraint of attempts) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraint);
+      const track = stream.getVideoTracks()[0];
+      if (track) return track;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr ?? new Error("Could not switch cameras on this device.");
+}
 
 export type CallMode = "voice" | "video";
 export type CallInviteState = "ringing" | "connected" | "ended" | "missed" | "declined";
@@ -54,7 +134,7 @@ type DataChannelMessage =
   | { type: "renegotiate-answer"; sdp: RTCSessionDescriptionInit }
   | { type: "hangup" };
 
-export type SoundboardEffectId = "tada" | "rimshot" | "chime" | "laser" | "cheer";
+export type SoundboardEffectId = "bruh" | "tada" | "rimshot" | "chime" | "laser" | "cheer";
 
 export interface FloatingCallReaction {
   id: string;
@@ -144,7 +224,9 @@ const RTC_CONFIG: RTCConfiguration = {
 };
 
 export function isHiddenCallSignal(body?: string | null): boolean {
-  return Boolean(body?.startsWith(CALL_SIGNAL_PREFIX));
+  return Boolean(
+    body?.startsWith(CALL_SIGNAL_PREFIX) || body?.startsWith(GROUP_CALL_SIGNAL_PREFIX),
+  );
 }
 
 export function parseCallInvite(body?: string | null): CallInvitePayload | null {
@@ -185,9 +267,48 @@ export function formatCallDuration(seconds: number): string {
   return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
+function stripMarkdownForPreview(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, (block) => {
+      const inner = block.replace(/^```[a-z0-9_+-]*\n?/i, "").replace(/```$/, "").trim();
+      return inner ? `⌨️ ${inner.split("\n")[0]}` : "⌨️ Code snippet";
+    })
+    .replace(/\|\|([\s\S]+?)\|\|/g, "▒▒▒")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^-#\s+/gm, "")
+    .replace(/^>{1,3}\s?/gm, "")
+    .replace(/(\*\*\*|___)(.+?)\1/g, "$2")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(\*|_)(.+?)\1/g, "$2")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/==(.+?)==/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function formatPreviewMessageText(body: string): string {
   const clean = stripBubbleStyleFromText(body);
   if (isHiddenCallSignal(clean)) return "";
+  if (clean.startsWith(GROUP_CALL_INVITE_PREFIX)) {
+    try {
+      const parsed = JSON.parse(clean.slice(GROUP_CALL_INVITE_PREFIX.length)) as {
+        mode?: string;
+        state?: string;
+        durationSec?: number;
+      };
+      const icon = parsed.mode === "video" ? "📹" : "📞";
+      const label = parsed.mode === "video" ? "Group video call" : "Group voice call";
+      if (parsed.state === "active") return `${icon} ${label} · Join call`;
+      if (parsed.durationSec && parsed.durationSec > 0) {
+        return `${icon} ${label} · ${formatCallDuration(parsed.durationSec)}`;
+      }
+      return `${icon} ${label} ended`;
+    } catch {
+      return "📞 Group call";
+    }
+  }
   const wp = parseWallpaperSignal(clean);
   if (wp) {
     return wp.kind === "none" ? "🖼️ Reset the chat wallpaper" : "🖼️ Changed the chat wallpaper";
@@ -205,7 +326,7 @@ export function formatPreviewMessageText(body: string): string {
     }
     return `${icon} ${kind} ended`;
   }
-  return clean;
+  return stripMarkdownForPreview(clean);
 }
 
 function waitForIceGathering(pc: RTCPeerConnection, maxWaitMs = 950): Promise<void> {
@@ -250,84 +371,82 @@ function getCallAudioCtx(): AudioContext | null {
   return sharedCallAudioCtx;
 }
 
-export function playSynthesizedSoundboard(effectId: SoundboardEffectId): void {
-  const ctx = getCallAudioCtx();
-  if (!ctx) return;
-  const now = ctx.currentTime;
+const SOUNDBOARD_FILE_MAP: Record<SoundboardEffectId, string> = {
+  bruh: "/sounds/bruh.mp3",
+  tada: "/sounds/bruh.mp3",
+  rimshot: "/sounds/rimshot.mp3",
+  chime: "/sounds/chime.mp3",
+  laser: "/sounds/laser.mp3",
+  cheer: "/sounds/cheer.mp3",
+};
 
-  if (effectId === "tada") {
-    const notes = [523.25, 659.25, 783.99, 1046.5];
-    notes.forEach((freq, idx) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(freq, now + idx * 0.08);
-      gain.gain.setValueAtTime(0.001, now + idx * 0.08);
-      gain.gain.exponentialRampToValueAtTime(0.16, now + idx * 0.08 + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.08 + 0.38);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + idx * 0.08);
-      osc.stop(now + idx * 0.08 + 0.4);
+const decodedSoundboardBuffers = new Map<string, AudioBuffer>();
+const loadingSoundboardPromises = new Map<string, Promise<AudioBuffer | null>>();
+
+function loadSoundboardBuffer(url: string): Promise<AudioBuffer | null> {
+  const cached = decodedSoundboardBuffers.get(url);
+  if (cached) return Promise.resolve(cached);
+  const inflight = loadingSoundboardPromises.get(url);
+  if (inflight) return inflight;
+
+  const ctx = getCallAudioCtx();
+  if (!ctx) return Promise.resolve(null);
+
+  const task = fetch(url)
+    .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error("Audio fetch failed"))))
+    .then((bytes) => ctx.decodeAudioData(bytes.slice(0)))
+    .then((buffer) => {
+      decodedSoundboardBuffers.set(url, buffer);
+      return buffer;
+    })
+    .catch(() => null)
+    .finally(() => {
+      loadingSoundboardPromises.delete(url);
     });
-  } else if (effectId === "rimshot") {
-    const freqs = [190, 145, 880];
-    freqs.forEach((freq, idx) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = idx === 2 ? "sine" : "square";
-      const t = now + (idx === 2 ? 0.24 : idx * 0.11);
-      osc.frequency.setValueAtTime(freq, t);
-      osc.frequency.exponentialRampToValueAtTime(idx === 2 ? 620 : 65, t + 0.12);
-      gain.gain.setValueAtTime(0.14, t);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + (idx === 2 ? 0.35 : 0.12));
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(t);
-      osc.stop(t + (idx === 2 ? 0.36 : 0.13));
-    });
-  } else if (effectId === "chime") {
-    [880, 1318.5, 1760].forEach((freq, idx) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, now + idx * 0.06);
-      gain.gain.setValueAtTime(0.13, now + idx * 0.06);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.06 + 0.5);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + idx * 0.06);
-      osc.stop(now + idx * 0.06 + 0.52);
-    });
-  } else if (effectId === "laser") {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sawtooth";
-    osc.frequency.setValueAtTime(1400, now);
-    osc.frequency.exponentialRampToValueAtTime(140, now + 0.28);
-    gain.gain.setValueAtTime(0.14, now);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.31);
-  } else if (effectId === "cheer") {
-    [440, 554.37, 659.25, 880, 1108.73].forEach((freq, idx) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, now + idx * 0.05);
-      gain.gain.setValueAtTime(0.11, now + idx * 0.05);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.05 + 0.35);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + idx * 0.05);
-      osc.stop(now + idx * 0.05 + 0.36);
-    });
+
+  loadingSoundboardPromises.set(url, task);
+  return task;
+}
+
+export function preloadSoundboardAudio(): void {
+  const uniqueUrls = new Set(Object.values(SOUNDBOARD_FILE_MAP));
+  for (const url of uniqueUrls) {
+    void loadSoundboardBuffer(url);
   }
 }
 
-function playCallRingChime(kind: "incoming" | "outgoing" | "connected" | "ended"): void {
+export function playSynthesizedSoundboard(effectId: SoundboardEffectId): void {
+  const url = SOUNDBOARD_FILE_MAP[effectId] ?? SOUNDBOARD_FILE_MAP.bruh;
+  const ctx = getCallAudioCtx();
+  const cached = decodedSoundboardBuffers.get(url);
+
+  if (ctx && cached) {
+    try {
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
+      source.buffer = cached;
+      gain.gain.value = 0.92;
+      source.connect(gain);
+      gain.connect(ctx.destination);
+      source.start(0);
+      return;
+    } catch {
+      // Fall through to HTMLAudioElement playback.
+    }
+  }
+
+  // Trigger async decode for next play, and play immediately via HTMLAudioElement right now
+  void loadSoundboardBuffer(url);
+  try {
+    const audio = new Audio(url);
+    audio.volume = 0.92;
+    void audio.play().catch(() => undefined);
+  } catch {
+    // Ignore audio playback errors.
+  }
+}
+
+export function playCallRingChime(kind: "incoming" | "outgoing" | "connected" | "ended"): void {
   const ctx = getCallAudioCtx();
   if (!ctx) return;
   const now = ctx.currentTime;
@@ -465,7 +584,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const prevBytesRef = useRef<{ bytes: number; ts: number } | null>(null);
   const captionSpeechRef = useRef<WebSpeechInstance | null>(null);
   const nativeCaptionListenerRef = useRef<PluginListenerHandle | null>(null);
+  const nativeScreenFrameListenerRef = useRef<PluginListenerHandle | null>(null);
+  const nativeScreenStopListenerRef = useRef<PluginListenerHandle | null>(null);
+  const nativeScreenKeepAliveRef = useRef<number | null>(null);
   const remoteAudioElementRef = useRef<HTMLAudioElement | null>(null);
+  const isDeafenedRef = useRef(false);
   const stateRef = useRef({
     isMuted: false,
     isCameraOff: true,
@@ -475,7 +598,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     sessionRef.current = session;
+    if (session) {
+      preloadSoundboardAudio();
+    }
   }, [session]);
+
+  useEffect(() => {
+    isDeafenedRef.current = isDeafened;
+  }, [isDeafened]);
 
   useEffect(() => {
     stateRef.current = { isMuted, isCameraOff, isScreenSharing, meSpeaking };
@@ -565,9 +695,28 @@ export function CallProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const stopNativeScreenShareInternal = useCallback((notifyNativeService: boolean) => {
+    if (nativeScreenKeepAliveRef.current !== null) {
+      window.clearInterval(nativeScreenKeepAliveRef.current);
+      nativeScreenKeepAliveRef.current = null;
+    }
+    if (nativeScreenFrameListenerRef.current) {
+      void nativeScreenFrameListenerRef.current.remove();
+      nativeScreenFrameListenerRef.current = null;
+    }
+    if (nativeScreenStopListenerRef.current) {
+      void nativeScreenStopListenerRef.current.remove();
+      nativeScreenStopListenerRef.current = null;
+    }
+    if (notifyNativeService && Capacitor.isNativePlatform()) {
+      void JaTextNative.stopScreenCapture().catch(() => undefined);
+    }
+  }, []);
+
   const cleanupCallResources = useCallback(() => {
     stopRingingTimers();
     stopCaptionCapture();
+    stopNativeScreenShareInternal(true);
     void configureNativeCallAudio(false, false);
 
     if (dcRef.current) {
@@ -629,7 +778,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setReactions([]);
     setCaptions([]);
     prevBytesRef.current = null;
-  }, [stopCaptionCapture, stopRingingTimers]);
+  }, [stopCaptionCapture, stopNativeScreenShareInternal, stopRingingTimers]);
 
   const sendSignalPacket = useCallback(
     async (receiverId: string, packet: SignalEnvelope) => {
@@ -698,10 +847,15 @@ export function CallProvider({ children }: { children: ReactNode }) {
             setPeerCameraOff(msg.cameraOff);
             setPeerScreenSharing(msg.screenSharing);
             setPeerSpeaking(msg.speaking);
+            if (!msg.cameraOff || msg.screenSharing) {
+              setRemoteStream((prev) => (prev ? new MediaStream(prev.getTracks()) : prev));
+            }
           } else if (msg.type === "reaction") {
             spawnReaction(msg.emoji, false, msg.id);
           } else if (msg.type === "soundboard") {
-            playSynthesizedSoundboard(msg.effectId);
+            if (!isDeafenedRef.current) {
+              playSynthesizedSoundboard(msg.effectId);
+            }
           } else if (msg.type === "caption") {
             if (msg.text.trim()) {
               setCaptions((prev) => {
@@ -739,6 +893,29 @@ export function CallProvider({ children }: { children: ReactNode }) {
             const current = sessionRef.current;
             if (current) {
               handledCallIdsRef.current.add(current.callId);
+              const durationSec = current.startedAt
+                ? Math.max(1, Math.round((Date.now() - current.startedAt) / 1000))
+                : 0;
+              const wasConnected = current.phase === "connected" || current.startedAt !== null;
+              updateCallHistoryStatus(current.callId, {
+                state: wasConnected ? "ended" : "missed",
+                durationSec: wasConnected ? durationSec : undefined,
+              });
+              if (current.isCaller && current.inviteMessageId) {
+                void store
+                  .editMessage(
+                    current.inviteMessageId,
+                    serializeCallInvite({
+                      v: 1,
+                      callId: current.callId,
+                      mode: current.mode,
+                      state: wasConnected ? "ended" : "missed",
+                      durationSec: wasConnected ? durationSec : undefined,
+                      ts: Date.now(),
+                    }),
+                  )
+                  .catch(() => undefined);
+              }
               if (soundsEnabled) playCallRingChime("ended");
               cleanupCallResources();
               setSession(null);
@@ -1031,6 +1208,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
       };
       setSession(newSession);
       setMinimized(false);
+      upsertCallHistoryEntry({
+        callId,
+        kind: "dm",
+        peerId: peer.id,
+        peerDisplayName: peer.displayName,
+        peerUsername: peer.username,
+        peerAvatarUrl: peer.avatarUrl,
+        peerAvatarColor: peer.avatarColor,
+        direction: "outgoing",
+        mode: actualMode,
+        state: "ringing",
+        timestamp: Date.now(),
+      });
 
       const pc = createConfiguredPeerConnection(peer, true);
       const outbound = new MediaStream();
@@ -1162,6 +1352,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
         startedAt: null,
       });
       setMinimized(false);
+      upsertCallHistoryEntry({
+        callId: invite.callId,
+        kind: "dm",
+        peerId: caller.id,
+        peerDisplayName: caller.displayName,
+        peerUsername: caller.username,
+        peerAvatarUrl: caller.avatarUrl,
+        peerAvatarColor: caller.avatarColor,
+        direction: "incoming",
+        mode: invite.mode,
+        state: "ringing",
+        timestamp: invite.ts || Date.now(),
+      });
 
       if (soundsEnabled && !preview.isMuted && me.statusPreference !== "dnd") {
         playCallRingChime("incoming");
@@ -1173,6 +1376,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       ringTimeoutRef.current = window.setTimeout(() => {
         const cur = sessionRef.current;
         if (cur && cur.callId === invite.callId && cur.phase === "incoming") {
+          updateCallHistoryStatus(invite.callId, { state: "missed" });
           cleanupCallResources();
           setSession(null);
         }
@@ -1212,7 +1416,17 @@ export function CallProvider({ children }: { children: ReactNode }) {
         void store.deleteMessageForMe(msg.id).catch(() => undefined);
 
         if (env.type === "decline" || env.type === "hangup") {
-          if (session.isCaller && session.inviteMessageId && env.type === "decline") {
+          const durationSec = session.startedAt
+            ? Math.max(1, Math.round((Date.now() - session.startedAt) / 1000))
+            : 0;
+          const wasConnected = session.phase === "connected" || session.startedAt !== null;
+          const finalState: CallInviteState =
+            env.type === "decline" ? "declined" : wasConnected ? "ended" : "missed";
+          updateCallHistoryStatus(session.callId, {
+            state: finalState,
+            durationSec: finalState === "ended" ? durationSec : undefined,
+          });
+          if (session.isCaller && session.inviteMessageId) {
             void store
               .editMessage(
                 session.inviteMessageId,
@@ -1220,7 +1434,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
                   v: 1,
                   callId: session.callId,
                   mode: session.mode,
-                  state: "declined",
+                  state: finalState,
+                  durationSec: finalState === "ended" ? durationSec : undefined,
                   ts: Date.now(),
                 }),
               )
@@ -1398,14 +1613,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
           ts: Date.now(),
         });
 
-        // Clean up our own transient answer signal message once caller has had time to read it
+        updateCallHistoryStatus(cur.callId, { state: "connected" });
+
+        // Hide our own transient answer signal message ONLY for us (NEVER unsendMessage, which creates "This message was unsent"!)
         window.setTimeout(() => {
           void store
             .fetchMessagesWithUser(cur.peer.id)
             .then((latest) => {
               for (const m of latest) {
                 if (m.senderId === me?.id && isHiddenCallSignal(m.body) && m.body.includes(cur.callId)) {
-                  void store.unsendMessage(m.id).catch(() => store.deleteMessageForMe(m.id));
+                  void store.deleteMessageForMe(m.id).catch(() => undefined);
                 }
               }
             })
@@ -1432,6 +1649,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const cur = sessionRef.current;
     if (!cur) return;
     handledCallIdsRef.current.add(cur.callId);
+    updateCallHistoryStatus(cur.callId, { state: "declined" });
     cleanupCallResources();
     setSession(null);
     try {
@@ -1446,7 +1664,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
           .then((latest) => {
             for (const m of latest) {
               if (m.senderId === me?.id && isHiddenCallSignal(m.body) && m.body.includes(cur.callId)) {
-                void store.unsendMessage(m.id).catch(() => store.deleteMessageForMe(m.id));
+                void store.deleteMessageForMe(m.id).catch(() => undefined);
               }
             }
           })
@@ -1469,6 +1687,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const inviteMsgId = cur.inviteMessageId;
     const wasCaller = cur.isCaller;
     const wasConnected = cur.phase === "connected" || cur.startedAt !== null;
+    updateCallHistoryStatus(cur.callId, {
+      state: wasConnected ? "ended" : "missed",
+      durationSec: wasConnected ? durationSec : undefined,
+    });
 
     cleanupCallResources();
     setSession(null);
@@ -1501,7 +1723,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         .then((latest) => {
           for (const m of latest) {
             if (m.senderId === me?.id && isHiddenCallSignal(m.body) && m.body.includes(cur.callId)) {
-              void store.unsendMessage(m.id).catch(() => store.deleteMessageForMe(m.id));
+              void store.deleteMessageForMe(m.id).catch(() => undefined);
             }
           }
         })
@@ -1565,33 +1787,45 @@ export function CallProvider({ children }: { children: ReactNode }) {
   }, [broadcastMyState, facingMode, isCameraOff, isScreenSharing, refreshLocalPreviewStream]);
 
   const flipCamera = useCallback(async () => {
-    const nextFacing = facingMode === "user" ? "environment" : "user";
-    setFacingMode(nextFacing);
-    if (isCameraOff || isScreenSharing) return;
+    const prevFacing = facingMode;
+    const nextFacing = prevFacing === "user" ? "environment" : "user";
+    if (isCameraOff || isScreenSharing) {
+      setFacingMode(nextFacing);
+      return;
+    }
+    setCallError(null);
+    const oldTrack = cameraTrackRef.current;
+    cameraTrackRef.current = null;
+
     try {
-      const camStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: nextFacing },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      });
-      const newTrack = camStream.getVideoTracks()[0];
-      if (!newTrack) return;
-      const oldTrack = cameraTrackRef.current;
+      const newTrack = await acquireSwitchedCameraTrack(oldTrack, nextFacing);
       cameraTrackRef.current = newTrack;
+      setFacingMode(nextFacing);
       if (videoSenderRef.current) {
         await videoSenderRef.current.replaceTrack(newTrack);
       }
-      oldTrack?.stop();
       refreshLocalPreviewStream();
+      broadcastMyState({ isCameraOff: false });
     } catch {
+      // Recover previous camera so user doesn't lose video
+      try {
+        const fallback = await acquireSwitchedCameraTrack(null, prevFacing);
+        cameraTrackRef.current = fallback;
+        if (videoSenderRef.current) {
+          await videoSenderRef.current.replaceTrack(fallback);
+        }
+        refreshLocalPreviewStream();
+      } catch {
+        setIsCameraOff(true);
+        refreshLocalPreviewStream();
+      }
       setCallError("Could not switch cameras on this device.");
     }
-  }, [facingMode, isCameraOff, isScreenSharing, refreshLocalPreviewStream]);
+  }, [broadcastMyState, facingMode, isCameraOff, isScreenSharing, refreshLocalPreviewStream]);
 
   const toggleScreenShare = useCallback(async () => {
     if (isScreenSharing) {
+      stopNativeScreenShareInternal(true);
       if (screenTrackRef.current) {
         screenTrackRef.current.stop();
         screenTrackRef.current = null;
@@ -1607,8 +1841,136 @@ export function CallProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // Native Android Screen Share via MediaProjection + Canvas Stream -> WebRTC
+    if (Capacitor.isNativePlatform()) {
+      try {
+        setCallError(null);
+        const startRes = await JaTextNative.startScreenCapture();
+        if (!startRes.started) {
+          return;
+        }
+        const width = Math.max(240, startRes.width ?? 540);
+        const height = Math.max(240, startRes.height ?? 960);
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx2d = canvas.getContext("2d", { alpha: false });
+        if (!ctx2d) {
+          await JaTextNative.stopScreenCapture().catch(() => undefined);
+          setCallError("Could not initialize screen share canvas.");
+          return;
+        }
+        ctx2d.fillStyle = "#0b0b10";
+        ctx2d.fillRect(0, 0, width, height);
+
+        const captureCanvas = canvas as HTMLCanvasElement & {
+          captureStream?: (frameRate?: number) => MediaStream;
+        };
+        if (typeof captureCanvas.captureStream !== "function") {
+          await JaTextNative.stopScreenCapture().catch(() => undefined);
+          setCallError("Screen capture stream is not supported by this Android WebView.");
+          return;
+        }
+
+        const stream = captureCanvas.captureStream(15);
+        const screenTrack = stream.getVideoTracks()[0] as
+          | (MediaStreamTrack & { requestFrame?: () => void })
+          | undefined;
+        if (!screenTrack) {
+          await JaTextNative.stopScreenCapture().catch(() => undefined);
+          setCallError("Could not start mobile screen stream.");
+          return;
+        }
+
+        const decodeImg = new Image();
+        let decodingFrame = false;
+        let lastDrawnAt = performance.now();
+
+        nativeScreenFrameListenerRef.current = await JaTextNative.addListener(
+          "screenCaptureFrame",
+          (ev) => {
+            if (!ev.frame || decodingFrame) return;
+            decodingFrame = true;
+            decodeImg.onload = () => {
+              decodingFrame = false;
+              if (ev.width && ev.height && (canvas.width !== ev.width || canvas.height !== ev.height)) {
+                canvas.width = ev.width;
+                canvas.height = ev.height;
+              }
+              ctx2d.drawImage(decodeImg, 0, 0, canvas.width, canvas.height);
+              lastDrawnAt = performance.now();
+              if (typeof screenTrack.requestFrame === "function") {
+                try {
+                  screenTrack.requestFrame();
+                } catch {
+                  // Ignore.
+                }
+              }
+            };
+            decodeImg.onerror = () => {
+              decodingFrame = false;
+            };
+            decodeImg.src = `data:image/jpeg;base64,${ev.frame}`;
+          },
+        );
+
+        // Keepalive repaint for static screens so WebRTC sends keyframes promptly
+        nativeScreenKeepAliveRef.current = window.setInterval(() => {
+          if (performance.now() - lastDrawnAt > 260 && decodeImg.complete && decodeImg.naturalWidth > 0) {
+            ctx2d.drawImage(decodeImg, 0, 0, canvas.width, canvas.height);
+            if (typeof screenTrack.requestFrame === "function") {
+              try {
+                screenTrack.requestFrame();
+              } catch {
+                // Ignore.
+              }
+            }
+          }
+        }, 280);
+
+        const handleNativeStopped = () => {
+          stopNativeScreenShareInternal(false);
+          if (screenTrackRef.current) {
+            screenTrackRef.current.stop();
+            screenTrackRef.current = null;
+          }
+          const fallbackCam = cameraTrackRef.current;
+          if (videoSenderRef.current) {
+            void videoSenderRef.current.replaceTrack(fallbackCam ?? null).catch(() => undefined);
+          }
+          setIsScreenSharing(false);
+          setIsCameraOff(!fallbackCam);
+          refreshLocalPreviewStream();
+          broadcastMyState({ isScreenSharing: false, isCameraOff: !fallbackCam });
+        };
+
+        nativeScreenStopListenerRef.current = await JaTextNative.addListener(
+          "screenCaptureStopped",
+          handleNativeStopped,
+        );
+
+        screenTrackRef.current = screenTrack;
+        if (videoSenderRef.current) {
+          await videoSenderRef.current.replaceTrack(screenTrack);
+        }
+        setIsScreenSharing(true);
+        setIsCameraOff(false);
+        refreshLocalPreviewStream();
+        broadcastMyState({ isScreenSharing: true, isCameraOff: false });
+      } catch (err) {
+        stopNativeScreenShareInternal(true);
+        setCallError(
+          err instanceof Error && err.message
+            ? err.message
+            : "Could not start mobile screen sharing.",
+        );
+      }
+      return;
+    }
+
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      setCallError("Screen sharing is available on desktop browsers.");
+      setCallError("Screen sharing isn't supported in this browser.");
       return;
     }
 
@@ -1641,7 +2003,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     } catch {
       // User cancelled screen picker.
     }
-  }, [broadcastMyState, isScreenSharing, refreshLocalPreviewStream]);
+  }, [broadcastMyState, isScreenSharing, refreshLocalPreviewStream, stopNativeScreenShareInternal]);
 
   const toggleSpeakerphone = useCallback(async () => {
     const next = !isSpeakerphone;
@@ -1794,9 +2156,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
   }, [sendDataChannelPacket]);
 
   const canScreenShare =
-    !Capacitor.isNativePlatform() &&
-    typeof navigator !== "undefined" &&
-    Boolean(navigator.mediaDevices?.getDisplayMedia);
+    Capacitor.isNativePlatform() ||
+    (typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getDisplayMedia));
 
   const contextValue = useMemo<CallContextValue>(
     () => ({

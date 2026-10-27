@@ -7,12 +7,15 @@ import { playMessageSound } from "../lib/alerts";
 import { copyImageUrlToClipboard } from "../lib/clipboard";
 import { syncComposerTextareaHeight } from "../lib/composerUtils";
 import { getSavedOutgoingBubbleStyle } from "../lib/chatCustomization";
+import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts";
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { friendlyError } from "../lib/errors";
 import { Avatar } from "./Avatar";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
+import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
+import { SwipeToReply } from "./SwipeToReply";
 import { StickerPicker } from "./StickerPicker";
 import { ContextMenu } from "./ContextMenu";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
@@ -205,18 +208,22 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
   onTypingSignal: (hasText: boolean) => void;
   onSubmitDraft: (body: string) => void;
 }) {
-  const [draft, setDraft] = useState(initialDraft);
-  const prevLenRef = useRef(initialDraft.length);
+  const draftKey = "community";
+  const startText = isEditing ? initialDraft : initialDraft || getDraft(draftKey);
+  const [draft, setDraft] = useState(startText);
+  const prevLenRef = useRef(startText.length);
 
   useLayoutEffect(() => {
-    syncComposerTextareaHeight(composerRef.current, 0, initialDraft);
-    prevLenRef.current = initialDraft.length;
-  }, [composerRef, initialDraft]);
+    const seed = isEditing ? initialDraft : initialDraft || getDraft(draftKey);
+    syncComposerTextareaHeight(composerRef.current, 0, seed);
+    prevLenRef.current = seed.length;
+  }, [composerRef, draftKey, initialDraft, isEditing]);
 
   function handleChange(next: string) {
     const prevLen = prevLenRef.current;
     prevLenRef.current = next.length;
     setDraft(next);
+    if (!isEditing) saveStoredDraft(draftKey, next);
     syncComposerTextareaHeight(composerRef.current, prevLen, next);
     if (!isEditing) {
       onTypingSignal(Boolean(next.trim()));
@@ -230,6 +237,7 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
     const keepFocus = document.activeElement === composerRef.current;
     prevLenRef.current = 0;
     setDraft("");
+    if (!isEditing) clearDraft(draftKey);
     syncComposerTextareaHeight(composerRef.current, trimmed.length, "");
     onSubmitDraft(trimmed);
     if (keepFocus) {
@@ -1054,16 +1062,28 @@ export function CommunityChatView({
             (message.attachmentType?.startsWith("video/") ||
               /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
           return (
-            <article
-              className="community-post"
+            <SwipeToReply
               key={message.renderKey ?? message.id}
-              id={`community-message-${message.id}`}
-              onContextMenu={(e) => openMessageMenu(e, message)}
-              onTouchStart={(e) => startPostTouchHold(e, message)}
-              onTouchMove={movePostTouchHold}
-              onTouchEnd={cancelPostTouchHold}
-              onTouchCancel={cancelPostTouchHold}
+              disabled={
+                Boolean(message.unsentAt) ||
+                message.id.startsWith("pending-") ||
+                !store.communityPermissions.canModerate
+              }
+              onReply={() => {
+                setEditingMessage(null);
+                setReplyTo(message);
+                window.setTimeout(() => composerRef.current?.focus(), 40);
+              }}
             >
+              <article
+                className="community-post"
+                id={`community-message-${message.id}`}
+                onContextMenu={(e) => openMessageMenu(e, message)}
+                onTouchStart={(e) => startPostTouchHold(e, message)}
+                onTouchMove={movePostTouchHold}
+                onTouchEnd={cancelPostTouchHold}
+                onTouchCancel={cancelPostTouchHold}
+              >
               <div className="community-post-header">
                 <Avatar
                   user={{
@@ -1191,10 +1211,18 @@ export function CommunityChatView({
                             mine={message.senderId === store.me?.id}
                             className="community-styled-bubble"
                           >
-                            <p className="community-post-body">{message.body}</p>
+                            <MessageMarkdown
+                              text={message.body}
+                              mine={message.senderId === store.me?.id}
+                              className="community-post-body"
+                            />
                           </DecoratedMessageBubble>
                         ) : (
-                          <p className="community-post-body">{message.body}</p>
+                          <MessageMarkdown
+                            text={message.body}
+                            mine={message.senderId === store.me?.id}
+                            className="community-post-body"
+                          />
                         ))}
                     </>
                   )}
@@ -1272,7 +1300,8 @@ export function CommunityChatView({
                   )}
                 </div>
               )}
-            </article>
+              </article>
+            </SwipeToReply>
           );
         })}
       </div>

@@ -176,3 +176,22 @@ export const activity = query({
     ).then((rows) => rows.filter((row) => row !== null));
   },
 });
+
+/** Unfriend an accepted friend so neither side stays in the other's friends list. */
+export const remove = mutation({
+  args: { friendId: v.id("users") },
+  handler: async (ctx, { friendId }) => {
+    const me = await requireUser(ctx);
+    const forward = await ctx.db
+      .query("friendRequests")
+      .withIndex("by_from_to", (q) => q.eq("fromId", me._id).eq("toId", friendId))
+      .collect();
+    const backward = await ctx.db
+      .query("friendRequests")
+      .withIndex("by_from_to", (q) => q.eq("fromId", friendId).eq("toId", me._id))
+      .collect();
+    for (const row of [...forward, ...backward]) {
+      await ctx.db.delete(row._id);
+    }
+  },
+});

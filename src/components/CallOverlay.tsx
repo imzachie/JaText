@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type TouchEvent } from "react";
 import { Capacitor } from "@capacitor/core";
 import {
   Activity,
@@ -32,7 +32,7 @@ import { Avatar } from "./Avatar";
 
 const CALL_REACTIONS = ["❤️", "😂", "🔥", "👏", "🎉", "👍"];
 const SOUNDBOARD_ITEMS: Array<{ id: SoundboardEffectId; emoji: string; label: string }> = [
-  { id: "tada", emoji: "🎉", label: "Fanfare" },
+  { id: "bruh", emoji: "🗿", label: "Bruh" },
   { id: "rimshot", emoji: "🥁", label: "Rimshot" },
   { id: "chime", emoji: "🔔", label: "Sparkle" },
   { id: "laser", emoji: "🚀", label: "Laser" },
@@ -123,6 +123,17 @@ export function CallOverlay() {
   const [openDrawer, setOpenDrawer] = useState<"none" | "reactions" | "soundboard" | "stats">(
     "none",
   );
+  const [fullscreenTarget, setFullscreenTarget] = useState<"remote" | "local" | null>(null);
+  const [fsHudVisible, setFsHudVisible] = useState(true);
+  const [fsZoom, setFsZoom] = useState(1);
+  const [fsPan, setFsPan] = useState({ x: 0, y: 0 });
+  const fullscreenStageRef = useRef<HTMLDivElement | null>(null);
+  const pinchGestureRef = useRef<
+    | { mode: "pinch"; startDist: number; startZoom: number }
+    | { mode: "pan"; startX: number; startY: number; baseX: number; baseY: number }
+    | null
+  >(null);
+
   const [pipOffset, setPipOffset] = useState({ x: 0, y: 0 });
   const dragStartRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(
     null,
@@ -145,8 +156,97 @@ export function CallOverlay() {
     if (!session) {
       setOpenDrawer("none");
       setPipOffset({ x: 0, y: 0 });
+      setFullscreenTarget(null);
     }
   }, [session]);
+
+  // Close fullscreen viewer automatically if that screen share stops
+  const activeFullscreenTarget =
+    fullscreenTarget === "remote" && (peerScreenSharing || (!peerCameraOff && Boolean(remoteStream)))
+      ? "remote"
+      : fullscreenTarget === "local" && (isScreenSharing || (!isCameraOff && Boolean(localStream)))
+        ? "local"
+        : null;
+
+  useEffect(() => {
+    if (!activeFullscreenTarget) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        setFullscreenTarget(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeFullscreenTarget]);
+
+  const openFullScreenView = (target: "remote" | "local") => {
+    setFsZoom(1);
+    setFsPan({ x: 0, y: 0 });
+    setFsHudVisible(true);
+    setFullscreenTarget(target);
+  };
+
+  const closeFullScreenView = () => {
+    if (typeof document !== "undefined" && document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+    setFullscreenTarget(null);
+    setFsZoom(1);
+    setFsPan({ x: 0, y: 0 });
+  };
+
+  const toggleBrowserTrueFullscreen = () => {
+    const el = fullscreenStageRef.current;
+    if (!el || Capacitor.isNativePlatform()) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    } else if (typeof el.requestFullscreen === "function") {
+      void el.requestFullscreen().catch(() => undefined);
+    }
+  };
+
+  const handleFsTouchStart = (e: TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length >= 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const dist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      pinchGestureRef.current = {
+        mode: "pinch",
+        startDist: Math.max(dist, 1),
+        startZoom: fsZoom,
+      };
+    } else if (e.touches.length === 1 && fsZoom > 1) {
+      pinchGestureRef.current = {
+        mode: "pan",
+        startX: e.touches[0].clientX,
+        startY: e.touches[0].clientY,
+        baseX: fsPan.x,
+        baseY: fsPan.y,
+      };
+    }
+  };
+
+  const handleFsTouchMove = (e: TouchEvent<HTMLDivElement>) => {
+    const g = pinchGestureRef.current;
+    if (!g) return;
+    if (e.touches.length >= 2 && g.mode === "pinch") {
+      e.preventDefault();
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const dist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      const nextZoom = Math.min(4, Math.max(1, (g.startZoom * dist) / g.startDist));
+      setFsZoom(nextZoom);
+      if (nextZoom <= 1.02) setFsPan({ x: 0, y: 0 });
+    } else if (e.touches.length === 1 && g.mode === "pan" && fsZoom > 1) {
+      e.preventDefault();
+      setFsPan({
+        x: g.baseX + (e.touches[0].clientX - g.startX),
+        y: g.baseY + (e.touches[0].clientY - g.startY),
+      });
+    }
+  };
+
+  const handleFsTouchEnd = () => {
+    pinchGestureRef.current = null;
+  };
 
   if (!session && !callError) return null;
 
@@ -164,9 +264,11 @@ export function CallOverlay() {
   if (!session) return null;
 
   const hasRemoteVideo =
-    !peerCameraOff && Boolean(remoteStream && remoteStream.getVideoTracks().length > 0);
+    (!peerCameraOff || peerScreenSharing) &&
+    Boolean(remoteStream && remoteStream.getVideoTracks().length > 0);
   const hasLocalVideo =
-    !isCameraOff && Boolean(localStream && localStream.getVideoTracks().length > 0);
+    (!isCameraOff || isScreenSharing) &&
+    Boolean(localStream && localStream.getVideoTracks().length > 0);
   const isNative = Capacitor.isNativePlatform();
 
   // Incoming Call Modal
@@ -252,7 +354,11 @@ export function CallOverlay() {
         }}
       >
         {hasRemoteVideo ? (
-          <StreamVideo stream={remoteStream} muted className="call-pip-video" />
+          <StreamVideo
+            stream={remoteStream}
+            muted
+            className={`call-pip-video ${peerScreenSharing ? "screenshare-contain" : ""}`}
+          />
         ) : (
           <div className="call-pip-avatar">
             <Avatar user={session.peer} size={46} ringWidth={3} />
@@ -301,8 +407,86 @@ export function CallOverlay() {
         ? "Connecting secure P2P…"
         : formatCallDuration(elapsedSec);
 
+  const fsStream = activeFullscreenTarget === "local" ? localStream : remoteStream;
+  const fsTitle =
+    activeFullscreenTarget === "local"
+      ? "Your Shared Screen"
+      : peerScreenSharing
+        ? `${session.peer.displayName}'s Screen`
+        : session.peer.displayName;
+
   return (
     <div className="call-studio-overlay">
+      {/* Fullscreen Screen-Share / Video Viewer (Mobile & Desktop) */}
+      {activeFullscreenTarget && fsStream && (
+        <div
+          ref={fullscreenStageRef}
+          className="call-screenshare-fullscreen"
+          onTouchStart={handleFsTouchStart}
+          onTouchMove={handleFsTouchMove}
+          onTouchEnd={handleFsTouchEnd}
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest("button")) return;
+            setFsHudVisible((v) => !v);
+          }}
+        >
+          <div
+            className="call-screenshare-fs-canvas"
+            style={{
+              transform: `translate(${fsPan.x}px, ${fsPan.y}px) scale(${fsZoom})`,
+            }}
+          >
+            <StreamVideo
+              stream={fsStream}
+              muted
+              className="call-screenshare-fs-video"
+            />
+          </div>
+
+          {fsHudVisible && (
+            <div className="call-screenshare-fs-topbar">
+              <div className="call-screenshare-fs-title">
+                <span className="call-live-dot live" />
+                <strong>{fsTitle}</strong>
+              </div>
+              <div className="call-screenshare-fs-controls">
+                <button
+                  type="button"
+                  className="call-fs-pill-btn"
+                  onClick={() => {
+                    const next = fsZoom >= 2 ? 1 : fsZoom >= 1.5 ? 2 : 1.5;
+                    setFsZoom(next);
+                    if (next === 1) setFsPan({ x: 0, y: 0 });
+                  }}
+                  title="Cycle zoom level"
+                >
+                  {fsZoom === 1 ? "1×" : `${fsZoom.toFixed(1)}×`}
+                </button>
+                {!isNative && typeof document !== "undefined" && (
+                  <button
+                    type="button"
+                    className="call-fs-pill-btn"
+                    onClick={toggleBrowserTrueFullscreen}
+                    title="Toggle monitor fullscreen"
+                  >
+                    <Maximize2 size={14} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="call-fs-pill-btn close"
+                  onClick={closeFullScreenView}
+                  title="Exit full view"
+                >
+                  <X size={15} />
+                  <span>Close</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Top Bar */}
       <header className="call-studio-topbar">
         <div className="call-studio-peer">
@@ -405,9 +589,20 @@ export function CallOverlay() {
       {/* Stage Area */}
       <div className={`call-stage ${layoutMode === "grid" ? "grid-mode" : "spotlight-mode"}`}>
         {/* Remote Tile */}
-        <div className={`call-tile remote-tile ${peerSpeaking ? "speaking-ring" : ""}`}>
+        <div
+          className={`call-tile remote-tile ${peerSpeaking ? "speaking-ring" : ""} ${
+            hasRemoteVideo ? "clickable-video-tile" : ""
+          }`}
+          onClick={() => {
+            if (hasRemoteVideo) openFullScreenView("remote");
+          }}
+        >
           {hasRemoteVideo ? (
-            <StreamVideo stream={remoteStream} muted className="call-tile-video" />
+            <StreamVideo
+              stream={remoteStream}
+              muted
+              className={`call-tile-video ${peerScreenSharing ? "screenshare-contain" : ""}`}
+            />
           ) : (
             <div className="call-avatar-stage">
               <div className={`call-avatar-halo ${peerSpeaking ? "active" : ""}`}>
@@ -427,10 +622,26 @@ export function CallOverlay() {
           )}
 
           {hasRemoteVideo && (
-            <div className="call-tile-badge">
-              <span>{session.peer.displayName}</span>
-              {peerMuted && <MicOff size={13} />}
-            </div>
+            <>
+              <div className="call-tile-badge">
+                <span>
+                  {peerScreenSharing ? `${session.peer.displayName}'s screen` : session.peer.displayName}
+                </span>
+                {peerMuted && <MicOff size={13} />}
+              </div>
+              <button
+                type="button"
+                className="call-tile-expand-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openFullScreenView("remote");
+                }}
+                title="View full screen"
+              >
+                <Maximize2 size={14} />
+                <span>{peerScreenSharing ? "Full Screen" : "Expand"}</span>
+              </button>
+            </>
           )}
         </div>
 
@@ -439,14 +650,17 @@ export function CallOverlay() {
           <div
             className={`call-tile local-tile ${
               layoutMode === "spotlight" ? "pip-corner" : ""
-            } ${meSpeaking ? "speaking-ring" : ""}`}
+            } ${meSpeaking ? "speaking-ring" : ""} ${hasLocalVideo ? "clickable-video-tile" : ""}`}
+            onClick={() => {
+              if (hasLocalVideo) openFullScreenView("local");
+            }}
           >
             {hasLocalVideo ? (
               <StreamVideo
                 stream={localStream}
                 muted
                 mirrored={!isScreenSharing && facingMode === "user"}
-                className="call-tile-video"
+                className={`call-tile-video ${isScreenSharing ? "screenshare-contain" : ""}`}
               />
             ) : (
               <div className="call-avatar-stage compact">
@@ -458,6 +672,19 @@ export function CallOverlay() {
               <span>{isScreenSharing ? "Your screen" : "You"}</span>
               {isMuted && <MicOff size={12} />}
             </div>
+            {hasLocalVideo && isScreenSharing && (
+              <button
+                type="button"
+                className="call-tile-expand-btn compact"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openFullScreenView("local");
+                }}
+                title="View your shared screen full"
+              >
+                <Maximize2 size={12} />
+              </button>
+            )}
           </div>
         )}
 

@@ -626,6 +626,25 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     [transact],
   );
 
+  const removeFriend = useCallback<JaTextStore["removeFriend"]>(
+    async (friendId) => {
+      if (!me) throw new Error("Not signed in.");
+      transact((draft) => {
+        draft.requests = draft.requests.filter(
+          (r) =>
+            !(
+              (r.fromId === me.id && r.toId === friendId) ||
+              (r.fromId === friendId && r.toId === me.id)
+            ),
+        );
+      });
+      if (activeChatId === friendId) {
+        setActiveChatId(null);
+      }
+    },
+    [activeChatId, me, setActiveChatId, transact],
+  );
+
   /* ---------------- messages ---------------- */
 
   const previews = useMemo<ChatPreview[]>(() => {
@@ -1369,6 +1388,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     saveProfile,
     sendFriendRequest,
     respondRequest,
+    removeFriend,
     sendMessage,
     fetchMessagesWithUser: async (otherId) =>
       otherId === activeChatId ? activeMessages : [],
@@ -1460,6 +1480,8 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     sendGroupMessage: async (..._args: unknown[]) => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
+    fetchGroupMessages: async () => [],
+    fetchGroupDetails: async () => null,
     sendGroupSticker: async (..._args: unknown[]) => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
