@@ -319,7 +319,7 @@ export function formatPreviewMessageText(body: string): string {
       .replace(/__JATEXT_E2EE_V1__:[\s\S]*$/m, "")
       .replace(/[\u200B\u200C\u2063]/g, "")
       .trim();
-    return labelPart || "🔒 Sent you a message · Tap to open";
+    return labelPart || "New message";
   }
   const clean = stripBubbleStyleFromText(body).replace(/[\u200B\u200C\u2063]/g, "");
   if (isHiddenCallSignal(clean)) return "";
@@ -855,6 +855,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
   );
 
   const readSignalEnvelope = useCallback(async (msg: ChatMessage): Promise<SignalEnvelope | null> => {
+    if (msg.e2ee?.encrypted && !msg.e2ee.decrypted) {
+      return null;
+    }
+    // If this signal carries an attachment (SDP offer/answer/ICE batch), wait until its decrypted blob URL is ready!
+    if (msg.attachmentName && !msg.attachmentUrl) {
+      return null;
+    }
     if (msg.attachmentUrl) {
       try {
         const res = await fetch(msg.attachmentUrl);
@@ -863,12 +870,21 @@ export function CallProvider({ children }: { children: ReactNode }) {
           if (json && json.callId && json.type) return json;
         }
       } catch {
-        // Fall through to inline parse.
+        if (msg.attachmentName) return null;
       }
     }
     if (msg.body.startsWith(CALL_SIGNAL_PREFIX)) {
       try {
-        return JSON.parse(msg.body.slice(CALL_SIGNAL_PREFIX.length)) as SignalEnvelope;
+        const parsed = JSON.parse(msg.body.slice(CALL_SIGNAL_PREFIX.length)) as SignalEnvelope;
+        if (
+          (parsed.type === "answer" ||
+            parsed.type === "renegotiate-offer" ||
+            parsed.type === "renegotiate-answer") &&
+          !parsed.sdp
+        ) {
+          return null;
+        }
+        return parsed;
       } catch {
         return null;
       }
@@ -1726,10 +1742,15 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const rows = await store.fetchMessagesWithUser(cur.peer.id);
-        const inviteMsg = [...rows]
-          .reverse()
-          .find((m) => parseCallInvite(m.body)?.callId === cur.callId);
+        let inviteMsg: ChatMessage | undefined;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const rows = await store.fetchMessagesWithUser(cur.peer.id);
+          inviteMsg = [...rows]
+            .reverse()
+            .find((m) => parseCallInvite(m.body)?.callId === cur.callId);
+          if (inviteMsg?.attachmentUrl) break;
+          await new Promise((r) => window.setTimeout(r, 250));
+        }
         if (!inviteMsg || !inviteMsg.attachmentUrl) {
           throw new Error("Call offer is no longer available.");
         }

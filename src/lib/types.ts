@@ -320,6 +320,7 @@ export interface JaTextStore {
   restoreE2EEVaultBackup?: (secretInput: string, mode: "pin" | "recovery") => Promise<void>;
   requestLiveDeviceSync?: () => Promise<string>;
   approveDeviceSyncRequest?: (request: DeviceSyncRequest) => Promise<void>;
+  verifyFriendSecurityCode?: (friendId: string, verified?: boolean) => Promise<boolean>;
 }
 
 export const USERNAME_REGEX = /^[a-z0-9._]{3,20}$/;

@@ -839,6 +839,64 @@ public class JaTextNativePlugin extends Plugin {
         }
     }
 
+    @PluginMethod
+    public void setAuthStorageItem(PluginCall call) {
+        String key = call.getString("key");
+        String value = call.getString("value");
+        String convexUrl = call.getString("convexUrl");
+        JaTextE2EEDecryptor.setAuthStorageItem(getContext(), key, value, convexUrl);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void getAuthStorageItem(PluginCall call) {
+        String key = call.getString("key");
+        String value = JaTextE2EEDecryptor.getAuthStorageItem(getContext(), key);
+        JSObject res = new JSObject();
+        res.put("value", value);
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void removeAuthStorageItem(PluginCall call) {
+        String key = call.getString("key");
+        JaTextE2EEDecryptor.removeAuthStorageItem(getContext(), key);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void syncE2EENotificationState(PluginCall call) {
+        JaTextE2EEDecryptor.syncState(
+            getContext(),
+            call.getString("convexUrl"),
+            call.getString("userId"),
+            call.getBoolean("notificationsEnabled", true),
+            call.getBoolean("isDnd", false),
+            call.getString("identitiesJson"),
+            call.getString("peersJson"),
+            call.getString("groupsJson")
+        );
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void showDecryptedNotification(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx != null && !MainActivity.isAppInForeground()) {
+            String tag = call.getString("tag");
+            String title = call.getString("title");
+            String body = call.getString("body");
+            String senderId = call.getString("senderId");
+            String groupId = call.getString("groupId");
+            Bundle extras = new Bundle();
+            if (senderId != null) extras.putString("senderId", senderId);
+            if (groupId != null) extras.putString("groupId", groupId);
+            extras.putString("type", groupId != null ? "group_mention" : "message");
+            JaTextE2EEDecryptor.postSystemMessageNotification(ctx, tag, title, body, extras);
+        }
+        call.resolve();
+    }
+
     @Override
     protected void handleOnDestroy() {
         if (activeInstance == this) {

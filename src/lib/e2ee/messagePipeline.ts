@@ -5,6 +5,7 @@ import {
 } from "../chatCustomization";
 import type { ChatMessage, ChatPreview, GroupDetails, GroupMessage, GroupSummary, StickerMedia } from "../types";
 import {
+  E2EE_AUTOSYNC_STICKER_NAME,
   E2EE_BUBBLE_PREF_PREFIX,
   E2EE_DEVSYNC_REQ_PREFIX,
   E2EE_DEVSYNC_RES_PREFIX,
@@ -23,13 +24,17 @@ import {
   decryptRemoteAttachmentToObjectUrl,
   decryptWireMessageCached,
   getActiveE2EEState,
+  getAllMyIdentities,
   getCachedDecryptedMediaUrl,
   getCachedDecryptedMessage,
   getLatestGroupEpoch,
+  getPeerKnownBundles,
   ingestGroupKeySignalPacket,
   ingestPeerIdentityBundle,
   parseGroupKeySignal,
   parseIdentitySignal,
+  parseVerifySignal,
+  setPeerVerifiedState,
   type MessageE2EEProof,
 } from "./keystore";
 
@@ -37,19 +42,46 @@ export function isInternalE2EEStickerName(name?: string | null): boolean {
   if (!name) return false;
   return (
     name === E2EE_VAULT_STICKER_NAME ||
+    name === E2EE_AUTOSYNC_STICKER_NAME ||
     name.startsWith(E2EE_BUBBLE_PREF_PREFIX) ||
     name.startsWith(E2EE_DEVSYNC_REQ_PREFIX) ||
     name.startsWith(E2EE_DEVSYNC_RES_PREFIX)
   );
 }
 
-export function scanDmRowsForE2EESignals(rows: { id: string; senderId: string; body: string }[]): void {
+function maybeApplyMutualVerifySignal(body: string, senderId: string, receiverId?: string): void {
+  const ver = parseVerifySignal(body);
+  if (!ver) return;
+  const state = getActiveE2EEState();
+  if (!state) return;
+  const peerId = senderId === state.userId ? receiverId : senderId;
+  if (peerId && peerId !== state.userId) {
+    void setPeerVerifiedState(peerId, true);
+  }
+}
+
+export function scanDmRowsForE2EESignals(rows: { id: string; senderId: string; receiverId?: string; body: string }[]): void {
   for (const row of rows) {
     const ik = parseIdentitySignal(row.body, row.senderId);
     if (ik) {
       void ingestPeerIdentityBundle(ik);
     }
+    maybeApplyMutualVerifySignal(row.body, row.senderId, row.receiverId);
   }
+}
+
+export async function scanDmRowsForE2EESignalsAsync(
+  rows: { id: string; senderId: string; receiverId?: string; body: string }[],
+): Promise<void> {
+  const tasks: Promise<unknown>[] = [];
+  for (const row of rows) {
+    const ik = parseIdentitySignal(row.body, row.senderId);
+    if (ik) {
+      tasks.push(ingestPeerIdentityBundle(ik));
+    }
+    maybeApplyMutualVerifySignal(row.body, row.senderId, row.receiverId);
+  }
+  if (tasks.length > 0) await Promise.all(tasks);
 }
 
 export function scanGroupRowsForE2EESignals(
@@ -69,6 +101,24 @@ export function scanGroupRowsForE2EESignals(
       void ingestGroupKeySignalPacket(gk, row.senderId);
     }
   }
+}
+
+export async function scanGroupRowsForE2EESignalsAsync(
+  rows: { id: string; senderId: string; body: string }[],
+): Promise<void> {
+  const ikTasks: Promise<unknown>[] = [];
+  for (const row of rows) {
+    const ik = parseIdentitySignal(row.body, row.senderId);
+    if (ik) ikTasks.push(ingestPeerIdentityBundle(ik));
+  }
+  if (ikTasks.length > 0) await Promise.all(ikTasks);
+
+  const gkTasks: Promise<unknown>[] = [];
+  for (const row of rows) {
+    const gk = parseGroupKeySignal(row.body);
+    if (gk) gkTasks.push(ingestGroupKeySignalPacket(gk, row.senderId));
+  }
+  if (gkTasks.length > 0) await Promise.all(gkTasks);
 }
 
 /* ------------------------------------------------------------------ */
@@ -177,9 +227,15 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
   const silentSignal =
     wireBody.startsWith("__JATEXT_CALL_SIG__:") || wireBody.startsWith("__JATEXT_REACT__:");
 
+  const additionalDeviceBundles = [
+    ...getAllMyIdentities(state).map((i) => ({ keyId: i.keyId, dhPubB64: i.dhPubB64 })),
+    ...getPeerKnownBundles(peerEntry).map((b) => ({ keyId: b.keyId, dhPubB64: b.dhPubB64 })),
+  ];
+
   const encryptedWire = await encryptDmPayload({
     senderIdentity: state.primaryIdentity,
     receiverPublic: peerEntry.bundle,
+    additionalDeviceBundles,
     senderId: state.userId,
     receiverId,
     payload,
@@ -467,6 +523,7 @@ export function hydrateDecryptedDmMessage(
   if (payload.msgBlob) {
     resolvedBody = resolveSpilledText(raw.attachmentUrl, payload.msgBlob, triggerRerender) ?? "";
   }
+  maybeApplyMutualVerifySignal(resolvedBody, raw.senderId, raw.receiverId);
 
   let attachmentUrl = raw.attachmentUrl;
   let attachmentName = raw.attachmentName;
@@ -483,7 +540,9 @@ export function hydrateDecryptedDmMessage(
       attachmentUrl = objUrl;
     } else {
       attachmentUrl = undefined;
-      void decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, payload.att);
+      void decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, payload.att).then(() =>
+        triggerRerender(),
+      );
     }
     attachmentName = payload.att.n;
     attachmentType = payload.att.t;
@@ -499,7 +558,9 @@ export function hydrateDecryptedDmMessage(
         attachmentUrl = objUrl;
       } else {
         attachmentUrl = undefined;
-        void decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, payload.stk.att);
+        void decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, payload.stk.att).then(() =>
+          triggerRerender(),
+        );
       }
       attachmentType = payload.stk.att.t;
     }
@@ -655,7 +716,9 @@ export function hydrateDecryptedGroupMessage(
       attachmentUrl = objUrl;
     } else {
       attachmentUrl = undefined;
-      void decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, payload.att);
+      void decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, payload.att).then(() =>
+        triggerRerender(),
+      );
     }
     attachmentName = payload.att.n;
     attachmentType = payload.att.t;
@@ -671,7 +734,9 @@ export function hydrateDecryptedGroupMessage(
         stickerUrl = objUrl;
       } else {
         stickerUrl = undefined;
-        void decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, payload.stk.att);
+        void decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, payload.stk.att).then(() =>
+          triggerRerender(),
+        );
       }
       attachmentUrl = undefined;
     }
@@ -797,3 +862,65 @@ export function hydrateDecryptedGroupSummary(
     lastMentionedMe: mentionedMe,
   };
 }
+
+export async function hydrateDecryptedDmMessageAsync(
+  raw: ChatMessage,
+  peerUserId: string,
+  triggerRerender: () => void,
+): Promise<ChatMessage> {
+  if (!raw.unsentAt && isEncryptedWireBody(raw.body)) {
+    const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
+    const cached = await decryptWireMessageCached({
+      cacheKey,
+      rawBody: raw.body,
+      senderId: raw.senderId,
+      receiverId: raw.receiverId,
+    });
+    if (cached.payload?.att && raw.attachmentUrl) {
+      try {
+        await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.att);
+      } catch {
+        // Ignore transient attachment fetch failure
+      }
+    } else if (cached.payload?.stk?.att && raw.attachmentUrl) {
+      try {
+        await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.stk.att);
+      } catch {
+        // Ignore transient sticker fetch failure
+      }
+    }
+  }
+  return hydrateDecryptedDmMessage(raw, peerUserId, triggerRerender);
+}
+
+export async function hydrateDecryptedGroupMessageAsync(
+  raw: GroupMessage,
+  groupId: string,
+  groupDetails: GroupDetails | null,
+  triggerRerender: () => void,
+): Promise<GroupMessage> {
+  if (!raw.unsentAt && isEncryptedWireBody(raw.body)) {
+    const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
+    const cached = await decryptWireMessageCached({
+      cacheKey,
+      rawBody: raw.body,
+      senderId: raw.senderId,
+      groupId,
+    });
+    if (cached.payload?.att && raw.attachmentUrl) {
+      try {
+        await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.att);
+      } catch {
+        // Ignore transient attachment fetch failure
+      }
+    } else if (cached.payload?.stk?.att && raw.attachmentUrl) {
+      try {
+        await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.stk.att);
+      } catch {
+        // Ignore transient sticker fetch failure
+      }
+    }
+  }
+  return hydrateDecryptedGroupMessage(raw, groupId, groupDetails, triggerRerender);
+}
+

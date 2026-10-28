@@ -59,9 +59,7 @@ export const sendMessageNotification = internalAction({
       .slice(0, 160);
     const cleanNotificationBody =
       rawNotificationBody ||
-      (body.includes("__JATEXT_E2EE_V1__:")
-        ? "🔒 Sent you a message · Tap to open"
-        : "Sent you an attachment");
+      (body.includes("__JATEXT_E2EE_V1__:") ? "New message" : "Sent you an attachment");
 
     let response;
     try {
@@ -73,6 +71,9 @@ export const sendMessageNotification = internalAction({
         },
         data: {
           senderId,
+          ...(body.includes("__JATEXT_E2EE_V1__:") && body.length <= 3200
+            ? { rawWire: body }
+            : {}),
           ...(groupId ? { groupId, type: "group_mention" } : { type: "message" }),
         },
         android: {

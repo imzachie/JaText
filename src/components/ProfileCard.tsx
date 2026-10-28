@@ -70,12 +70,10 @@ export function ProfileModal({
   user,
   status,
   onClose,
-  onOpenE2EEVault,
 }: {
   user: JaUser;
   status?: ActivityStatus;
   onClose: () => void;
-  onOpenE2EEVault?: () => void;
 }) {
   const store = useJaText();
   const { me, friends, activeChatId, activeMessages, blockedUserIds, setActiveChatId } = store;
@@ -87,10 +85,25 @@ export function ProfileModal({
   const [closing, setClosing] = useState(false);
   const [showRawKey, setShowRawKey] = useState(false);
   const [copiedE2ee, setCopiedE2ee] = useState(false);
+  const [verifyBusy, setVerifyBusy] = useState(false);
 
   const peerKey = me && me.id !== user.id ? e2ee.peerKeys[user.id] : undefined;
   const isVerifiedPeer = Boolean(peerKey && peerKey.verifiedKeyId === peerKey.bundle.keyId);
   const safetyBlocks = peerKey?.safetyNumber ? peerKey.safetyNumber.split(" ") : [];
+
+  async function handleVerifySecurityCode() {
+    if (!peerKey || verifyBusy) return;
+    setVerifyBusy(true);
+    try {
+      if (store.verifyFriendSecurityCode) {
+        await store.verifyFriendSecurityCode(user.id, !isVerifiedPeer);
+      } else {
+        await togglePeerVerified(user.id);
+      }
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
 
   function animateClose() {
     if (closing) return;
@@ -196,28 +209,31 @@ export function ProfileModal({
         <div className="profile-modal-scroll">
           <ProfileCard user={user} status={status} />
 
-          <section className="profile-e2ee-section" aria-label="End-to-End Encryption Key">
+          <section className="profile-e2ee-section" aria-label="End-to-End Encryption">
             <div className="profile-e2ee-header">
               <span className="profile-e2ee-title">
                 <LockIcon size={14} />
-                <strong>E2EE Key</strong>
+                <strong>Encryption</strong>
               </span>
               {!isNotMe ? (
                 <span className="e2ee-pill active">
-                  {e2ee.ready ? `Active · P-256` : "Initializing…"}
+                  {e2ee.ready ? "Encrypted · Synced" : "Initializing…"}
                 </span>
               ) : peerKey ? (
                 <span className={`e2ee-pill ${isVerifiedPeer ? "verified" : "active"}`}>
-                  {isVerifiedPeer ? "✓ Verified" : "Active · P-256"}
+                  {isVerifiedPeer ? "✓ Encrypted & Verified" : "Encrypted"}
                 </span>
               ) : (
-                <span className="e2ee-pill pending">Pending Key</span>
+                <span className="e2ee-pill pending">Setting up…</span>
               )}
             </div>
 
             {!isNotMe ? (
               e2ee.myFingerprint ? (
                 <>
+                  <p className="muted small" style={{ margin: "2px 0 4px" }}>
+                    Your end-to-end encryption keys sync automatically across your logged-in devices.
+                  </p>
                   <div className="profile-e2ee-compact-key">
                     <span className="profile-e2ee-sub">
                       ID <code>{e2ee.myKeyId}</code>
@@ -257,51 +273,34 @@ export function ProfileModal({
                     >
                       {showRawKey ? "Hide details" : "Details"}
                     </button>
-                    {onOpenE2EEVault && (
-                      <button
-                        type="button"
-                        className="mini-btn"
-                        onClick={onOpenE2EEVault}
-                      >
-                        Backup / Sync
-                      </button>
-                    )}
                   </div>
                 </>
               ) : (
-                <p className="muted small">Generating your on-device P-256 identity key…</p>
+                <p className="muted small">Setting up your encryption key…</p>
               )
             ) : peerKey ? (
               <>
-                {peerKey.keyChangedAt && !isVerifiedPeer && (
-                  <div className="e2ee-key-changed-banner">
-                    ⚠️ @{user.username}&apos;s key changed recently — tap Safety # to verify.
-                  </div>
-                )}
-                <div className="profile-e2ee-compact-key">
-                  <span className="profile-e2ee-sub">
-                    ID <code>{peerKey.bundle.keyId}</code> · ECDSA P-256
-                  </span>
-                  <code className="e2ee-fingerprint-code compact">{peerKey.fingerprint}</code>
-                </div>
+                <p className="muted small" style={{ margin: "2px 0 6px" }}>
+                  {isVerifiedPeer
+                    ? `Messages and calls in this chat are end-to-end encrypted and verified with @${user.username}.`
+                    : `Messages and calls are end-to-end encrypted. Tap below to verify your security code with @${user.username}.`}
+                </p>
 
-                {showRawKey && (
+                {showRawKey && safetyBlocks.length > 0 && (
                   <div className="profile-e2ee-details-drawer">
-                    {safetyBlocks.length > 0 && (
-                      <div className="profile-safety-wrap">
-                        <span className="muted small">60-Digit Safety Number (matches on both screens)</span>
-                        <div className="profile-safety-grid">
-                          {safetyBlocks.map((block, idx) => (
-                            <span key={idx}>{block}</span>
-                          ))}
-                        </div>
+                    <div className="profile-safety-wrap">
+                      <span className="muted small">60-Digit Security Code</span>
+                      <div className="profile-safety-grid">
+                        {safetyBlocks.map((block, idx) => (
+                          <span key={idx}>{block}</span>
+                        ))}
                       </div>
-                    )}
-                    <div className="profile-e2ee-raw">
-                      <span className="muted small">ECDH P-256 Public Key:</span>
-                      <code>{peerKey.bundle.dhPubB64}</code>
-                      <span className="muted small">ECDSA P-256 Signing Key:</span>
-                      <code>{peerKey.bundle.sigPubB64}</code>
+                    </div>
+                    <div className="profile-e2ee-compact-key" style={{ marginTop: 6 }}>
+                      <span className="profile-e2ee-sub">
+                        Key ID <code>{peerKey.bundle.keyId}</code>
+                      </span>
+                      <code className="e2ee-fingerprint-code compact">{peerKey.fingerprint}</code>
                     </div>
                   </div>
                 )}
@@ -309,36 +308,43 @@ export function ProfileModal({
                 <div className="profile-e2ee-btn-row">
                   <button
                     type="button"
-                    className="mini-btn"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(
-                        `JaText E2EE Verification (@${user.username})\nKey ID: ${peerKey.bundle.keyId}\nFingerprint: ${peerKey.fingerprint}\nSafety Number: ${peerKey.safetyNumber}\nECDH-P256: ${peerKey.bundle.dhPubB64}`,
-                      );
-                      setCopiedE2ee(true);
-                      window.setTimeout(() => setCopiedE2ee(false), 1800);
-                    }}
+                    className={`mini-btn ${isVerifiedPeer ? "verified-btn" : "verify-primary-btn"}`}
+                    disabled={verifyBusy}
+                    onClick={() => void handleVerifySecurityCode()}
                   >
-                    {copiedE2ee ? "✓ Copied" : "Copy key"}
+                    {verifyBusy
+                      ? "Verifying…"
+                      : isVerifiedPeer
+                        ? "✓ Encrypted & Verified"
+                        : "🛡️ Verify security code"}
                   </button>
                   <button
                     type="button"
                     className="mini-btn"
                     onClick={() => setShowRawKey((v) => !v)}
                   >
-                    {showRawKey ? "Hide safety #" : "Safety # & key"}
+                    {showRawKey ? "Hide code" : "View code"}
                   </button>
-                  <button
-                    type="button"
-                    className={`mini-btn ${isVerifiedPeer ? "verified-btn" : ""}`}
-                    onClick={() => void togglePeerVerified(user.id)}
-                  >
-                    {isVerifiedPeer ? "✓ Verified" : "Verify"}
-                  </button>
+                  {showRawKey && (
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(
+                          `JaText Security Code (@${user.username})\n${peerKey.safetyNumber}\nFingerprint: ${peerKey.fingerprint}`,
+                        );
+                        setCopiedE2ee(true);
+                        window.setTimeout(() => setCopiedE2ee(false), 1800);
+                      }}
+                    >
+                      {copiedE2ee ? "✓ Copied" : "Copy"}
+                    </button>
+                  )}
                 </div>
               </>
             ) : (
               <p className="muted small profile-e2ee-wait">
-                Waiting for @{user.username} to open JaText once to exchange signed P-256 keys.
+                Messages and calls are end-to-end encrypted once @{user.username} comes online.
               </p>
             )}
           </section>

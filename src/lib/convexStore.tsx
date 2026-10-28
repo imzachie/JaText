@@ -36,13 +36,16 @@ import {
   type BubbleStyleId,
 } from "./chatCustomization";
 import {
+  E2EE_AUTOSYNC_STICKER_NAME,
   E2EE_BUBBLE_PREF_PREFIX,
   E2EE_DEVSYNC_REQ_PREFIX,
   E2EE_DEVSYNC_RES_PREFIX,
   E2EE_VAULT_STICKER_NAME,
   createGroupKeySignalPacket,
   generateDeviceSyncKeypair,
+  openAutoSyncKeyring,
   openSealedE2EEVault,
+  sealAutoSyncKeyring,
   sealE2EEVault,
   toPublicIdentityBundle,
   unwrapDeviceSyncResponse,
@@ -51,6 +54,7 @@ import {
   type DeviceSyncResponse,
   type LocalDeviceSyncKeypair,
   type PublicIdentityBundle,
+  type SealedAutoSyncKeyring,
   type SealedE2EEVault,
 } from "./e2ee/cryptoPrimitives";
 import {
@@ -64,23 +68,30 @@ import {
   importRestoredVaultContents,
   ingestPeerIdentityBundle,
   markCurrentIdentityBackedUp,
+  mergeAutoSyncedKeyring,
   parseGroupKeySignal,
   parseIdentitySignal,
   rotateGroupEpoch,
   serializeGroupKeySignal,
   serializeIdentitySignal,
+  serializeVerifySignal,
+  setPeerVerifiedState,
   useE2EESnapshot,
 } from "./e2ee/keystore";
 import {
   hydrateDecryptedChatPreview,
   hydrateDecryptedDmMessage,
+  hydrateDecryptedDmMessageAsync,
   hydrateDecryptedGroupMessage,
+  hydrateDecryptedGroupMessageAsync,
   hydrateDecryptedGroupSummary,
   isInternalE2EEStickerName,
   prepareOutgoingDmEncrypted,
   prepareOutgoingGroupEncrypted,
   scanDmRowsForE2EESignals,
+  scanDmRowsForE2EESignalsAsync,
   scanGroupRowsForE2EESignals,
+  scanGroupRowsForE2EESignalsAsync,
 } from "./e2ee/messagePipeline";
 import { OFFICIAL_COMMUNITY_ID } from "./types";
 import type {
@@ -2168,10 +2179,11 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       const rows = ((await convex.query(api.messages.list, {
         otherId: otherId as Id<"users">,
       })) ?? []) as ChatMessage[];
-      scanDmRowsForE2EESignals(rows);
-      const hydrated = rows.map((r) =>
-        normalizeDirectMessage(hydrateDecryptedDmMessage(r, otherId, triggerE2EERerender)),
+      await scanDmRowsForE2EESignalsAsync(rows);
+      const decryptedRows = await Promise.all(
+        rows.map((r) => hydrateDecryptedDmMessageAsync(r, otherId, triggerE2EERerender)),
       );
+      const hydrated = decryptedRows.map((r) => normalizeDirectMessage(r));
       return foldReactionSignals(hydrated).messages;
     },
     [convex, isAuthenticated, triggerE2EERerender],
@@ -2183,12 +2195,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       const rows = ((await convex.query(api.groups.listMessages, {
         groupId: groupId as Id<"groups">,
       })) ?? []) as GroupMessage[];
-      scanGroupRowsForE2EESignals(rows);
-      const hydrated = rows.map((r) =>
-        normalizeGroupMessage(
-          hydrateDecryptedGroupMessage(r, groupId, activeGroupId === groupId ? groupDetails : null, triggerE2EERerender),
-        ),
+      await scanGroupRowsForE2EESignalsAsync(rows);
+      const details = activeGroupId === groupId ? groupDetails : null;
+      const decryptedRows = await Promise.all(
+        rows.map((r) => hydrateDecryptedGroupMessageAsync(r, groupId, details, triggerE2EERerender)),
       );
+      const hydrated = decryptedRows.map((r) => normalizeGroupMessage(r));
       return foldReactionSignals(hydrated).messages;
     },
     [activeGroupId, convex, groupDetails, isAuthenticated, triggerE2EERerender],
@@ -2209,9 +2221,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   /* Real E2EE Identity Init, Key Handshake, Vault & Live Device Sync   */
   /* ------------------------------------------------------------------ */
 
+  const [autoSyncSettled, setAutoSyncSettled] = useState(false);
+  const autoSyncPushInFlightRef = useRef(false);
+  const lastPushedAutoSyncSigRef = useRef<string>("");
+
   useEffect(() => {
-    if (!isAuthenticated || !me?.id) return;
+    if (!isAuthenticated || !me?.id) {
+      setAutoSyncSettled(false);
+      lastPushedAutoSyncSigRef.current = "";
+      return;
+    }
     let cancelled = false;
+    // Offline fallback: if stickerLibrary doesn't load within 1.5s, proceed with local identity
+    const timer = window.setTimeout(() => {
+      if (!cancelled) setAutoSyncSettled(true);
+    }, 1500);
     void ensureUserE2EEInitialized(me.id).then(async (state) => {
       if (cancelled) return;
       if (e2eeServerSupportedRef.current !== false) {
@@ -2231,12 +2255,119 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     });
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [convex, isAuthenticated, me?.id]);
 
+  // Zero-password automatic account keyring sync across all devices logged into the same account
+  const pushAutoSyncedKeyring = useCallback(async () => {
+    if (!isAuthenticated || !me?.id || autoSyncPushInFlightRef.current) return;
+    const contents = exportCurrentVaultContents();
+    if (!contents) return;
+    const sig = [
+      contents.primaryIdentity.keyId,
+      ...contents.previousIdentities.map((i) => i.keyId).sort(),
+      ...contents.groupEpochs.map((g) => `${g.groupId}:${g.epoch}`).sort(),
+    ].join("|");
+    if (lastPushedAutoSyncSigRef.current === sig) return;
+
+    autoSyncPushInFlightRef.current = true;
+    try {
+      const sealed = await sealAutoSyncKeyring(contents);
+      const bytes = new TextEncoder().encode(JSON.stringify(sealed));
+      const keyringFile = new File([bytes], "e2ee-autosync.json", {
+        type: "application/json",
+      });
+      const storageId = await upload(keyringFile);
+      const oldItems = (stickerFavoritesRef.current ?? []).filter(
+        (s) => s.name === E2EE_AUTOSYNC_STICKER_NAME,
+      );
+      await saveStickerMut({
+        storageId,
+        name: E2EE_AUTOSYNC_STICKER_NAME,
+        mediaType: "sticker",
+      });
+      lastPushedAutoSyncSigRef.current = sig;
+      await Promise.all(
+        oldItems.map((old) =>
+          setStickerFavoriteMut({
+            mediaKey: old.key,
+            name: old.name,
+            mediaType: old.mediaType,
+            source: old.source,
+            isFavorite: false,
+          }).catch(() => undefined),
+        ),
+      );
+    } catch {
+      // Ignore transient upload errors
+    } finally {
+      autoSyncPushInFlightRef.current = false;
+    }
+  }, [isAuthenticated, me?.id, saveStickerMut, setStickerFavoriteMut, upload]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !me?.id || !e2eeSnapshot.ready || !stickerLibrary) return;
+    let cancelled = false;
+    const runAutoSync = async () => {
+      const allItems = [...stickerLibrary.favorites, ...stickerLibrary.recent];
+      const syncItems = allItems.filter(
+        (item) => item.name === E2EE_AUTOSYNC_STICKER_NAME && item.url,
+      );
+      if (syncItems.length === 0) {
+        if (!cancelled) {
+          setAutoSyncSettled(true);
+          void pushAutoSyncedKeyring();
+        }
+        return;
+      }
+
+      let anyNeedsPush = false;
+      for (const item of syncItems.slice(0, 3)) {
+        try {
+          const resp = await fetch(item.url);
+          if (!resp.ok) continue;
+          const env = (await resp.json()) as SealedAutoSyncKeyring;
+          const remoteContents = await openAutoSyncKeyring(env, me.id);
+          if (!remoteContents || cancelled) continue;
+          const { needsRemotePush } = await mergeAutoSyncedKeyring(remoteContents);
+          if (needsRemotePush) anyNeedsPush = true;
+        } catch {
+          // Ignore malformed entry
+        }
+      }
+
+      if (!cancelled) {
+        setAutoSyncSettled(true);
+        if (anyNeedsPush) {
+          void pushAutoSyncedKeyring();
+        } else {
+          const contents = exportCurrentVaultContents();
+          if (contents) {
+            lastPushedAutoSyncSigRef.current = [
+              contents.primaryIdentity.keyId,
+              ...contents.previousIdentities.map((i) => i.keyId).sort(),
+              ...contents.groupEpochs.map((g) => `${g.groupId}:${g.epoch}`).sort(),
+            ].join("|");
+          }
+        }
+      }
+    };
+    void runAutoSync();
+    return () => {
+      cancelled = true;
+    };
+  }, [e2eeSnapshot.ready, isAuthenticated, me?.id, pushAutoSyncedKeyring, stickerLibrary]);
+
+  // Also push updated keyring whenever new group epochs are created locally
+  useEffect(() => {
+    if (!autoSyncSettled || !e2eeSnapshot.ready || !stickerLibrary) return;
+    void pushAutoSyncedKeyring();
+  }, [autoSyncSettled, e2eeSnapshot.ready, e2eeSnapshot.version, pushAutoSyncedKeyring, stickerLibrary]);
+
   // Background E2EE signed key exchange across accepted friends & private groups
   useEffect(() => {
-    if (!isAuthenticated || !me?.id || !e2eeSnapshot.ready || !e2eeSnapshot.myKeyId) return;
+    if (!isAuthenticated || !me?.id || !e2eeSnapshot.ready || !e2eeSnapshot.myKeyId || !autoSyncSettled) return;
     const state = getActiveE2EEState();
     if (!state || state.userId !== me.id) return;
     let cancelled = false;
@@ -2258,7 +2389,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Announce our signed E2EE identity key in each friend pair (reusing our own prior signal row)
+      // Announce our signed E2EE identity key in each friend pair WITHOUT clobbering other devices' keys!
       const mySigPacket = serializeIdentitySignal(state.primaryIdentity);
       for (const friend of friends) {
         if (cancelled) return;
@@ -2270,18 +2401,20 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           const rows = ((await convex.query(api.messages.list, {
             otherId: friend.id as Id<"users">,
           })) ?? []) as ChatMessage[];
-          scanDmRowsForE2EESignals(rows);
+          await scanDmRowsForE2EESignalsAsync(rows);
           const myExistingRows = rows.filter(
             (r) => r.senderId === me.id && parseIdentitySignal(r.body, me.id) !== null,
           );
-          const latestOwn = myExistingRows[myExistingRows.length - 1];
-          const parsedOwn = latestOwn ? parseIdentitySignal(latestOwn.body, me.id) : null;
-          if (parsedOwn?.keyId === state.primaryIdentity.keyId) {
+          const alreadyAnnounced = myExistingRows.some(
+            (r) => parseIdentitySignal(r.body, me.id)?.keyId === state.primaryIdentity.keyId,
+          );
+          if (alreadyAnnounced) {
             continue;
           }
-          if (latestOwn) {
+          if (myExistingRows.length >= 4) {
+            // Recycle oldest slot only if 4+ historical keys exist
             await editMessageMut({
-              messageId: latestOwn.id as Id<"messages">,
+              messageId: myExistingRows[0].id as Id<"messages">,
               body: mySigPacket,
             }).catch(async () => {
               await sendMessageMut({
@@ -2311,17 +2444,18 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           const rows = ((await convex.query(api.groups.listMessages, {
             groupId: grp.id as Id<"groups">,
           })) ?? []) as GroupMessage[];
-          scanGroupRowsForE2EESignals(rows);
+          await scanGroupRowsForE2EESignalsAsync(rows);
 
           const myOwnIkRows = rows.filter(
             (r) => r.senderId === me.id && parseIdentitySignal(r.body, me.id) !== null,
           );
-          const latestOwnIk = myOwnIkRows[myOwnIkRows.length - 1];
-          const parsedOwnIk = latestOwnIk ? parseIdentitySignal(latestOwnIk.body, me.id) : null;
-          if (parsedOwnIk?.keyId !== state.primaryIdentity.keyId) {
-            if (latestOwnIk) {
+          const alreadyAnnouncedIk = myOwnIkRows.some(
+            (r) => parseIdentitySignal(r.body, me.id)?.keyId === state.primaryIdentity.keyId,
+          );
+          if (!alreadyAnnouncedIk) {
+            if (myOwnIkRows.length >= 4) {
               await editGroupMut({
-                messageId: latestOwnIk.id as Id<"groupMessages">,
+                messageId: myOwnIkRows[0].id as Id<"groupMessages">,
                 body: mySigPacket,
               }).catch(async () => {
                 await sendGroupMessageMut({
@@ -2358,6 +2492,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [
+    autoSyncSettled,
     convex,
     distributeGroupEpochToMembers,
     e2eeSnapshot.myKeyId,
@@ -2841,6 +2976,32 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     restoreE2EEVaultBackup,
     requestLiveDeviceSync,
     approveDeviceSyncRequest,
+    verifyFriendSecurityCode: async (friendId: string, verified = true) => {
+      const state = getActiveE2EEState();
+      const peerEntry = state?.peerKeys[friendId];
+      if (!state || !peerEntry) return false;
+      const nowVerified = await setPeerVerifiedState(friendId, verified);
+      if (nowVerified) {
+        try {
+          const sigBody = serializeVerifySignal(
+            state.primaryIdentity.keyId,
+            peerEntry.bundle.keyId,
+          );
+          const enc = await prepareOutgoingDmEncrypted({
+            receiverId: friendId,
+            wireBody: sigBody,
+            uploadFile: upload,
+          });
+          await sendMessageMut({
+            receiverId: friendId as Id<"users">,
+            body: enc ? enc.wireBody : sigBody,
+          });
+        } catch {
+          // Local verification already succeeded
+        }
+      }
+      return nowVerified;
+    },
   };
 
   return <JaTextContext.Provider value={value}>{children}</JaTextContext.Provider>;

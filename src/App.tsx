@@ -12,7 +12,7 @@ import { Onboarding } from "./components/Onboarding";
 import { NotificationWelcome } from "./components/NotificationWelcome";
 import { ProfileModal } from "./components/ProfileCard";
 import { SettingsModal } from "./components/Settings";
-import { E2EEKeyVaultModal, LockIcon } from "./components/E2EEModals";
+import { LockIcon } from "./components/E2EEModals";
 import { Sidebar } from "./components/Sidebar";
 import {
   CallProvider,
@@ -21,7 +21,14 @@ import {
   parseCallInvite,
   useCall,
 } from "./lib/calling";
+import {
+  getActiveE2EEState,
+  getAllMyIdentities,
+  getPeerKnownBundles,
+  useE2EESnapshot,
+} from "./lib/e2ee/keystore";
 import { GroupCallProvider, useGroupCall } from "./lib/groupCalling";
+import { JaTextNative } from "./lib/nativeBridge";
 import { useJaText } from "./lib/store";
 import { playMessageSound } from "./lib/alerts";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
@@ -70,7 +77,7 @@ function AppContent() {
   } = store;
   const [profileUser, setProfileUser] = useState<JaUser | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [e2eeModalOpen, setE2eeModalOpen] = useState(false);
+  const e2eeSnapshot = useE2EESnapshot();
   const [notificationWelcomeSeen, setNotificationWelcomeSeen] = useState(
     () => localStorage.getItem(NOTIFICATION_WELCOME_KEY) === "true",
   );
@@ -129,6 +136,43 @@ function AppContent() {
       : "online";
   }, [freshProfileUser, store.friendActivities, store.me?.id]);
 
+  // Sync E2EE decryption keys & notification settings to Android MODE_PRIVATE keystore
+  // so background/closed FCM push notifications decrypt on-device like WhatsApp!
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !me?.id) return;
+    const state = getActiveE2EEState();
+    if (!state || state.userId !== me.id) return;
+
+    const identities = getAllMyIdentities(state).map((id) => ({
+      keyId: id.keyId,
+      dhPrivPkcs8B64: id.dhPrivPkcs8B64,
+      dhPubB64: id.dhPubB64,
+    }));
+    const peers: Record<string, { keyId: string; dhPubB64: string }[]> = {};
+    for (const [peerId, entry] of Object.entries(state.peerKeys)) {
+      peers[peerId] = getPeerKnownBundles(entry).map((b) => ({
+        keyId: b.keyId,
+        dhPubB64: b.dhPubB64,
+      }));
+    }
+    const groupEpochs: Record<string, string> = {};
+    for (const [gid, epMap] of Object.entries(state.groupEpochs)) {
+      for (const [ep, epEntry] of Object.entries(epMap)) {
+        groupEpochs[`${gid}:${ep}`] = epEntry.secretB64;
+      }
+    }
+
+    void JaTextNative.syncE2EENotificationState({
+      convexUrl: import.meta.env.VITE_CONVEX_URL as string | undefined,
+      userId: me.id,
+      notificationsEnabled,
+      isDnd: me.statusPreference === "dnd",
+      identitiesJson: JSON.stringify(identities),
+      peersJson: JSON.stringify(peers),
+      groupsJson: JSON.stringify(groupEpochs),
+    }).catch(() => undefined);
+  }, [e2eeSnapshot.version, me?.id, me?.statusPreference, notificationsEnabled]);
+
   useEffect(() => {
     if (!me || !previewsReady) {
       previousPreviews.current = null;
@@ -145,8 +189,9 @@ function AppContent() {
       const isPendingE2EE =
         Boolean(previous) &&
         previous?.get(preview.friendId) !== sig &&
-        preview.body.includes("__JATEXT_E2EE_V1__:") &&
-        now - preview.createdAt < 1800;
+        (preview.body === "🔒 Encrypted message" ||
+          preview.body.includes("__JATEXT_E2EE_V1__:")) &&
+        now - preview.createdAt < 2500;
       if (isPendingE2EE) {
         pendingHydration = true;
         const prevSig = previous?.get(preview.friendId);
@@ -161,10 +206,9 @@ function AppContent() {
 
     let fallbackTimer: number | null = null;
     if (pendingHydration) {
-      // Re-evaluate if E2EE key vault is locked so notification still fires with clean fallback text
       fallbackTimer = window.setTimeout(() => {
         previousPreviews.current = new Map(current);
-      }, 1900);
+      }, 2600);
     }
 
     for (const preview of previews) {
@@ -194,26 +238,31 @@ function AppContent() {
         playMessageSound("received");
       }
 
+      const readableText = formatPreviewMessageText(preview.body) || "Sent you an attachment";
+
       // Only show system notifications when the app/tab is minimized or hidden — NEVER while in the app!
-      if (
-        !Capacitor.isNativePlatform() &&
-        notificationsEnabled &&
-        !appInForeground &&
-        "Notification" in window &&
-        Notification.permission === "granted"
-      ) {
-        try {
-          const notification = new Notification(`Message from ${friend.displayName}`, {
-            body: formatPreviewMessageText(preview.body) || "Sent you an attachment",
-            tag: `jatext-${friend.id}`,
-          });
-          notification.onclick = () => {
-            window.focus();
-            setActiveChatId(friend.id);
-            notification.close();
-          };
-        } catch {
-          // Mobile browsers / WebViews disallow direct Notification construction.
+      if (notificationsEnabled && !appInForeground) {
+        if (Capacitor.isNativePlatform()) {
+          void JaTextNative.showDecryptedNotification({
+            tag: `dm:${friend.id}`,
+            title: `New message from ${friend.displayName}`,
+            body: readableText,
+            senderId: friend.id,
+          }).catch(() => undefined);
+        } else if ("Notification" in window && Notification.permission === "granted") {
+          try {
+            const notification = new Notification(`Message from ${friend.displayName}`, {
+              body: readableText,
+              tag: `jatext-${friend.id}`,
+            });
+            notification.onclick = () => {
+              window.focus();
+              setActiveChatId(friend.id);
+              notification.close();
+            };
+          } catch {
+            // Mobile browsers / WebViews disallow direct Notification construction.
+          }
         }
       }
     }
@@ -237,19 +286,30 @@ function AppContent() {
       return;
     }
 
-    const current = new Map(
-      groups.map((group) => [
-        group.id,
-        `${group.lastMessageAt}:${group.lastSenderId ?? ""}`,
-      ]),
-    );
     const previous = previousGroups.current;
+    const current = new Map<string, string>();
+    const now = Date.now();
+    for (const group of groups) {
+      const sig = `${group.lastMessageAt}:${group.lastSenderId ?? ""}`;
+      const isPendingGroupE2EE =
+        Boolean(previous) &&
+        previous?.get(group.id) !== sig &&
+        (group.lastMessage === "🔒 Encrypted message" ||
+          group.lastMessage.includes("__JATEXT_E2EE_V1__:")) &&
+        now - group.lastMessageAt < 2500;
+      if (isPendingGroupE2EE) {
+        const prevSig = previous?.get(group.id);
+        if (prevSig !== undefined) current.set(group.id, prevSig);
+      } else {
+        current.set(group.id, sig);
+      }
+    }
     previousGroups.current = current;
     if (!previous) return;
 
     for (const group of groups) {
       const signature = `${group.lastMessageAt}:${group.lastSenderId ?? ""}`;
-      if (previous.get(group.id) === signature) continue;
+      if (previous.get(group.id) === signature || current.get(group.id) !== signature) continue;
       if (
         !group.lastMentionedMe ||
         group.lastSenderId === me.id ||
@@ -268,26 +328,30 @@ function AppContent() {
 
       const senderLabel = group.lastSenderName || "Someone";
       const title = `${senderLabel} mentioned you in ${group.name}`;
+      const readableGroupBody = formatPreviewMessageText(group.lastMessage) || "Open group chat";
 
-      if (
-        !Capacitor.isNativePlatform() &&
-        notificationsEnabled &&
-        !appInForeground &&
-        "Notification" in window &&
-        Notification.permission === "granted"
-      ) {
-        try {
-          const notification = new Notification(title, {
-            body: formatPreviewMessageText(group.lastMessage) || "Open group chat",
-            tag: `jatext-group-${group.id}`,
-          });
-          notification.onclick = () => {
-            window.focus();
-            setActiveGroupId(group.id);
-            notification.close();
-          };
-        } catch {
-          // Mobile browsers / WebViews disallow direct Notification construction.
+      if (notificationsEnabled && !appInForeground) {
+        if (Capacitor.isNativePlatform()) {
+          void JaTextNative.showDecryptedNotification({
+            tag: `group:${group.id}`,
+            title,
+            body: readableGroupBody,
+            groupId: group.id,
+          }).catch(() => undefined);
+        } else if ("Notification" in window && Notification.permission === "granted") {
+          try {
+            const notification = new Notification(title, {
+              body: readableGroupBody,
+              tag: `jatext-group-${group.id}`,
+            });
+            notification.onclick = () => {
+              window.focus();
+              setActiveGroupId(group.id);
+              notification.close();
+            };
+          } catch {
+            // Mobile browsers / WebViews disallow direct Notification construction.
+          }
         }
       }
     }
@@ -423,37 +487,12 @@ function AppContent() {
           user={freshProfileUser}
           status={profileStatus}
           onClose={() => setProfileUser(null)}
-          onOpenE2EEVault={() => {
-            setProfileUser(null);
-            setE2eeModalOpen(true);
-          }}
         />
       )}
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
-          onOpenE2EEVault={() => {
-            setSettingsOpen(false);
-            setE2eeModalOpen(true);
-          }}
         />
-      )}
-      {e2eeModalOpen && <E2EEKeyVaultModal onClose={() => setE2eeModalOpen(false)} />}
-      {(store.pendingDeviceSyncRequests?.length ?? 0) > 0 && !e2eeModalOpen && (
-        <div className="e2ee-sync-toast" role="region" aria-label="Device E2EE sync request">
-          <LockIcon size={16} />
-          <span>
-            <strong>{store.pendingDeviceSyncRequests![0].deviceLabel}</strong> requested E2EE key
-            sync (<code>{store.pendingDeviceSyncRequests![0].sasCode}</code>)
-          </span>
-          <button
-            type="button"
-            className="primary-btn small-btn"
-            onClick={() => setE2eeModalOpen(true)}
-          >
-            Review
-          </button>
-        </div>
       )}
       <CallOverlay />
       <GroupCallOverlay />

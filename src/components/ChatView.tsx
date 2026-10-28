@@ -1309,7 +1309,11 @@ export function ChatView({
           <span className="muted small chat-presence">
             @{friend.username} · {friendStatusLabel}
             {friendActivity?.customStatus ? ` · ${friendActivity.customStatus}` : ""}
-            {peerE2EE ? " · 🔒 Encrypted" : ""}
+            {peerE2EE
+              ? peerE2EE.verifiedKeyId === peerE2EE.bundle.keyId
+                ? " · 🔒 Encrypted & Verified"
+                : " · 🔒 Encrypted"
+              : ""}
           </span>
         </button>
         <div className="chat-header-actions" aria-label="Chat actions">

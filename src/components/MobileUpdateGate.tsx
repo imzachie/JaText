@@ -318,10 +318,10 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <h2>Welcome to {currentLabel} of JaText!</h2>
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
-              <li>😍 Multi-Reactions on Messages — Add 2, 3, or More Emojis to Any Message</li>
-              <li>💬 Custom Chat Bubbles Fixed in DMs &amp; Groups + Live Sync Across Mobile &amp; PC</li>
-              <li>🔔 Clean Push Notifications for Encrypted Messages, Photos &amp; Voice Notes</li>
-              <li>✨ Smooth Group Settings Scrolling &amp; Sleek Compact Profile E2EE Card</li>
+              <li>🔔 Readable E2EE Notifications — Decrypts Messages On-Device Like WhatsApp</li>
+              <li>🛡️ Seamless Automatic Key Sync &amp; 1-Tap Profile Security Code Verification</li>
+              <li>📞 Restored Fast &amp; Reliable 1:1 &amp; Group Voice/Video Calling</li>
+              <li>🔓 Retroactive Unlock for Multi-Device Encrypted Chats</li>
             </ul>
             <button
               type="button"
