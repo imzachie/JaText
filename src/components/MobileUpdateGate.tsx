@@ -4,7 +4,13 @@ import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { JaTextNative, type AppVersionInfo } from "../lib/nativeBridge";
 import { AnimatedModal } from "./AnimatedModal";
 import { Phone } from "./CallIcons";
-import { BellIcon, RocketIcon, ShieldCheckIcon, SparklesIcon } from "./UiIcons";
+import {
+  BellIcon,
+  RocketIcon,
+  ShieldCheckIcon,
+  SparklesIcon,
+  SwitchAccountIcon,
+} from "./UiIcons";
 
 const WELCOMED_VERSION_KEY = "jatext:welcomed-mobile-build:v1";
 const PUBLIC_UPDATE_MANIFEST_URL = "https://jatext.vercel.app/apk-version.json";
@@ -321,8 +327,12 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
               <li>
+                <SwitchAccountIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Direct Multi-Account Switching — Add Accounts &amp; Switch Instantly in 1 Tap
+              </li>
+              <li>
                 <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Self-Healing Group E2EE Key Sync — Eliminates &ldquo;Waiting for this message…&rdquo;
+                Self-Healing Group E2EE Key Sync &amp; 1-Tap Security Code Verification
               </li>
               <li>
                 <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
@@ -330,10 +340,10 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
               </li>
               <li>
                 <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Readable On-Device E2EE Push Notifications &amp; 1-Tap Security Code Verification
+                Readable On-Device E2EE Push Notifications &amp; Reliable Voice/Video Calling
               </li>
               <li>
-                <Phone size={15} /> Fast &amp; Reliable 1:1 &amp; Group Voice/Video Calling
+                <Phone size={15} /> Fast &amp; Smooth 60 FPS Mobile Experience
               </li>
             </ul>
             <button

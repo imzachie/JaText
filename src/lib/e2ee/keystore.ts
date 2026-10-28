@@ -261,6 +261,12 @@ export async function ensureUserE2EEInitialized(userId: string): Promise<Persist
     activeUserId = userId;
     return activeState;
   }
+  if (activeUserId !== userId || (activeState && activeState.userId !== userId)) {
+    activeUserId = userId;
+    activeState = null;
+    failedDecryptRetryAt.clear();
+    notifyListeners();
+  }
   const existingInit = initPromises.get(userId);
   if (existingInit) return existingInit;
 
@@ -286,9 +292,11 @@ export async function ensureUserE2EEInitialized(userId: string): Promise<Persist
       await writePersistedState(loaded);
     }
 
-    activeUserId = userId;
-    activeState = loaded;
-    notifyListeners();
+    if (activeUserId === userId) {
+      activeState = loaded;
+      failedDecryptRetryAt.clear();
+      notifyListeners();
+    }
     return loaded;
   })();
 
@@ -303,6 +311,7 @@ export async function ensureUserE2EEInitialized(userId: string): Promise<Persist
 export function clearActiveE2EESession(): void {
   activeUserId = null;
   activeState = null;
+  failedDecryptRetryAt.clear();
   notifyListeners();
 }
 

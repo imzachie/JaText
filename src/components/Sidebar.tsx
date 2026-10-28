@@ -3,6 +3,11 @@ import { AnimatedModal } from "./AnimatedModal";
 import { Phone, Video } from "./CallIcons";
 import { ContextMenu } from "./ContextMenu";
 import {
+  switchToAccountSlot,
+  useMultiAccountState,
+  type SavedAccountEntry,
+} from "../lib/accountManager";
+import {
   formatCallDuration,
   formatPreviewMessageText,
   parseCallInvite,
@@ -24,11 +29,13 @@ import {
   BellIcon,
   BellOffIcon,
   CheckIcon,
+  ChevronUpDownIcon,
   ClockIcon,
   FlaskIcon,
   MessageCircleIcon,
   PlusIcon,
   SettingsIcon,
+  SwitchAccountIcon,
   TrashIcon,
   UnlockIcon,
   UserMinusIcon,
@@ -53,16 +60,32 @@ function dayPart(date: Date): string {
   return "night";
 }
 
+function savedEntryToAvatarUser(entry: SavedAccountEntry): JaUser {
+  return {
+    id: entry.userId,
+    displayName: entry.displayName || entry.username || "Account",
+    username: entry.username || "user",
+    bio: "",
+    pronouns: "",
+    avatarColor: entry.avatarColor,
+    avatarUrl: entry.avatarUrl,
+    onboardingComplete: true,
+  };
+}
+
 export function Sidebar({
   onOpenProfile,
   onOpenSettings,
+  onOpenAccountSwitcher,
 }: {
   onOpenProfile: (user: JaUser) => void;
   onOpenSettings: () => void;
+  onOpenAccountSwitcher: () => void;
 }) {
   const store = useJaText();
-  const { session, startCall } = useCall();
-  const { groupSession, startGroupCall } = useGroupCall();
+  const { session, startCall, endCall } = useCall();
+  const { groupSession, startGroupCall, leaveGroupCall } = useGroupCall();
+  const { activeSlotId, accounts } = useMultiAccountState();
   const draftsMap = useDraftsMap();
   const storedCallHistory = useCallHistoryEntries();
   const { me, friends, incoming, outgoing, previews, activeChatId, setActiveChatId } = store;
@@ -249,6 +272,18 @@ export function Sidebar({
   }
 
   const communityDraft = draftsMap["community"];
+  const otherSavedAccounts = accounts
+    .filter((a) => a.slotId !== activeSlotId && a.userId !== me.id)
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+
+  async function handleDirectQuickSwitch(targetSlotId: string) {
+    if (session) await endCall().catch(() => undefined);
+    if (groupSession) await leaveGroupCall().catch(() => undefined);
+    void switchToAccountSlot(
+      targetSlotId,
+      import.meta.env.VITE_CONVEX_URL as string | undefined,
+    );
+  }
 
   return (
     <aside className="sidebar">
@@ -257,9 +292,25 @@ export function Sidebar({
           <img className="logo-icon" src="/jatext-logo-icon.png" alt="" />
           <span>JaText</span>
         </div>
-        <button className="icon-btn" onClick={onOpenSettings} title="Settings" aria-label="Settings">
-          <SettingsIcon size={18} />
-        </button>
+        <div className="sidebar-header-actions">
+          <button
+            type="button"
+            className="icon-btn account-switch-header-btn"
+            onClick={onOpenAccountSwitcher}
+            title="Switch or add account"
+            aria-label="Switch or add account"
+          >
+            <SwitchAccountIcon size={17} />
+            {accounts.length > 1 && (
+              <span className="account-count-badge" aria-hidden="true">
+                {accounts.length}
+              </span>
+            )}
+          </button>
+          <button className="icon-btn" onClick={onOpenSettings} title="Settings" aria-label="Settings">
+            <SettingsIcon size={18} />
+          </button>
+        </div>
       </header>
 
       <div className="greeting">
@@ -279,7 +330,51 @@ export function Sidebar({
           <span className="greeting-title">
             Good {dayPart(now)}, {me.displayName}!
           </span>
-          <span className="muted">@{me.username}</span>
+          <button
+            type="button"
+            className="greeting-account-btn"
+            onClick={onOpenAccountSwitcher}
+            title="Switch or add account"
+          >
+            <span>@{me.username}</span>
+            <ChevronUpDownIcon size={13} />
+          </button>
+        </div>
+        <div className="greeting-quick-accounts">
+          {otherSavedAccounts.slice(0, 2).map((acct) => (
+            <button
+              key={acct.slotId}
+              type="button"
+              className="quick-account-avatar-btn"
+              title={`Switch directly to ${acct.displayName || `@${acct.username}`}`}
+              aria-label={`Switch directly to ${acct.displayName || acct.username}`}
+              onClick={() => void handleDirectQuickSwitch(acct.slotId)}
+            >
+              <Avatar user={savedEntryToAvatarUser(acct)} size={30} />
+            </button>
+          ))}
+          {otherSavedAccounts.length > 2 && (
+            <button
+              type="button"
+              className="quick-account-more-btn"
+              title="All saved accounts"
+              aria-label="All saved accounts"
+              onClick={onOpenAccountSwitcher}
+            >
+              +{otherSavedAccounts.length - 2}
+            </button>
+          )}
+          {otherSavedAccounts.length === 0 && (
+            <button
+              type="button"
+              className="quick-account-add-btn"
+              title="Add another account for instant switching"
+              aria-label="Add another account"
+              onClick={onOpenAccountSwitcher}
+            >
+              <UserPlusIcon size={15} />
+            </button>
+          )}
         </div>
       </div>
 

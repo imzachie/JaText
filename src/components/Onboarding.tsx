@@ -1,16 +1,40 @@
 import { useState } from "react";
+import { switchToAccountSlot, useMultiAccountState } from "../lib/accountManager";
 import { useJaText } from "../lib/store";
 import { LegalModal, type LegalTab } from "./LegalModal";
 import { ProfileForm } from "./ProfileForm";
-import { ArrowRightIcon, SparklesIcon } from "./UiIcons";
+import { ArrowRightIcon, SparklesIcon, SwitchAccountIcon } from "./UiIcons";
+
+const CONVEX_URL = import.meta.env.VITE_CONVEX_URL as string | undefined;
 
 export function Onboarding() {
   const { me, signOut } = useJaText();
+  const { activeSlotId, accounts } = useMultiAccountState();
+  const otherAccounts = accounts.filter(
+    (acct) => acct.slotId !== activeSlotId && (!me || acct.userId !== me.id),
+  );
   const [legalTab, setLegalTab] = useState<LegalTab | null>(null);
   if (!me) return null;
   return (
     <div className="onboarding-page">
       <div className="onboarding-card">
+        {otherAccounts.length > 0 && (
+          <div className="onboarding-switch-bar">
+            {otherAccounts.map((acct) => (
+              <button
+                key={acct.slotId}
+                type="button"
+                className="ghost-btn onboarding-switch-btn"
+                onClick={() => switchToAccountSlot(acct.slotId, CONVEX_URL)}
+              >
+                <SwitchAccountIcon size={14} />
+                <span>
+                  Switch to {acct.username ? `@${acct.username}` : acct.displayName}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
         <h1>
           Welcome to JaText! <SparklesIcon size={24} style={{ color: "var(--accent)" }} />
         </h1>

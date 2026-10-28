@@ -12,6 +12,7 @@ import { Onboarding } from "./components/Onboarding";
 import { NotificationWelcome } from "./components/NotificationWelcome";
 import { ProfileModal } from "./components/ProfileCard";
 import { SettingsModal } from "./components/Settings";
+import { AccountSwitcherModal } from "./components/AccountSwitcherModal";
 import { LockIcon } from "./components/E2EEModals";
 import { Sidebar } from "./components/Sidebar";
 import { MessageCircleIcon } from "./components/UiIcons";
@@ -79,6 +80,7 @@ function AppContent() {
   } = store;
   const [profileUser, setProfileUser] = useState<JaUser | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const e2eeSnapshot = useE2EESnapshot();
   const [notificationWelcomeSeen, setNotificationWelcomeSeen] = useState(
     () => localStorage.getItem(NOTIFICATION_WELCOME_KEY) === "true",
@@ -91,6 +93,7 @@ function AppContent() {
     activeGroupId,
     hasProfile: Boolean(profileUser),
     settingsOpen,
+    accountSwitcherOpen,
     callFullScreen: false,
     groupCallFullScreen: false,
   });
@@ -377,12 +380,14 @@ function AppContent() {
       activeGroupId,
       hasProfile: Boolean(profileUser),
       settingsOpen,
+      accountSwitcherOpen,
       callFullScreen: Boolean(
         callSession && !callMinimized && callSession.phase !== "incoming",
       ),
       groupCallFullScreen: Boolean(groupCallSession && !groupCallMinimized),
     };
   }, [
+    accountSwitcherOpen,
     activeChatId,
     activeGroupId,
     callMinimized,
@@ -401,6 +406,8 @@ function AppContent() {
         setGroupCallMinimized(true);
       } else if (navigation.callFullScreen) {
         setCallMinimized(true);
+      } else if (navigation.accountSwitcherOpen) {
+        setAccountSwitcherOpen(false);
       } else if (navigation.settingsOpen) {
         setSettingsOpen(false);
       } else if (navigation.hasProfile) {
@@ -456,7 +463,11 @@ function AppContent() {
 
   return (
     <div className={`app-shell ${activeFriend || activeCommunity || activeGroup ? "chat-open" : ""}`}>
-      <Sidebar onOpenProfile={setProfileUser} onOpenSettings={() => setSettingsOpen(true)} />
+      <Sidebar
+        onOpenProfile={setProfileUser}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenAccountSwitcher={() => setAccountSwitcherOpen(true)}
+      />
       <main className="main-pane">
         {activeCommunity ? (
           <CommunityChatView onOpenProfile={setProfileUser} onBack={() => setActiveChatId(null)} />
@@ -501,7 +512,14 @@ function AppContent() {
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
+          onOpenAccountSwitcher={() => {
+            setSettingsOpen(false);
+            setAccountSwitcherOpen(true);
+          }}
         />
+      )}
+      {accountSwitcherOpen && (
+        <AccountSwitcherModal onClose={() => setAccountSwitcherOpen(false)} />
       )}
       <CallOverlay />
       <GroupCallOverlay />

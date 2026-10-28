@@ -1,7 +1,22 @@
 import { useState, type FormEvent } from "react";
+import {
+  cancelAddAnotherAccount,
+  switchToAccountSlot,
+  useMultiAccountState,
+} from "../lib/accountManager";
 import { useJaText } from "../lib/store";
+import { Avatar } from "./Avatar";
 import { LegalModal, type LegalTab } from "./LegalModal";
-import { FlaskIcon, MessageCircleIcon, PaletteIcon, UsersIcon } from "./UiIcons";
+import {
+  ArrowLeftIcon,
+  FlaskIcon,
+  MessageCircleIcon,
+  PaletteIcon,
+  SwitchAccountIcon,
+  UsersIcon,
+} from "./UiIcons";
+
+const CONVEX_URL = import.meta.env.VITE_CONVEX_URL as string | undefined;
 
 function GoogleIcon() {
   return (
@@ -16,8 +31,14 @@ function GoogleIcon() {
 
 export function LoginPage() {
   const store = useJaText();
+  const { activeSlotId, accounts, returnToSlotId } = useMultiAccountState();
+  const activeSavedAccount = accounts.find((acct) => acct.slotId === activeSlotId);
+  const switchableAccounts = accounts.filter((acct) => acct.slotId !== activeSlotId);
+  const returnAccount = returnToSlotId
+    ? accounts.find((acct) => acct.slotId === returnToSlotId)
+    : undefined;
   const [tab, setTab] = useState<"signin" | "signup">("signin");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => activeSavedAccount?.email ?? "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,7 +102,74 @@ export function LoginPage() {
       </section>
 
       <section className="login-card">
-        <h2>{tab === "signin" ? "Welcome back" : "Create your account"}</h2>
+        {returnToSlotId && (
+          <div className="login-add-account-banner">
+            <button
+              type="button"
+              className="ghost-btn login-back-account-btn"
+              onClick={() => cancelAddAnotherAccount(CONVEX_URL)}
+            >
+              <ArrowLeftIcon size={15} />
+              <span>
+                {returnAccount
+                  ? `Back to @${returnAccount.username ?? returnAccount.displayName}`
+                  : "Back to active account"}
+              </span>
+            </button>
+            <span className="login-add-account-badge">
+              <SwitchAccountIcon size={13} /> Adding account
+            </span>
+          </div>
+        )}
+
+        {switchableAccounts.length > 0 && (
+          <div className="login-saved-accounts">
+            <div className="login-saved-accounts-header">
+              <span>Saved accounts on this device</span>
+              <span className="muted small">Tap to switch directly</span>
+            </div>
+            <div className="login-saved-accounts-list">
+              {switchableAccounts.map((acct) => (
+                <button
+                  key={acct.slotId}
+                  type="button"
+                  className="login-saved-account-btn"
+                  onClick={() => switchToAccountSlot(acct.slotId, CONVEX_URL)}
+                >
+                  <Avatar
+                    user={{
+                      displayName: acct.displayName || acct.username || "JaText User",
+                      username: acct.username || "user",
+                      avatarUrl: acct.avatarUrl,
+                      avatarColor: acct.avatarColor,
+                    }}
+                    size={34}
+                  />
+                  <span className="login-saved-account-meta">
+                    <strong>{acct.displayName}</strong>
+                    <span>
+                      {acct.username
+                        ? `@${acct.username}`
+                        : acct.email ?? "Saved account"}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <h2>
+          {returnToSlotId
+            ? tab === "signin"
+              ? "Add another account"
+              : "Create another account"
+            : activeSavedAccount
+              ? `Sign back in as ${activeSavedAccount.displayName}`
+              : tab === "signin"
+                ? "Welcome back"
+                : "Create your account"}
+        </h2>
 
         <button className="google-btn" onClick={onGoogle} disabled={busy}>
           <GoogleIcon /> Continue with Google
