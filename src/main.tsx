@@ -1,10 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { Capacitor } from "@capacitor/core";
 import { ConvexReactClient } from "convex/react";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import App from "./App";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { ConvexStoreProvider } from "./lib/convexStore";
+import { createNativeSyncedAuthStorage } from "./lib/nativeBridge";
 import { DemoStoreProvider } from "./lib/store";
 import "./index.css";
 
@@ -18,11 +20,15 @@ import "./index.css";
  */
 const convexUrl = import.meta.env.VITE_CONVEX_URL as string | undefined;
 const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : null;
+const nativeAuthStorage =
+  convexUrl && Capacitor.isNativePlatform()
+    ? createNativeSyncedAuthStorage(convexUrl)
+    : undefined;
 
 export function Root() {
   if (convexClient) {
     return (
-      <ConvexAuthProvider client={convexClient}>
+      <ConvexAuthProvider client={convexClient} storage={nativeAuthStorage}>
         <ConvexStoreProvider>
           <App />
         </ConvexStoreProvider>

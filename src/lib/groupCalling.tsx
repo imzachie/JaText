@@ -632,7 +632,9 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   );
 
   const readGroupSignalEnvelope = useCallback(async (msg: GroupMessage): Promise<GroupSignalEnvelope | null> => {
+    if (msg.e2ee?.encrypted && !msg.e2ee.decrypted) return null;
     if (!msg.body.startsWith(GROUP_CALL_SIGNAL_PREFIX)) return null;
+    if (msg.attachmentName && !msg.attachmentUrl) return null;
     if (msg.attachmentUrl) {
       try {
         const res = await fetch(msg.attachmentUrl);
@@ -640,11 +642,15 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
           return (await res.json()) as GroupSignalEnvelope;
         }
       } catch {
-        // Fall through to inline JSON parse.
+        if (msg.attachmentName) return null;
       }
     }
     try {
-      return JSON.parse(msg.body.slice(GROUP_CALL_SIGNAL_PREFIX.length)) as GroupSignalEnvelope;
+      const parsed = JSON.parse(msg.body.slice(GROUP_CALL_SIGNAL_PREFIX.length)) as GroupSignalEnvelope;
+      if ((parsed.type === "offer" || parsed.type === "answer") && !parsed.sdp) {
+        return null;
+      }
+      return parsed;
     } catch {
       return null;
     }

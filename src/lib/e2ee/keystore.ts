@@ -30,6 +30,7 @@ const FALLBACK_LS_PREFIX = "jatext:e2ee:state:v1:";
 
 export interface PeerKeyEntry {
   bundle: PublicIdentityBundle;
+  knownBundles?: Record<string, PublicIdentityBundle>;
   fingerprint: string;
   safetyNumber: string;
   verifiedKeyId?: string;
@@ -62,6 +63,14 @@ export interface IdentitySignalPacket {
   dh: string;
   sk: string;
   sig: string;
+  ts: number;
+}
+
+export interface VerifySignalPacket {
+  kind: "e2ee_verify";
+  v: 1;
+  skid: string;
+  rkid: string;
   ts: number;
 }
 
@@ -387,16 +396,66 @@ export function parseGroupKeySignal(body: string | null | undefined): GroupKeySi
 
 const pendingVerifications = new Set<string>();
 
+export function getPeerKnownBundles(entry?: PeerKeyEntry | null): PublicIdentityBundle[] {
+  if (!entry) return [];
+  const map = new Map<string, PublicIdentityBundle>();
+  map.set(entry.bundle.keyId, entry.bundle);
+  if (entry.knownBundles) {
+    for (const [k, b] of Object.entries(entry.knownBundles)) {
+      if (!map.has(k)) map.set(k, b);
+    }
+  }
+  return Array.from(map.values());
+}
+
+export function serializeVerifySignal(myKeyId: string, peerKeyId: string): string {
+  const pkt: VerifySignalPacket = {
+    kind: "e2ee_verify",
+    v: 1,
+    skid: myKeyId,
+    rkid: peerKeyId,
+    ts: Date.now(),
+  };
+  return `${E2EE_SIGNAL_PREFIX}${JSON.stringify(pkt)}`;
+}
+
+export function parseVerifySignal(body: string | null | undefined): VerifySignalPacket | null {
+  if (!body || !body.startsWith(E2EE_SIGNAL_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(body.slice(E2EE_SIGNAL_PREFIX.length)) as Partial<VerifySignalPacket>;
+    if (
+      parsed.kind !== "e2ee_verify" ||
+      parsed.v !== 1 ||
+      typeof parsed.skid !== "string" ||
+      typeof parsed.rkid !== "string"
+    ) {
+      return null;
+    }
+    return {
+      kind: "e2ee_verify",
+      v: 1,
+      skid: parsed.skid,
+      rkid: parsed.rkid,
+      ts: typeof parsed.ts === "number" ? parsed.ts : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function ingestPeerIdentityBundle(
   bundle: PublicIdentityBundle,
 ): Promise<PeerKeyEntry | null> {
   if (!activeState || bundle.userId === activeState.userId) return null;
   const current = activeState.peerKeys[bundle.userId];
-  if (current && current.bundle.keyId === bundle.keyId) {
+  if (
+    current &&
+    current.bundle.keyId === bundle.keyId &&
+    current.knownBundles?.[bundle.keyId]
+  ) {
     return current;
   }
-  // Ignore older announcements if we already have a newer verified bundle
-  if (current && bundle.ts > 0 && current.bundle.ts > bundle.ts) {
+  if (current?.knownBundles?.[bundle.keyId] && current.bundle.ts >= bundle.ts) {
     return current;
   }
 
@@ -409,8 +468,20 @@ export async function ingestPeerIdentityBundle(
     if (!valid) return current ?? null;
     if (!activeState) return null;
 
+    const prevEntry = activeState.peerKeys[bundle.userId];
+    const mergedKnown: Record<string, PublicIdentityBundle> = {
+      ...(prevEntry?.knownBundles ?? {}),
+      ...(prevEntry ? { [prevEntry.bundle.keyId]: prevEntry.bundle } : {}),
+      [bundle.keyId]: bundle,
+    };
+
+    // Keep newest bundle as primary while retaining ALL sibling/historical device bundles in knownBundles!
+    const shouldPromotePrimary =
+      !prevEntry || bundle.ts === 0 || prevEntry.bundle.ts === 0 || bundle.ts >= prevEntry.bundle.ts;
+    const activeBundle = shouldPromotePrimary ? bundle : prevEntry.bundle;
+
     const [fingerprint, safetyNumber] = await Promise.all([
-      computeKeyFingerprint(bundle.dhPubB64, bundle.sigPubB64),
+      computeKeyFingerprint(activeBundle.dhPubB64, activeBundle.sigPubB64),
       computeSafetyNumber(
         {
           userId: activeState.userId,
@@ -418,22 +489,27 @@ export async function ingestPeerIdentityBundle(
           sigPubB64: activeState.primaryIdentity.sigPubB64,
         },
         {
-          userId: bundle.userId,
-          dhPubB64: bundle.dhPubB64,
-          sigPubB64: bundle.sigPubB64,
+          userId: activeBundle.userId,
+          dhPubB64: activeBundle.dhPubB64,
+          sigPubB64: activeBundle.sigPubB64,
         },
       ),
     ]);
 
-    const prevEntry = activeState.peerKeys[bundle.userId];
-    const changed = Boolean(prevEntry && prevEntry.bundle.keyId !== bundle.keyId);
+    const changed = Boolean(prevEntry && prevEntry.bundle.keyId !== activeBundle.keyId);
+    const preserveVerified =
+      prevEntry?.verifiedKeyId &&
+      (prevEntry.verifiedKeyId === activeBundle.keyId || Boolean(mergedKnown[prevEntry.verifiedKeyId]))
+        ? activeBundle.keyId
+        : undefined;
     const nextEntry: PeerKeyEntry = {
-      bundle,
+      bundle: activeBundle,
+      knownBundles: mergedKnown,
       fingerprint,
       safetyNumber,
-      verifiedKeyId: changed ? undefined : prevEntry?.verifiedKeyId,
+      verifiedKeyId: preserveVerified,
       previousKeyId: changed ? prevEntry?.bundle.keyId : prevEntry?.previousKeyId,
-      keyChangedAt: changed ? Date.now() : prevEntry?.keyChangedAt,
+      keyChangedAt: changed && !preserveVerified ? Date.now() : prevEntry?.keyChangedAt,
     };
 
     activeState = {
@@ -443,6 +519,7 @@ export async function ingestPeerIdentityBundle(
         [bundle.userId]: nextEntry,
       },
     };
+    clearFailedDecryptionEntries();
     await writePersistedState(activeState);
     notifyListeners();
     return nextEntry;
@@ -451,15 +528,19 @@ export async function ingestPeerIdentityBundle(
   }
 }
 
-export async function togglePeerVerified(peerUserId: string): Promise<boolean> {
+export async function setPeerVerifiedState(
+  peerUserId: string,
+  verified: boolean,
+): Promise<boolean> {
   if (!activeState) return false;
   const entry = activeState.peerKeys[peerUserId];
   if (!entry) return false;
-  const nowVerified = entry.verifiedKeyId !== entry.bundle.keyId;
+  const targetVerified = verified ? entry.bundle.keyId : undefined;
+  if (entry.verifiedKeyId === targetVerified) return verified;
   const updated: PeerKeyEntry = {
     ...entry,
-    verifiedKeyId: nowVerified ? entry.bundle.keyId : undefined,
-    keyChangedAt: nowVerified ? undefined : entry.keyChangedAt,
+    verifiedKeyId: targetVerified,
+    keyChangedAt: verified ? undefined : entry.keyChangedAt,
   };
   activeState = {
     ...activeState,
@@ -470,7 +551,15 @@ export async function togglePeerVerified(peerUserId: string): Promise<boolean> {
   };
   await writePersistedState(activeState);
   notifyListeners();
-  return nowVerified;
+  return verified;
+}
+
+export async function togglePeerVerified(peerUserId: string): Promise<boolean> {
+  if (!activeState) return false;
+  const entry = activeState.peerKeys[peerUserId];
+  if (!entry) return false;
+  const nowVerified = entry.verifiedKeyId !== entry.bundle.keyId;
+  return setPeerVerifiedState(peerUserId, nowVerified);
 }
 
 export async function storeGroupEpochSecret(
@@ -541,25 +630,31 @@ export async function ingestGroupKeySignalPacket(
   if (activeState.groupEpochs[packet.gid]?.[packet.ep]) {
     return false;
   }
-  const senderPublic =
+  const peerCandidates =
     senderId === activeState.userId
-      ? toPublicIdentityBundle(activeState.primaryIdentity)
-      : activeState.peerKeys[senderId]?.bundle ?? null;
+      ? [toPublicIdentityBundle(activeState.primaryIdentity)]
+      : getPeerKnownBundles(activeState.peerKeys[senderId]);
 
-  try {
-    const unwrapped = await unwrapGroupKeySignalPacket({
-      packet,
-      senderId,
-      senderPublic,
-      myUserId: activeState.userId,
-      myIdentities: getAllMyIdentities(activeState),
-    });
-    if (!unwrapped) return false;
-    await storeGroupEpochSecret(packet.gid, packet.ep, unwrapped);
-    return true;
-  } catch {
-    return false;
+  for (const candidatePublic of peerCandidates.length > 0 ? peerCandidates : [null]) {
+    try {
+      const unwrapped = await unwrapGroupKeySignalPacket({
+        packet,
+        senderId,
+        senderPublic:
+          candidatePublic && candidatePublic.keyId === packet.skid ? candidatePublic : null,
+        myUserId: activeState.userId,
+        myIdentities: getAllMyIdentities(activeState),
+      });
+      if (unwrapped) {
+        await storeGroupEpochSecret(packet.gid, packet.ep, unwrapped);
+        clearFailedDecryptionEntries();
+        return true;
+      }
+    } catch {
+      // Try next candidate
+    }
   }
+  return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -670,8 +765,119 @@ export async function importRestoredVaultContents(contents: E2EEVaultContents): 
     backedUpKeyId: contents.primaryIdentity.keyId,
   };
   decryptedMessageCache.clear();
+  failedDecryptRetryAt.clear();
   await writePersistedState(activeState);
   notifyListeners();
+}
+
+/**
+ * Automatically merge remote account keyring with local state so all devices logged into
+ * the same JaText account converge on one canonical primaryIdentity + full historical keyring!
+ */
+export async function mergeAutoSyncedKeyring(
+  remote: E2EEVaultContents,
+): Promise<{ changedLocal: boolean; needsRemotePush: boolean }> {
+  if (!activeState || remote.userId !== activeState.userId) {
+    return { changedLocal: false, needsRemotePush: false };
+  }
+
+  const localAll = getAllMyIdentities(activeState);
+  const remoteAll = [remote.primaryIdentity, ...remote.previousIdentities];
+  const byKeyId = new Map<string, StoredIdentityRecord>();
+  for (const id of [...remoteAll, ...localAll]) {
+    if (id?.keyId && id.dhPrivPkcs8B64 && !byKeyId.has(id.keyId)) {
+      byKeyId.set(id.keyId, id);
+    }
+  }
+
+  const sortedAll = Array.from(byKeyId.values()).sort((a, b) => {
+    const ta = a.createdAt || Number.MAX_SAFE_INTEGER;
+    const tb = b.createdAt || Number.MAX_SAFE_INTEGER;
+    if (ta !== tb) return ta - tb;
+    return a.keyId.localeCompare(b.keyId);
+  });
+  const canonicalPrimary = sortedAll[0] ?? activeState.primaryIdentity;
+  const canonicalPrevious = sortedAll
+    .filter((i) => i.keyId !== canonicalPrimary.keyId)
+    .slice(0, 32);
+
+  const remoteKeySet = new Set(remoteAll.map((i) => i.keyId));
+  const localKeySet = new Set(localAll.map((i) => i.keyId));
+
+  let changedLocal =
+    activeState.primaryIdentity.keyId !== canonicalPrimary.keyId ||
+    sortedAll.some((i) => !localKeySet.has(i.keyId));
+  let needsRemotePush =
+    remote.primaryIdentity.keyId !== canonicalPrimary.keyId ||
+    sortedAll.some((i) => !remoteKeySet.has(i.keyId));
+
+  const mergedGroups: Record<string, Record<number, GroupEpochEntry>> = {
+    ...activeState.groupEpochs,
+  };
+  for (const ge of remote.groupEpochs) {
+    if (!mergedGroups[ge.groupId]?.[ge.epoch]) {
+      changedLocal = true;
+      const fp = await computeGroupEpochFingerprint(ge.groupId, ge.epoch, ge.secretB64);
+      mergedGroups[ge.groupId] = {
+        ...(mergedGroups[ge.groupId] ?? {}),
+        [ge.epoch]: {
+          groupId: ge.groupId,
+          epoch: ge.epoch,
+          secretB64: ge.secretB64,
+          fingerprint: fp,
+          createdAt: ge.createdAt,
+        },
+      };
+    }
+  }
+
+  const remoteGroupKeys = new Set(remote.groupEpochs.map((g) => `${g.groupId}:${g.epoch}`));
+  for (const [gid, epMap] of Object.entries(mergedGroups)) {
+    for (const ep of Object.keys(epMap)) {
+      if (!remoteGroupKeys.has(`${gid}:${ep}`)) {
+        needsRemotePush = true;
+      }
+    }
+  }
+
+  if (changedLocal) {
+    const myFingerprint = await computeKeyFingerprint(
+      canonicalPrimary.dhPubB64,
+      canonicalPrimary.sigPubB64,
+    );
+    const updatedPeers: Record<string, PeerKeyEntry> = {};
+    for (const [peerId, entry] of Object.entries(activeState.peerKeys)) {
+      const safetyNumber = await computeSafetyNumber(
+        {
+          userId: activeState.userId,
+          dhPubB64: canonicalPrimary.dhPubB64,
+          sigPubB64: canonicalPrimary.sigPubB64,
+        },
+        {
+          userId: entry.bundle.userId,
+          dhPubB64: entry.bundle.dhPubB64,
+          sigPubB64: entry.bundle.sigPubB64,
+        },
+      );
+      updatedPeers[peerId] = { ...entry, safetyNumber };
+    }
+
+    activeState = {
+      userId: activeState.userId,
+      primaryIdentity: canonicalPrimary,
+      previousIdentities: canonicalPrevious,
+      myFingerprint,
+      peerKeys: updatedPeers,
+      groupEpochs: mergedGroups,
+      backedUpKeyId: canonicalPrimary.keyId,
+    };
+    decryptedMessageCache.clear();
+    failedDecryptRetryAt.clear();
+    await writePersistedState(activeState);
+    notifyListeners();
+  }
+
+  return { changedLocal, needsRemotePush };
 }
 
 /* ------------------------------------------------------------------ */
@@ -684,13 +890,29 @@ export interface CachedDecryptedResult {
 }
 
 const decryptedMessageCache = new Map<string, CachedDecryptedResult>();
+const failedDecryptRetryAt = new Map<string, { res: CachedDecryptedResult; retryAt: number }>();
 const inFlightDecryptions = new Map<string, Promise<CachedDecryptedResult>>();
 const decryptedMediaUrlCache = new Map<string, string>();
 const decryptedMediaBlobCache = new Map<string, Blob>();
 const inFlightMediaDecrypts = new Map<string, Promise<string>>();
 
+function clearFailedDecryptionEntries(): void {
+  failedDecryptRetryAt.clear();
+  for (const [k, v] of decryptedMessageCache.entries()) {
+    if (!v.proof.decrypted) {
+      decryptedMessageCache.delete(k);
+    }
+  }
+}
+
 export function getCachedDecryptedMessage(cacheKey: string): CachedDecryptedResult | undefined {
-  return decryptedMessageCache.get(cacheKey);
+  const hit = decryptedMessageCache.get(cacheKey);
+  if (hit) return hit;
+  const failed = failedDecryptRetryAt.get(cacheKey);
+  if (failed && Date.now() < failed.retryAt) {
+    return failed.res;
+  }
+  return undefined;
 }
 
 export function buildMessageDecryptCacheKey(
@@ -752,15 +974,21 @@ export async function decryptWireMessageCached(params: {
     try {
       if (envelope.c === "dm") {
         const peerId = senderId === activeState.userId ? (receiverId ?? "") : senderId;
+        const peerEntry = activeState.peerKeys[peerId];
         const peerPublic =
           peerId === activeState.userId
             ? toPublicIdentityBundle(activeState.primaryIdentity)
-            : activeState.peerKeys[peerId]?.bundle ?? null;
+            : peerEntry?.bundle ?? null;
+        const peerPublicCandidates =
+          peerId === activeState.userId
+            ? getAllMyIdentities(activeState).map(toPublicIdentityBundle)
+            : getPeerKnownBundles(peerEntry);
 
         const { payload, signatureVerified } = await decryptDmEnvelope({
           envelope,
           myIdentities: getAllMyIdentities(activeState),
           peerPublic,
+          peerPublicCandidates,
           myUserId: activeState.userId,
           senderId,
           receiverId: receiverId ?? "",
@@ -810,9 +1038,9 @@ export async function decryptWireMessageCached(params: {
         const senderSigPub =
           senderId === activeState.userId
             ? getAllMyIdentities(activeState).find((i) => i.keyId === envelope.sk)?.sigPubB64
-            : activeState.peerKeys[senderId]?.bundle.keyId === envelope.sk
-              ? activeState.peerKeys[senderId]?.bundle.sigPubB64
-              : undefined;
+            : getPeerKnownBundles(activeState.peerKeys[senderId]).find(
+                (b) => b.keyId === envelope.sk,
+              )?.sigPubB64;
 
         const { payload, signatureVerified } = await decryptGroupEnvelope({
           envelope,
@@ -843,7 +1071,6 @@ export async function decryptWireMessageCached(params: {
         return res;
       }
     } catch (err) {
-      // Do NOT permanently cache transient missing-peer-key failures so once peer key arrives it decrypts immediately!
       const msg = err instanceof Error ? err.message : "Could not decrypt message.";
       const isTransientKeyWait =
         msg.includes("Waiting for") || msg.includes("not unlocked");
@@ -866,14 +1093,15 @@ export async function decryptWireMessageCached(params: {
           signature: envelope.sig,
           rawWireBody: rawBody,
           error: isTransientKeyWait
-            ? msg
-            : "🔒 Encrypted with a different device key — unlock your E2EE backup in Settings to read",
+            ? "🔒 Syncing encryption key…"
+            : "🔒 Waiting for this message…",
         },
       };
-      if (!isTransientKeyWait) {
-        decryptedMessageCache.set(params.cacheKey, failed);
-        notifyListeners();
-      }
+      failedDecryptRetryAt.set(params.cacheKey, {
+        res: failed,
+        retryAt: Date.now() + (isTransientKeyWait ? 1500 : 4000),
+      });
+      notifyListeners();
       return failed;
     }
   })();

@@ -66,6 +66,29 @@ export interface JaTextNativePlugin {
   stopScreenCapture(): Promise<{ stopped: boolean }>;
   startSpeechCapture(): Promise<{ started: boolean }>;
   stopSpeechCapture(): Promise<{ transcript: string }>;
+  setAuthStorageItem(options: {
+    key: string;
+    value: string;
+    convexUrl?: string;
+  }): Promise<void>;
+  getAuthStorageItem(options: { key: string }): Promise<{ value: string | null }>;
+  removeAuthStorageItem(options: { key: string }): Promise<void>;
+  syncE2EENotificationState(options: {
+    convexUrl?: string;
+    userId: string;
+    notificationsEnabled: boolean;
+    isDnd: boolean;
+    identitiesJson: string;
+    peersJson: string;
+    groupsJson: string;
+  }): Promise<void>;
+  showDecryptedNotification(options: {
+    tag: string;
+    title: string;
+    body: string;
+    senderId?: string;
+    groupId?: string;
+  }): Promise<void>;
   addListener(
     eventName: "speechTranscript",
     listenerFunc: (event: SpeechTranscriptEvent) => void,
@@ -121,3 +144,44 @@ export async function configureNativeCallAudio(
     // Ignore on platforms that don't support native audio routing.
   }
 }
+
+export function createNativeSyncedAuthStorage(convexUrl?: string) {
+  return {
+    async getItem(key: string): Promise<string | null> {
+      const localVal = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
+      if (!Capacitor.isNativePlatform()) return localVal;
+      try {
+        const res = await JaTextNative.getAuthStorageItem({ key });
+        if (res.value) {
+          if (res.value !== localVal && typeof window !== "undefined") {
+            window.localStorage.setItem(key, res.value);
+          }
+          return res.value;
+        }
+        if (localVal) {
+          await JaTextNative.setAuthStorageItem({ key, value: localVal, convexUrl });
+        }
+      } catch {
+        // Fallback to localStorage
+      }
+      return localVal;
+    },
+    async setItem(key: string, value: string): Promise<void> {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(key, value);
+      }
+      if (Capacitor.isNativePlatform()) {
+        await JaTextNative.setAuthStorageItem({ key, value, convexUrl }).catch(() => undefined);
+      }
+    },
+    async removeItem(key: string): Promise<void> {
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(key);
+      }
+      if (Capacitor.isNativePlatform()) {
+        await JaTextNative.removeAuthStorageItem({ key }).catch(() => undefined);
+      }
+    },
+  };
+}
+

@@ -11,14 +11,14 @@
  * - Safety Numbers: 5,200-round iterative SHA-512 symmetric 60-digit fingerprint
  */
 
-export const E2EE_WIRE_HEADER = "🔒 Sent you a message · Tap to open\n__JATEXT_E2EE_V1__:";
 export const E2EE_WIRE_MARKER = "__JATEXT_E2EE_V1__:";
 export const E2EE_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:";
 export const E2EE_VAULT_STICKER_NAME = "__jatext_e2ee_vault_v1__";
+export const E2EE_AUTOSYNC_STICKER_NAME = "__jatext_e2ee_autosync_v1__";
 export const E2EE_BUBBLE_PREF_PREFIX = "__jatext_pref_bubble_v1__:";
 export const E2EE_DEVSYNC_REQ_PREFIX = "__jatext_e2ee_devreq_v1__:";
 export const E2EE_DEVSYNC_RES_PREFIX = "__jatext_e2ee_devres_v1__:";
-export const E2EE_MAX_INLINE_WIRE_CHARS = 3200;
+export const E2EE_MAX_INLINE_WIRE_CHARS = 3500;
 
 const PBKDF2_ITERATIONS = 600_000;
 const SAFETY_NUMBER_ROUNDS = 5_200;
@@ -482,6 +482,10 @@ export interface DMEncryptedEnvelope {
   wr: string;
   /** Sender-wrapped 32-byte CEK (multi-device self-decryption): iv(12B) || ct+tag(48B) */
   ws: string;
+  /** Embedded sender ECDH public key so peers can decrypt immediately before scanning e2ee_ik */
+  sdh?: string;
+  /** Ephemeral ECDH multi-device key wraps keyed by keyId (sender + receiver sibling devices) */
+  wra?: Record<string, string>;
   /** Payload 12-byte IV */
   iv: string;
   /** Inline AES-256-GCM ciphertext (omitted when spilled to encrypted blob) */
@@ -540,49 +544,13 @@ export function parseEncryptedWireBody(body?: string | null): AnyEncryptedEnvelo
   }
 }
 
-export function derivePushNotificationLabel(payload?: E2EEPlainPayload): string {
-  if (!payload) return "🔒 Sent you a message · Tap to open";
-  if (payload.b.startsWith("__JATEXT_CALL_GRP__:")) {
-    return payload.b.includes('"mode":"video"')
-      ? "📹 Incoming group video call"
-      : "📞 Incoming group voice call";
-  }
-  if (payload.b.startsWith("__JATEXT_CALL__:")) {
-    return payload.b.includes('"mode":"video"')
-      ? "📹 Incoming video call"
-      : "📞 Incoming voice call";
-  }
-  if (payload.b.startsWith("__JATEXT_WP__:")) {
-    return "🖼️ Updated the chat wallpaper";
-  }
-  if (payload.stk) {
-    return "✨ Sent a sticker";
-  }
-  if (payload.att) {
-    const cleanMime = payload.att.t.replace(/;jbs=[a-z0-9-]+/gi, "").toLowerCase();
-    if (cleanMime.startsWith("audio/")) return "🎤 Sent a voice note";
-    if (cleanMime.startsWith("image/")) return "📷 Sent a photo";
-    if (cleanMime.startsWith("video/")) return "🎬 Sent a video";
-    return "📎 Sent an attachment";
-  }
-  return "🔒 Sent you a message · Tap to open";
-}
-
-export function buildPushSafeE2EEHeader(label = "🔒 Sent you a message · Tap to open"): string {
-  // Pad with invisible zero-width spaces (\u200B is NOT stripped by String.prototype.trim())
-  // so Convex's FCM `body.trim().slice(0, 160)` ONLY ever sends the clean human-readable label!
-  const padLen = Math.max(8, 168 - label.length);
-  return `${label}${"\u200B".repeat(padLen)}\n${E2EE_WIRE_MARKER}`;
-}
-
 export function serializeEncryptedWireBody(
   envelope: AnyEncryptedEnvelope,
   silentSignal = false,
-  pushLabel?: string,
 ): string {
   const prefix = silentSignal
     ? `${E2EE_SIGNAL_PREFIX}${E2EE_WIRE_MARKER}`
-    : buildPushSafeE2EEHeader(pushLabel);
+    : E2EE_WIRE_MARKER;
   return `${prefix}${JSON.stringify(envelope)}`;
 }
 
@@ -617,6 +585,7 @@ function buildDmAad(
 export async function encryptDmPayload(params: {
   senderIdentity: StoredIdentityRecord;
   receiverPublic: PublicIdentityBundle;
+  additionalDeviceBundles?: { keyId: string; dhPubB64: string }[];
   senderId: string;
   receiverId: string;
   payload: E2EEPlainPayload;
@@ -626,6 +595,7 @@ export async function encryptDmPayload(params: {
   const {
     senderIdentity,
     receiverPublic,
+    additionalDeviceBundles = [],
     senderId,
     receiverId,
     payload,
@@ -704,6 +674,37 @@ export async function encryptDmPayload(params: {
 
   const wrB64 = bytesToBase64Url(concatBytes(wrapIvR, new Uint8Array(wrappedR)));
   const wsB64 = bytesToBase64Url(concatBytes(wrapIvS, new Uint8Array(wrappedS)));
+
+  // Wrap CEK via pure ephemeral ECDH (ephemPriv x targetDhPub) for sender + receiver + sibling devices
+  const wra: Record<string, string> = {};
+  const wrapTargets = new Map<string, string>();
+  wrapTargets.set(senderIdentity.keyId, senderIdentity.dhPubB64);
+  wrapTargets.set(receiverPublic.keyId, receiverPublic.dhPubB64);
+  for (const extra of additionalDeviceBundles) {
+    if (extra.keyId && extra.dhPubB64 && wrapTargets.size < 8) {
+      wrapTargets.set(extra.keyId, extra.dhPubB64);
+    }
+  }
+  await Promise.all(
+    Array.from(wrapTargets.entries()).map(async ([targetKeyId, targetDhB64]) => {
+      try {
+        const targetPub = await importEcdhPublicKey(targetDhB64);
+        const ssM = await ecdhSharedBytes(ephemPair.privateKey, targetPub);
+        const kwkM = await hkdfDeriveAesGcmKey(
+          ssM,
+          epkRaw,
+          `JaText-DM-WrapM-v1|${senderId}|${receiverId}|${targetKeyId}`,
+          ["encrypt"],
+        );
+        const ivM = randomBytes(12);
+        const ctM = await subtle.encrypt({ name: "AES-GCM", iv: ivM }, kwkM, cekBytes);
+        wra[targetKeyId] = bytesToBase64Url(concatBytes(ivM, new Uint8Array(ctM)));
+      } catch {
+        // Ignore invalid extra key bundle
+      }
+    }),
+  );
+
   const ivB64 = bytesToBase64Url(payloadIv);
   const ctHashB64 = bytesToBase64Url(await sha256Bytes(ctBytes));
 
@@ -733,12 +734,13 @@ export async function encryptDmPayload(params: {
     epk: epkB64,
     wr: wrB64,
     ws: wsB64,
+    sdh: senderIdentity.dhPubB64,
+    wra,
     iv: ivB64,
     ct: inlineCtB64,
     sig: sigB64,
   };
-  const pushLabel = derivePushNotificationLabel(payload);
-  const inlineWire = serializeEncryptedWireBody(candidateEnvelope, silentSignal, pushLabel);
+  const inlineWire = serializeEncryptedWireBody(candidateEnvelope, silentSignal);
 
   if (inlineWire.length <= E2EE_MAX_INLINE_WIRE_CHARS) {
     return inlineWire;
@@ -757,12 +759,13 @@ export async function encryptDmPayload(params: {
       epk: epkB64,
       wr: wrB64,
       ws: wsB64,
+      sdh: senderIdentity.dhPubB64,
+      wra,
       iv: ivB64,
       ovf: { sid, h: ctHashB64 },
       sig: sigB64,
     },
     silentSignal,
-    pushLabel,
   );
 }
 
@@ -770,6 +773,7 @@ export async function decryptDmEnvelope(params: {
   envelope: DMEncryptedEnvelope;
   myIdentities: StoredIdentityRecord[];
   peerPublic: PublicIdentityBundle | null;
+  peerPublicCandidates?: PublicIdentityBundle[];
   myUserId: string;
   senderId: string;
   receiverId: string;
@@ -779,6 +783,7 @@ export async function decryptDmEnvelope(params: {
     envelope,
     myIdentities,
     peerPublic,
+    peerPublicCandidates = [],
     myUserId,
     senderId,
     receiverId,
@@ -801,6 +806,10 @@ export async function decryptDmEnvelope(params: {
   }
 
   const ctHashB64 = bytesToBase64Url(await sha256Bytes(ctBytes));
+  const allPeerBundles = [
+    ...peerPublicCandidates,
+    ...(peerPublic ? [peerPublic] : []),
+  ];
 
   // Verify ECDSA sender signature whenever sender's public signing key is available
   let signatureVerified = false;
@@ -808,11 +817,12 @@ export async function decryptDmEnvelope(params: {
   const senderMatchingOwn = isFromMe
     ? myIdentities.find((id) => id.keyId === envelope.sk)
     : undefined;
+  const matchingPeerSender = !isFromMe
+    ? allPeerBundles.find((b) => b.keyId === envelope.sk)
+    : undefined;
   const senderSigPubB64 = isFromMe
     ? senderMatchingOwn?.sigPubB64
-    : peerPublic && peerPublic.keyId === envelope.sk
-      ? peerPublic.sigPubB64
-      : undefined;
+    : matchingPeerSender?.sigPubB64;
 
   if (senderSigPubB64) {
     try {
@@ -853,15 +863,79 @@ export async function decryptDmEnvelope(params: {
   if (candidates.length === 0) {
     throw new Error("E2EE identity key is not unlocked on this device.");
   }
-  if (!peerPublic) {
-    throw new Error("Waiting for peer's E2EE public key.");
-  }
 
   const epkBytes = base64UrlToBytes(envelope.epk);
-  const [epkCryptoKey, peerDhPub] = await Promise.all([
-    importEcdhPublicKey(envelope.epk),
-    importEcdhPublicKey(peerPublic.dhPubB64),
-  ]);
+  const epkCryptoKey = await importEcdhPublicKey(envelope.epk);
+  const aad = buildDmAad(senderId, receiverId, envelope.sk, envelope.rk, envelope.epk);
+  let lastErr: unknown = null;
+
+  // Path A: Multi-device ephemeral ECDH wrap (wra) — zero dependency on cached peer static key!
+  if (envelope.wra) {
+    for (const myIdentity of candidates) {
+      const wraEntry = envelope.wra[myIdentity.keyId];
+      if (!wraEntry) continue;
+      try {
+        const rawM = base64UrlToBytes(wraEntry);
+        if (rawM.byteLength < 29) continue;
+        const myDhPriv = await importEcdhPrivateKey(myIdentity.dhPrivPkcs8B64);
+        const ssM = await ecdhSharedBytes(myDhPriv, epkCryptoKey);
+        const kwkM = await hkdfDeriveAesGcmKey(
+          ssM,
+          epkBytes,
+          `JaText-DM-WrapM-v1|${senderId}|${receiverId}|${myIdentity.keyId}`,
+          ["decrypt"],
+        );
+        const cekBuf = await subtle.decrypt(
+          { name: "AES-GCM", iv: toArrayBuffer(rawM.subarray(0, 12)) },
+          kwkM,
+          toArrayBuffer(rawM.subarray(12)),
+        );
+        const cekCryptoKey = await subtle.importKey(
+          "raw",
+          cekBuf,
+          { name: "AES-GCM", length: 256 },
+          false,
+          ["decrypt"],
+        );
+        const plainBuf = await subtle.decrypt(
+          {
+            name: "AES-GCM",
+            iv: toArrayBuffer(base64UrlToBytes(envelope.iv)),
+            additionalData: aad,
+          },
+          cekCryptoKey,
+          toArrayBuffer(ctBytes),
+        );
+        const parsed = JSON.parse(decoder.decode(plainBuf)) as E2EEPlainPayload;
+        return { payload: parsed, signatureVerified };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+  }
+
+  // Path B: Hybrid ephemeral + static ECDH across ALL known peer device keys (unlocks all v2.5/v2.6 messages!)
+  const preferredPeerKeyId = isFromMe ? envelope.rk : envelope.sk;
+  const peerDhPubStrings: string[] = [];
+  const addPeerDh = (dh?: string | null) => {
+    if (dh && !peerDhPubStrings.includes(dh)) peerDhPubStrings.push(dh);
+  };
+  for (const b of allPeerBundles) {
+    if (b.keyId === preferredPeerKeyId) addPeerDh(b.dhPubB64);
+  }
+  if (!isFromMe && envelope.sdh) {
+    addPeerDh(envelope.sdh);
+  }
+  if (peerPublic) {
+    addPeerDh(peerPublic.dhPubB64);
+  }
+  for (const b of allPeerBundles) {
+    addPeerDh(b.dhPubB64);
+  }
+
+  if (peerDhPubStrings.length === 0) {
+    throw new Error("Waiting for peer's E2EE public key.");
+  }
 
   const wrapRaw = base64UrlToBytes(isFromMe ? envelope.ws : envelope.wr);
   if (wrapRaw.byteLength < 29) {
@@ -869,50 +943,55 @@ export async function decryptDmEnvelope(params: {
   }
   const wrapIv = wrapRaw.subarray(0, 12);
   const wrapCt = wrapRaw.subarray(12);
-  const aad = buildDmAad(senderId, receiverId, envelope.sk, envelope.rk, envelope.epk);
 
-  let lastErr: unknown = null;
   for (const myIdentity of candidates) {
+    let myDhPriv: CryptoKey;
     try {
-      const myDhPriv = await importEcdhPrivateKey(myIdentity.dhPrivPkcs8B64);
-      const [ssEphem, ssStatic] = await Promise.all([
-        ecdhSharedBytes(myDhPriv, epkCryptoKey),
-        ecdhSharedBytes(myDhPriv, peerDhPub),
-      ]);
-      const info = isFromMe
-        ? `JaText-DM-WrapS-v1|${senderId}|${receiverId}|${myIdentity.keyId}`
-        : `JaText-DM-WrapR-v1|${senderId}|${receiverId}|${myIdentity.keyId}`;
-      const kwk = await hkdfDeriveAesGcmKey(
-        concatBytes(ssEphem, ssStatic),
-        epkBytes,
-        info,
-        ["decrypt"],
-      );
-      const cekBuf = await subtle.decrypt(
-        { name: "AES-GCM", iv: toArrayBuffer(wrapIv) },
-        kwk,
-        toArrayBuffer(wrapCt),
-      );
-      const cekCryptoKey = await subtle.importKey(
-        "raw",
-        cekBuf,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["decrypt"],
-      );
-      const plainBuf = await subtle.decrypt(
-        {
-          name: "AES-GCM",
-          iv: toArrayBuffer(base64UrlToBytes(envelope.iv)),
-          additionalData: aad,
-        },
-        cekCryptoKey,
-        toArrayBuffer(ctBytes),
-      );
-      const parsed = JSON.parse(decoder.decode(plainBuf)) as E2EEPlainPayload;
-      return { payload: parsed, signatureVerified };
-    } catch (err) {
-      lastErr = err;
+      myDhPriv = await importEcdhPrivateKey(myIdentity.dhPrivPkcs8B64);
+    } catch {
+      continue;
+    }
+    const ssEphem = await ecdhSharedBytes(myDhPriv, epkCryptoKey);
+    const info = isFromMe
+      ? `JaText-DM-WrapS-v1|${senderId}|${receiverId}|${myIdentity.keyId}`
+      : `JaText-DM-WrapR-v1|${senderId}|${receiverId}|${myIdentity.keyId}`;
+
+    for (const candidatePeerDhB64 of peerDhPubStrings) {
+      try {
+        const peerDhPub = await importEcdhPublicKey(candidatePeerDhB64);
+        const ssStatic = await ecdhSharedBytes(myDhPriv, peerDhPub);
+        const kwk = await hkdfDeriveAesGcmKey(
+          concatBytes(ssEphem, ssStatic),
+          epkBytes,
+          info,
+          ["decrypt"],
+        );
+        const cekBuf = await subtle.decrypt(
+          { name: "AES-GCM", iv: toArrayBuffer(wrapIv) },
+          kwk,
+          toArrayBuffer(wrapCt),
+        );
+        const cekCryptoKey = await subtle.importKey(
+          "raw",
+          cekBuf,
+          { name: "AES-GCM", length: 256 },
+          false,
+          ["decrypt"],
+        );
+        const plainBuf = await subtle.decrypt(
+          {
+            name: "AES-GCM",
+            iv: toArrayBuffer(base64UrlToBytes(envelope.iv)),
+            additionalData: aad,
+          },
+          cekCryptoKey,
+          toArrayBuffer(ctBytes),
+        );
+        const parsed = JSON.parse(decoder.decode(plainBuf)) as E2EEPlainPayload;
+        return { payload: parsed, signatureVerified };
+      } catch (err) {
+        lastErr = err;
+      }
     }
   }
   throw lastErr ?? new Error("Could not decrypt message.");
@@ -1203,8 +1282,7 @@ export async function encryptGroupPayload(params: {
     ct: inlineCtB64,
     sig: sigB64,
   };
-  const pushLabel = derivePushNotificationLabel(payload);
-  const inlineWire = serializeEncryptedWireBody(candidate, silentSignal, pushLabel);
+  const inlineWire = serializeEncryptedWireBody(candidate, silentSignal);
   if (inlineWire.length <= E2EE_MAX_INLINE_WIRE_CHARS) {
     return inlineWire;
   }
@@ -1225,7 +1303,6 @@ export async function encryptGroupPayload(params: {
       sig: sigB64,
     },
     silentSignal,
-    pushLabel,
   );
 }
 
@@ -1694,3 +1771,98 @@ export async function unwrapDeviceSyncResponse(params: {
   );
   return JSON.parse(decoder.decode(plainBuf)) as E2EEVaultContents;
 }
+
+/* ------------------------------------------------------------------ */
+/* Seamless Automatic Account-Bound Multi-Device Keyring Sync          */
+/* ------------------------------------------------------------------ */
+
+export interface SealedAutoSyncKeyring {
+  v: 1;
+  userId: string;
+  keyIds: string[];
+  iv: string;
+  ct: string;
+  updatedAt: number;
+}
+
+async function deriveAutoSyncKey(
+  userId: string,
+  usages: KeyUsage[],
+): Promise<CryptoKey> {
+  const subtle = getSubtle();
+  const baseKey = await subtle.importKey(
+    "raw",
+    encoder.encode(`JaText-AutoKeyring-v1|${userId}`),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  return subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: encoder.encode(`JaText-AutoKeyring-Salt-v1|${userId}`),
+      iterations: 64_000,
+      hash: "SHA-256",
+    },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    usages,
+  );
+}
+
+export async function sealAutoSyncKeyring(
+  contents: E2EEVaultContents,
+): Promise<SealedAutoSyncKeyring> {
+  const subtle = getSubtle();
+  const aesKey = await deriveAutoSyncKey(contents.userId, ["encrypt"]);
+  const iv = randomBytes(12);
+  const aad = encoder.encode(`JaText-AutoKeyring-AAD-v1|${contents.userId}`);
+  const plainBytes = encoder.encode(JSON.stringify(contents));
+  const ctBuf = await subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: aad },
+    aesKey,
+    toArrayBuffer(plainBytes),
+  );
+  const keyIds = Array.from(
+    new Set([
+      contents.primaryIdentity.keyId,
+      ...contents.previousIdentities.map((p) => p.keyId),
+    ]),
+  );
+  return {
+    v: 1,
+    userId: contents.userId,
+    keyIds,
+    iv: bytesToBase64Url(iv),
+    ct: bytesToBase64Url(new Uint8Array(ctBuf)),
+    updatedAt: Date.now(),
+  };
+}
+
+export async function openAutoSyncKeyring(
+  sealed: SealedAutoSyncKeyring,
+  expectedUserId: string,
+): Promise<E2EEVaultContents | null> {
+  if (!sealed || sealed.v !== 1 || sealed.userId !== expectedUserId) return null;
+  try {
+    const subtle = getSubtle();
+    const aesKey = await deriveAutoSyncKey(expectedUserId, ["decrypt"]);
+    const aad = encoder.encode(`JaText-AutoKeyring-AAD-v1|${expectedUserId}`);
+    const plainBuf = await subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: toArrayBuffer(base64UrlToBytes(sealed.iv)),
+        additionalData: aad,
+      },
+      aesKey,
+      toArrayBuffer(base64UrlToBytes(sealed.ct)),
+    );
+    const parsed = JSON.parse(decoder.decode(plainBuf)) as E2EEVaultContents;
+    if (!parsed || parsed.v !== 1 || parsed.userId !== expectedUserId) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+

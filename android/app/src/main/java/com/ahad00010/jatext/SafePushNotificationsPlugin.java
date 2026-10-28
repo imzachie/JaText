@@ -60,111 +60,53 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
     private void postBackgroundSystemNotification(RemoteMessage remoteMessage) {
         try {
             Context ctx = getContext();
-            if (ctx == null) return;
+            if (ctx == null || !JaTextE2EEDecryptor.areNotificationsAllowed(ctx)) return;
             RemoteMessage.Notification notif = remoteMessage.getNotification();
             Map<String, String> data = remoteMessage.getData();
 
             String title = notif != null && notif.getTitle() != null
                 ? notif.getTitle()
                 : data.get("title");
-            String body = notif != null && notif.getBody() != null
+            String rawBody = notif != null && notif.getBody() != null
                 ? notif.getBody()
                 : data.get("body");
-            if ((title == null || title.isEmpty()) && (body == null || body.isEmpty())) {
+            String senderId = data.get("senderId");
+            String groupId = data.get("groupId");
+            if ((title == null || title.isEmpty()) && (rawBody == null || rawBody.isEmpty())) {
                 return;
             }
-            if (body != null) {
-                if (body.contains("__JATEXT_E2EE_V1__:")) {
-                    int markerIdx = body.indexOf("__JATEXT_E2EE_V1__:");
-                    String prefixLabel = body.substring(0, markerIdx)
-                        .replace("\u200B", "")
-                        .replace("\u200C", "")
-                        .replace("\u2063", "")
-                        .trim();
-                    body = prefixLabel.isEmpty()
-                        ? "🔒 Sent you a message · Tap to open"
-                        : prefixLabel;
-                } else {
-                    body = body
-                        .replace("\u200B", "")
-                        .replace("\u200C", "")
-                        .replace("\u2063", "")
-                        .trim();
-                }
-                if (body.startsWith("__JATEXT_CALL_SIG__:")) {
-                    return;
-                }
-                if (body.startsWith("__JATEXT_BUBBLE__:")) {
-                    int nl = body.indexOf('\n');
-                    body = nl >= 0 ? body.substring(nl + 1) : body;
-                }
-                if (body.startsWith("__JATEXT_CALL_GRP__:")) {
-                    body = body.contains("\"mode\":\"video\"")
-                        ? "📹 Incoming group video call"
-                        : "📞 Incoming group voice call";
-                } else if (body.startsWith("__JATEXT_CALL__:")) {
-                    body = body.contains("\"mode\":\"video\"")
-                        ? "📹 Incoming video call"
-                        : "📞 Incoming voice call";
-                } else if (body.startsWith("__JATEXT_WALLPAPER__:") || body.startsWith("__JATEXT_WP__:")) {
-                    body = "🖼️ Updated the chat wallpaper";
-                }
+
+            String readableBody = JaTextE2EEDecryptor.resolveNotificationBody(
+                ctx,
+                rawBody,
+                senderId,
+                groupId
+            );
+            if (readableBody == null || readableBody.isEmpty()) {
+                return;
             }
 
-            NotificationManager nm =
-                (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm == null) return;
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                NotificationChannel channel = new NotificationChannel(
-                    "messages",
-                    "Messages",
-                    NotificationManager.IMPORTANCE_HIGH
-                );
-                channel.setDescription("New JaText messages and call alerts");
-                channel.enableVibration(true);
-                nm.createNotificationChannel(channel);
-            }
-
-            Intent launchIntent = new Intent(ctx, MainActivity.class);
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             String msgId = remoteMessage.getMessageId() != null
                 ? remoteMessage.getMessageId()
                 : String.valueOf(System.currentTimeMillis());
-            launchIntent.putExtra("google.message_id", msgId);
+            android.os.Bundle extras = new android.os.Bundle();
+            extras.putString("google.message_id", msgId);
             for (Map.Entry<String, String> entry : data.entrySet()) {
-                launchIntent.putExtra(entry.getKey(), entry.getValue());
+                extras.putString(entry.getKey(), entry.getValue());
             }
 
-            int reqCode = (int) (System.currentTimeMillis() & 0x7FFFFFFF);
-            PendingIntent pi = PendingIntent.getActivity(
-                ctx,
-                reqCode,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-            );
-
-            int iconRes = ctx.getApplicationInfo().icon;
-            if (iconRes == 0) {
-                iconRes = android.R.drawable.sym_action_chat;
-            }
-
-            NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, "messages")
-                .setSmallIcon(iconRes)
-                .setContentTitle(title != null ? title : "JaText")
-                .setContentText(body != null ? body : "New message")
-                .setStyle(new NotificationCompat.BigTextStyle().bigText(body != null ? body : "New message"))
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                .setAutoCancel(true)
-                .setContentIntent(pi);
-
-            String tag = data.containsKey("groupId")
-                ? "group:" + data.get("groupId")
-                : data.containsKey("senderId")
-                    ? "dm:" + data.get("senderId")
+            String tag = (groupId != null && !groupId.isEmpty())
+                ? "group:" + groupId
+                : (senderId != null && !senderId.isEmpty())
+                    ? "dm:" + senderId
                     : msgId;
-            nm.notify(tag, 1001, builder.build());
+            JaTextE2EEDecryptor.postSystemMessageNotification(
+                ctx,
+                tag,
+                title != null ? title : "JaText",
+                readableBody,
+                extras
+            );
         } catch (Throwable ignored) {}
     }
 

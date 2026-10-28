@@ -10,10 +10,8 @@ import { ProfileForm } from "./ProfileForm";
 
 export function SettingsModal({
   onClose,
-  onOpenE2EEVault,
 }: {
   onClose: () => void;
-  onOpenE2EEVault?: () => void;
 }) {
   const {
     me,
@@ -22,7 +20,6 @@ export function SettingsModal({
     notificationsEnabled,
     pushRegistrationStatus,
     soundsEnabled,
-    hasRemoteE2EEVault,
     setActivity,
     setNotificationsEnabled,
     refreshPushRegistration,
@@ -30,7 +27,6 @@ export function SettingsModal({
   } = useJaText();
   const e2ee = useE2EESnapshot();
   const [copiedFp, setCopiedFp] = useState(false);
-  const needsVaultUnlock = Boolean(hasRemoteE2EEVault && !e2ee.backedUp);
   const [saved, setSaved] = useState(false);
   const [activityStatus, setActivityStatus] = useState(me?.statusPreference ?? "online");
   const [customStatus, setCustomStatus] = useState(me?.customStatus ?? "");
@@ -219,24 +215,21 @@ export function SettingsModal({
                 </span>
                 <span
                   className={`e2ee-pill ${
-                    needsVaultUnlock ? "locked" : e2ee.ready ? "active" : "pending"
+                    e2ee.ready ? "active" : "pending"
                   }`}
                 >
-                  {needsVaultUnlock
-                    ? "Backup Available"
-                    : e2ee.ready
-                      ? "Active · Zero-Knowledge"
-                      : "Initializing…"}
+                  {e2ee.ready ? "Active · Synced" : "Initializing…"}
                 </span>
               </div>
               <p className="muted small">
-                Private DMs, group chats, voice notes, and attachments are encrypted on your device
-                with ECDH P-256 + AES-256-GCM before reaching Convex.
+                Private chats, group chats, voice notes, and attachments are end-to-end encrypted on
+                your device and sync automatically across your logged-in devices. Open any friend&apos;s
+                profile to verify your security code.
               </p>
               {e2ee.myFingerprint && (
                 <>
                   <div className="profile-e2ee-sub">
-                    Device Key ID: <code>{e2ee.myKeyId}</code>
+                    Key ID: <code>{e2ee.myKeyId}</code>
                   </div>
                   <code className="e2ee-fingerprint-code">{e2ee.myFingerprint}</code>
                 </>
@@ -254,20 +247,7 @@ export function SettingsModal({
                       window.setTimeout(() => setCopiedFp(false), 1800);
                     }}
                   >
-                    {copiedFp ? "✓ Copied" : "Copy E2EE key"}
-                  </button>
-                )}
-                {onOpenE2EEVault && (
-                  <button
-                    type="button"
-                    className="ghost-btn e2ee-vault-open-btn"
-                    onClick={onOpenE2EEVault}
-                  >
-                    {needsVaultUnlock
-                      ? "🔓 Unlock / Sync Device Key"
-                      : e2ee.backedUp
-                        ? "🔐 Manage Key Backup & Sync"
-                        : "🛡️ Set Up Key Backup & Sync"}
+                    {copiedFp ? "✓ Copied" : "Copy security key"}
                   </button>
                 )}
               </div>
