@@ -803,7 +803,9 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
 }
 .group-message-sticker {
   display: block;
-  width: min(220px, 60vw);
+  width: auto;
+  height: auto;
+  max-width: min(220px, 60vw);
   max-height: 220px;
   object-fit: contain;
 }
@@ -1153,6 +1155,9 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   border-radius: 14px;
   object-fit: contain;
   margin-bottom: 4px;
+}
+.image-message-button:last-child .msg-image {
+  margin-bottom: 0;
 }
 .video-attachment { display: grid; gap: 7px; min-width: min(260px, 100%); }
 .msg-video { display: block; width: min(420px, 100%); max-height: 360px; background: #000; border-radius: 14px; }
@@ -3560,6 +3565,8 @@ input:focus, textarea:focus {
 .bubble.styled-bubble {
   position: relative;
   overflow: visible;
+  width: fit-content;
+  max-width: 100%;
   margin-top: 8px;
   margin-bottom: 6px;
 }
@@ -3581,6 +3588,8 @@ input:focus, textarea:focus {
 .styled-bubble-inner {
   position: relative;
   z-index: 1;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .bs-deco {
@@ -4519,6 +4528,7 @@ input:focus, textarea:focus {
   position: relative;
   display: flex;
   align-items: center;
+  width: fit-content;
   max-width: 100%;
   min-width: 0;
   touch-action: pan-y;
@@ -4528,6 +4538,7 @@ input:focus, textarea:focus {
 .swipe-reply-track {
   display: flex;
   flex-direction: column;
+  width: fit-content;
   max-width: 100%;
   min-width: 0;
 }

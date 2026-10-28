@@ -1015,6 +1015,8 @@ export interface GroupKeySignalPacket {
   skid: string;
   epk: string;
   wraps: Record<string, GroupEpochWrapEntry>;
+  /** Per-device keyId wraps so members with multiple active devices all unwrap immediately */
+  kwraps?: Record<string, GroupEpochWrapEntry>;
   sig: string;
   ts: number;
 }
@@ -1058,31 +1060,66 @@ export async function createGroupKeySignalPacket(params: {
   const epkRaw = new Uint8Array(await subtle.exportKey("raw", ephemPair.publicKey));
   const epkB64 = bytesToBase64Url(epkRaw);
 
+  // Deduplicate bundles by keyId while preserving order (primary bundle per user comes first)
+  const uniqueBundles: PublicIdentityBundle[] = [];
+  const seenKeyIds = new Set<string>();
+  for (const b of memberBundles) {
+    if (b?.userId && b.keyId && b.dhPubB64 && !seenKeyIds.has(b.keyId)) {
+      seenKeyIds.add(b.keyId);
+      uniqueBundles.push(b);
+    }
+  }
+
   const wraps: Record<string, GroupEpochWrapEntry> = {};
+  const kwraps: Record<string, GroupEpochWrapEntry> = {};
   await Promise.all(
-    memberBundles.map(async (member) => {
-      const memberDhPub = await importEcdhPublicKey(member.dhPubB64);
-      const ss = await ecdhSharedBytes(ephemPair.privateKey, memberDhPub);
-      const kwk = await hkdfDeriveAesGcmKey(
-        ss,
-        epkRaw,
-        `JaText-GK-Wrap-v1|${groupId}|${epoch}|${senderIdentity.userId}|${member.userId}|${member.keyId}`,
-        ["encrypt"],
-      );
-      const iv = randomBytes(12);
-      const aad = encoder.encode(`JaText-GK-AAD-v1|${groupId}|${epoch}|${member.userId}`);
-      const ct = await subtle.encrypt(
-        { name: "AES-GCM", iv, additionalData: toArrayBuffer(aad) },
-        kwk,
-        epochSecretBytes,
-      );
-      wraps[member.userId] = {
-        kid: member.keyId,
-        iv: bytesToBase64Url(iv),
-        ct: bytesToBase64Url(new Uint8Array(ct)),
-      };
+    uniqueBundles.map(async (member) => {
+      try {
+        const memberDhPub = await importEcdhPublicKey(member.dhPubB64);
+        const ss = await ecdhSharedBytes(ephemPair.privateKey, memberDhPub);
+        const kwk = await hkdfDeriveAesGcmKey(
+          ss,
+          epkRaw,
+          `JaText-GK-Wrap-v1|${groupId}|${epoch}|${senderIdentity.userId}|${member.userId}|${member.keyId}`,
+          ["encrypt"],
+        );
+        const iv = randomBytes(12);
+        const aad = encoder.encode(`JaText-GK-AAD-v1|${groupId}|${epoch}|${member.userId}`);
+        const ct = await subtle.encrypt(
+          { name: "AES-GCM", iv, additionalData: toArrayBuffer(aad) },
+          kwk,
+          epochSecretBytes,
+        );
+        const entry: GroupEpochWrapEntry = {
+          kid: member.keyId,
+          iv: bytesToBase64Url(iv),
+          ct: bytesToBase64Url(new Uint8Array(ct)),
+        };
+        kwraps[member.keyId] = entry;
+        if (!wraps[member.userId]) {
+          wraps[member.userId] = entry;
+        }
+      } catch {
+        // Ignore invalid individual member key bundle
+      }
     }),
   );
+
+  // Ensure deterministic user-level wraps order (primary bundle first)
+  for (const member of uniqueBundles) {
+    if (kwraps[member.keyId] && !wraps[member.userId]) {
+      wraps[member.userId] = kwraps[member.keyId];
+    }
+  }
+  for (const member of uniqueBundles) {
+    // First bundle seen for each userId wins as primary user-level wrap
+    if (
+      kwraps[member.keyId] &&
+      uniqueBundles.find((b) => b.userId === member.userId)?.keyId === member.keyId
+    ) {
+      wraps[member.userId] = kwraps[member.keyId];
+    }
+  }
 
   const sigPayload = buildGroupKeyPacketSigPayload(
     groupId,
@@ -1106,6 +1143,7 @@ export async function createGroupKeySignalPacket(params: {
     skid: senderIdentity.keyId,
     epk: epkB64,
     wraps,
+    kwraps,
     sig: sigB64,
     ts: Date.now(),
   };
@@ -1121,10 +1159,13 @@ export async function unwrapGroupKeySignalPacket(params: {
   const { packet, senderId, senderPublic, myUserId, myIdentities } = params;
   const subtle = getSubtle();
 
-  const myWrap = packet.wraps[myUserId];
-  if (!myWrap) return null;
+  const myUserWrap = packet.wraps?.[myUserId];
+  const hasAnyDeviceWrap = Boolean(
+    packet.kwraps && myIdentities.some((id) => Boolean(packet.kwraps?.[id.keyId])),
+  );
+  if (!myUserWrap && !hasAnyDeviceWrap) return null;
 
-  // Verify distributor ECDSA signature whenever distributor's public key is available
+  // Verify distributor ECDSA signature whenever distributor's matching public key is available
   if (senderPublic && senderPublic.keyId === packet.skid) {
     const sigPub = await importEcdsaPublicKey(senderPublic.sigPubB64);
     const sigPayload = buildGroupKeyPacketSigPayload(
@@ -1150,12 +1191,26 @@ export async function unwrapGroupKeySignalPacket(params: {
   const epkPub = await importEcdhPublicKey(packet.epk);
   const aad = encoder.encode(`JaText-GK-AAD-v1|${packet.gid}|${packet.ep}|${myUserId}`);
 
-  const candidates = [
-    ...myIdentities.filter((k) => k.keyId === myWrap.kid),
-    ...myIdentities.filter((k) => k.keyId !== myWrap.kid),
-  ];
+  const attempts: { identity: StoredIdentityRecord; wrap: GroupEpochWrapEntry }[] = [];
+  if (packet.kwraps) {
+    for (const myIdentity of myIdentities) {
+      const kw = packet.kwraps[myIdentity.keyId];
+      if (kw) {
+        attempts.push({ identity: myIdentity, wrap: kw });
+      }
+    }
+  }
+  if (myUserWrap) {
+    const ordered = [
+      ...myIdentities.filter((k) => k.keyId === myUserWrap.kid),
+      ...myIdentities.filter((k) => k.keyId !== myUserWrap.kid),
+    ];
+    for (const myIdentity of ordered) {
+      attempts.push({ identity: myIdentity, wrap: myUserWrap });
+    }
+  }
 
-  for (const myIdentity of candidates) {
+  for (const { identity: myIdentity, wrap } of attempts) {
     try {
       const myDhPriv = await importEcdhPrivateKey(myIdentity.dhPrivPkcs8B64);
       const ss = await ecdhSharedBytes(myDhPriv, epkPub);
@@ -1168,15 +1223,15 @@ export async function unwrapGroupKeySignalPacket(params: {
       const secretBuf = await subtle.decrypt(
         {
           name: "AES-GCM",
-          iv: toArrayBuffer(base64UrlToBytes(myWrap.iv)),
+          iv: toArrayBuffer(base64UrlToBytes(wrap.iv)),
           additionalData: toArrayBuffer(aad),
         },
         kwk,
-        toArrayBuffer(base64UrlToBytes(myWrap.ct)),
+        toArrayBuffer(base64UrlToBytes(wrap.ct)),
       );
       return bytesToBase64Url(new Uint8Array(secretBuf));
     } catch {
-      // Try next candidate identity
+      // Try next candidate identity / wrap
     }
   }
   return null;
@@ -1310,6 +1365,7 @@ export async function decryptGroupEnvelope(params: {
   envelope: GroupEncryptedEnvelope;
   groupId: string;
   epochSecretB64: string;
+  epochSecretsB64?: string[];
   senderId: string;
   senderSigPubB64?: string;
   fetchOverflowCiphertext?: (storageId: string) => Promise<Uint8Array<ArrayBuffer>>;
@@ -1318,6 +1374,7 @@ export async function decryptGroupEnvelope(params: {
     envelope,
     groupId,
     epochSecretB64,
+    epochSecretsB64,
     senderId,
     senderSigPubB64,
     fetchOverflowCiphertext,
@@ -1361,27 +1418,45 @@ export async function decryptGroupEnvelope(params: {
     }
   }
 
+  const candidateSecrets: string[] = [];
+  for (const s of [epochSecretB64, ...(epochSecretsB64 ?? [])]) {
+    if (s && !candidateSecrets.includes(s)) {
+      candidateSecrets.push(s);
+    }
+  }
+
   const saltBytes = base64UrlToBytes(envelope.s);
-  const msgKey = await hkdfDeriveAesGcmKey(
-    base64UrlToBytes(epochSecretB64),
-    saltBytes,
-    `JaText-Grp-Msg-v1|${groupId}|${envelope.ep}|${senderId}|${envelope.sk}`,
-    ["decrypt"],
-  );
   const aad = buildGroupMsgAad(groupId, envelope.ep, senderId, envelope.sk, envelope.s);
-  const plainBuf = await subtle.decrypt(
-    {
-      name: "AES-GCM",
-      iv: toArrayBuffer(base64UrlToBytes(envelope.iv)),
-      additionalData: aad,
-    },
-    msgKey,
-    toArrayBuffer(ctBytes),
-  );
-  return {
-    payload: JSON.parse(decoder.decode(plainBuf)) as E2EEPlainPayload,
-    signatureVerified,
-  };
+  const ivBuf = toArrayBuffer(base64UrlToBytes(envelope.iv));
+  const ctBuf = toArrayBuffer(ctBytes);
+
+  let lastErr: unknown = null;
+  for (const candidateSecretB64 of candidateSecrets) {
+    try {
+      const msgKey = await hkdfDeriveAesGcmKey(
+        base64UrlToBytes(candidateSecretB64),
+        saltBytes,
+        `JaText-Grp-Msg-v1|${groupId}|${envelope.ep}|${senderId}|${envelope.sk}`,
+        ["decrypt"],
+      );
+      const plainBuf = await subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: ivBuf,
+          additionalData: aad,
+        },
+        msgKey,
+        ctBuf,
+      );
+      return {
+        payload: JSON.parse(decoder.decode(plainBuf)) as E2EEPlainPayload,
+        signatureVerified,
+      };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr ?? new Error("Could not decrypt group message.");
 }
 
 /* ------------------------------------------------------------------ */

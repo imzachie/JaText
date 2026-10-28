@@ -47,6 +47,7 @@ import {
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
+import { ChatAttachmentImage } from "./ChatAttachmentImage";
 import {
   ArrowLeftIcon,
   BellOffIcon,
@@ -523,12 +524,12 @@ const GroupChatHistory = memo(function GroupChatHistory({
                               onClick={() => onOpenImage(message.attachmentUrl!)}
                               aria-label="Open image viewer"
                             >
-                              <img
+                              <ChatAttachmentImage
                                 className="msg-image"
                                 src={message.attachmentUrl}
                                 alt={message.attachmentName ?? "attachment"}
-                                loading="lazy"
-                                decoding="async"
+                                maxWidth={420}
+                                maxHeight={420}
                                 onLoad={handleMediaLoad}
                               />
                             </button>
@@ -582,12 +583,12 @@ const GroupChatHistory = memo(function GroupChatHistory({
                             onClick={() => onOpenImage(message.stickerUrl!)}
                             aria-label="Open sticker viewer"
                           >
-                            <img
+                            <ChatAttachmentImage
                               className="group-message-sticker"
                               src={message.stickerUrl}
                               alt={message.stickerName ?? "Sticker"}
-                              loading="lazy"
-                              decoding="async"
+                              maxWidth={220}
+                              maxHeight={220}
                               onLoad={handleMediaLoad}
                             />
                           </button>

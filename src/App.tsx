@@ -25,6 +25,7 @@ import {
 import {
   getActiveE2EEState,
   getAllMyIdentities,
+  getGroupEpochAllSecrets,
   getPeerKnownBundles,
   useE2EESnapshot,
 } from "./lib/e2ee/keystore";
@@ -156,10 +157,13 @@ function AppContent() {
         dhPubB64: b.dhPubB64,
       }));
     }
-    const groupEpochs: Record<string, string> = {};
+    const groupEpochs: Record<string, string | string[]> = {};
     for (const [gid, epMap] of Object.entries(state.groupEpochs)) {
       for (const [ep, epEntry] of Object.entries(epMap)) {
-        groupEpochs[`${gid}:${ep}`] = epEntry.secretB64;
+        const allSecrets = getGroupEpochAllSecrets(epEntry);
+        if (allSecrets.length > 0) {
+          groupEpochs[`${gid}:${ep}`] = allSecrets.length === 1 ? allSecrets[0] : allSecrets;
+        }
       }
     }
 
