@@ -167,39 +167,41 @@ export function AccountSwitcherModal({ onClose }: { onClose: () => void }) {
             })}
           </div>
 
-          <button
-            type="button"
-            className="primary-btn account-switcher-add-btn"
-            onClick={async () => {
-              await stopAnyActiveCall();
-              requestClose();
-              window.setTimeout(() => {
-                beginAddAnotherAccount();
-              }, 90);
-            }}
-          >
-            <UserPlusIcon size={16} />
-            <span>Add another account</span>
-          </button>
-
-          {me && (
+          <div className="account-switcher-actions">
             <button
               type="button"
-              className="ghost-btn account-switcher-signout-btn"
+              className="primary-btn account-switcher-add-btn"
               onClick={async () => {
                 await stopAnyActiveCall();
                 requestClose();
-                void signOut();
+                window.setTimeout(() => {
+                  beginAddAnotherAccount();
+                }, 90);
               }}
             >
-              <LogOutIcon size={15} />
-              <span>
-                {sortedAccounts.length > 1
-                  ? `Sign out of @${me.username || me.displayName}`
-                  : "Sign out"}
-              </span>
+              <UserPlusIcon size={16} />
+              <span>Add another account</span>
             </button>
-          )}
+
+            {me && (
+              <button
+                type="button"
+                className="ghost-btn account-switcher-signout-btn"
+                onClick={async () => {
+                  await stopAnyActiveCall();
+                  requestClose();
+                  void signOut();
+                }}
+              >
+                <LogOutIcon size={15} />
+                <span>
+                  {sortedAccounts.length > 1
+                    ? `Sign out of @${me.username || me.displayName}`
+                    : "Sign out"}
+                </span>
+              </button>
+            )}
+          </div>
         </div>
       )}
     </AnimatedModal>
