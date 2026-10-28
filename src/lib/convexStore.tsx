@@ -43,6 +43,7 @@ import {
   E2EE_VAULT_STICKER_NAME,
   createGroupKeySignalPacket,
   generateDeviceSyncKeypair,
+  generateGroupEpochSecretB64,
   openAutoSyncKeyring,
   openSealedE2EEVault,
   sealAutoSyncKeyring,
@@ -64,18 +65,24 @@ import {
   ensureUserE2EEInitialized,
   exportCurrentVaultContents,
   getActiveE2EEState,
+  getAllMyIdentities,
+  getGroupEpochAllSecrets,
+  getKnownPacketSecretB64,
   getLatestGroupEpoch,
+  getPeerKnownBundles,
   importRestoredVaultContents,
   ingestPeerIdentityBundle,
   markCurrentIdentityBackedUp,
   mergeAutoSyncedKeyring,
   parseGroupKeySignal,
   parseIdentitySignal,
+  recordPacketSecretB64,
   rotateGroupEpoch,
   serializeGroupKeySignal,
   serializeIdentitySignal,
   serializeVerifySignal,
   setPeerVerifiedState,
+  storeGroupEpochSecret,
   useE2EESnapshot,
 } from "./e2ee/keystore";
 import {
@@ -88,9 +95,7 @@ import {
   isInternalE2EEStickerName,
   prepareOutgoingDmEncrypted,
   prepareOutgoingGroupEncrypted,
-  scanDmRowsForE2EESignals,
   scanDmRowsForE2EESignalsAsync,
-  scanGroupRowsForE2EESignals,
   scanGroupRowsForE2EESignalsAsync,
 } from "./e2ee/messagePipeline";
 import { OFFICIAL_COMMUNITY_ID } from "./types";
@@ -267,9 +272,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       : "skip",
   );
   useEffect(() => {
-    if (!activeMessagesQuery) return;
-    scanDmRowsForE2EESignals(activeMessagesQuery as ChatMessage[]);
-  }, [activeMessagesQuery]);
+    if (!activeMessagesQuery || !e2eeSnapshot.ready) return;
+    void scanDmRowsForE2EESignalsAsync(activeMessagesQuery as ChatMessage[]);
+  }, [activeMessagesQuery, e2eeSnapshot.myKeyId, e2eeSnapshot.ready]);
   const dmFold = useMemo(() => {
     void e2eeSnapshot.version;
     const peerId = activeChatId && activeChatId !== OFFICIAL_COMMUNITY_ID ? activeChatId : "";
@@ -346,9 +351,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       : "skip",
   );
   useEffect(() => {
-    if (!groupMessagesQuery) return;
-    scanGroupRowsForE2EESignals(groupMessagesQuery as GroupMessage[]);
-  }, [groupMessagesQuery]);
+    if (!groupMessagesQuery || !e2eeSnapshot.ready) return;
+    void scanGroupRowsForE2EESignalsAsync(groupMessagesQuery as GroupMessage[]);
+  }, [e2eeSnapshot.myKeyId, e2eeSnapshot.ready, groupMessagesQuery]);
   const groupFold = useMemo(() => {
     void e2eeSnapshot.version;
     const gid = activeGroupId ?? "";
@@ -868,12 +873,19 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       if (!details) return;
 
       const allowedSet = targetMemberIds ? new Set(targetMemberIds) : null;
-      const memberBundles: PublicIdentityBundle[] = [toPublicIdentityBundle(state.primaryIdentity)];
+      const memberBundles: PublicIdentityBundle[] = getAllMyIdentities(state).map(
+        toPublicIdentityBundle,
+      );
       for (const m of details.members) {
         if (m.id === state.userId) continue;
         if (allowedSet && !allowedSet.has(m.id)) continue;
         const peer = state.peerKeys[m.id];
-        if (peer) memberBundles.push(peer.bundle);
+        if (peer) {
+          memberBundles.push(peer.bundle);
+          for (const extraBundle of getPeerKnownBundles(peer)) {
+            memberBundles.push(extraBundle);
+          }
+        }
       }
 
       const pkt = await createGroupKeySignalPacket({
@@ -883,6 +895,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         senderIdentity: state.primaryIdentity,
         memberBundles,
       });
+      recordPacketSecretB64(pkt.epk, epochSecretB64);
       await sendGroupMessageMut({
         groupId: groupId as Id<"groups">,
         body: serializeGroupKeySignal(pkt),
@@ -895,16 +908,33 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     async (groupId: string) => {
       let epochEntry = getLatestGroupEpoch(groupId);
       if (!epochEntry) {
-        epochEntry = await ensureInitialGroupEpoch(groupId);
-        if (epochEntry) {
-          await distributeGroupEpochToMembers(groupId, epochEntry.epoch, epochEntry.secretB64).catch(
-            () => undefined,
-          );
+        const rows = ((await convex
+          .query(api.groups.listMessages, { groupId: groupId as Id<"groups"> })
+          .catch(() => [])) ?? []) as GroupMessage[];
+        if (rows.length > 0) {
+          await scanGroupRowsForE2EESignalsAsync(rows);
+          epochEntry = getLatestGroupEpoch(groupId);
+        }
+        if (!epochEntry) {
+          const maxExistingEpoch = rows.reduce((mx, r) => {
+            const pkt = parseGroupKeySignal(r.body);
+            return pkt && pkt.ep > mx ? pkt.ep : mx;
+          }, 0);
+          const nextEpoch = maxExistingEpoch + 1;
+          const secretB64 = generateGroupEpochSecretB64();
+          epochEntry = await storeGroupEpochSecret(groupId, nextEpoch, secretB64);
+          if (epochEntry) {
+            await distributeGroupEpochToMembers(
+              groupId,
+              epochEntry.epoch,
+              epochEntry.secretB64,
+            ).catch(() => undefined);
+          }
         }
       }
       return epochEntry;
     },
-    [distributeGroupEpochToMembers],
+    [convex, distributeGroupEpochToMembers],
   );
 
   const forwardCommunityMessage: JaTextStore["forwardCommunityMessage"] = useCallback(
@@ -2507,54 +2537,115 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     sendMessageMut,
   ]);
 
-  // Auto-wrap active group's current epoch key for any member whose E2EE key newly arrived
+  // Auto-reconcile active group's identity announcement + wrap all held epoch secrets across all member devices
   const wrappedGroupMembersCacheRef = useRef(new Set<string>());
   useEffect(() => {
-    if (!activeGroupId || !groupDetails || !groupMessagesQuery || !me?.id) return;
-    const state = getActiveE2EEState();
-    const epochEntry = getLatestGroupEpoch(activeGroupId);
-    if (!state || !epochEntry) return;
+    if (!activeGroupId || !groupDetails || !groupMessagesQuery || !me?.id || !e2eeSnapshot.ready) {
+      return;
+    }
+    let cancelled = false;
+    const rows = groupMessagesQuery as GroupMessage[];
 
-    const wrappedUserKeyPairs = new Set<string>();
-    for (const row of groupMessagesQuery as GroupMessage[]) {
-      const pkt = parseGroupKeySignal(row.body);
-      if (pkt && pkt.ep === epochEntry.epoch) {
-        for (const [uid, wrap] of Object.entries(pkt.wraps)) {
-          wrappedUserKeyPairs.add(`${uid}:${wrap.kid}`);
+    const reconcileActiveGroupKeys = async () => {
+      await scanGroupRowsForE2EESignalsAsync(rows);
+      if (cancelled) return;
+      const state = getActiveE2EEState();
+      if (!state || state.userId !== me.id) return;
+
+      // Ensure our own active identity key is announced in this group immediately
+      const grpIkGuard = `active:${me.id}:${activeGroupId}:${state.primaryIdentity.keyId}`;
+      if (!announcedGroupKeysRef.current.has(grpIkGuard)) {
+        const alreadyAnnounced = rows.some(
+          (r) =>
+            r.senderId === me.id &&
+            parseIdentitySignal(r.body, me.id)?.keyId === state.primaryIdentity.keyId,
+        );
+        announcedGroupKeysRef.current.add(grpIkGuard);
+        if (!alreadyAnnounced) {
+          await sendGroupMessageMut({
+            groupId: activeGroupId as Id<"groups">,
+            body: serializeIdentitySignal(state.primaryIdentity),
+          }).catch(() => {
+            announcedGroupKeysRef.current.delete(grpIkGuard);
+          });
         }
       }
-    }
 
-    const missingMembers = groupDetails.members.filter((m) => {
-      if (m.id === me.id) return false;
-      const peer = state.peerKeys[m.id];
-      if (!peer) return false;
-      const pair = `${m.id}:${peer.bundle.keyId}`;
-      const guard = `${activeGroupId}:${epochEntry.epoch}:${pair}`;
-      return !wrappedUserKeyPairs.has(pair) && !wrappedGroupMembersCacheRef.current.has(guard);
-    });
+      const groupEpochsMap = state.groupEpochs[activeGroupId];
+      if (!groupEpochsMap) return;
 
-    if (missingMembers.length === 0) return;
-    for (const m of missingMembers) {
-      const peer = state.peerKeys[m.id];
-      if (peer) {
-        wrappedGroupMembersCacheRef.current.add(
-          `${activeGroupId}:${epochEntry.epoch}:${m.id}:${peer.bundle.keyId}`,
-        );
+      for (const epochEntry of Object.values(groupEpochsMap)) {
+        if (cancelled) return;
+        for (const secretB64 of getGroupEpochAllSecrets(epochEntry)) {
+          if (cancelled) return;
+          const secretTag = secretB64.slice(0, 12);
+          const wrappedKeysForSecret = new Set<string>();
+
+          for (const row of rows) {
+            const pkt = parseGroupKeySignal(row.body);
+            if (!pkt || pkt.ep !== epochEntry.epoch) continue;
+            const pktSecret = getKnownPacketSecretB64(pkt.epk);
+            if (pktSecret !== secretB64) continue;
+
+            for (const [uid, wrap] of Object.entries(pkt.wraps)) {
+              wrappedKeysForSecret.add(`${uid}:${wrap.kid}`);
+              wrappedKeysForSecret.add(`*:${wrap.kid}`);
+            }
+            if (pkt.kwraps) {
+              for (const [kid, wrap] of Object.entries(pkt.kwraps)) {
+                wrappedKeysForSecret.add(`*:${kid}`);
+                wrappedKeysForSecret.add(`*:${wrap.kid}`);
+              }
+            }
+          }
+
+          const missingGuards: string[] = [];
+          for (const m of groupDetails.members) {
+            if (m.id === me.id) continue;
+            const peer = state.peerKeys[m.id];
+            if (!peer) continue;
+            for (const bundle of getPeerKnownBundles(peer)) {
+              const covered =
+                wrappedKeysForSecret.has(`${m.id}:${bundle.keyId}`) ||
+                wrappedKeysForSecret.has(`*:${bundle.keyId}`);
+              const guard = `${activeGroupId}:${epochEntry.epoch}:${secretTag}:${m.id}:${bundle.keyId}`;
+              if (!covered && !wrappedGroupMembersCacheRef.current.has(guard)) {
+                missingGuards.push(guard);
+              }
+            }
+          }
+
+          if (missingGuards.length > 0) {
+            for (const g of missingGuards) {
+              wrappedGroupMembersCacheRef.current.add(g);
+            }
+            await distributeGroupEpochToMembers(
+              activeGroupId,
+              epochEntry.epoch,
+              secretB64,
+            ).catch(() => {
+              for (const g of missingGuards) {
+                wrappedGroupMembersCacheRef.current.delete(g);
+              }
+            });
+          }
+        }
       }
-    }
-    void distributeGroupEpochToMembers(
-      activeGroupId,
-      epochEntry.epoch,
-      epochEntry.secretB64,
-    ).catch(() => undefined);
+    };
+
+    void reconcileActiveGroupKeys();
+    return () => {
+      cancelled = true;
+    };
   }, [
     activeGroupId,
     distributeGroupEpochToMembers,
+    e2eeSnapshot.ready,
     e2eeSnapshot.version,
     groupDetails,
     groupMessagesQuery,
     me?.id,
+    sendGroupMessageMut,
   ]);
 
   // Monitor private stickerLibrary for remote E2EE Vault & Live Device Sync packets

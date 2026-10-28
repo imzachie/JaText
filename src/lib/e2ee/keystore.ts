@@ -42,6 +42,8 @@ export interface GroupEpochEntry {
   groupId: string;
   epoch: number;
   secretB64: string;
+  /** Additional unwrapped secrets observed for the same (groupId, epoch) so split-brain historical messages always decrypt */
+  candidateSecretsB64?: string[];
   fingerprint: string;
   createdAt: number;
 }
@@ -562,24 +564,66 @@ export async function togglePeerVerified(peerUserId: string): Promise<boolean> {
   return setPeerVerifiedState(peerUserId, nowVerified);
 }
 
+export function getGroupEpochAllSecrets(entry?: GroupEpochEntry | null): string[] {
+  if (!entry) return [];
+  const out: string[] = [];
+  for (const s of [entry.secretB64, ...(entry.candidateSecretsB64 ?? [])]) {
+    if (s && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+const packetSecretByEpk = new Map<string, string>();
+const checkedGroupKeyPackets = new Set<string>();
+
+export function recordPacketSecretB64(epk: string, secretB64: string): void {
+  if (epk && secretB64) {
+    packetSecretByEpk.set(epk, secretB64);
+  }
+}
+
+export function getKnownPacketSecretB64(epk: string): string | undefined {
+  return packetSecretByEpk.get(epk);
+}
+
 export async function storeGroupEpochSecret(
   groupId: string,
   epoch: number,
   secretB64: string,
+  options?: { preferExistingPrimary?: boolean },
 ): Promise<GroupEpochEntry | null> {
   if (!activeState) return null;
   const existing = activeState.groupEpochs[groupId]?.[epoch];
-  if (existing && existing.secretB64 === secretB64) return existing;
+  const existingAll = getGroupEpochAllSecrets(existing);
+  const preferExisting = Boolean(options?.preferExistingPrimary);
 
-  const fingerprint = await computeGroupEpochFingerprint(groupId, epoch, secretB64);
+  if (existing && existingAll.includes(secretB64)) {
+    if (preferExisting || existing.secretB64 === secretB64) {
+      return existing;
+    }
+  }
+
+  const primarySecret = existing && preferExisting ? existing.secretB64 : secretB64;
+  const mergedCandidates: string[] = [];
+  for (const s of [primarySecret, ...existingAll, secretB64]) {
+    if (s && !mergedCandidates.includes(s)) {
+      mergedCandidates.push(s);
+    }
+  }
+
+  const fingerprint =
+    existing && existing.secretB64 === primarySecret
+      ? existing.fingerprint
+      : await computeGroupEpochFingerprint(groupId, epoch, primarySecret);
   if (!activeState) return null;
 
   const entry: GroupEpochEntry = {
     groupId,
     epoch,
-    secretB64,
+    secretB64: primarySecret,
+    candidateSecretsB64: mergedCandidates.length > 1 ? mergedCandidates : undefined,
     fingerprint,
-    createdAt: Date.now(),
+    createdAt: existing?.createdAt ?? Date.now(),
   };
   activeState = {
     ...activeState,
@@ -591,6 +635,7 @@ export async function storeGroupEpochSecret(
       },
     },
   };
+  clearFailedDecryptionEntries();
   await writePersistedState(activeState);
   notifyListeners();
   return entry;
@@ -627,33 +672,54 @@ export async function ingestGroupKeySignalPacket(
   senderId: string,
 ): Promise<boolean> {
   if (!activeState) return false;
-  if (activeState.groupEpochs[packet.gid]?.[packet.ep]) {
+  const myIdentities = getAllMyIdentities(activeState);
+  const checkKey = `${activeState.userId}:${packet.gid}:${packet.ep}:${packet.epk}:${myIdentities
+    .map((i) => i.keyId)
+    .join(",")}`;
+  if (checkedGroupKeyPackets.has(checkKey)) {
     return false;
   }
+
   const peerCandidates =
     senderId === activeState.userId
-      ? [toPublicIdentityBundle(activeState.primaryIdentity)]
+      ? myIdentities.map(toPublicIdentityBundle)
       : getPeerKnownBundles(activeState.peerKeys[senderId]);
 
-  for (const candidatePublic of peerCandidates.length > 0 ? peerCandidates : [null]) {
+  const matchingSenderKey =
+    peerCandidates.find((b) => b.keyId === packet.skid) ?? null;
+  const candidatePublicList: (PublicIdentityBundle | null)[] = matchingSenderKey
+    ? [matchingSenderKey, null]
+    : [null];
+
+  for (const candidatePublic of candidatePublicList) {
     try {
       const unwrapped = await unwrapGroupKeySignalPacket({
         packet,
         senderId,
-        senderPublic:
-          candidatePublic && candidatePublic.keyId === packet.skid ? candidatePublic : null,
+        senderPublic: candidatePublic,
         myUserId: activeState.userId,
-        myIdentities: getAllMyIdentities(activeState),
+        myIdentities,
       });
       if (unwrapped) {
-        await storeGroupEpochSecret(packet.gid, packet.ep, unwrapped);
-        clearFailedDecryptionEntries();
-        return true;
+        checkedGroupKeyPackets.add(checkKey);
+        recordPacketSecretB64(packet.epk, unwrapped);
+        const alreadyKnown = getGroupEpochAllSecrets(
+          activeState?.groupEpochs[packet.gid]?.[packet.ep],
+        ).includes(unwrapped);
+        await storeGroupEpochSecret(packet.gid, packet.ep, unwrapped, {
+          preferExistingPrimary: true,
+        });
+        if (!alreadyKnown) {
+          clearFailedDecryptionEntries();
+          return true;
+        }
+        return false;
       }
     } catch {
       // Try next candidate
     }
   }
+  checkedGroupKeyPackets.add(checkKey);
   return false;
 }
 
@@ -666,12 +732,14 @@ export function exportCurrentVaultContents(): E2EEVaultContents | null {
   const groupEpochs: E2EEVaultContents["groupEpochs"] = [];
   for (const [groupId, epochsMap] of Object.entries(activeState.groupEpochs)) {
     for (const entry of Object.values(epochsMap)) {
-      groupEpochs.push({
-        groupId,
-        epoch: entry.epoch,
-        secretB64: entry.secretB64,
-        createdAt: entry.createdAt,
-      });
+      for (const secretB64 of getGroupEpochAllSecrets(entry)) {
+        groupEpochs.push({
+          groupId,
+          epoch: entry.epoch,
+          secretB64,
+          createdAt: entry.createdAt,
+        });
+      }
     }
   }
   return {
@@ -742,15 +810,22 @@ export async function importRestoredVaultContents(contents: E2EEVaultContents): 
     ...activeState.groupEpochs,
   };
   for (const ge of contents.groupEpochs) {
-    const fp = await computeGroupEpochFingerprint(ge.groupId, ge.epoch, ge.secretB64);
+    const prevEp = mergedGroups[ge.groupId]?.[ge.epoch];
+    const combined: string[] = [];
+    for (const s of [ge.secretB64, ...getGroupEpochAllSecrets(prevEp)]) {
+      if (s && !combined.includes(s)) combined.push(s);
+    }
+    const primary = combined[0] ?? ge.secretB64;
+    const fp = await computeGroupEpochFingerprint(ge.groupId, ge.epoch, primary);
     mergedGroups[ge.groupId] = {
       ...(mergedGroups[ge.groupId] ?? {}),
       [ge.epoch]: {
         groupId: ge.groupId,
         epoch: ge.epoch,
-        secretB64: ge.secretB64,
+        secretB64: primary,
+        candidateSecretsB64: combined.length > 1 ? combined : undefined,
         fingerprint: fp,
-        createdAt: ge.createdAt,
+        createdAt: prevEp ? Math.min(prevEp.createdAt, ge.createdAt) : ge.createdAt,
       },
     };
   }
@@ -815,27 +890,42 @@ export async function mergeAutoSyncedKeyring(
     ...activeState.groupEpochs,
   };
   for (const ge of remote.groupEpochs) {
-    if (!mergedGroups[ge.groupId]?.[ge.epoch]) {
+    const existingEp = mergedGroups[ge.groupId]?.[ge.epoch];
+    const existingAll = getGroupEpochAllSecrets(existingEp);
+    if (!existingEp || !existingAll.includes(ge.secretB64)) {
       changedLocal = true;
-      const fp = await computeGroupEpochFingerprint(ge.groupId, ge.epoch, ge.secretB64);
+      const primary = existingEp ? existingEp.secretB64 : ge.secretB64;
+      const combined: string[] = [];
+      for (const s of [primary, ...existingAll, ge.secretB64]) {
+        if (s && !combined.includes(s)) combined.push(s);
+      }
+      const fp =
+        existingEp && existingEp.secretB64 === primary
+          ? existingEp.fingerprint
+          : await computeGroupEpochFingerprint(ge.groupId, ge.epoch, primary);
       mergedGroups[ge.groupId] = {
         ...(mergedGroups[ge.groupId] ?? {}),
         [ge.epoch]: {
           groupId: ge.groupId,
           epoch: ge.epoch,
-          secretB64: ge.secretB64,
+          secretB64: primary,
+          candidateSecretsB64: combined.length > 1 ? combined : undefined,
           fingerprint: fp,
-          createdAt: ge.createdAt,
+          createdAt: existingEp ? Math.min(existingEp.createdAt, ge.createdAt) : ge.createdAt,
         },
       };
     }
   }
 
-  const remoteGroupKeys = new Set(remote.groupEpochs.map((g) => `${g.groupId}:${g.epoch}`));
+  const remoteGroupSecrets = new Set(
+    remote.groupEpochs.map((g) => `${g.groupId}:${g.epoch}:${g.secretB64}`),
+  );
   for (const [gid, epMap] of Object.entries(mergedGroups)) {
-    for (const ep of Object.keys(epMap)) {
-      if (!remoteGroupKeys.has(`${gid}:${ep}`)) {
-        needsRemotePush = true;
+    for (const entry of Object.values(epMap)) {
+      for (const s of getGroupEpochAllSecrets(entry)) {
+        if (!remoteGroupSecrets.has(`${gid}:${entry.epoch}:${s}`)) {
+          needsRemotePush = true;
+        }
       }
     }
   }
@@ -1046,6 +1136,7 @@ export async function decryptWireMessageCached(params: {
           envelope,
           groupId: gid,
           epochSecretB64: epochEntry.secretB64,
+          epochSecretsB64: getGroupEpochAllSecrets(epochEntry),
           senderId,
           senderSigPubB64: senderSigPub,
           fetchOverflowCiphertext,

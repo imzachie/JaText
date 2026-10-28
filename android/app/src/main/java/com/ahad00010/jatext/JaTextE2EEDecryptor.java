@@ -231,8 +231,14 @@ public final class JaTextE2EEDecryptor {
                     } else if ("e2ee_gk".equals(kind) && groupId != null) {
                         int ep = pkt.optInt("ep", 0);
                         String secret = tryUnwrapGroupEpochSignal(ctx, pkt, rowSender, myUserId);
-                        if (secret != null && ep > 0) {
-                            extraGroupEpochs.put(groupId + ":" + ep, secret);
+                        if (secret != null && !secret.isEmpty() && ep > 0) {
+                            String epKey = groupId + ":" + ep;
+                            JSONArray arr = extraGroupEpochs.optJSONArray(epKey);
+                            if (arr == null) {
+                                arr = new JSONArray();
+                                extraGroupEpochs.put(epKey, arr);
+                            }
+                            arr.put(secret);
                         }
                     }
                 } catch (Throwable ignored) {}
@@ -402,9 +408,9 @@ public final class JaTextE2EEDecryptor {
     ) {
         try {
             JSONObject wraps = pkt.optJSONObject("wraps");
-            if (wraps == null) return null;
-            JSONObject myWrap = wraps.optJSONObject(myUserId);
-            if (myWrap == null) return null;
+            JSONObject kwraps = pkt.optJSONObject("kwraps");
+            JSONObject myUserWrap = wraps != null ? wraps.optJSONObject(myUserId) : null;
+            if (myUserWrap == null && kwraps == null) return null;
 
             String gid = pkt.optString("gid", "");
             int ep = pkt.optInt("ep", 0);
@@ -429,16 +435,35 @@ public final class JaTextE2EEDecryptor {
                         epkBytes,
                         "JaText-GK-Wrap-v1|" + gid + "|" + ep + "|" + senderId + "|" + myUserId + "|" + myKeyId
                     );
-                    byte[] plain = aesGcmDecrypt(
-                        kwk,
-                        b64UrlDecode(myWrap.optString("iv", "")),
-                        aad,
-                        b64UrlDecode(myWrap.optString("ct", ""))
-                    );
-                    return Base64.encodeToString(
-                        plain,
-                        Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING
-                    );
+
+                    JSONObject kw = kwraps != null ? kwraps.optJSONObject(myKeyId) : null;
+                    if (kw != null) {
+                        try {
+                            byte[] plain = aesGcmDecrypt(
+                                kwk,
+                                b64UrlDecode(kw.optString("iv", "")),
+                                aad,
+                                b64UrlDecode(kw.optString("ct", ""))
+                            );
+                            return Base64.encodeToString(
+                                plain,
+                                Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING
+                            );
+                        } catch (Throwable ignored) {}
+                    }
+
+                    if (myUserWrap != null) {
+                        byte[] plain = aesGcmDecrypt(
+                            kwk,
+                            b64UrlDecode(myUserWrap.optString("iv", "")),
+                            aad,
+                            b64UrlDecode(myUserWrap.optString("ct", ""))
+                        );
+                        return Base64.encodeToString(
+                            plain,
+                            Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING
+                        );
+                    }
                 } catch (Throwable ignored) {}
             }
         } catch (Throwable ignored) {}
@@ -612,6 +637,24 @@ public final class JaTextE2EEDecryptor {
         return null;
     }
 
+    private static void collectEpochSecrets(Object raw, List<String> dest) {
+        if (raw == null || raw == JSONObject.NULL) return;
+        if (raw instanceof JSONArray) {
+            JSONArray arr = (JSONArray) raw;
+            for (int i = 0; i < arr.length(); i++) {
+                String s = arr.optString(i, "");
+                if (!s.isEmpty() && !dest.contains(s)) {
+                    dest.add(s);
+                }
+            }
+        } else if (raw instanceof String) {
+            String s = (String) raw;
+            if (!s.isEmpty() && !dest.contains(s)) {
+                dest.add(s);
+            }
+        }
+    }
+
     private static byte[] decryptGroupEnvelopeBytes(
         SharedPreferences sp,
         JSONObject env,
@@ -627,21 +670,31 @@ public final class JaTextE2EEDecryptor {
         String ivB64 = env.optString("iv", "");
 
         String epochKey = groupId + ":" + ep;
-        String secretB64 = extraGroupEpochs != null ? extraGroupEpochs.optString(epochKey, "") : "";
-        if (secretB64.isEmpty()) {
-            JSONObject groupsMap = new JSONObject(sp.getString("groups_json", "{}"));
-            secretB64 = groupsMap.optString(epochKey, "");
+        List<String> candidateSecrets = new ArrayList<>();
+        if (extraGroupEpochs != null) {
+            collectEpochSecrets(extraGroupEpochs.opt(epochKey), candidateSecrets);
         }
-        if (secretB64.isEmpty()) return null;
+        try {
+            JSONObject groupsMap = new JSONObject(sp.getString("groups_json", "{}"));
+            collectEpochSecrets(groupsMap.opt(epochKey), candidateSecrets);
+        } catch (Throwable ignored) {}
 
-        byte[] msgKey = hkdfSha256(
-            b64UrlDecode(secretB64),
-            b64UrlDecode(saltB64),
-            "JaText-Grp-Msg-v1|" + groupId + "|" + ep + "|" + senderId + "|" + sk
-        );
+        if (candidateSecrets.isEmpty()) return null;
+
+        byte[] saltBytes = b64UrlDecode(saltB64);
+        byte[] ivBytes = b64UrlDecode(ivB64);
+        byte[] ctBytes = b64UrlDecode(ctB64);
         byte[] aad = ("JaText-Grp-AAD-v1|" + groupId + "|" + ep + "|" + senderId + "|" + sk + "|" + saltB64)
             .getBytes(StandardCharsets.UTF_8);
-        return aesGcmDecrypt(msgKey, b64UrlDecode(ivB64), aad, b64UrlDecode(ctB64));
+        String info = "JaText-Grp-Msg-v1|" + groupId + "|" + ep + "|" + senderId + "|" + sk;
+
+        for (String secretB64 : candidateSecrets) {
+            try {
+                byte[] msgKey = hkdfSha256(b64UrlDecode(secretB64), saltBytes, info);
+                return aesGcmDecrypt(msgKey, ivBytes, aad, ctBytes);
+            } catch (Throwable ignored) {}
+        }
+        return null;
     }
 
     private static String formatDecryptedPayload(JSONObject payload) {

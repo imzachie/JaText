@@ -321,19 +321,19 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
               <li>
+                <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Self-Healing Group E2EE Key Sync — Eliminates &ldquo;Waiting for this message…&rdquo;
+              </li>
+              <li>
                 <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Crisp Vector SVG UI Icons Across Every Screen, Menu &amp; Composer
+                Crisp Fit-Wrapped Image &amp; Sticker Custom Bubbles + Vector SVG UI Icons
               </li>
               <li>
                 <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Readable E2EE Notifications — Decrypts Messages On-Device Like WhatsApp
+                Readable On-Device E2EE Push Notifications &amp; 1-Tap Security Code Verification
               </li>
               <li>
-                <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Automatic Multi-Device Key Sync &amp; 1-Tap Security Code Verification
-              </li>
-              <li>
-                <Phone size={15} /> Restored Fast &amp; Reliable 1:1 &amp; Group Voice/Video Calling
+                <Phone size={15} /> Fast &amp; Reliable 1:1 &amp; Group Voice/Video Calling
               </li>
             </ul>
             <button

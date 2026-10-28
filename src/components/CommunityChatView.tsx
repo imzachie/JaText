@@ -18,6 +18,7 @@ import { AnimatedModal } from "./AnimatedModal";
 import { Avatar } from "./Avatar";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
+import { ChatAttachmentImage } from "./ChatAttachmentImage";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { SwipeToReply } from "./SwipeToReply";
@@ -1262,7 +1263,7 @@ export function CommunityChatView({
                           />
                         ) : isImage ? (
                           <button type="button" className="image-message-button" onClick={() => openImagePreview(message.attachmentUrl!)} aria-label="Open image viewer">
-                            <img className="msg-image" src={message.attachmentUrl} alt={message.attachmentName ?? "attachment"} />
+                            <ChatAttachmentImage className="msg-image" src={message.attachmentUrl} alt={message.attachmentName ?? "attachment"} maxWidth={420} maxHeight={420} />
                           </button>
                         ) : isVideo ? (
                           <div className="video-attachment">
@@ -1282,11 +1283,12 @@ export function CommunityChatView({
                           onClick={() => openImagePreview(message.stickerUrl!)}
                           aria-label="Open sticker viewer"
                         >
-                          <img
+                          <ChatAttachmentImage
                             className="group-message-sticker"
                             src={message.stickerUrl}
                             alt={message.stickerName ?? "Sticker"}
-                            style={{ maxWidth: 220, maxHeight: 220 }}
+                            maxWidth={220}
+                            maxHeight={220}
                           />
                         </button>
                       )}

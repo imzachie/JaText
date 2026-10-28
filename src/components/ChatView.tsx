@@ -38,6 +38,7 @@ import { MessageEncryptionModal } from "./E2EEModals";
 import { isVoiceNoteOrAudio, saveCachedVoiceTranscript, decodeVoiceNoteMime } from "../lib/voiceNotes";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
+import { ChatAttachmentImage } from "./ChatAttachmentImage";
 import { CallMessageCard } from "./CallMessageCard";
 import { ContextMenu } from "./ContextMenu";
 import { MessageMarkdown } from "./MessageMarkdown";
@@ -347,12 +348,12 @@ const ChatHistory = memo(function ChatHistory({
                             onClick={() => onOpenImage(message.attachmentUrl!)}
                             aria-label="Open image viewer"
                           >
-                            <img
+                            <ChatAttachmentImage
                               className="msg-image"
                               src={message.attachmentUrl}
                               alt={message.attachmentName ?? "attachment"}
-                              loading="lazy"
-                              decoding="async"
+                              maxWidth={420}
+                              maxHeight={420}
                               onLoad={() => {
                                 if (initialScrollAllowedRef.current) {
                                   const container = messagesRef.current;
