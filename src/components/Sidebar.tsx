@@ -336,46 +336,37 @@ export function Sidebar({
             onClick={onOpenAccountSwitcher}
             title="Switch or add account"
           >
-            <span>@{me.username}</span>
+            <span className="greeting-username">@{me.username}</span>
             <ChevronUpDownIcon size={13} />
           </button>
         </div>
-        <div className="greeting-quick-accounts">
-          {otherSavedAccounts.slice(0, 2).map((acct) => (
-            <button
-              key={acct.slotId}
-              type="button"
-              className="quick-account-avatar-btn"
-              title={`Switch directly to ${acct.displayName || `@${acct.username}`}`}
-              aria-label={`Switch directly to ${acct.displayName || acct.username}`}
-              onClick={() => void handleDirectQuickSwitch(acct.slotId)}
-            >
-              <Avatar user={savedEntryToAvatarUser(acct)} size={30} />
-            </button>
-          ))}
-          {otherSavedAccounts.length > 2 && (
-            <button
-              type="button"
-              className="quick-account-more-btn"
-              title="All saved accounts"
-              aria-label="All saved accounts"
-              onClick={onOpenAccountSwitcher}
-            >
-              +{otherSavedAccounts.length - 2}
-            </button>
-          )}
-          {otherSavedAccounts.length === 0 && (
-            <button
-              type="button"
-              className="quick-account-add-btn"
-              title="Add another account for instant switching"
-              aria-label="Add another account"
-              onClick={onOpenAccountSwitcher}
-            >
-              <UserPlusIcon size={15} />
-            </button>
-          )}
-        </div>
+        {otherSavedAccounts.length > 0 && (
+          <div className="greeting-quick-accounts">
+            {otherSavedAccounts.slice(0, 2).map((acct) => (
+              <button
+                key={acct.slotId}
+                type="button"
+                className="quick-account-avatar-btn"
+                title={`Switch directly to ${acct.displayName || `@${acct.username}`}`}
+                aria-label={`Switch directly to ${acct.displayName || acct.username}`}
+                onClick={() => void handleDirectQuickSwitch(acct.slotId)}
+              >
+                <Avatar user={savedEntryToAvatarUser(acct)} size={30} />
+              </button>
+            ))}
+            {otherSavedAccounts.length > 2 && (
+              <button
+                type="button"
+                className="quick-account-more-btn"
+                title="All saved accounts"
+                aria-label="All saved accounts"
+                onClick={onOpenAccountSwitcher}
+              >
+                +{otherSavedAccounts.length - 2}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="tabs sidebar-tabs">
