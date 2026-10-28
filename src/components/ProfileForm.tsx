@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { AVATAR_COLORS, colorById } from "../lib/colors";
 import { useJaText } from "../lib/store";
 import { USERNAME_REGEX, usernameLockInfo, type JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
+import { EditIcon, ImageIcon, LockClosedIcon } from "./UiIcons";
 
 type ImageState =
   | { kind: "keep" }
@@ -20,7 +21,7 @@ export function ProfileForm({
   onDone,
 }: {
   initial: JaUser;
-  submitLabel: string;
+  submitLabel: ReactNode;
   onDone?: () => void;
 }) {
   const store = useJaText();
@@ -74,7 +75,7 @@ export function ProfileForm({
         const res = await store.checkUsername(name);
         setNameStatus({
           ok: res.available,
-          text: res.available ? `@${name} is available ✨` : res.message ?? "Already taken",
+          text: res.available ? `@${name} is available` : res.message ?? "Already taken",
         });
       } catch {
         setNameStatus(null);
@@ -145,7 +146,9 @@ export function ProfileForm({
           onClick={() => bannerInput.current?.click()}
           title="Click to set your banner"
         >
-          <span className="pf-banner-hint">🖼️ {bannerPreview ? "Change banner" : "Add a banner"}</span>
+          <span className="pf-banner-hint">
+            <ImageIcon size={14} /> {bannerPreview ? "Change banner" : "Add a banner"}
+          </span>
           {bannerPreview && (
             <button
               type="button"
@@ -174,7 +177,9 @@ export function ProfileForm({
             title="Click to set your profile picture"
           >
             <Avatar user={previewUser} size={96} ringWidth={4} />
-            <span className="pf-avatar-edit">✏️</span>
+            <span className="pf-avatar-edit">
+              <EditIcon size={14} />
+            </span>
           </div>
           <input
             ref={pfpInput}
@@ -191,7 +196,7 @@ export function ProfileForm({
             </span>
             {bio && <span className="pf-preview-bio">{bio}</span>}
             <span className="muted small">
-              This is how your profile looks when someone clicks your pfp 👆
+              This is how your profile looks when someone clicks your profile picture
             </span>
           </div>
           {avatarPreview && (
@@ -231,7 +236,8 @@ export function ProfileForm({
         )}
         {initial.username && lock.locked ? (
           <span className="hint-bad">
-            🔒 Username locked — next change in {lock.daysLeft} day{lock.daysLeft === 1 ? "" : "s"}
+            <LockClosedIcon size={13} /> Username locked — next change in {lock.daysLeft} day
+            {lock.daysLeft === 1 ? "" : "s"}
             {lock.nextChangeAt
               ? ` (${new Date(lock.nextChangeAt).toLocaleDateString()})`
               : ""}
@@ -271,7 +277,7 @@ export function ProfileForm({
           Your avatar color outlines your <strong>profile card</strong>,{" "}
           <strong>banner</strong>, and <strong>profile picture</strong> when
           someone views your profile. Pick blue or yellow and your whole card
-          gets that outline ✨
+          gets that outline.
         </p>
         <div className="color-grid">
           {AVATAR_COLORS.map((c) => (

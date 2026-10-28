@@ -13,7 +13,7 @@ export const AVATAR_COLORS: AvatarColor[] = [
   {
     id: "black",
     name: "Default (Black)",
-    note: "if.. ur boring 😴",
+    note: "if.. ur boring",
     hex: "#43434f",
     soft: "#1c1c22",
     gradient: "linear-gradient(135deg,#1c1c22,#33333f)",

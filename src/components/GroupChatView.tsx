@@ -47,6 +47,35 @@ import {
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
+import {
+  ArrowLeftIcon,
+  BellOffIcon,
+  BubblePaletteIcon,
+  CameraIcon,
+  CheckIcon,
+  CloseIcon,
+  CopyIcon,
+  CrownIcon,
+  EditIcon,
+  FileTextIcon,
+  ForwardIcon,
+  ImageIcon,
+  LinkIcon,
+  LockClosedIcon,
+  MicVoiceIcon,
+  MoreVerticalIcon,
+  PaperclipIcon,
+  PlusIcon,
+  ReplyIcon,
+  SendIcon,
+  ShieldCheckIcon,
+  SmilePlusIcon,
+  SparklesIcon,
+  StarIcon,
+  TrashIcon,
+  UndoIcon,
+  UsersIcon,
+} from "./UiIcons";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { ContextMenu } from "./ContextMenu";
 import { MessageMarkdown } from "./MessageMarkdown";
@@ -268,7 +297,10 @@ const GroupChatHistory = memo(function GroupChatHistory({
     >
       {messagesReady && messages.length === 0 && (
         <div className="empty-box center">
-          <strong>This is the beginning of the group 🎉</strong>
+          <strong>
+            This is the beginning of the group{" "}
+            <SparklesIcon size={16} style={{ color: "var(--accent)" }} />
+          </strong>
           <span className="muted small">
             Say hello, share photos or stickers, or type <code>@everyone</code> to notify the group!
           </span>
@@ -289,7 +321,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
             <Fragment key={message.renderKey ?? message.id}>
               {showDay && <div className="day-divider">{day}</div>}
               <div className="wallpaper-event-pill" id={`group-message-${message.id}`}>
-                🖼️ {actor}{" "}
+                <ImageIcon size={13} /> {actor}{" "}
                 {wpSignal.kind === "none"
                   ? "reset the group wallpaper"
                   : "changed the group wallpaper"}
@@ -357,7 +389,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                 )}
                 {message.forwardedFromName && (
                   <span className={`message-meta forwarded-label ${!mine ? "group-indented" : ""}`}>
-                    ↗ Forwarded from {message.forwardedFromName}
+                    <ForwardIcon size={12} /> Forwarded from {message.forwardedFromName}
                   </span>
                 )}
                 <div className={`group-bubble-line ${mine ? "mine" : "theirs"}`}>
@@ -401,7 +433,13 @@ const GroupChatHistory = memo(function GroupChatHistory({
                           <strong>
                             {message.replyTo.senderId === me.id ? "You" : message.replyTo.senderName}
                           </strong>
-                          <span>{formatPreviewMessageText(message.replyTo.body) || "📎 Attachment"}</span>
+                          <span>
+                            {formatPreviewMessageText(message.replyTo.body) || (
+                              <>
+                                <PaperclipIcon size={12} /> Attachment
+                              </>
+                            )}
+                          </span>
                         </button>
                       )}
                       {message.unsentAt ? (
@@ -534,7 +572,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                               target="_blank"
                               rel="noopener noreferrer"
                             >
-                              📎 {message.attachmentName ?? "Attachment"}
+                              <PaperclipIcon size={14} /> {message.attachmentName ?? "Attachment"}
                             </a>
                           ))}
                         {message.stickerUrl && (
@@ -598,7 +636,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                           title="Add another reaction"
                           aria-label="Add another reaction"
                         >
-                          +
+                          <PlusIcon size={13} strokeWidth={2.5} />
                         </button>
                       )}
                     </div>
@@ -935,7 +973,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
             disabled={isEditing}
             onClick={() => fileInputRef.current?.click()}
           >
-            📎
+            <PaperclipIcon size={18} />
           </button>
           <StickerPicker
             friendId=""
@@ -950,10 +988,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
             disabled={busy || isEditing}
             onClick={onStartVoiceNote}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="9" y="2" width="6" height="12" rx="3" />
-              <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
-            </svg>
+            <MicVoiceIcon size={18} />
           </button>
           <textarea
             ref={composerRef}
@@ -1022,7 +1057,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
             onMouseDown={(event) => event.preventDefault()}
             aria-label={isEditing ? "Save edit" : "Send message"}
           >
-            {isEditing ? "✓" : "➤"}
+            {isEditing ? <CheckIcon size={19} strokeWidth={2.6} /> : <SendIcon size={18} />}
           </button>
         </form>
       )}
@@ -2152,7 +2187,7 @@ export function GroupChatView({
       ) : null}
       <header className="chat-header">
         <button className="icon-btn back-btn" onClick={closeChat} aria-label="Back">
-          ←
+          <ArrowLeftIcon size={19} />
         </button>
         <button
           type="button"
@@ -2170,7 +2205,7 @@ export function GroupChatView({
             />
           ) : (
             <div className="group-avatar group-avatar-fallback" aria-hidden="true">
-              👥
+              <UsersIcon size={22} />
             </div>
           )}
         </button>
@@ -2178,7 +2213,12 @@ export function GroupChatView({
           <strong>{group?.name ?? summary?.name ?? "Group chat"}</strong>
           <span className="muted small">
             {group?.members.length ?? summary?.memberCount ?? 0} members
-            {latestGroupEpoch ? ` · 🔒 Encrypted (Epoch #${latestGroupEpoch.epoch})` : ""}
+            {latestGroupEpoch ? (
+              <>
+                {" · "}
+                <LockClosedIcon size={12} /> Encrypted (Epoch #{latestGroupEpoch.epoch})
+              </>
+            ) : null}
             {" · Tap for group settings"}
           </span>
         </button>
@@ -2205,7 +2245,7 @@ export function GroupChatView({
               void groupCall.startGroupCall(groupSummary, "voice");
             }}
           >
-            📞
+            <Phone size={18} />
           </button>
           <button
             type="button"
@@ -2229,7 +2269,7 @@ export function GroupChatView({
               void groupCall.startGroupCall(groupSummary, "video");
             }}
           >
-            📹
+            <Video size={18} />
           </button>
           <button type="button" className="ghost-btn" onClick={openManageModal}>
             Manage
@@ -2241,7 +2281,7 @@ export function GroupChatView({
             aria-label="Group options"
             onClick={openManageModal}
           >
-            ⋮
+            <MoreVerticalIcon size={18} />
           </button>
         </div>
       </header>
@@ -2289,7 +2329,7 @@ export function GroupChatView({
             aria-label="Dismiss unsend notice"
             onClick={() => setShowUnsendWarning(false)}
           >
-            ×
+            <CloseIcon size={15} />
           </button>
         </div>
       )}
@@ -2346,16 +2386,18 @@ export function GroupChatView({
             <strong>Editing your message</strong>
             <span>{editingMessage.body}</span>
           </div>
-          <button type="button" className="mini-btn" onClick={cancelEditingMessage}>
-            ✕
+          <button type="button" className="mini-btn" aria-label="Cancel editing" onClick={cancelEditingMessage}>
+            <CloseIcon size={13} />
           </button>
         </div>
       )}
       {file && (
         <div className="attach-preview">
-          <span>📎 {file.name}</span>
+          <span>
+            <PaperclipIcon size={14} /> {file.name}
+          </span>
           <button type="button" className="mini-btn" onClick={() => setFile(null)}>
-            ✕ Remove
+            <CloseIcon size={12} /> Remove
           </button>
         </div>
       )}
@@ -2378,6 +2420,7 @@ export function GroupChatView({
           <button
             type="button"
             className="mini-btn"
+            aria-label="Dismiss preview"
             onClick={() => {
               setReplyTo(null);
               setForwardedMessage(null);
@@ -2386,7 +2429,7 @@ export function GroupChatView({
               }
             }}
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
       )}
@@ -2429,7 +2472,10 @@ export function GroupChatView({
           onClose={closeMessageMenu}
         >
           <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}>
-            <span>↩️</span> Reply
+            <span>
+              <ReplyIcon size={15} />
+            </span>{" "}
+            Reply
           </button>
           {!messageMenu.message.unsentAt &&
             messageMenu.message.senderId === store.me?.id && (
@@ -2441,7 +2487,10 @@ export function GroupChatView({
                   setBubbleStyleOpen(true);
                 }}
               >
-                <span>💬</span> Bubble style
+                <span>
+                  <BubblePaletteIcon size={15} />
+                </span>{" "}
+                Bubble style
               </button>
             )}
           {!messageMenu.message.unsentAt &&
@@ -2458,7 +2507,9 @@ export function GroupChatView({
                   closeMessageMenu();
                 }}
               >
-                <span>📝</span>{" "}
+                <span>
+                  <FileTextIcon size={15} />
+                </span>{" "}
                 {shownTranscriptIds[messageMenu.message.id]
                   ? "Hide transcription"
                   : "Show transcription"}
@@ -2472,7 +2523,10 @@ export function GroupChatView({
                   role="menuitem"
                   onClick={() => startEditingMessage(messageMenu.message)}
                 >
-                  <span>✏️</span> Edit message
+                  <span>
+                    <EditIcon size={15} />
+                  </span>{" "}
+                  Edit message
                 </button>
               )}
               <button
@@ -2488,7 +2542,10 @@ export function GroupChatView({
                   closeMessageMenu();
                 }}
               >
-                <span>↗️</span> Forward
+                <span>
+                  <ForwardIcon size={15} />
+                </span>{" "}
+                Forward
               </button>
               <button
                 type="button"
@@ -2503,7 +2560,10 @@ export function GroupChatView({
                   });
                 }}
               >
-                <span>✨</span> Reaction
+                <span>
+                  <SmilePlusIcon size={15} />
+                </span>{" "}
+                Reaction
               </button>
             </>
           )}
@@ -2512,14 +2572,20 @@ export function GroupChatView({
             role="menuitem"
             onClick={() => void copyMessage(messageMenu.message)}
           >
-            <span>📋</span> Copy text
+            <span>
+              <CopyIcon size={15} />
+            </span>{" "}
+            Copy text
           </button>
           <button
             type="button"
             role="menuitem"
             onClick={() => void deleteForMe(messageMenu.message)}
           >
-            <span>🗑️</span> Delete for me
+            <span>
+              <TrashIcon size={15} />
+            </span>{" "}
+            Delete for me
           </button>
           {(messageMenu.message.stickerKey ||
             isImageAttachment(
@@ -2533,7 +2599,9 @@ export function GroupChatView({
               role="menuitem"
               onClick={() => void favoriteSticker(messageMenu.message)}
             >
-              <span>{messageMenu.message.isStickerFavorite ? "☆" : "⭐"}</span>
+              <span>
+                <StarIcon size={15} filled={!messageMenu.message.isStickerFavorite} />
+              </span>
               {isImageAttachment(
                 messageMenu.message.attachmentType,
                 messageMenu.message.attachmentName,
@@ -2559,14 +2627,20 @@ export function GroupChatView({
                 role="menuitem"
                 onClick={() => void copyImage(messageMenu.message)}
               >
-                <span>🖼️</span> Copy image
+                <span>
+                  <ImageIcon size={15} />
+                </span>{" "}
+                Copy image
               </button>
               <button
                 type="button"
                 role="menuitem"
                 onClick={() => void copyImageAddress(messageMenu.message)}
               >
-                <span>🔗</span> Copy image address
+                <span>
+                  <LinkIcon size={15} />
+                </span>{" "}
+                Copy image address
               </button>
             </>
           )}
@@ -2577,7 +2651,10 @@ export function GroupChatView({
               className="destructive-menu-item"
               onClick={() => void unsend(messageMenu.message)}
             >
-              <span>↩️</span> Unsend
+              <span>
+                <UndoIcon size={15} />
+              </span>{" "}
+              Unsend
             </button>
           )}
           <button
@@ -2588,7 +2665,10 @@ export function GroupChatView({
               closeMessageMenu();
             }}
           >
-            <span>🔐</span> Encryption details
+            <span>
+              <LockClosedIcon size={15} />
+            </span>{" "}
+            Encryption details
           </button>
         </ContextMenu>
       )}
@@ -2614,7 +2694,7 @@ export function GroupChatView({
                 aria-label="Close forward dialog"
                 onClick={closeForwardDialog}
               >
-                ✕
+                <CloseIcon size={17} />
               </button>
             </header>
             <div className="forward-friends">
@@ -2647,8 +2727,8 @@ export function GroupChatView({
                         style={{ width: 38, height: 38 }}
                       />
                     ) : (
-                      <span className="group-avatar group-avatar-fallback" style={{ width: 38, height: 38, fontSize: 18 }}>
-                        👥
+                      <span className="group-avatar group-avatar-fallback" style={{ width: 38, height: 38 }}>
+                        <UsersIcon size={19} />
                       </span>
                     )}
                     <span>{target.name}</span>
@@ -2703,7 +2783,7 @@ export function GroupChatView({
             aria-label="Close image viewer"
             onClick={closeImagePreview}
           >
-            ×
+            <CloseIcon size={20} />
           </button>
           <img
             ref={imageElementRef}
@@ -2745,7 +2825,7 @@ export function GroupChatView({
               onClick={closeManageModal}
               aria-label="Close"
             >
-              ×
+              <CloseIcon size={17} />
             </button>
             <h2>Group settings</h2>
 
@@ -2781,7 +2861,15 @@ export function GroupChatView({
                         window.setTimeout(() => setCopiedGroupKey(false), 1800);
                       }}
                     >
-                      {copiedGroupKey ? "✓ Copied" : "Copy group E2EE key"}
+                      {copiedGroupKey ? (
+                        <>
+                          <CheckIcon size={12} /> Copied
+                        </>
+                      ) : (
+                        <>
+                          <CopyIcon size={12} /> Copy group E2EE key
+                        </>
+                      )}
                     </button>
                   </div>
                 </>
@@ -2806,11 +2894,13 @@ export function GroupChatView({
                       <img className="group-pfp-circle-img" src={groupAvatarPreview} alt={group.name} />
                     ) : (
                       <span className="group-pfp-circle-fallback" aria-hidden="true">
-                        {(renameDraft.trim() || group.name).slice(0, 2).toUpperCase() || "👥"}
+                        {(renameDraft.trim() || group.name).slice(0, 2).toUpperCase() || (
+                          <UsersIcon size={24} />
+                        )}
                       </span>
                     )}
                     <span className="pf-avatar-edit" aria-hidden="true">
-                      ✏️
+                      <EditIcon size={14} />
                     </span>
                   </button>
                   <input
@@ -2834,7 +2924,7 @@ export function GroupChatView({
                         className="mini-btn"
                         onClick={() => groupPfpInput.current?.click()}
                       >
-                        📷 Choose photo
+                        <CameraIcon size={13} /> Choose photo
                       </button>
                       {isMobileWallpaper && (
                         <button
@@ -2845,7 +2935,7 @@ export function GroupChatView({
                             setWallpaperOpen(true);
                           }}
                         >
-                          🖼️ Chat wallpaper
+                          <ImageIcon size={13} /> Chat wallpaper
                         </button>
                       )}
                       {groupAvatarPreview && (
@@ -2883,7 +2973,9 @@ export function GroupChatView({
 
                 <div className="group-save-row">
                   {manageSaved ? (
-                    <span className="hint-ok">✓ Changes saved!</span>
+                    <span className="hint-ok">
+                      <CheckIcon size={13} /> Changes saved!
+                    </span>
                   ) : (
                     <span className="muted small">
                       {hasGroupProfileChanges ? "Unsaved changes" : "Group profile is up to date"}
@@ -2922,7 +3014,7 @@ export function GroupChatView({
                       />
                     ) : (
                       <span className="group-pfp-circle-fallback" aria-hidden="true">
-                        {group.name.slice(0, 2).toUpperCase() || "👥"}
+                        {group.name.slice(0, 2).toUpperCase() || <UsersIcon size={24} />}
                       </span>
                     )}
                   </button>
@@ -2950,7 +3042,13 @@ export function GroupChatView({
                   className="mini-btn group-invite-toggle"
                   onClick={() => setShowAddMembers((open) => !open)}
                 >
-                  {showAddMembers ? "Close invite" : "➕ Add friends"}
+                  {showAddMembers ? (
+                    "Close invite"
+                  ) : (
+                    <>
+                      <PlusIcon size={13} /> Add friends
+                    </>
+                  )}
                 </button>
               )}
             </div>
@@ -3048,12 +3146,20 @@ export function GroupChatView({
                         <strong>{member.displayName}</strong>
                         {isSelf && <span className="role-pill you">You</span>}
                         {member.role === "owner" && (
-                          <span className="role-pill owner">👑 Owner</span>
+                          <span className="role-pill owner">
+                            <CrownIcon size={12} /> Owner
+                          </span>
                         )}
                         {member.role === "moderator" && (
-                          <span className="role-pill moderator">🛡️ Moderator</span>
+                          <span className="role-pill moderator">
+                            <ShieldCheckIcon size={12} /> Moderator
+                          </span>
                         )}
-                        {member.muted && <span className="role-pill muted-pill">🔇 Muted</span>}
+                        {member.muted && (
+                          <span className="role-pill muted-pill">
+                            <BellOffIcon size={12} /> Muted
+                          </span>
+                        )}
                       </span>
                       <span className="muted small">
                         @{member.username}

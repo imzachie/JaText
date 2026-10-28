@@ -1,5 +1,6 @@
 import { Fragment, memo, useState, type ReactNode } from "react";
 import type { GroupMember, JaUser } from "../lib/types";
+import { CheckIcon, CopyIcon } from "./UiIcons";
 
 export interface MarkdownMentionContext {
   memberByUsername: Map<string, GroupMember>;
@@ -164,7 +165,15 @@ function CodeBlockView({ lang, code }: { lang: string; code: string }) {
       <div className="md-codeblock-head">
         <span className="md-codeblock-lang">{lang || "code"}</span>
         <button type="button" className="md-codeblock-copy" onClick={handleCopy}>
-          {copied ? "Copied ✓" : "Copy"}
+          {copied ? (
+            <>
+              <CheckIcon size={12} /> Copied
+            </>
+          ) : (
+            <>
+              <CopyIcon size={12} /> Copy
+            </>
+          )}
         </button>
       </div>
       <pre className="md-codeblock-pre">
@@ -493,7 +502,7 @@ function renderListItems(
             className={`md-task-box ${cur.checked ? "checked" : ""}`}
             aria-hidden="true"
           >
-            {cur.checked ? "✓" : ""}
+            {cur.checked ? <CheckIcon size={11} strokeWidth={3} /> : ""}
           </span>
         )}
         <span className={cur.checked ? "md-task-done" : undefined}>

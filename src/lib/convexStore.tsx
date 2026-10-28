@@ -934,7 +934,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           // Ignore media fetch failure
         }
       }
-      const fwdText = src.body ? `↪ Forwarded from @${src.senderUsername}:\n${src.body}` : "";
+      const fwdText = src.body ? `Forwarded from @${src.senderUsername}:\n${src.body}` : "";
       if (target.userId) {
         const enc = await prepareOutgoingDmEncrypted({
           receiverId: target.userId,
@@ -1327,7 +1327,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           }
         }
       }
-      const fwdBody = src.body ? `↪ Forwarded from ${src.senderName || "group"}:\n${src.body}` : "";
+      const fwdBody = src.body ? `Forwarded from ${src.senderName || "group"}:\n${src.body}` : "";
 
       if (target.userId) {
         const enc = await prepareOutgoingDmEncrypted({
@@ -1898,7 +1898,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         }
         const enc = await prepareOutgoingDmEncrypted({
           receiverId,
-          wireBody: src.body ? `↪ Forwarded:\n${src.body}` : "",
+          wireBody: src.body ? `Forwarded:\n${src.body}` : "",
           file: fwdFile,
           sticker: klipySticker,
           uploadFile: upload,

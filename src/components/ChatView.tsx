@@ -45,6 +45,37 @@ import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { SwipeToReply } from "./SwipeToReply";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { StickerPicker } from "./StickerPicker";
+import {
+  ArrowLeftIcon,
+  BanIcon,
+  BellIcon,
+  BellOffIcon,
+  BubblePaletteIcon,
+  CheckIcon,
+  CloseIcon,
+  CopyIcon,
+  EditIcon,
+  FileTextIcon,
+  ForwardIcon,
+  ImageIcon,
+  LinkIcon,
+  LockClosedIcon,
+  MicVoiceIcon,
+  MoreVerticalIcon,
+  PaperclipIcon,
+  PlusIcon,
+  ReplyIcon,
+  SendIcon,
+  ShieldCheckIcon,
+  SmilePlusIcon,
+  SparklesIcon,
+  StarIcon,
+  TrashIcon,
+  UndoIcon,
+  UnlockIcon,
+  UserIcon,
+  UserMinusIcon,
+} from "./UiIcons";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { useJaText } from "../lib/store";
@@ -194,7 +225,8 @@ const ChatHistory = memo(function ChatHistory({
         <div className="empty-box center">
           <Avatar user={friend} size={72} onClick={() => onOpenProfile(friend)} />
           <p>
-            You're now friends with <strong>{friend.displayName}</strong> 🎉
+            You&apos;re now friends with <strong>{friend.displayName}</strong>{" "}
+            <SparklesIcon size={16} style={{ color: "var(--accent)" }} />
           </p>
           <p className="muted small">Send the first message below — photos &amp; files work too!</p>
         </div>
@@ -213,7 +245,7 @@ const ChatHistory = memo(function ChatHistory({
             <div key={message.renderKey ?? message.id}>
               {showDay && <div className="day-divider">{day}</div>}
               <div className="wallpaper-event-pill" id={`message-${message.id}`}>
-                🖼️ {actor}{" "}
+                <ImageIcon size={13} /> {actor}{" "}
                 {wpSignal.kind === "none"
                   ? "reset the chat wallpaper"
                   : "changed the chat wallpaper"}
@@ -243,7 +275,7 @@ const ChatHistory = memo(function ChatHistory({
               <div className="msg-col">
                 {message.forwardedFrom && (
                   <span className="message-meta forwarded-label">
-                    ↗ Forwarded from {message.forwardedFrom}
+                    <ForwardIcon size={12} /> Forwarded from {message.forwardedFrom}
                   </span>
                 )}
                 <SwipeToReply
@@ -279,7 +311,11 @@ const ChatHistory = memo(function ChatHistory({
                         {message.replyTo.senderId === me.id ? "You" : friend.displayName}
                       </strong>
                       <span>
-                        {formatPreviewMessageText(message.replyTo.body) || "📎 Attachment"}
+                        {formatPreviewMessageText(message.replyTo.body) || (
+                          <>
+                            <PaperclipIcon size={12} /> Attachment
+                          </>
+                        )}
                       </span>
                     </button>
                   )}
@@ -365,7 +401,7 @@ const ChatHistory = memo(function ChatHistory({
                             target="_blank"
                             rel="noreferrer"
                           >
-                            📎 {message.attachmentName ?? "Attachment"}
+                            <PaperclipIcon size={14} /> {message.attachmentName ?? "Attachment"}
                           </a>
                         ))}
                       {message.body && <MessageMarkdown text={message.body} mine={mine} />}
@@ -407,7 +443,7 @@ const ChatHistory = memo(function ChatHistory({
                         title="Add another reaction"
                         aria-label="Add another reaction"
                       >
-                        +
+                        <PlusIcon size={13} strokeWidth={2.5} />
                       </button>
                     )}
                   </div>
@@ -530,10 +566,11 @@ const DirectChatComposer = memo(function DirectChatComposer({
         type="button"
         className="icon-btn attach-btn"
         title="Attach a photo or file"
+        aria-label="Attach a photo or file"
         disabled={isFriendBlocked || isEditing}
         onClick={() => fileInputRef.current?.click()}
       >
-        📎
+        <PaperclipIcon size={18} />
       </button>
       <StickerPicker friendId={friendId} disabled={isFriendBlocked || isEditing} />
       <button
@@ -544,10 +581,7 @@ const DirectChatComposer = memo(function DirectChatComposer({
         disabled={isFriendBlocked || isEditing}
         onClick={onStartVoiceNote}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="9" y="2" width="6" height="12" rx="3" />
-          <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
-        </svg>
+        <MicVoiceIcon size={18} />
       </button>
       <textarea
         ref={composerRef}
@@ -587,8 +621,9 @@ const DirectChatComposer = memo(function DirectChatComposer({
         }
         onPointerDown={(event) => event.preventDefault()}
         onMouseDown={(event) => event.preventDefault()}
+        aria-label={isEditing ? "Save edit" : "Send message"}
       >
-        {isEditing ? "✓" : "➤"}
+        {isEditing ? <CheckIcon size={19} strokeWidth={2.6} /> : <SendIcon size={18} />}
       </button>
     </form>
   );
@@ -1296,7 +1331,7 @@ export function ChatView({
       ) : null}
       <header className="chat-header">
         <button className="icon-btn back-btn" onClick={closeChat} aria-label="Back">
-          ←
+          <ArrowLeftIcon size={19} />
         </button>
         <Avatar
           user={friend}
@@ -1309,11 +1344,19 @@ export function ChatView({
           <span className="muted small chat-presence">
             @{friend.username} · {friendStatusLabel}
             {friendActivity?.customStatus ? ` · ${friendActivity.customStatus}` : ""}
-            {peerE2EE
-              ? peerE2EE.verifiedKeyId === peerE2EE.bundle.keyId
-                ? " · 🔒 Encrypted & Verified"
-                : " · 🔒 Encrypted"
-              : ""}
+            {peerE2EE ? (
+              peerE2EE.verifiedKeyId === peerE2EE.bundle.keyId ? (
+                <>
+                  {" · "}
+                  <ShieldCheckIcon size={12} /> Encrypted &amp; Verified
+                </>
+              ) : (
+                <>
+                  {" · "}
+                  <LockClosedIcon size={12} /> Encrypted
+                </>
+              )
+            ) : null}
           </span>
         </button>
         <div className="chat-header-actions" aria-label="Chat actions">
@@ -1347,7 +1390,7 @@ export function ChatView({
               setHeaderMoreMenu({ x: rect.right - 8, y: rect.bottom + 6 });
             }}
           >
-            ⋮
+            <MoreVerticalIcon size={18} />
           </button>
         </div>
       </header>
@@ -1364,7 +1407,7 @@ export function ChatView({
             aria-label="Dismiss unsend notice"
             onClick={() => setShowUnsendWarning(false)}
           >
-            ×
+            <CloseIcon size={15} />
           </button>
         </div>
       )}
@@ -1406,9 +1449,11 @@ export function ChatView({
 
       {file && (
         <div className="attach-preview">
-          📎 {file.name}
+          <span>
+            <PaperclipIcon size={14} /> {file.name}
+          </span>
           <button className="mini-btn" onClick={() => setFile(null)}>
-            ✕ Remove
+            <CloseIcon size={12} /> Remove
           </button>
         </div>
       )}
@@ -1419,8 +1464,8 @@ export function ChatView({
             <strong>Replying to {replyTo.senderId === me.id ? "yourself" : friend.displayName}</strong>
             <span>{replyTo.unsentAt ? "This message was unsent" : replyTo.body || replyTo.attachmentName || "Attachment"}</span>
           </div>
-          <button type="button" className="mini-btn" onClick={() => setReplyTo(null)}>
-            ✕
+          <button type="button" className="mini-btn" aria-label="Cancel reply" onClick={() => setReplyTo(null)}>
+            <CloseIcon size={13} />
           </button>
         </div>
       )}
@@ -1430,8 +1475,8 @@ export function ChatView({
             <strong>Editing your message</strong>
             <span>{editingMessage.body}</span>
           </div>
-          <button type="button" className="mini-btn" onClick={cancelEditingMessage}>
-            ✕
+          <button type="button" className="mini-btn" aria-label="Cancel editing" onClick={cancelEditingMessage}>
+            <CloseIcon size={13} />
           </button>
         </div>
       )}
@@ -1471,7 +1516,10 @@ export function ChatView({
           onClose={closeMessageMenu}
         >
           <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}>
-            <span>↩️</span> Reply
+            <span>
+              <ReplyIcon size={15} />
+            </span>{" "}
+            Reply
           </button>
           {!messageMenu.message.unsentAt &&
             messageMenu.message.senderId === me.id && (
@@ -1483,7 +1531,10 @@ export function ChatView({
                   setBubbleStyleOpen(true);
                 }}
               >
-                <span>💬</span> Bubble style
+                <span>
+                  <BubblePaletteIcon size={15} />
+                </span>{" "}
+                Bubble style
               </button>
             )}
           {!messageMenu.message.unsentAt &&
@@ -1500,7 +1551,9 @@ export function ChatView({
                   closeMessageMenu();
                 }}
               >
-                <span>📝</span>{" "}
+                <span>
+                  <FileTextIcon size={15} />
+                </span>{" "}
                 {shownTranscriptIds[messageMenu.message.id]
                   ? "Hide transcription"
                   : "Show transcription"}
@@ -1514,7 +1567,10 @@ export function ChatView({
                   role="menuitem"
                   onClick={() => startEditingMessage(messageMenu.message)}
                 >
-                  <span>✏️</span> Edit message
+                  <span>
+                    <EditIcon size={15} />
+                  </span>{" "}
+                  Edit message
                 </button>
               )}
               <button
@@ -1530,7 +1586,10 @@ export function ChatView({
                   closeMessageMenu();
                 }}
               >
-                <span>↗️</span> Forward
+                <span>
+                  <ForwardIcon size={15} />
+                </span>{" "}
+                Forward
               </button>
               <button
                 type="button"
@@ -1545,15 +1604,24 @@ export function ChatView({
                   });
                 }}
               >
-                <span>✨</span> Reaction
+                <span>
+                  <SmilePlusIcon size={15} />
+                </span>{" "}
+                Reaction
               </button>
             </>
           )}
           <button type="button" role="menuitem" onClick={() => void copyMessage(messageMenu.message)}>
-            <span>📋</span> Copy text
+            <span>
+              <CopyIcon size={15} />
+            </span>{" "}
+            Copy text
           </button>
           <button type="button" role="menuitem" onClick={() => void deleteForMe(messageMenu.message)}>
-            <span>🗑️</span> Delete for me
+            <span>
+              <TrashIcon size={15} />
+            </span>{" "}
+            Delete for me
           </button>
           {(messageMenu.message.stickerKey ||
             messageMenu.message.attachmentType?.startsWith("image/")) && (
@@ -1562,7 +1630,9 @@ export function ChatView({
               role="menuitem"
               onClick={() => void favoriteSticker(messageMenu.message)}
             >
-              <span>{messageMenu.message.isStickerFavorite ? "☆" : "⭐"}</span>
+              <span>
+                <StarIcon size={15} filled={!messageMenu.message.isStickerFavorite} />
+              </span>
               {messageMenu.message.attachmentType?.startsWith("image/") &&
               !messageMenu.message.stickerKey
                 ? "Make this image a sticker..."
@@ -1574,14 +1644,20 @@ export function ChatView({
           {messageMenu.message.attachmentType?.startsWith("image/") && (
             <>
               <button type="button" role="menuitem" onClick={() => void copyImage(messageMenu.message)}>
-                <span>🖼️</span> Copy image
+                <span>
+                  <ImageIcon size={15} />
+                </span>{" "}
+                Copy image
               </button>
               <button
                 type="button"
                 role="menuitem"
                 onClick={() => void copyImageAddress(messageMenu.message)}
               >
-                <span>🔗</span> Copy image address
+                <span>
+                  <LinkIcon size={15} />
+                </span>{" "}
+                Copy image address
               </button>
             </>
           )}
@@ -1592,7 +1668,10 @@ export function ChatView({
               className="destructive-menu-item"
               onClick={() => void unsend(messageMenu.message)}
             >
-              <span>↩️</span> Unsend
+              <span>
+                <UndoIcon size={15} />
+              </span>{" "}
+              Unsend
             </button>
           )}
           <button
@@ -1603,7 +1682,10 @@ export function ChatView({
               closeMessageMenu();
             }}
           >
-            <span>🔐</span> Encryption details
+            <span>
+              <LockClosedIcon size={15} />
+            </span>{" "}
+            Encryption details
           </button>
         </ContextMenu>
       )}
@@ -1629,7 +1711,7 @@ export function ChatView({
                 aria-label="Close forward dialog"
                 onClick={closeForwardDialog}
               >
-                ✕
+                <CloseIcon size={17} />
               </button>
             </header>
             <div className="forward-friends">
@@ -1720,7 +1802,10 @@ export function ChatView({
               onOpenProfile(friend);
             }}
           >
-            <span>👤</span> View profile
+            <span>
+              <UserIcon size={15} />
+            </span>{" "}
+            View profile
           </button>
           <button
             type="button"
@@ -1730,7 +1815,10 @@ export function ChatView({
               setBubbleStyleOpen(true);
             }}
           >
-            <span>💬</span> Bubble style
+            <span>
+              <BubblePaletteIcon size={15} />
+            </span>{" "}
+            Bubble style
           </button>
           {isMobileWallpaper && (
             <button
@@ -1741,7 +1829,10 @@ export function ChatView({
                 setWallpaperModalOpen(true);
               }}
             >
-              <span>🖼️</span> Chat wallpaper
+              <span>
+                <ImageIcon size={15} />
+              </span>{" "}
+              Chat wallpaper
             </button>
           )}
           <button
@@ -1755,7 +1846,11 @@ export function ChatView({
             }}
           >
             <span>
-              {store.previews.find((p) => p.friendId === friend.id)?.isMuted ? "🔔" : "🔕"}
+              {store.previews.find((p) => p.friendId === friend.id)?.isMuted ? (
+                <BellIcon size={15} />
+              ) : (
+                <BellOffIcon size={15} />
+              )}
             </span>
             {store.previews.find((p) => p.friendId === friend.id)?.isMuted
               ? "Unmute chat"
@@ -1776,7 +1871,10 @@ export function ChatView({
               }
             }}
           >
-            <span>💔</span> Unfriend
+            <span>
+              <UserMinusIcon size={15} />
+            </span>{" "}
+            Unfriend
           </button>
           <button
             type="button"
@@ -1787,7 +1885,7 @@ export function ChatView({
               void store.setUserBlocked(friend.id, !isFriendBlocked);
             }}
           >
-            <span>{isFriendBlocked ? "🔓" : "🚫"}</span>
+            <span>{isFriendBlocked ? <UnlockIcon size={15} /> : <BanIcon size={15} />}</span>
             {isFriendBlocked ? "Unblock" : "Block"}
           </button>
         </ContextMenu>
@@ -1806,7 +1904,7 @@ export function ChatView({
             aria-label="Close image viewer"
             onClick={closeImagePreview}
           >
-            ×
+            <CloseIcon size={20} />
           </button>
           <img
             ref={imageElementRef}

@@ -14,6 +14,7 @@ import { ProfileModal } from "./components/ProfileCard";
 import { SettingsModal } from "./components/Settings";
 import { LockIcon } from "./components/E2EEModals";
 import { Sidebar } from "./components/Sidebar";
+import { MessageCircleIcon } from "./components/UiIcons";
 import {
   CallProvider,
   formatPreviewMessageText,
@@ -189,7 +190,8 @@ function AppContent() {
       const isPendingE2EE =
         Boolean(previous) &&
         previous?.get(preview.friendId) !== sig &&
-        (preview.body === "🔒 Encrypted message" ||
+        (preview.body === "Encrypted message" ||
+          preview.body === "🔒 Encrypted message" ||
           preview.body.includes("__JATEXT_E2EE_V1__:")) &&
         now - preview.createdAt < 2500;
       if (isPendingE2EE) {
@@ -294,7 +296,8 @@ function AppContent() {
       const isPendingGroupE2EE =
         Boolean(previous) &&
         previous?.get(group.id) !== sig &&
-        (group.lastMessage === "🔒 Encrypted message" ||
+        (group.lastMessage === "Encrypted message" ||
+          group.lastMessage === "🔒 Encrypted message" ||
           group.lastMessage.includes("__JATEXT_E2EE_V1__:")) &&
         now - group.lastMessageAt < 2500;
       if (isPendingGroupE2EE) {
@@ -469,7 +472,9 @@ function AppContent() {
         ) : (
           <div className="no-chat">
             <img className="logo-icon no-chat-logo" src="/jatext-logo-icon.png" alt="" />
-            <h2>Pick a chat 💬</h2>
+            <h2>
+              Pick a chat <MessageCircleIcon size={22} style={{ color: "var(--accent)" }} />
+            </h2>
             <p className="muted">
               Choose a friend on the left to start texting, or add someone new
               by their username.

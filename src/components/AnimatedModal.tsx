@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { CloseIcon } from "./UiIcons";
 
 export function AnimatedModal({
   open = true,
@@ -67,7 +68,7 @@ export function AnimatedModal({
             onClick={requestClose}
             aria-label={closeLabel}
           >
-            ✕
+            <CloseIcon size={17} />
           </button>
         )}
         {children(requestClose)}

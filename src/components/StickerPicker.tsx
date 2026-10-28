@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "reac
 import { friendlyError } from "../lib/errors";
 import { useJaText } from "../lib/store";
 import type { StickerMedia } from "../lib/types";
+import { CloseIcon, ImageIcon, PlusIcon, StarIcon } from "./UiIcons";
 
 type PickerTab = "favorites" | "recent" | "klipy" | "upload";
 
@@ -211,7 +212,7 @@ export function StickerPicker({
               aria-label="Close sticker picker"
               onClick={closePicker}
             >
-              ×
+              <CloseIcon size={14} />
             </button>
           </header>
           <nav className="sticker-tabs" aria-label="Sticker collections">
@@ -265,7 +266,7 @@ export function StickerPicker({
                     />
                   ) : (
                     <div className="sticker-upload-placeholder" aria-hidden="true">
-                      🖼️
+                      <ImageIcon size={28} />
                     </div>
                   )}
                   <strong>{uploadFile.name}</strong>
@@ -294,7 +295,9 @@ export function StickerPicker({
                   className="sticker-upload-select"
                   onClick={() => uploadInputRef.current?.click()}
                 >
-                  <span aria-hidden="true">＋</span>
+                  <span aria-hidden="true">
+                    <PlusIcon size={22} />
+                  </span>
                   <strong>Choose an image or GIF</strong>
                   <small>
                     JPG, PNG, GIF, WebP and more · up to{" "}
@@ -364,7 +367,7 @@ export function StickerPicker({
                           title={isFavorite ? "Remove from favourites" : "Add to favourites"}
                           onClick={() => void toggleFavorite(sticker, isFavorite)}
                         >
-                          {isFavorite ? "★" : "☆"}
+                          <StarIcon size={13} filled={isFavorite} />
                         </button>
                       </div>
                     );

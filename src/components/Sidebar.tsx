@@ -15,6 +15,26 @@ import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
+import {
+  ArchiveIcon,
+  ArrowDownLeftIcon,
+  ArrowLeftIcon,
+  ArrowUpRightIcon,
+  BanIcon,
+  BellIcon,
+  BellOffIcon,
+  CheckIcon,
+  ClockIcon,
+  FlaskIcon,
+  MessageCircleIcon,
+  PlusIcon,
+  SettingsIcon,
+  TrashIcon,
+  UnlockIcon,
+  UserMinusIcon,
+  UserPlusIcon,
+  UsersIcon,
+} from "./UiIcons";
 
 function fmtTime(ts: number) {
   const d = new Date(ts);
@@ -238,7 +258,7 @@ export function Sidebar({
           <span>JaText</span>
         </div>
         <button className="icon-btn" onClick={onOpenSettings} title="Settings" aria-label="Settings">
-          ⚙️
+          <SettingsIcon size={18} />
         </button>
       </header>
 
@@ -265,13 +285,16 @@ export function Sidebar({
 
       <div className="tabs sidebar-tabs">
         <button className={tab === "chats" ? "active" : ""} onClick={() => setTab("chats")}>
-          💬 Chats
+          <MessageCircleIcon size={15} />
+          <span>Chats</span>
         </button>
         <button className={tab === "calls" ? "active" : ""} onClick={() => setTab("calls")}>
-          📞 Calls
+          <Phone size={15} />
+          <span>Calls</span>
         </button>
         <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}>
-          ➕ Add
+          <PlusIcon size={15} />
+          <span>Add</span>
           {incoming.length > 0 && <span className="badge">{incoming.length}</span>}
         </button>
       </div>
@@ -289,7 +312,15 @@ export function Sidebar({
             className={`archive-toggle ${showArchived ? "active" : ""}`}
             onClick={() => setShowArchived((current) => !current)}
           >
-            {showArchived ? "← Chats" : `📦 Archived${archivedCount ? ` (${archivedCount})` : ""}`}
+            {showArchived ? (
+              <>
+                <ArrowLeftIcon size={14} /> Chats
+              </>
+            ) : (
+              <>
+                <ArchiveIcon size={14} /> Archived{archivedCount ? ` (${archivedCount})` : ""}
+              </>
+            )}
           </button>
           {chatActionError && (
             <div className="error-box sidebar-error" role="alert">
@@ -308,7 +339,7 @@ export function Sidebar({
                     <strong>JaText Community</strong>
                     <span className="friend-row-badges">
                       <span className="verified-badge" title="Verified">
-                        ✓
+                        <CheckIcon size={11} strokeWidth={3} />
                       </span>
                       <span className="official-badge">Official</span>
                     </span>
@@ -353,7 +384,7 @@ export function Sidebar({
                           className="group-avatar sidebar-group-avatar group-avatar-fallback"
                           aria-hidden="true"
                         >
-                          👥
+                          <UsersIcon size={20} />
                         </div>
                       )}
                       <div className="friend-row-text">
@@ -392,7 +423,9 @@ export function Sidebar({
             )}
             {friends.length === 0 && (
               <div className="empty-box">
-                <p>No friends yet 🥲</p>
+                <p>
+                  <UserPlusIcon size={18} style={{ color: "var(--accent)" }} /> No friends yet
+                </p>
                 <p className="muted small">
                   Head to <strong>Add</strong> and add someone by their username. Once they accept,
                   you can start texting!
@@ -428,8 +461,16 @@ export function Sidebar({
                     <div className="friend-row-top">
                       <strong>{friend.displayName}</strong>
                       <span className="friend-row-badges">
-                        {preview?.isArchived && <span title="Archived">📦</span>}
-                        {preview?.isMuted && <span title="Muted">🔕</span>}
+                        {preview?.isArchived && (
+                          <span title="Archived">
+                            <ArchiveIcon size={13} />
+                          </span>
+                        )}
+                        {preview?.isMuted && (
+                          <span title="Muted">
+                            <BellOffIcon size={13} />
+                          </span>
+                        )}
                         {preview?.createdAt ? (
                           <span className="muted small">{fmtTime(preview.createdAt)}</span>
                         ) : null}
@@ -443,7 +484,7 @@ export function Sidebar({
                       ) : preview?.createdAt ? (
                         `${preview.senderId === me.id ? "You: " : ""}${formatPreviewMessageText(preview.body)}`
                       ) : (
-                        `@${friend.username} — say hi! 👋`
+                        `@${friend.username} — say hi!`
                       )}
                     </span>
                   </div>
@@ -458,7 +499,9 @@ export function Sidebar({
         <div className="sidebar-tab-pane calls-tab-pane" key="pane-calls">
           {combinedCalls.length === 0 ? (
             <div className="empty-box">
-              <p>No calls yet 📞</p>
+              <p>
+                <Phone size={18} /> No calls yet
+              </p>
               <p className="muted small">
                 Start a voice or video call with a friend or group — your incoming and outgoing call
                 history will show right here.
@@ -483,7 +526,6 @@ export function Sidebar({
                   onboardingComplete: true,
                 };
                 const isMissed = entry.state === "missed" || entry.state === "declined";
-                const dirArrow = entry.direction === "outgoing" ? "↗" : "↙";
                 const dirLabel = entry.direction === "outgoing" ? "Outgoing" : "Incoming";
                 const isLiveNow =
                   session?.callId === entry.callId || groupSession?.callId === entry.callId;
@@ -521,7 +563,7 @@ export function Sidebar({
                         />
                       ) : (
                         <div className="group-avatar sidebar-group-avatar group-avatar-fallback">
-                          👥
+                          <UsersIcon size={20} />
                         </div>
                       )
                     ) : (
@@ -548,7 +590,12 @@ export function Sidebar({
                       </div>
                       <div className={`call-history-sub ${isMissed ? "missed" : ""}`}>
                         <span className={`call-dir-badge ${isMissed ? "missed" : entry.direction}`}>
-                          {dirArrow} {dirLabel}
+                          {entry.direction === "outgoing" ? (
+                            <ArrowUpRightIcon size={12} />
+                          ) : (
+                            <ArrowDownLeftIcon size={12} />
+                          )}{" "}
+                          {dirLabel}
                         </span>
                         <span className="call-history-state-copy">
                           · {entry.mode === "video" ? "Video" : "Voice"} · {stateLabel}
@@ -653,7 +700,7 @@ export function Sidebar({
                         loading="lazy"
                       />
                     ) : (
-                      "👥"
+                      <UsersIcon size={18} />
                     )}
                   </span>
                   <span>
@@ -667,8 +714,9 @@ export function Sidebar({
 
           {store.mode === "demo" && (
             <div className="hint-box">
-              🧪 <strong>Demo tip:</strong> try adding <code>@maya</code>, <code>@kai.codes</code>{" "}
-              or <code>@Nova</code> — they accept after a couple of seconds and will text you back.
+              <FlaskIcon size={14} /> <strong>Demo tip:</strong> try adding <code>@maya</code>,{" "}
+              <code>@kai.codes</code> or <code>@Nova</code> — they accept after a couple of seconds
+              and will text you back.
             </div>
           )}
 
@@ -787,7 +835,9 @@ export function Sidebar({
                     <strong>{req.to.displayName}</strong>
                     <span className="muted small">@{req.to.username}</span>
                   </div>
-                  <span className="pending-chip">⏳ Pending</span>
+                  <span className="pending-chip">
+                    <ClockIcon size={13} /> Pending
+                  </span>
                 </div>
               ))}
             </>
@@ -801,7 +851,7 @@ export function Sidebar({
 
       {store.mode === "demo" && (
         <footer className="sidebar-footer muted small">
-          🧪 Demo mode — connect Convex to go live
+          <FlaskIcon size={13} /> Demo mode — connect Convex to go live
         </footer>
       )}
       {chatMenu && (
@@ -821,7 +871,9 @@ export function Sidebar({
               )
             }
           >
-            <span>📦</span>
+            <span>
+              <ArchiveIcon size={15} />
+            </span>
             {previewByFriend.get(chatMenu.friend.id)?.isArchived ? "Unarchive" : "Archive chat"}
           </button>
           <button
@@ -831,7 +883,13 @@ export function Sidebar({
               void updateChat(previewByFriend.get(chatMenu.friend.id)?.isMuted ? "unmute" : "mute")
             }
           >
-            <span>{previewByFriend.get(chatMenu.friend.id)?.isMuted ? "🔔" : "🔕"}</span>
+            <span>
+              {previewByFriend.get(chatMenu.friend.id)?.isMuted ? (
+                <BellIcon size={15} />
+              ) : (
+                <BellOffIcon size={15} />
+              )}
+            </span>
             {previewByFriend.get(chatMenu.friend.id)?.isMuted ? "Unmute" : "Mute"}
           </button>
           <button
@@ -840,7 +898,10 @@ export function Sidebar({
             className="destructive-menu-item"
             onClick={() => void updateChat("unfriend")}
           >
-            <span>💔</span> Unfriend
+            <span>
+              <UserMinusIcon size={15} />
+            </span>{" "}
+            Unfriend
           </button>
           <button
             type="button"
@@ -854,7 +915,13 @@ export function Sidebar({
               )
             }
           >
-            <span>{store.blockedUserIds.includes(chatMenu.friend.id) ? "🔓" : "🚫"}</span>
+            <span>
+              {store.blockedUserIds.includes(chatMenu.friend.id) ? (
+                <UnlockIcon size={15} />
+              ) : (
+                <BanIcon size={15} />
+              )}
+            </span>
             {store.blockedUserIds.includes(chatMenu.friend.id) ? "Unblock" : "Block"}
           </button>
           <button
@@ -863,7 +930,10 @@ export function Sidebar({
             className="destructive-menu-item"
             onClick={() => void updateChat("delete")}
           >
-            <span>🗑️</span> Delete chat
+            <span>
+              <TrashIcon size={15} />
+            </span>{" "}
+            Delete chat
           </button>
         </ContextMenu>
       )}

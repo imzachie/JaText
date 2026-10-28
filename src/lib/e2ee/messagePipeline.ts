@@ -415,7 +415,7 @@ function resolveSpilledText(
     })();
     inFlightMsgBlob.set(key, p);
   }
-  return "🔒 Decrypting long message…";
+  return "Decrypting long message…";
 }
 
 function resolveReplyBody(
@@ -433,7 +433,7 @@ function resolveReplyBody(
     if (cached.payload) {
       return cached.payload.b || cached.payload.att?.n || cached.payload.stk?.n || "Attachment";
     }
-    return cached.proof.error ?? "🔒 Encrypted message";
+    return cached.proof.error ?? "Encrypted message";
   }
 
   const receiverId =
@@ -450,7 +450,7 @@ function resolveReplyBody(
     receiverId,
     groupId,
   });
-  return "🔒 Decrypting…";
+  return "Decrypting…";
 }
 
 export function hydrateDecryptedDmMessage(
@@ -490,7 +490,7 @@ export function hydrateDecryptedDmMessage(
     }).then(() => triggerRerender());
     return {
       ...withReply,
-      body: isSilentWire ? "__JATEXT_CALL_SIG__:decrypting" : "🔒 Decrypting message…",
+      body: isSilentWire ? "__JATEXT_CALL_SIG__:decrypting" : "Decrypting message…",
       attachmentUrl: undefined,
       attachmentName: undefined,
       attachmentType: undefined,
@@ -510,7 +510,7 @@ export function hydrateDecryptedDmMessage(
       ...withReply,
       body: isSilentWire
         ? "__JATEXT_CALL_SIG__:undecryptable"
-        : cached.proof.error ?? "🔒 Encrypted message",
+        : cached.proof.error ?? "Encrypted message",
       attachmentUrl: undefined,
       attachmentName: undefined,
       attachmentType: undefined,
@@ -663,7 +663,7 @@ export function hydrateDecryptedGroupMessage(
     }).then(() => triggerRerender());
     return {
       ...withReply,
-      body: isSilentWire ? "__JATEXT_CALL_SIG__:decrypting" : "🔒 Decrypting message…",
+      body: isSilentWire ? "__JATEXT_CALL_SIG__:decrypting" : "Decrypting message…",
       attachmentUrl: undefined,
       attachmentName: undefined,
       attachmentType: undefined,
@@ -684,7 +684,7 @@ export function hydrateDecryptedGroupMessage(
       ...withReply,
       body: isSilentWire
         ? "__JATEXT_CALL_SIG__:undecryptable"
-        : cached.proof.error ?? "🔒 Encrypted message",
+        : cached.proof.error ?? "Encrypted message",
       attachmentUrl: undefined,
       attachmentName: undefined,
       attachmentType: undefined,
@@ -788,22 +788,22 @@ export function hydrateDecryptedChatPreview(preview: ChatPreview, myUserId: stri
       senderId: preview.senderId,
       receiverId,
     });
-    return { ...preview, body: "🔒 Encrypted message" };
+    return { ...preview, body: "Encrypted message" };
   }
   if (!cached.payload) {
-    return { ...preview, body: "🔒 Encrypted message" };
+    return { ...preview, body: "Encrypted message" };
   }
   const p = cached.payload;
   const cleanPreviewBody = stripBubbleStyleFromText(p.b);
   const summary =
     cleanPreviewBody ||
     (p.att?.t?.startsWith("audio/")
-      ? "🎤 Voice note"
+      ? "Voice note"
       : p.att
-        ? `📎 ${p.att.n}`
+        ? p.att.n || "Attachment"
         : p.stk
-          ? `✨ ${p.stk.n || "Sticker"}`
-          : "🔒 Encrypted message");
+          ? p.stk.n || "Sticker"
+          : "Encrypted message");
   return { ...preview, body: summary };
 }
 
@@ -826,22 +826,22 @@ export function hydrateDecryptedGroupSummary(
       senderId: group.lastSenderId ?? "",
       groupId: group.id,
     });
-    return { ...group, lastMessage: "🔒 Encrypted message" };
+    return { ...group, lastMessage: "Encrypted message" };
   }
   if (!cached.payload) {
-    return { ...group, lastMessage: "🔒 Encrypted message" };
+    return { ...group, lastMessage: "Encrypted message" };
   }
   const p = cached.payload;
   const cleanGroupPreviewBody = stripBubbleStyleFromText(p.b);
   const summary =
     cleanGroupPreviewBody ||
     (p.att?.t?.startsWith("audio/")
-      ? "🎤 Voice note"
+      ? "Voice note"
       : p.att
-        ? `📎 ${p.att.n}`
+        ? p.att.n || "Attachment"
         : p.stk
-          ? `✨ ${p.stk.n || "Sticker"}`
-          : "🔒 Encrypted message");
+          ? p.stk.n || "Sticker"
+          : "Encrypted message");
 
   const mentionedMe =
     group.lastMentionedMe ||

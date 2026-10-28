@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type TouchEvent } from "react";
 import { Volume2, VolumeX } from "./CallIcons";
+import { FileTextIcon, MicVoiceIcon, PauseIcon, PlayIcon } from "./UiIcons";
 import {
   VOICE_TRANSCRIPT_EVENT,
   decodeVoiceNoteMime,
@@ -331,7 +332,7 @@ export function VoiceNotePlayer({
           aria-label={playing ? "Pause voice note" : "Play voice note"}
           onClick={togglePlay}
         >
-          {playing ? "⏸" : "▶"}
+          {playing ? <PauseIcon size={16} /> : <PlayIcon size={16} />}
         </button>
 
         <div className="voice-note-body">
@@ -360,7 +361,7 @@ export function VoiceNotePlayer({
 
           <div className="voice-note-footer">
             <span className="voice-note-duration">
-              🎤{" "}
+              <MicVoiceIcon size={12} />{" "}
               {playing || currentSec > 0
                 ? `${formatAudioDuration(currentSec)} / ${formatAudioDuration(effectiveDuration)}`
                 : formatAudioDuration(effectiveDuration)}
@@ -411,7 +412,7 @@ export function VoiceNotePlayer({
         <div className="voice-transcript-box" role="region" aria-label="Voice note transcription">
           <div className="voice-transcript-header">
             <span>
-              📝 Transcription
+              <FileTextIcon size={13} /> Transcription
               {transcriptState.loading && transcriptState.percent > 0
                 ? ` · ${transcriptState.percent}%`
                 : ""}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from "react";
 import { Capacitor } from "@capacitor/core";
+import { ReplyIcon } from "./UiIcons";
 
 const TRIGGER_PX = 56;
 const MAX_PULL_PX = 84;
@@ -165,7 +166,9 @@ export function SwipeToReply({
           aria-hidden="true"
           style={{ opacity: 0, transform: "translate3d(-8px, 0, 0) scale(0.5)" }}
         >
-          <span className="swipe-reply-badge">↩</span>
+          <span className="swipe-reply-badge">
+            <ReplyIcon size={15} />
+          </span>
         </div>
       )}
       <div ref={trackRef} className="swipe-reply-content">

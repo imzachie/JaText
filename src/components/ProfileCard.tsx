@@ -15,6 +15,17 @@ import { useJaText } from "../lib/store";
 import type { ActivityStatus, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 import { LockIcon } from "./E2EEModals";
+import {
+  BanIcon,
+  CheckIcon,
+  CloseIcon,
+  CopyIcon,
+  ImageIcon,
+  MessageCircleIcon,
+  ShieldCheckIcon,
+  UnlockIcon,
+  UserMinusIcon,
+} from "./UiIcons";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 
 /**
@@ -204,7 +215,7 @@ export function ProfileModal({
           onClick={animateClose}
           aria-label="Close profile"
         >
-          ✕
+          <CloseIcon size={17} />
         </button>
         <div className="profile-modal-scroll">
           <ProfileCard user={user} status={status} />
@@ -221,7 +232,13 @@ export function ProfileModal({
                 </span>
               ) : peerKey ? (
                 <span className={`e2ee-pill ${isVerifiedPeer ? "verified" : "active"}`}>
-                  {isVerifiedPeer ? "✓ Encrypted & Verified" : "Encrypted"}
+                  {isVerifiedPeer ? (
+                    <>
+                      <CheckIcon size={12} /> Encrypted &amp; Verified
+                    </>
+                  ) : (
+                    "Encrypted"
+                  )}
                 </span>
               ) : (
                 <span className="e2ee-pill pending">Setting up…</span>
@@ -264,7 +281,15 @@ export function ProfileModal({
                         window.setTimeout(() => setCopiedE2ee(false), 1800);
                       }}
                     >
-                      {copiedE2ee ? "✓ Copied" : "Copy key"}
+                      {copiedE2ee ? (
+                        <>
+                          <CheckIcon size={12} /> Copied
+                        </>
+                      ) : (
+                        <>
+                          <CopyIcon size={12} /> Copy key
+                        </>
+                      )}
                     </button>
                     <button
                       type="button"
@@ -312,11 +337,17 @@ export function ProfileModal({
                     disabled={verifyBusy}
                     onClick={() => void handleVerifySecurityCode()}
                   >
-                    {verifyBusy
-                      ? "Verifying…"
-                      : isVerifiedPeer
-                        ? "✓ Encrypted & Verified"
-                        : "🛡️ Verify security code"}
+                    {verifyBusy ? (
+                      "Verifying…"
+                    ) : isVerifiedPeer ? (
+                      <>
+                        <CheckIcon size={13} /> Encrypted &amp; Verified
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheckIcon size={13} /> Verify security code
+                      </>
+                    )}
                   </button>
                   <button
                     type="button"
@@ -337,7 +368,15 @@ export function ProfileModal({
                         window.setTimeout(() => setCopiedE2ee(false), 1800);
                       }}
                     >
-                      {copiedE2ee ? "✓ Copied" : "Copy"}
+                      {copiedE2ee ? (
+                        <>
+                          <CheckIcon size={12} /> Copied
+                        </>
+                      ) : (
+                        <>
+                          <CopyIcon size={12} /> Copy
+                        </>
+                      )}
                     </button>
                   )}
                 </div>
@@ -361,7 +400,7 @@ export function ProfileModal({
                       animateClose();
                     }}
                   >
-                    <span>💬</span>
+                    <MessageCircleIcon size={16} />
                     <span>Message</span>
                   </button>
                   <button
@@ -392,7 +431,7 @@ export function ProfileModal({
                       className="ghost-btn profile-action-row"
                       onClick={() => setWallpaperOpen(true)}
                     >
-                      <span>🖼️</span>
+                      <ImageIcon size={16} />
                       <span>Chat wallpaper</span>
                     </button>
                   )}
@@ -410,7 +449,7 @@ export function ProfileModal({
                       }
                     }}
                   >
-                    <span>💔</span>
+                    <UserMinusIcon size={16} />
                     <span>Unfriend</span>
                   </button>
                 </>
@@ -421,7 +460,7 @@ export function ProfileModal({
                 disabled={blockBusy}
                 onClick={() => void handleToggleBlock()}
               >
-                <span>{isBlocked ? "✓" : "🚫"}</span>
+                {isBlocked ? <UnlockIcon size={16} /> : <BanIcon size={16} />}
                 <span>{isBlocked ? "Unblock" : "Block"}</span>
               </button>
             </div>

@@ -7,6 +7,7 @@ import { AnimatedModal } from "./AnimatedModal";
 import { LockIcon } from "./E2EEModals";
 import { LegalModal, type LegalTab } from "./LegalModal";
 import { ProfileForm } from "./ProfileForm";
+import { CheckCircleIcon, CheckIcon, CopyIcon, FileTextIcon, SettingsIcon } from "./UiIcons";
 
 export function SettingsModal({
   onClose,
@@ -102,7 +103,9 @@ export function SettingsModal({
       >
         {(requestClose) => (
           <>
-            <h2 className="settings-title">⚙️ Settings</h2>
+            <h2 className="settings-title">
+              <SettingsIcon size={20} style={{ color: "var(--accent)" }} /> Settings
+            </h2>
         <p className="muted">
           Signed in as <strong>{me.email ?? `@${me.username}`}</strong>
           {mode === "demo" ? " · Demo mode (browser storage)" : ""}
@@ -195,7 +198,11 @@ export function SettingsModal({
           )}
         </section>
 
-        {saved && <div className="success-box">✅ Profile saved!</div>}
+        {saved && (
+          <div className="success-box">
+            <CheckCircleIcon size={16} /> Profile saved!
+          </div>
+        )}
 
             <ProfileForm
               initial={me}
@@ -247,7 +254,15 @@ export function SettingsModal({
                       window.setTimeout(() => setCopiedFp(false), 1800);
                     }}
                   >
-                    {copiedFp ? "✓ Copied" : "Copy security key"}
+                    {copiedFp ? (
+                      <>
+                        <CheckIcon size={13} /> Copied
+                      </>
+                    ) : (
+                      <>
+                        <CopyIcon size={13} /> Copy security key
+                      </>
+                    )}
                   </button>
                 )}
               </div>
@@ -255,7 +270,9 @@ export function SettingsModal({
 
             <hr className="settings-hr" />
             <section className="legal-settings-section">
-              <h3>📜 Legal &amp; Policies</h3>
+              <h3>
+                <FileTextIcon size={16} style={{ color: "var(--accent)" }} /> Legal &amp; Policies
+              </h3>
               <div className="legal-links-row">
                 <button
                   type="button"

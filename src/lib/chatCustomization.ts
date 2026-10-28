@@ -39,9 +39,9 @@ export interface BubbleStyleMeta {
 export const BUBBLE_STYLES: readonly BubbleStyleMeta[] = [
   { id: "default", label: "Default", tone: "dark-bg" },
   { id: "whee-sketch", label: "Whee sketch", tone: "light-bg" },
-  { id: "ghost-limited", label: "👻", limited: true, tone: "light-bg" },
-  { id: "pumpkin-limited", label: "🎃", limited: true, tone: "light-bg" },
-  { id: "spider-limited", label: "🕷️", limited: true, tone: "dark-bg" },
+  { id: "ghost-limited", label: "Ghost", limited: true, tone: "light-bg" },
+  { id: "pumpkin-limited", label: "Pumpkin", limited: true, tone: "light-bg" },
+  { id: "spider-limited", label: "Spider", limited: true, tone: "dark-bg" },
   { id: "bubbly-otter", label: "Bubbly otter", tone: "light-bg" },
   { id: "glam-diva", label: "Glam diva", tone: "light-bg" },
   { id: "chill-croc", label: "Chill croc", tone: "light-bg" },

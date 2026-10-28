@@ -3,6 +3,8 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { JaTextNative, type AppVersionInfo } from "../lib/nativeBridge";
 import { AnimatedModal } from "./AnimatedModal";
+import { Phone } from "./CallIcons";
+import { BellIcon, RocketIcon, ShieldCheckIcon, SparklesIcon } from "./UiIcons";
 
 const WELCOMED_VERSION_KEY = "jatext:welcomed-mobile-build:v1";
 const PUBLIC_UPDATE_MANIFEST_URL = "https://jatext.vercel.app/apk-version.json";
@@ -231,7 +233,7 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
         {(requestClose) => (
           <div className="mobile-update-body">
             <div className="mobile-update-icon" aria-hidden="true">
-              🚀
+              <RocketIcon size={28} />
             </div>
             <h2>Update your JaText version!</h2>
             <p className="mobile-update-copy">
@@ -313,15 +315,26 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
         {(requestClose) => (
           <div className="mobile-update-body">
             <div className="mobile-update-icon welcome" aria-hidden="true">
-              ✨
+              <SparklesIcon size={28} />
             </div>
             <h2>Welcome to {currentLabel} of JaText!</h2>
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
-              <li>🔔 Readable E2EE Notifications — Decrypts Messages On-Device Like WhatsApp</li>
-              <li>🛡️ Seamless Automatic Key Sync &amp; 1-Tap Profile Security Code Verification</li>
-              <li>📞 Restored Fast &amp; Reliable 1:1 &amp; Group Voice/Video Calling</li>
-              <li>🔓 Retroactive Unlock for Multi-Device Encrypted Chats</li>
+              <li>
+                <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Crisp Vector SVG UI Icons Across Every Screen, Menu &amp; Composer
+              </li>
+              <li>
+                <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Readable E2EE Notifications — Decrypts Messages On-Device Like WhatsApp
+              </li>
+              <li>
+                <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Automatic Multi-Device Key Sync &amp; 1-Tap Security Code Verification
+              </li>
+              <li>
+                <Phone size={15} /> Restored Fast &amp; Reliable 1:1 &amp; Group Voice/Video Calling
+              </li>
             </ul>
             <button
               type="button"
