@@ -1,18 +1,28 @@
 import { useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
+import { useMultiAccountState } from "../lib/accountManager";
 import { useE2EESnapshot } from "../lib/e2ee/keystore";
 import { useJaText } from "../lib/store";
 import { AnimatedModal } from "./AnimatedModal";
 import { LockIcon } from "./E2EEModals";
 import { LegalModal, type LegalTab } from "./LegalModal";
 import { ProfileForm } from "./ProfileForm";
-import { CheckCircleIcon, CheckIcon, CopyIcon, FileTextIcon, SettingsIcon } from "./UiIcons";
+import {
+  CheckCircleIcon,
+  CheckIcon,
+  CopyIcon,
+  FileTextIcon,
+  SettingsIcon,
+  SwitchAccountIcon,
+} from "./UiIcons";
 
 export function SettingsModal({
   onClose,
+  onOpenAccountSwitcher,
 }: {
   onClose: () => void;
+  onOpenAccountSwitcher?: () => void;
 }) {
   const {
     me,
@@ -26,6 +36,7 @@ export function SettingsModal({
     refreshPushRegistration,
     setSoundsEnabled,
   } = useJaText();
+  const { accounts } = useMultiAccountState();
   const e2ee = useE2EESnapshot();
   const [copiedFp, setCopiedFp] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -110,6 +121,30 @@ export function SettingsModal({
           Signed in as <strong>{me.email ?? `@${me.username}`}</strong>
           {mode === "demo" ? " · Demo mode (browser storage)" : ""}
         </p>
+        {onOpenAccountSwitcher && (
+          <div className="settings-accounts-bar">
+            <div className="settings-accounts-info">
+              <strong>
+                {accounts.length > 1
+                  ? `${accounts.length} saved accounts on this device`
+                  : "Quick account switching"}
+              </strong>
+              <span className="muted small">
+                {accounts.length > 1
+                  ? "Switch directly between your accounts without signing out."
+                  : "Add a second account to jump between them in 1 tap."}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="ghost-btn settings-switch-btn"
+              onClick={onOpenAccountSwitcher}
+            >
+              <SwitchAccountIcon size={15} />
+              <span>{accounts.length > 1 ? "Switch / Manage" : "Add account"}</span>
+            </button>
+          </div>
+        )}
         <p className="muted small">
           Profile picture, banner, display name, bio, pronouns and avatar color
           can be changed any time. Username changes are limited to once every
@@ -299,7 +334,7 @@ export function SettingsModal({
                 void signOut();
               }}
             >
-              sign out
+              {accounts.length > 1 ? `sign out of @${me.username}` : "sign out"}
             </button>
           </>
         )}

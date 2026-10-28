@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { ACCOUNT_SLOT_CHANGE_EVENT, getScopedStorageKey } from "./accountManager";
 
 export interface CallHistoryEntry {
   callId: string;
@@ -22,16 +23,19 @@ const CALL_HISTORY_KEY = "jatext:call-history:v1";
 const MAX_HISTORY_ITEMS = 120;
 
 let cachedEntries: CallHistoryEntry[] | null = null;
+let cachedSlotKey = "";
 const listeners = new Set<() => void>();
 
 function loadEntries(): CallHistoryEntry[] {
-  if (cachedEntries) return cachedEntries;
+  const activeKey = getScopedStorageKey(CALL_HISTORY_KEY);
+  if (cachedEntries && cachedSlotKey === activeKey) return cachedEntries;
+  cachedSlotKey = activeKey;
   if (typeof window === "undefined") {
     cachedEntries = [];
     return cachedEntries;
   }
   try {
-    const raw = window.localStorage.getItem(CALL_HISTORY_KEY);
+    const raw = window.localStorage.getItem(activeKey);
     if (!raw) {
       cachedEntries = [];
       return cachedEntries;
@@ -52,10 +56,12 @@ function loadEntries(): CallHistoryEntry[] {
 }
 
 function saveEntries(next: CallHistoryEntry[]) {
+  const activeKey = getScopedStorageKey(CALL_HISTORY_KEY);
+  cachedSlotKey = activeKey;
   cachedEntries = next.slice(0, MAX_HISTORY_ITEMS);
   if (typeof window !== "undefined") {
     try {
-      window.localStorage.setItem(CALL_HISTORY_KEY, JSON.stringify(cachedEntries));
+      window.localStorage.setItem(activeKey, JSON.stringify(cachedEntries));
     } catch {
       // Ignore quota errors.
     }
@@ -96,8 +102,14 @@ export function updateCallHistoryStatus(
 
 function subscribeCallHistory(listener: () => void): () => void {
   listeners.add(listener);
+  if (typeof window !== "undefined") {
+    window.addEventListener(ACCOUNT_SLOT_CHANGE_EVENT, listener);
+  }
   return () => {
     listeners.delete(listener);
+    if (typeof window !== "undefined") {
+      window.removeEventListener(ACCOUNT_SLOT_CHANGE_EVENT, listener);
+    }
   };
 }
 

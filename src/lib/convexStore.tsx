@@ -11,6 +11,12 @@ import { JaTextNative } from "./nativeBridge";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { JaTextContext } from "./store";
+import {
+  finalizeSignOutCurrentSlot,
+  getActiveAccountSlotId,
+  getScopedStorageKey,
+  syncActiveUserToSavedAccounts,
+} from "./accountManager";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
 import { ensureValidFileMime, normalizeImageFileForUpload } from "./imageUtils";
 import {
@@ -185,6 +191,8 @@ async function checkNativeFirebaseConfigured(): Promise<boolean> {
 /* Google OAuth + email/password providers.                            */
 /* ------------------------------------------------------------------ */
 
+const handledOAuthCodes = new Set<string>();
+
 export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const convex = useConvex();
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
@@ -215,7 +223,6 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     bumpE2EEHydration((v) => v + 1);
   }, []);
   const e2eeSnapshot = useE2EESnapshot();
-  const handledOAuthCodes = useRef(new Set<string>());
   const previewsQuery = useQuery(
     api.messages.previews,
     isAuthenticated ? {} : "skip",
@@ -225,13 +232,25 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     | JaUser
     | null
     | undefined;
+
+  useEffect(() => {
+    if (!isAuthenticated || !me?.id) return;
+    void syncActiveUserToSavedAccounts(
+      me,
+      import.meta.env.VITE_CONVEX_URL as string | undefined,
+    );
+  }, [
+    isAuthenticated,
+    me,
+  ]);
+
   const rawFriends = (useQuery(
     api.friends.listFriends,
     isAuthenticated ? {} : "skip",
   ) ?? []) as JaUser[];
   const [localUnfriendedIds, setLocalUnfriendedIds] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem("jatext:unfriended:v1");
+      const saved = localStorage.getItem(getScopedStorageKey("jatext:unfriended:v1"));
       return saved ? (JSON.parse(saved) as string[]) : [];
     } catch {
       return [];
@@ -1575,13 +1594,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         return;
       }
       const code = callback.searchParams.get("code");
-      if (!code || handledOAuthCodes.current.has(code)) return;
-      handledOAuthCodes.current.add(code);
+      if (!code || handledOAuthCodes.has(code)) return;
+      handledOAuthCodes.add(code);
       try {
         await Browser.close();
         await signIn("google", { code });
       } catch (error) {
-        handledOAuthCodes.current.delete(code);
+        handledOAuthCodes.delete(code);
         console.error("Could not complete Google sign-in in the Android app.", error);
       }
     };
@@ -1606,6 +1625,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   }, [signIn]);
 
   const signOut = useCallback(async () => {
+    const signingOutSlotId = getActiveAccountSlotId();
     setActiveChatIdForStore(null);
     setActiveGroupId(null);
     clearDecryptedSessionCaches();
@@ -1621,6 +1641,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       console.error("Could not clean up this device before signing out.", error);
     } finally {
       await convexSignOut();
+      await finalizeSignOutCurrentSlot(
+        signingOutSlotId,
+        import.meta.env.VITE_CONVEX_URL as string | undefined,
+      );
     }
   }, [convexSignOut, disconnectMut, isAuthenticated, setActiveChatIdForStore, setActiveGroupId, unregisterPushDeviceMut]);
 
@@ -1667,7 +1691,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         setLocalUnfriendedIds((prev) => {
           const next = prev.filter((id) => id !== matched.id);
           try {
-            localStorage.setItem("jatext:unfriended:v1", JSON.stringify(next));
+            localStorage.setItem(getScopedStorageKey("jatext:unfriended:v1"), JSON.stringify(next));
           } catch {
             // Ignore.
           }
@@ -1701,7 +1725,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         if (prev.includes(friendId)) return prev;
         const next = [...prev, friendId];
         try {
-          localStorage.setItem("jatext:unfriended:v1", JSON.stringify(next));
+          localStorage.setItem(getScopedStorageKey("jatext:unfriended:v1"), JSON.stringify(next));
         } catch {
           // Ignore.
         }

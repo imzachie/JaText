@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
+import { ACCOUNT_SLOT_CHANGE_EVENT, getScopedStorageKey } from "./accountManager";
 
 export type BubbleStyleId =
   | "default"
@@ -80,7 +81,7 @@ export function getBubbleStyleMeta(id: BubbleStyleId): BubbleStyleMeta {
 
 export function getSavedOutgoingBubbleStyle(): BubbleStyleId {
   try {
-    const raw = localStorage.getItem(BUBBLE_STYLE_STORAGE_KEY);
+    const raw = localStorage.getItem(getScopedStorageKey(BUBBLE_STYLE_STORAGE_KEY));
     if (raw && isValidBubbleStyleId(raw)) return raw;
   } catch {
     // Ignore storage access errors.
@@ -93,8 +94,9 @@ export function saveOutgoingBubbleStyle(
   options?: { fromRemote?: boolean },
 ): void {
   try {
-    const prev = localStorage.getItem(BUBBLE_STYLE_STORAGE_KEY);
-    localStorage.setItem(BUBBLE_STYLE_STORAGE_KEY, styleId);
+    const key = getScopedStorageKey(BUBBLE_STYLE_STORAGE_KEY);
+    const prev = localStorage.getItem(key);
+    localStorage.setItem(key, styleId);
     window.dispatchEvent(new CustomEvent(BUBBLE_STYLE_EVENT, { detail: styleId }));
     if (!options?.fromRemote && prev !== styleId) {
       window.dispatchEvent(new CustomEvent(BUBBLE_STYLE_REMOTE_SYNC_EVENT, { detail: styleId }));
@@ -110,9 +112,11 @@ export function useOutgoingBubbleStyle(): [BubbleStyleId, (next: BubbleStyleId) 
   useEffect(() => {
     const handler = () => setStyleId(getSavedOutgoingBubbleStyle());
     window.addEventListener(BUBBLE_STYLE_EVENT, handler);
+    window.addEventListener(ACCOUNT_SLOT_CHANGE_EVENT, handler);
     window.addEventListener("storage", handler);
     return () => {
       window.removeEventListener(BUBBLE_STYLE_EVENT, handler);
+      window.removeEventListener(ACCOUNT_SLOT_CHANGE_EVENT, handler);
       window.removeEventListener("storage", handler);
     };
   }, []);

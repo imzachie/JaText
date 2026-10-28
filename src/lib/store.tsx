@@ -21,6 +21,12 @@ import {
   type StickerMedia,
 } from "./types";
 import { WALLPAPER_PREFIX, getSavedOutgoingBubbleStyle } from "./chatCustomization";
+import {
+  DEFAULT_ACCOUNT_SLOT_ID,
+  finalizeSignOutCurrentSlot,
+  getDemoSessionKeyForSlot,
+  syncActiveUserToSavedAccounts,
+} from "./accountManager";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
 import { generateIdentityRecord, toPublicIdentityBundle } from "./e2ee/cryptoPrimitives";
 import {
@@ -49,7 +55,6 @@ export function useJaText(): JaTextStore {
 /* ------------------------------------------------------------------ */
 
 const DB_KEY = "jatext-demo-db-v1";
-const SESSION_KEY = "jatext-demo-session-v1";
 
 interface DemoUser extends JaUser {
   password?: string;
@@ -228,10 +233,17 @@ const toPublic = (u: DemoUser): JaUser => {
   return pub;
 };
 
-export function DemoStoreProvider({ children }: { children: ReactNode }) {
+export function DemoStoreProvider({
+  children,
+  slotId = DEFAULT_ACCOUNT_SLOT_ID,
+}: {
+  children: ReactNode;
+  slotId?: string;
+}) {
+  const sessionStorageKey = getDemoSessionKeyForSlot(slotId);
   const [db, setDb] = useState<DemoDb>(() => loadDb());
   const [sessionId, setSessionId] = useState<string | null>(() =>
-    localStorage.getItem(SESSION_KEY),
+    localStorage.getItem(sessionStorageKey),
   );
   const [activeChatId, setActiveChatIdState] = useState<string | null>(null);
   const [activeGroupId, setActiveGroupIdState] = useState<string | null>(null);
@@ -286,6 +298,11 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
   const currentUserId = me?.id;
 
   useEffect(() => {
+    if (!me?.id) return;
+    void syncActiveUserToSavedAccounts(toPublic(me));
+  }, [me]);
+
+  useEffect(() => {
     if (!currentUserId) return;
     let lastActivityAt = Date.now();
     const markActive = () => {
@@ -316,10 +333,13 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
     };
   }, [currentUserId, transact]);
 
-  const startSession = useCallback((userId: string) => {
-    localStorage.setItem(SESSION_KEY, userId);
-    setSessionId(userId);
-  }, []);
+  const startSession = useCallback(
+    (userId: string) => {
+      localStorage.setItem(sessionStorageKey, userId);
+      setSessionId(userId);
+    },
+    [sessionStorageKey],
+  );
 
   /* ---------------- bot behaviours (demo only) ---------------- */
 
@@ -482,10 +502,11 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
         }
       });
     }
-    localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(sessionStorageKey);
     setSessionId(null);
     setActiveChatId(null);
-  }, [sessionId, setActiveChatId, transact]);
+    await finalizeSignOutCurrentSlot(slotId);
+  }, [sessionId, sessionStorageKey, setActiveChatId, slotId, transact]);
 
   /* ---------------- profile ---------------- */
 
