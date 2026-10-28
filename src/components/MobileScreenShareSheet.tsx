@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { MonitorUp, Video, X } from "./CallIcons";
+import { MonitorUp, Video, Volume2, X } from "./CallIcons";
 import { AnimatedModal } from "./AnimatedModal";
 import { formatAudioDuration } from "../lib/voiceNotes";
+import { FilmIcon, PauseIcon, PlayIcon, SmartphoneShareIcon } from "./UiIcons";
 
 const APK_DOWNLOAD_URL = "https://jatext.vercel.app/downloads/JaText-release.apk";
 
@@ -74,9 +75,7 @@ export function MobileScreenShareSheet({
               onClick={() => fileInputRef.current?.click()}
             >
               <span className="mobile-share-opt-icon">
-                <span aria-hidden="true" style={{ fontSize: 18 }}>
-                  🎬
-                </span>
+                <FilmIcon size={20} />
               </span>
               <span className="mobile-share-opt-copy">
                 <strong>Share Video or Screen Recording (with Audio)</strong>
@@ -110,9 +109,7 @@ export function MobileScreenShareSheet({
               rel="noopener noreferrer"
             >
               <span className="mobile-share-opt-icon apk">
-                <span aria-hidden="true" style={{ fontSize: 18 }}>
-                  📲
-                </span>
+                <SmartphoneShareIcon size={20} />
               </span>
               <span className="mobile-share-opt-copy">
                 <strong>Full Live Phone Screen + System Audio (Android APK)</strong>
@@ -176,10 +173,10 @@ export function SharedMediaPlaybackBar({
           }
         }}
       >
-        {paused ? "▶" : "⏸"}
+        {paused ? <PlayIcon size={15} /> : <PauseIcon size={15} />}
       </button>
       <span className="shared-media-time">
-        🔊 {formatAudioDuration(currentTime)} / {formatAudioDuration(duration)}
+        <Volume2 size={14} /> {formatAudioDuration(currentTime)} / {formatAudioDuration(duration)}
       </span>
       <input
         type="range"

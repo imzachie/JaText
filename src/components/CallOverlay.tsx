@@ -30,15 +30,31 @@ import {
 import { useJaText } from "../lib/store";
 import { Avatar } from "./Avatar";
 import { MobileScreenShareSheet, SharedMediaPlaybackBar } from "./MobileScreenShareSheet";
+import { DrumIcon, RocketIcon, SoundWaveIcon, SparklesIcon, UsersIcon } from "./UiIcons";
 
 const CALL_REACTIONS = ["❤️", "😂", "🔥", "👏", "🎉", "👍"];
-const SOUNDBOARD_ITEMS: Array<{ id: SoundboardEffectId; emoji: string; label: string }> = [
-  { id: "bruh", emoji: "🗿", label: "Bruh" },
-  { id: "rimshot", emoji: "🥁", label: "Rimshot" },
-  { id: "chime", emoji: "🔔", label: "Sparkle" },
-  { id: "laser", emoji: "🚀", label: "Laser" },
-  { id: "cheer", emoji: "👏", label: "Applause" },
+const SOUNDBOARD_ITEMS: Array<{ id: SoundboardEffectId; label: string }> = [
+  { id: "bruh", label: "Bruh" },
+  { id: "rimshot", label: "Rimshot" },
+  { id: "chime", label: "Sparkle" },
+  { id: "laser", label: "Laser" },
+  { id: "cheer", label: "Applause" },
 ];
+
+function renderSoundboardIcon(id: SoundboardEffectId) {
+  switch (id) {
+    case "bruh":
+      return <SoundWaveIcon size={15} />;
+    case "rimshot":
+      return <DrumIcon size={15} />;
+    case "chime":
+      return <SparklesIcon size={15} />;
+    case "laser":
+      return <RocketIcon size={15} />;
+    case "cheer":
+      return <UsersIcon size={15} />;
+  }
+}
 
 function StreamVideo({
   stream,
@@ -313,7 +329,15 @@ export function CallOverlay() {
       <div className="call-incoming-backdrop">
         <div className="call-incoming-sheet">
           <div className="call-incoming-badge">
-            {session.mode === "video" ? "📹 Incoming Video Call" : "📞 Incoming Voice Call"}
+            {session.mode === "video" ? (
+              <>
+                <Video size={14} /> Incoming Video Call
+              </>
+            ) : (
+              <>
+                <Phone size={14} /> Incoming Voice Call
+              </>
+            )}
           </div>
           <div className="call-incoming-avatar-pulse">
             <Avatar user={session.peer} size={92} ringWidth={4} />
@@ -651,13 +675,17 @@ export function CallOverlay() {
               </div>
               <div className="call-stage-name">{session.peer.displayName}</div>
               <div className="call-stage-state">
-                {session.phase !== "connected"
-                  ? statusText
-                  : peerMuted
-                    ? "🔇 Microphone muted"
-                    : peerSpeaking
-                      ? "Speaking…"
-                      : "Connected"}
+                {session.phase !== "connected" ? (
+                  statusText
+                ) : peerMuted ? (
+                  <>
+                    <MicOff size={13} /> Microphone muted
+                  </>
+                ) : peerSpeaking ? (
+                  "Speaking…"
+                ) : (
+                  "Connected"
+                )}
               </div>
             </div>
           )}
@@ -785,7 +813,7 @@ export function CallOverlay() {
               className="call-sound-pill"
               onClick={() => playSoundboard(item.id)}
             >
-              <span>{item.emoji}</span>
+              {renderSoundboardIcon(item.id)}
               <span>{item.label}</span>
             </button>
           ))}

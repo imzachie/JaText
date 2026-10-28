@@ -1093,8 +1093,8 @@ export async function decryptWireMessageCached(params: {
           signature: envelope.sig,
           rawWireBody: rawBody,
           error: isTransientKeyWait
-            ? "🔒 Syncing encryption key…"
-            : "🔒 Waiting for this message…",
+            ? "Syncing encryption key…"
+            : "Waiting for this message…",
         },
       };
       failedDecryptRetryAt.set(params.cacheKey, {

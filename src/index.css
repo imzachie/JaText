@@ -1194,6 +1194,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   background: var(--accent); color: #fff; border: none;
   width: 44px; height: 44px; border-radius: 50%;
   font-size: 18px; font-weight: 900; cursor: pointer; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .send-btn:disabled { opacity: .4; cursor: not-allowed; }
 .voice-note-placeholder {
@@ -5984,6 +5985,49 @@ input:focus, textarea:focus {
   gap: 6px;
   flex: none;
 }
+
+/* ------------------------------------------------------------------ */
+/* Unified Vector SVG UI Icon System                                  */
+/* ------------------------------------------------------------------ */
+
+.ui-icon {
+  display: inline-block;
+  vertical-align: -0.16em;
+  flex-shrink: 0;
+}
+
+.mini-btn,
+.role-pill,
+.e2ee-pill,
+.pending-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sidebar-tabs button,
+.legal-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.context-menu button > span:first-child,
+[role="menuitem"] > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  flex-shrink: 0;
+}
+
+.group-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 
 
 

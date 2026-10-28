@@ -8,6 +8,45 @@ import {
   searchEmojis,
   type EmojiCategoryId,
 } from "../lib/emojis";
+import { Smile } from "./CallIcons";
+import {
+  ClockIcon,
+  CloseIcon,
+  CompassIcon,
+  CupFoodIcon,
+  FlagIcon,
+  HandWaveIcon,
+  HeartOutlineIcon,
+  LightbulbIcon,
+  PawIcon,
+  SearchIcon,
+  TrophyIcon,
+} from "./UiIcons";
+
+function renderCategoryTabIcon(categoryId: EmojiCategoryId) {
+  switch (categoryId) {
+    case "recent":
+      return <ClockIcon size={17} />;
+    case "smileys":
+      return <Smile size={17} />;
+    case "people":
+      return <HandWaveIcon size={17} />;
+    case "animals":
+      return <PawIcon size={17} />;
+    case "food":
+      return <CupFoodIcon size={17} />;
+    case "activities":
+      return <TrophyIcon size={17} />;
+    case "travel":
+      return <CompassIcon size={17} />;
+    case "objects":
+      return <LightbulbIcon size={17} />;
+    case "symbols":
+      return <HeartOutlineIcon size={17} />;
+    case "flags":
+      return <FlagIcon size={17} />;
+  }
+}
 
 interface ReactionEmojiPickerProps {
   x?: number;
@@ -123,7 +162,7 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
         <div className="emoji-picker-top">
           <div className="emoji-picker-search-wrap">
             <span className="emoji-picker-search-icon" aria-hidden="true">
-              🔍
+              <SearchIcon size={15} />
             </span>
             <input
               ref={searchInputRef}
@@ -150,7 +189,7 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
                 }}
                 aria-label="Clear search"
               >
-                ×
+                <CloseIcon size={13} />
               </button>
             )}
           </div>
@@ -160,7 +199,7 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
             onClick={animateAndClose}
             aria-label="Close emoji picker"
           >
-            ✕
+            <CloseIcon size={16} />
           </button>
         </div>
 
@@ -182,7 +221,7 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
                   if (gridRef.current) gridRef.current.scrollTop = 0;
                 }}
               >
-                {cat.icon}
+                {renderCategoryTabIcon(cat.id)}
               </button>
             );
           })}

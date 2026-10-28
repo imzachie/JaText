@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { WALLPAPER_PRESETS } from "../lib/chatCustomization";
+import { CheckIcon, ImageIcon } from "./UiIcons";
 
 async function optimizeWallpaperFile(file: File): Promise<File> {
   if (!file.type.startsWith("image/")) {
@@ -212,11 +213,17 @@ export function WallpaperModal({
               />
             ) : null}
             <div className="wallpaper-custom-overlay">
-              <span className="wallpaper-custom-plus">🖼️</span>
+              <span className="wallpaper-custom-plus">
+                <ImageIcon size={24} />
+              </span>
               <span className="wallpaper-custom-title">Custom image</span>
               <span className="wallpaper-custom-sub">Choose photo</span>
             </div>
-            {selectedKind === "custom" ? <span className="wallpaper-check">✓</span> : null}
+            {selectedKind === "custom" ? (
+              <span className="wallpaper-check">
+                <CheckIcon size={12} strokeWidth={3} />
+              </span>
+            ) : null}
           </button>
 
           {/* Options 1–6: Exact 6 Preset Wallpapers */}
@@ -243,7 +250,11 @@ export function WallpaperModal({
                   <span className="wp-mini-them" />
                   <span className="wp-mini-me" />
                 </div>
-                {isSelected ? <span className="wallpaper-check">✓</span> : null}
+                {isSelected ? (
+                  <span className="wallpaper-check">
+                    <CheckIcon size={12} strokeWidth={3} />
+                  </span>
+                ) : null}
               </button>
             );
           })}

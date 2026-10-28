@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useJaText } from "../lib/store";
 import { LegalModal, type LegalTab } from "./LegalModal";
+import { FlaskIcon, MessageCircleIcon, PaletteIcon, UsersIcon } from "./UiIcons";
 
 function GoogleIcon() {
   return (
@@ -67,9 +68,15 @@ export function LoginPage() {
           and chat in real time.
         </p>
         <ul className="hero-points">
-          <li>💬 Real-time chats &amp; attachments</li>
-          <li>🎨 Profile picture, banner &amp; your own avatar color</li>
-          <li>👥 Friend requests — you only chat with people you accept</li>
+          <li>
+            <MessageCircleIcon size={16} style={{ color: "var(--accent)" }} /> Real-time chats &amp; attachments
+          </li>
+          <li>
+            <PaletteIcon size={16} style={{ color: "var(--accent)" }} /> Profile picture, banner &amp; your own avatar color
+          </li>
+          <li>
+            <UsersIcon size={16} style={{ color: "var(--accent)" }} /> Friend requests — you only chat with people you accept
+          </li>
         </ul>
       </section>
 
@@ -83,7 +90,7 @@ export function LoginPage() {
         {showDemoGoogle && (
           <div className="demo-google-box">
             <p className="muted small">
-              🧪 Demo mode: this simulates a Google account. Connect Convex +
+              <FlaskIcon size={14} /> Demo mode: this simulates a Google account. Connect Convex +
               Google OAuth (see README) for the real Google sign-in popup.
             </p>
             <label>

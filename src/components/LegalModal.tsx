@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AnimatedModal } from "./AnimatedModal";
+import { FileTextIcon, LockClosedIcon } from "./UiIcons";
 
 export type LegalTab = "terms" | "privacy";
 
@@ -26,14 +27,14 @@ export function LegalModal({
               className={`legal-tab-btn ${tab === "terms" ? "active" : ""}`}
               onClick={() => setTab("terms")}
             >
-              📜 Terms of Service
+              <FileTextIcon size={15} /> Terms of Service
             </button>
             <button
               type="button"
               className={`legal-tab-btn ${tab === "privacy" ? "active" : ""}`}
               onClick={() => setTab("privacy")}
             >
-              🔒 Privacy Policy
+              <LockClosedIcon size={15} /> Privacy Policy
             </button>
           </div>
 

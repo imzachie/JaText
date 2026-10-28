@@ -296,7 +296,7 @@ function stripMarkdownForPreview(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, (block) => {
       const inner = block.replace(/^```[a-z0-9_+-]*\n?/i, "").replace(/```$/, "").trim();
-      return inner ? `⌨️ ${inner.split("\n")[0]}` : "⌨️ Code snippet";
+      return inner ? inner.split("\n")[0] : "Code snippet";
     })
     .replace(/\|\|([\s\S]+?)\|\|/g, "▒▒▒")
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, "$1")
@@ -331,41 +331,39 @@ export function formatPreviewMessageText(body: string): string {
         durationSec?: number;
         ts?: number;
       };
-      const icon = parsed.mode === "video" ? "📹" : "📞";
       const label = parsed.mode === "video" ? "Group video call" : "Group voice call";
       const ageMs = parsed.ts && parsed.ts > 0 ? Date.now() - parsed.ts : 0;
       if (parsed.state === "active" && ageMs < 55_000) {
-        return `${icon} ${label} · Join call`;
+        return `${label} · Join call`;
       }
       if (parsed.durationSec && parsed.durationSec > 0) {
-        return `${icon} GC VC Ended · ${formatCallDuration(parsed.durationSec)}`;
+        return `GC VC Ended · ${formatCallDuration(parsed.durationSec)}`;
       }
-      return `${icon} GC VC Ended`;
+      return "GC VC Ended";
     } catch {
-      return "📞 Group call";
+      return "Group call";
     }
   }
   const wp = parseWallpaperSignal(clean);
   if (wp) {
-    return wp.kind === "none" ? "🖼️ Reset the chat wallpaper" : "🖼️ Changed the chat wallpaper";
+    return wp.kind === "none" ? "Reset the chat wallpaper" : "Changed the chat wallpaper";
   }
   const invite = parseCallInvite(clean);
   if (invite) {
-    const icon = invite.mode === "video" ? "📹" : "📞";
     const kind = invite.mode === "video" ? "Video call" : "Voice call";
     const ageMs = invite.ts > 0 ? Date.now() - invite.ts : 0;
     if (invite.state === "ringing") {
-      return ageMs > 60_000 ? `${icon} Missed ${kind.toLowerCase()}` : `${icon} ${kind} · Ringing…`;
+      return ageMs > 60_000 ? `Missed ${kind.toLowerCase()}` : `${kind} · Ringing…`;
     }
     if (invite.state === "connected") {
-      return ageMs > 4 * 60 * 60 * 1000 ? `${icon} ${kind} ended` : `${icon} ${kind} · In call`;
+      return ageMs > 4 * 60 * 60 * 1000 ? `${kind} ended` : `${kind} · In call`;
     }
-    if (invite.state === "missed") return `${icon} Missed ${kind.toLowerCase()}`;
-    if (invite.state === "declined") return `${icon} Declined ${kind.toLowerCase()}`;
+    if (invite.state === "missed") return `Missed ${kind.toLowerCase()}`;
+    if (invite.state === "declined") return `Declined ${kind.toLowerCase()}`;
     if (invite.durationSec && invite.durationSec > 0) {
-      return `${icon} ${kind} · ${formatCallDuration(invite.durationSec)}`;
+      return `${kind} · ${formatCallDuration(invite.durationSec)}`;
     }
-    return `${icon} ${kind} ended`;
+    return `${kind} ended`;
   }
   return stripMarkdownForPreview(clean);
 }

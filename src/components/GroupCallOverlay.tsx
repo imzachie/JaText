@@ -25,15 +25,31 @@ import { useGroupCall } from "../lib/groupCalling";
 import { useJaText } from "../lib/store";
 import { Avatar } from "./Avatar";
 import { MobileScreenShareSheet, SharedMediaPlaybackBar } from "./MobileScreenShareSheet";
+import { DrumIcon, RocketIcon, SoundWaveIcon, SparklesIcon, UsersIcon } from "./UiIcons";
 
 const CALL_REACTIONS = ["❤️", "😂", "🔥", "👏", "🎉", "👍"];
-const SOUNDBOARD_ITEMS: Array<{ id: SoundboardEffectId; emoji: string; label: string }> = [
-  { id: "bruh", emoji: "🗿", label: "Bruh" },
-  { id: "rimshot", emoji: "🥁", label: "Rimshot" },
-  { id: "chime", emoji: "🔔", label: "Sparkle" },
-  { id: "laser", emoji: "🚀", label: "Laser" },
-  { id: "cheer", emoji: "👏", label: "Applause" },
+const SOUNDBOARD_ITEMS: Array<{ id: SoundboardEffectId; label: string }> = [
+  { id: "bruh", label: "Bruh" },
+  { id: "rimshot", label: "Rimshot" },
+  { id: "chime", label: "Sparkle" },
+  { id: "laser", label: "Laser" },
+  { id: "cheer", label: "Applause" },
 ];
+
+function renderSoundboardIcon(id: SoundboardEffectId) {
+  switch (id) {
+    case "bruh":
+      return <SoundWaveIcon size={15} />;
+    case "rimshot":
+      return <DrumIcon size={15} />;
+    case "chime":
+      return <SparklesIcon size={15} />;
+    case "laser":
+      return <RocketIcon size={15} />;
+    case "cheer":
+      return <UsersIcon size={15} />;
+  }
+}
 
 function GroupStreamVideo({
   stream,
@@ -181,9 +197,15 @@ export function GroupCallOverlay() {
       <div className="call-incoming-backdrop">
         <div className="call-incoming-sheet">
           <div className="call-incoming-badge">
-            {groupSession.mode === "video"
-              ? "📹 Incoming Group Video Call"
-              : "📞 Incoming Group Voice Call"}
+            {groupSession.mode === "video" ? (
+              <>
+                <Video size={14} /> Incoming Group Video Call
+              </>
+            ) : (
+              <>
+                <Phone size={14} /> Incoming Group Voice Call
+              </>
+            )}
           </div>
           <div className="call-incoming-avatar-pulse">
             {groupSession.group.avatarUrl ? (
@@ -205,7 +227,7 @@ export function GroupCallOverlay() {
                   fontSize: 42,
                 }}
               >
-                👥
+                <UsersIcon size={40} />
               </div>
             )}
           </div>
@@ -279,7 +301,9 @@ export function GroupCallOverlay() {
               style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }}
             />
           ) : (
-            <span style={{ fontSize: 22 }}>👥</span>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+              <UsersIcon size={22} />
+            </span>
           )}
         </div>
         <div className="call-pip-meta">
@@ -540,7 +564,15 @@ export function GroupCallOverlay() {
                 </div>
                 <div className="call-stage-name">You</div>
                 <div className="call-stage-state">
-                  {isMuted ? "🔇 Muted" : meSpeaking ? "Speaking…" : "Connected"}
+                  {isMuted ? (
+                    <>
+                      <MicOff size={13} /> Muted
+                    </>
+                  ) : meSpeaking ? (
+                    "Speaking…"
+                  ) : (
+                    "Connected"
+                  )}
                 </div>
               </div>
             )}
@@ -598,7 +630,15 @@ export function GroupCallOverlay() {
                   </div>
                   <div className="call-stage-name">{p.user.displayName}</div>
                   <div className="call-stage-state">
-                    {p.muted ? "🔇 Muted" : p.speaking ? "Speaking…" : `@${p.user.username}`}
+                    {p.muted ? (
+                      <>
+                        <MicOff size={13} /> Muted
+                      </>
+                    ) : p.speaking ? (
+                      "Speaking…"
+                    ) : (
+                      `@${p.user.username}`
+                    )}
                   </div>
                 </div>
               )}
@@ -679,7 +719,7 @@ export function GroupCallOverlay() {
               className="call-sound-pill"
               onClick={() => playSoundboard(item.id)}
             >
-              <span>{item.emoji}</span>
+              {renderSoundboardIcon(item.id)}
               <span>{item.label}</span>
             </button>
           ))}

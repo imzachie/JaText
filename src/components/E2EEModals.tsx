@@ -2,6 +2,13 @@ import { useState } from "react";
 import { AnimatedModal } from "./AnimatedModal";
 import { useE2EESnapshot, type MessageE2EEProof } from "../lib/e2ee/keystore";
 import { useJaText } from "../lib/store";
+import {
+  CheckIcon,
+  CopyIcon,
+  LockClosedIcon,
+  SmartphoneShareIcon,
+  UnlockIcon,
+} from "./UiIcons";
 
 export function LockIcon({
   size = 15,
@@ -82,9 +89,13 @@ export function MessageEncryptionModal({
                 <div className="e2ee-meta-row">
                   <span className="muted small">Sender signature</span>
                   <span className={proof.signatureVerified ? "e2ee-status-ok" : "muted small"}>
-                    {proof.signatureVerified
-                      ? "✓ Verified (ECDSA P-256)"
-                      : "Signed (awaiting peer key match)"}
+                    {proof.signatureVerified ? (
+                      <>
+                        <CheckIcon size={12} /> Verified (ECDSA P-256)
+                      </>
+                    ) : (
+                      "Signed (awaiting peer key match)"
+                    )}
                   </span>
                 </div>
                 {proof.senderKeyId && (
@@ -120,7 +131,9 @@ export function MessageEncryptionModal({
                 {proof.attachmentEncrypted && (
                   <div className="e2ee-meta-row">
                     <span className="muted small">Media / file attachment</span>
-                    <span className="e2ee-status-ok">✓ AES-256-GCM + SHA-256 encrypted blob</span>
+                    <span className="e2ee-status-ok">
+                      <CheckIcon size={12} /> AES-256-GCM + SHA-256 encrypted blob
+                    </span>
                   </div>
                 )}
               </>
@@ -131,7 +144,15 @@ export function MessageEncryptionModal({
             <div className="e2ee-wire-top">
               <span className="muted small">Raw wire payload stored on Convex DB</span>
               <button type="button" className="mini-btn" onClick={() => void handleCopyCiphertext()}>
-                {copied ? "✓ Copied" : "Copy raw payload"}
+                {copied ? (
+                  <>
+                    <CheckIcon size={12} /> Copied
+                  </>
+                ) : (
+                  <>
+                    <CopyIcon size={12} /> Copy raw payload
+                  </>
+                )}
               </button>
             </div>
             <pre className="e2ee-wire-box">
@@ -274,7 +295,9 @@ export function E2EEKeyVaultModal({ onClose }: { onClose: () => void }) {
                 <span className="muted small">
                   This device key · ID <code>{snap.myKeyId}</code>{" "}
                   {snap.backedUp ? (
-                    <span className="e2ee-status-ok">· ✓ Backed up</span>
+                    <span className="e2ee-status-ok">
+                      · <CheckIcon size={12} /> Backed up
+                    </span>
                   ) : null}
                 </span>
                 <button
@@ -289,7 +312,15 @@ export function E2EEKeyVaultModal({ onClose }: { onClose: () => void }) {
                     window.setTimeout(() => setCopiedMyKey(false), 1800);
                   }}
                 >
-                  {copiedMyKey ? "✓ Copied" : "Copy key"}
+                  {copiedMyKey ? (
+                    <>
+                      <CheckIcon size={12} /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <CopyIcon size={12} /> Copy key
+                    </>
+                  )}
                 </button>
               </div>
               <code className="e2ee-fingerprint-code">{snap.myFingerprint}</code>
@@ -313,7 +344,7 @@ export function E2EEKeyVaultModal({ onClose }: { onClose: () => void }) {
                 setTab("backup");
               }}
             >
-              🔐 Backup PIN
+              <LockClosedIcon size={14} /> Backup PIN
             </button>
             <button
               type="button"
@@ -323,7 +354,7 @@ export function E2EEKeyVaultModal({ onClose }: { onClose: () => void }) {
                 setTab("restore");
               }}
             >
-              🔓 Unlock Key
+              <UnlockIcon size={14} /> Unlock Key
             </button>
             <button
               type="button"
@@ -333,7 +364,7 @@ export function E2EEKeyVaultModal({ onClose }: { onClose: () => void }) {
                 setTab("devices");
               }}
             >
-              📱 Sync Device
+              <SmartphoneShareIcon size={14} /> Sync Device
               {(store.pendingDeviceSyncRequests?.length ?? 0) > 0
                 ? ` (${store.pendingDeviceSyncRequests!.length})`
                 : ""}
@@ -387,7 +418,15 @@ export function E2EEKeyVaultModal({ onClose }: { onClose: () => void }) {
                         window.setTimeout(() => setCopiedRecovery(false), 1800);
                       }}
                     >
-                      {copiedRecovery ? "✓ Copied" : "Copy recovery key"}
+                      {copiedRecovery ? (
+                        <>
+                          <CheckIcon size={12} /> Copied
+                        </>
+                      ) : (
+                        <>
+                          <CopyIcon size={12} /> Copy recovery key
+                        </>
+                      )}
                     </button>
                   </div>
                   <code className="e2ee-recovery-code">{generatedRecoveryKey}</code>
@@ -470,7 +509,7 @@ export function E2EEKeyVaultModal({ onClose }: { onClose: () => void }) {
                           setError(null);
                           try {
                             await store.approveDeviceSyncRequest(req);
-                            setSuccess(`✓ Synced E2EE keys to ${req.deviceLabel}!`);
+                            setSuccess(`Synced E2EE keys to ${req.deviceLabel}!`);
                           } catch (err) {
                             setError(err instanceof Error ? err.message : "Could not approve sync.");
                           } finally {

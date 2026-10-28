@@ -596,7 +596,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
       const fresh = loadDb();
       const target = fresh.users.find((u) => u.username === username);
       if (!target) throw new Error(`No JaText user with username @${username}.`);
-      if (target.id === me.id) throw new Error("You can't add yourself 😅");
+      if (target.id === me.id) throw new Error("You can't add yourself.");
       const between = fresh.requests.filter(
         (r) =>
           (r.fromId === me.id && r.toId === target.id) ||
@@ -680,7 +680,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
         body: latest
           ? latest.unsentAt
             ? "This message was unsent"
-            : latest.body || "📎 Attachment"
+            : latest.body || "Attachment"
           : "",
         createdAt: latest?.createdAt ?? 0,
         senderId: latest?.senderId ?? me.id,
@@ -757,7 +757,7 @@ export function DemoStoreProvider({ children }: { children: ReactNode }) {
               ? "Message unavailable"
               : source.unsentAt
                 ? "This message was unsent"
-                : source.body || "📎 Attachment",
+                : source.body || "Attachment",
           },
         };
       });

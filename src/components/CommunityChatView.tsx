@@ -23,6 +23,29 @@ import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { SwipeToReply } from "./SwipeToReply";
 import { StickerPicker } from "./StickerPicker";
 import { ContextMenu } from "./ContextMenu";
+import {
+  ArrowLeftIcon,
+  BubblePaletteIcon,
+  CheckIcon,
+  CloseIcon,
+  CopyIcon,
+  EditIcon,
+  FileTextIcon,
+  ForwardIcon,
+  ImageIcon,
+  LinkIcon,
+  MicVoiceIcon,
+  PaperclipIcon,
+  PlusIcon,
+  ReplyIcon,
+  SearchIcon,
+  SendIcon,
+  SmilePlusIcon,
+  StarIcon,
+  TrashIcon,
+  UndoIcon,
+  UsersIcon,
+} from "./UiIcons";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import type { CommunityMessage, JaUser, StickerMedia } from "../lib/types";
@@ -271,8 +294,9 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
         disabled={isEditing}
         onClick={() => fileInputRef.current?.click()}
         title="Attach a photo or file"
+        aria-label="Attach a photo or file"
       >
-        📎
+        <PaperclipIcon size={18} />
       </button>
       <StickerPicker friendId="" disabled={isEditing} onSelect={onSelectSticker} />
       <button
@@ -283,10 +307,7 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
         disabled={isEditing}
         onClick={onStartVoiceNote}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="9" y="2" width="6" height="12" rx="3" />
-          <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
-        </svg>
+        <MicVoiceIcon size={18} />
       </button>
       <button
         type="button"
@@ -330,8 +351,9 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
         disabled={isEditing ? !draft.trim() : !draft.trim() && !hasFile}
         onPointerDown={(event) => event.preventDefault()}
         onMouseDown={(event) => event.preventDefault()}
+        aria-label={isEditing ? "Save edit" : "Send message"}
       >
-        {isEditing ? "✓" : "➤"}
+        {isEditing ? <CheckIcon size={19} strokeWidth={2.6} /> : <SendIcon size={18} />}
       </button>
     </form>
   );
@@ -1044,12 +1066,16 @@ export function CommunityChatView({
   return (
     <section className="chat community-chat">
       <header className="chat-header">
-        <button className="icon-btn back-btn" onClick={onBack} aria-label="Back">←</button>
+        <button className="icon-btn back-btn" onClick={onBack} aria-label="Back">
+          <ArrowLeftIcon size={19} />
+        </button>
         <img className="community-mark" src="/jatext-logo-icon.png" alt="" />
         <div className="chat-title community-title">
           <strong>JaText Community</strong>
           <span className="community-title-badges">
-            <span className="verified-badge" title="Verified JaText account">✓</span>
+            <span className="verified-badge" title="Verified JaText account">
+              <CheckIcon size={11} strokeWidth={3} />
+            </span>
             <span className="official-badge">Official</span>
           </span>
         </div>
@@ -1070,7 +1096,9 @@ export function CommunityChatView({
       {showUnsendWarning && (
         <div className="unsend-warning-banner" role="status">
           <span>You unsent a message. In the meantime, they may have already seen it, screenshotted it, or reported it.</span>
-          <button type="button" className="unsend-warning-dismiss" aria-label="Dismiss unsend notice" onClick={() => setShowUnsendWarning(false)}>×</button>
+          <button type="button" className="unsend-warning-dismiss" aria-label="Dismiss unsend notice" onClick={() => setShowUnsendWarning(false)}>
+            <CloseIcon size={15} />
+          </button>
         </div>
       )}
 
@@ -1157,7 +1185,9 @@ export function CommunityChatView({
                   }
                 />
                 <strong>{message.senderName || "JaText"}</strong>
-                <span className="verified-badge" title="Verified">✓</span>
+                <span className="verified-badge" title="Verified">
+                  <CheckIcon size={11} strokeWidth={3} />
+                </span>
                 <span className="official-badge">Official</span>
                 <time className="muted small">{new Date(message.createdAt).toLocaleString()}</time>
                 {message.editedAt && <span className="muted small">Edited</span>}
@@ -1195,7 +1225,9 @@ export function CommunityChatView({
               ) : (
                 <>
                   {message.forwardedFromName && (
-                    <span className="message-meta forwarded-label">↗ Forwarded from {message.forwardedFromName}</span>
+                    <span className="message-meta forwarded-label">
+                      <ForwardIcon size={12} /> Forwarded from {message.forwardedFromName}
+                    </span>
                   )}
                   {message.replyTo && (
                     <button
@@ -1240,7 +1272,7 @@ export function CommunityChatView({
                           </div>
                         ) : (
                           <a className="file-chip" href={message.attachmentUrl} download={message.attachmentName ?? "file"} target="_blank" rel="noreferrer">
-                            📎 {message.attachmentName ?? "Attachment"}
+                            <PaperclipIcon size={14} /> {message.attachmentName ?? "Attachment"}
                           </a>
                         ))}
                       {message.stickerUrl && (
@@ -1306,7 +1338,7 @@ export function CommunityChatView({
                           title="Add another reaction"
                           aria-label="Add another reaction"
                         >
-                          +
+                          <PlusIcon size={13} strokeWidth={2.5} />
                         </button>
                       )}
                     </div>
@@ -1382,7 +1414,14 @@ export function CommunityChatView({
       {store.mode === "convex" && <CommunityTypingStatus />}
 
       {file && (
-        <div className="attach-preview">📎 {file.name} <button className="mini-btn" onClick={() => setFile(null)}>✕ Remove</button></div>
+        <div className="attach-preview">
+          <span>
+            <PaperclipIcon size={14} /> {file.name}
+          </span>
+          <button className="mini-btn" onClick={() => setFile(null)}>
+            <CloseIcon size={12} /> Remove
+          </button>
+        </div>
       )}
       {replyTo && !editingMessage && (
         <div className="reply-composer-preview">
@@ -1390,13 +1429,17 @@ export function CommunityChatView({
             <strong>Replying to {replyTo.senderName}</strong>
             <span>{replyTo.body || replyTo.attachmentName || replyTo.stickerName || "Attachment"}</span>
           </div>
-          <button type="button" className="mini-btn" onClick={() => setReplyTo(null)}>×</button>
+          <button type="button" className="mini-btn" aria-label="Cancel reply" onClick={() => setReplyTo(null)}>
+            <CloseIcon size={13} />
+          </button>
         </div>
       )}
       {editingMessage && (
         <div className="reply-composer-preview">
           <div><strong>Editing your message</strong><span>{editingMessage.body}</span></div>
-          <button type="button" className="mini-btn" onClick={() => { setEditingMessage(null); setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" })); }}>×</button>
+          <button type="button" className="mini-btn" aria-label="Cancel editing" onClick={() => { setEditingMessage(null); setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" })); }}>
+            <CloseIcon size={13} />
+          </button>
         </div>
       )}
 
@@ -1408,7 +1451,7 @@ export function CommunityChatView({
               {pollOptions.map((option, index) => (
                 <div className="community-poll-edit-option" key={index}>
                   <input value={option} maxLength={120} onChange={(event) => setPollOptions((current) => current.map((value, optionIndex) => (optionIndex === index ? event.target.value : value)))} placeholder={`Option ${index + 1}`} aria-label={`Poll option ${index + 1}`} />
-                  {pollOptions.length > 1 && <button type="button" className="mini-btn" onClick={() => setPollOptions((current) => current.filter((_, i) => i !== index))} aria-label={`Remove option ${index + 1}`}>×</button>}
+                  {pollOptions.length > 1 && <button type="button" className="mini-btn" onClick={() => setPollOptions((current) => current.filter((_, i) => i !== index))} aria-label={`Remove option ${index + 1}`}><CloseIcon size={12} /></button>}
                 </div>
               ))}
               <div className="community-poll-form-actions">
@@ -1462,7 +1505,7 @@ export function CommunityChatView({
                   <input ref={directorySearchInput} className="search-input community-directory-search" value={directorySearch} onChange={(event) => setDirectorySearch(event.target.value)} placeholder="Search people…" aria-label="Search registered people" autoFocus />
                 )}
                 <button type="button" className="icon-btn community-directory-search-toggle" aria-label={directorySearchOpen ? "Close people search" : "Search registered people"} title={directorySearchOpen ? "Close search" : "Search people"} onClick={() => { setDirectorySearchOpen((open) => !open); if (directorySearchOpen) setDirectorySearch(""); else window.setTimeout(() => directorySearchInput.current?.focus(), 0); }}>
-                  {directorySearchOpen ? "×" : (<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 5 5" /></svg>)}
+                  {directorySearchOpen ? <CloseIcon size={16} /> : <SearchIcon size={17} />}
                 </button>
               </div>
               <div className="community-directory">
@@ -1485,7 +1528,7 @@ export function CommunityChatView({
 
       {messageMenu && (
         <ContextMenu x={messageMenu.x} y={messageMenu.y} label="Message actions" className={`message-context-menu ${messageMenuClosing ? "closing" : ""}`} onClose={closeMessageMenu}>
-          <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}><span>↩️</span> Reply</button>
+          <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}><span><ReplyIcon size={15} /></span> Reply</button>
           {!messageMenu.message.unsentAt &&
             messageMenu.message.senderId === store.me?.id && (
               <button
@@ -1496,7 +1539,7 @@ export function CommunityChatView({
                   setBubbleStyleOpen(true);
                 }}
               >
-                <span>💬</span> Bubble style
+                <span><BubblePaletteIcon size={15} /></span> Bubble style
               </button>
             )}
           {!messageMenu.message.unsentAt &&
@@ -1513,7 +1556,7 @@ export function CommunityChatView({
                   closeMessageMenu();
                 }}
               >
-                <span>📝</span>{" "}
+                <span><FileTextIcon size={15} /></span>{" "}
                 {shownTranscriptIds[messageMenu.message.id]
                   ? "Hide transcription"
                   : "Show transcription"}
@@ -1521,8 +1564,8 @@ export function CommunityChatView({
             )}
           {!messageMenu.message.unsentAt && (
             <>
-              {messageMenu.canEdit && <button type="button" role="menuitem" onClick={() => startEditingMessage(messageMenu.message)}><span>✏️</span> Edit message</button>}
-              <button type="button" role="menuitem" onClick={() => openForwardDialog(messageMenu.message)}><span>↗️</span> Forward</button>
+              {messageMenu.canEdit && <button type="button" role="menuitem" onClick={() => startEditingMessage(messageMenu.message)}><span><EditIcon size={15} /></span> Edit message</button>}
+              <button type="button" role="menuitem" onClick={() => openForwardDialog(messageMenu.message)}><span><ForwardIcon size={15} /></span> Forward</button>
               <button
                 type="button"
                 role="menuitem"
@@ -1536,26 +1579,26 @@ export function CommunityChatView({
                   });
                 }}
               >
-                <span>✨</span> Reaction
+                <span><SmilePlusIcon size={15} /></span> Reaction
               </button>
             </>
           )}
-          <button type="button" role="menuitem" onClick={() => void copyMessage(messageMenu.message)}><span>📋</span> Copy text</button>
-          <button type="button" role="menuitem" onClick={() => void deleteForMe(messageMenu.message)}><span>🗑️</span> Delete for me</button>
+          <button type="button" role="menuitem" onClick={() => void copyMessage(messageMenu.message)}><span><CopyIcon size={15} /></span> Copy text</button>
+          <button type="button" role="menuitem" onClick={() => void deleteForMe(messageMenu.message)}><span><TrashIcon size={15} /></span> Delete for me</button>
           {(messageMenu.message.stickerKey || messageMenu.message.attachmentType?.startsWith("image/") || messageMenu.message.stickerUrl || messageMenu.message.attachmentUrl) && (
             <button type="button" role="menuitem" onClick={() => void favoriteSticker(messageMenu.message)}>
-              <span>{messageMenu.message.isStickerFavorite ? "☆" : "⭐"}</span>
+              <span><StarIcon size={15} filled={!messageMenu.message.isStickerFavorite} /></span>
               {messageMenu.message.attachmentType?.startsWith("image/") && !messageMenu.message.stickerKey ? "Make this image a sticker..." : messageMenu.message.isStickerFavorite ? "Remove from favourites" : "Add to favourites"}
             </button>
           )}
           {(messageMenu.message.attachmentType?.startsWith("image/") || messageMenu.message.stickerUrl) && (
             <>
-              <button type="button" role="menuitem" onClick={() => void copyImage(messageMenu.message)}><span>🖼️</span> Copy image</button>
-              <button type="button" role="menuitem" onClick={() => void copyImageAddress(messageMenu.message)}><span>🔗</span> Copy image address</button>
+              <button type="button" role="menuitem" onClick={() => void copyImage(messageMenu.message)}><span><ImageIcon size={15} /></span> Copy image</button>
+              <button type="button" role="menuitem" onClick={() => void copyImageAddress(messageMenu.message)}><span><LinkIcon size={15} /></span> Copy image address</button>
             </>
           )}
           {messageMenu.canUnsend && (
-            <button type="button" role="menuitem" className="destructive-menu-item" onClick={() => void unsend(messageMenu.message)}><span>↩️</span> Unsend</button>
+            <button type="button" role="menuitem" className="destructive-menu-item" onClick={() => void unsend(messageMenu.message)}><span><UndoIcon size={15} /></span> Unsend</button>
           )}
         </ContextMenu>
       )}
@@ -1568,7 +1611,7 @@ export function CommunityChatView({
                 <h3>Forward message</h3>
                 <p>Choose a friend or group to send this to.</p>
               </div>
-              <button type="button" className="icon-btn" aria-label="Close forward dialog" onClick={closeForwardDialog}>✕</button>
+              <button type="button" className="icon-btn" aria-label="Close forward dialog" onClick={closeForwardDialog}><CloseIcon size={17} /></button>
             </header>
             {(store.friends.length + store.groups.length > 4) && (
               <input
@@ -1610,7 +1653,7 @@ export function CommunityChatView({
                     {target.avatarUrl ? (
                       <img className="group-avatar" src={target.avatarUrl} alt="" style={{ width: 38, height: 38 }} />
                     ) : (
-                      <span className="group-avatar group-avatar-fallback" style={{ width: 38, height: 38, fontSize: 18 }}>👥</span>
+                      <span className="group-avatar group-avatar-fallback" style={{ width: 38, height: 38 }}><UsersIcon size={19} /></span>
                     )}
                     <span>{target.name}</span>
                     <span className="muted">{target.memberCount} members</span>
@@ -1644,7 +1687,7 @@ export function CommunityChatView({
       )}
       {imagePreview && (
         <div className={`media-lightbox ${imageClosing ? "closing" : ""}`} role="dialog" aria-modal="true" aria-label="Image viewer" onClick={closeImagePreview}>
-          <button type="button" className="media-lightbox-close" aria-label="Close image viewer" onClick={closeImagePreview}>×</button>
+          <button type="button" className="media-lightbox-close" aria-label="Close image viewer" onClick={closeImagePreview}><CloseIcon size={20} /></button>
           <img ref={imageElementRef} src={imagePreview} alt="Full-size attachment" style={{ transform: "translate3d(0, 0, 0) scale(1)" }} onClick={(event) => event.stopPropagation()} onTouchStart={startImageGesture} onTouchMove={moveImageGesture} onTouchEnd={endImageGesture} onTouchCancel={endImageGesture} onWheel={(event) => { event.preventDefault(); const { scale, x, y } = imageTransformRef.current; applyImageTransform(Math.min(4, Math.max(1, scale + (event.deltaY < 0 ? 0.2 : -0.2))), x, y); }} />
           <span className="media-lightbox-hint">Pinch to zoom · Drag to move · Click outside or press Esc to close</span>
         </div>

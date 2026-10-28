@@ -656,16 +656,16 @@ public final class JaTextE2EEDecryptor {
         JSONObject stk = payload.optJSONObject("stk");
         if (stk != null) {
             String name = stk.optString("n", "Sticker");
-            return "✨ " + (name.isEmpty() ? "Sticker" : name);
+            return name.isEmpty() ? "Sent a sticker" : name;
         }
         JSONObject att = payload.optJSONObject("att");
         if (att != null) {
             String mime = att.optString("t", "").toLowerCase();
             String name = att.optString("n", "Attachment");
-            if (mime.startsWith("audio/")) return "🎤 Voice note";
-            if (mime.startsWith("image/")) return "📷 Photo";
-            if (mime.startsWith("video/")) return "🎬 Video";
-            return "📎 " + name;
+            if (mime.startsWith("audio/")) return "Voice note";
+            if (mime.startsWith("image/")) return "Photo";
+            if (mime.startsWith("video/")) return "Video";
+            return name;
         }
         if (payload.optJSONObject("msgBlob") != null) {
             return "Sent a long message";
@@ -689,16 +689,16 @@ public final class JaTextE2EEDecryptor {
         }
         if (s.startsWith("__JATEXT_CALL_GRP__:")) {
             return s.contains("\"mode\":\"video\"")
-                ? "📹 Incoming group video call"
-                : "📞 Incoming group voice call";
+                ? "Incoming group video call"
+                : "Incoming group voice call";
         }
         if (s.startsWith("__JATEXT_CALL__:")) {
             return s.contains("\"mode\":\"video\"")
-                ? "📹 Incoming video call"
-                : "📞 Incoming voice call";
+                ? "Incoming video call"
+                : "Incoming voice call";
         }
         if (s.startsWith("__JATEXT_WALLPAPER__:") || s.startsWith("__JATEXT_WP__:")) {
-            return "🖼️ Updated the chat wallpaper";
+            return "Updated the chat wallpaper";
         }
         return s;
     }

@@ -7,6 +7,7 @@ import {
   pickSupportedAudioMime,
   type VoiceNoteMeta,
 } from "../lib/voiceNotes";
+import { PauseIcon, PlayIcon, SendIcon, TrashIcon } from "./UiIcons";
 
 interface WebSpeechRecognitionInstance {
   continuous: boolean;
@@ -377,7 +378,7 @@ export function VoiceNoteRecorder({
         disabled={sending}
         onClick={() => void cancelRecording()}
       >
-        🗑️
+        <TrashIcon size={17} />
       </button>
 
       <button
@@ -388,7 +389,7 @@ export function VoiceNoteRecorder({
         disabled={sending}
         onClick={togglePause}
       >
-        {paused ? "▶" : "⏸"}
+        {paused ? <PlayIcon size={16} /> : <PauseIcon size={16} />}
       </button>
 
       <div className="voice-recorder-track">
@@ -422,7 +423,7 @@ export function VoiceNoteRecorder({
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => void finishAndSend()}
       >
-        ➤
+        <SendIcon size={18} />
       </button>
     </div>
   );
