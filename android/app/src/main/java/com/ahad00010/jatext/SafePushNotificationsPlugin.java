@@ -1,44 +1,34 @@
 package com.ahad00010.jatext;
 
+import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import com.capacitorjs.plugins.pushnotifications.PushNotificationsPlugin;
-import com.getcapacitor.Bridge;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
-import com.google.firebase.FirebaseApp;
+import com.getcapacitor.annotation.PermissionCallback;
 import com.google.firebase.messaging.RemoteMessage;
 import java.util.Map;
 
-/**
- * Crash-safe wrapper around Capacitor's PushNotificationsPlugin that:
- * 1. Prevents crashes if google-services.json is absent.
- * 2. Suppresses push notifications while JaText is actively in the foreground.
- * 3. Uses rawWire + JaTextE2EEDecryptor when minimized so incoming calls wake/open immediately
- *    and E2EE messages ALWAYS show decrypted readable text!
- */
 @CapacitorPlugin(
     name = "PushNotifications",
-    permissions = { @Permission(strings = { "android.permission.POST_NOTIFICATIONS" }, alias = "receive") }
+    permissions = @Permission(strings = { Manifest.permission.POST_NOTIFICATIONS }, alias = "receive")
 )
 public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
 
-    private boolean isFirebaseConfigured() {
+    @Override
+    public void load() {
         try {
-            Context context = getContext();
-            if (context == null) {
-                return false;
+            if (MainActivity.isAppInForeground()) {
+                PushNotificationsPlugin.lastMessage = null;
             }
-            if (!FirebaseApp.getApps(context).isEmpty()) {
-                return true;
-            }
-            return FirebaseApp.initializeApp(context) != null;
+            super.load();
         } catch (Throwable ignored) {
-            return false;
+            // Keep app running even if notification services fail during startup.
         }
     }
 
@@ -46,7 +36,8 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
     protected void handleOnNewIntent(Intent data) {
         if (data != null && data.getExtras() != null) {
             Bundle extras = data.getExtras();
-            boolean isCallWake = extras.getBoolean("incomingCallWake", false) ||
+            boolean isCallWake =
+                extras.getBoolean("incomingCallWake", false) ||
                 "incoming_call".equals(extras.getString("type"));
             String senderId = extras.getString("senderId");
             String groupId = extras.getString("groupId");
@@ -62,75 +53,89 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
 
     @Override
     public void fireNotification(RemoteMessage remoteMessage) {
+        if (remoteMessage == null) return;
+
+        // When the user has JaText open in the foreground, NEVER show a system notification!
         if (MainActivity.isAppInForeground()) {
+            JSObject remoteMessageData = new JSObject();
+            JSObject data = new JSObject();
+            remoteMessageData.put("id", remoteMessage.getMessageId());
+            for (Map.Entry<String, String> entry : remoteMessage.getData().entrySet()) {
+                data.put(entry.getKey(), entry.getValue());
+            }
+            remoteMessageData.put("data", data);
+            notifyListeners("pushNotificationReceived", remoteMessageData, true);
             return;
         }
+
         Context ctx = getContext();
-        if (ctx != null && remoteMessage != null) {
-            Map<String, String> data = remoteMessage.getData();
-            RemoteMessage.Notification notif = remoteMessage.getNotification();
-            String title = notif != null ? notif.getTitle() : (data != null ? data.get("title") : null);
-            String rawWire = data != null ? data.get("rawWire") : null;
-            String rawBody = (rawWire != null && !rawWire.isEmpty())
-                ? rawWire
-                : (notif != null ? notif.getBody() : (data != null ? data.get("body") : null));
-            String senderId = data != null ? data.get("senderId") : null;
-            String groupId = data != null ? data.get("groupId") : null;
-            String chatId = data != null ? data.get("chatId") : null;
-            String type = data != null ? data.get("type") : null;
+        if (ctx == null) return;
 
-            new Thread(() -> {
-                JaTextE2EEDecryptor.handleBackgroundPush(
-                    ctx.getApplicationContext(),
-                    title,
-                    rawBody,
-                    senderId,
-                    groupId,
-                    chatId,
-                    type,
-                    remoteMessage.getMessageId()
-                );
-            }).start();
-            return;
-        }
+        final Context appCtx = ctx.getApplicationContext();
+        final RemoteMessage.Notification notif = remoteMessage.getNotification();
+        final Map<String, String> data = remoteMessage.getData();
+        final String title = notif != null && notif.getTitle() != null
+            ? notif.getTitle()
+            : (data != null ? data.get("title") : null);
+        final String rawWire = data != null ? data.get("rawWire") : null;
+        final String rawBody = (rawWire != null && !rawWire.isEmpty())
+            ? rawWire
+            : (notif != null && notif.getBody() != null
+                ? notif.getBody()
+                : (data != null ? data.get("body") : null));
+        final String senderId = data != null ? data.get("senderId") : null;
+        final String groupId = data != null ? data.get("groupId") : null;
+        final String chatId = data != null ? data.get("chatId") : null;
+        final String type = data != null ? data.get("type") : null;
+        final String msgId = remoteMessage.getMessageId();
 
-        Bridge b = getBridge();
-        if (b != null) {
-            b.saveInstanceState();
-        }
-        try {
-            super.fireNotification(remoteMessage);
-        } catch (Throwable ignored) {}
+        new Thread(() -> {
+            JaTextE2EEDecryptor.handleBackgroundPush(
+                appCtx,
+                title,
+                rawBody,
+                senderId,
+                groupId,
+                chatId,
+                type,
+                msgId
+            );
+        }).start();
     }
 
     @Override
     @PluginMethod
     public void register(PluginCall call) {
-        if (!isFirebaseConfigured()) {
-            JSObject err = new JSObject();
-            err.put("error", "Firebase is not configured on this Android build.");
-            notifyListeners("registrationError", err, true);
+        if (!JaTextNativePlugin.isFirebaseConfigured(getContext())) {
+            sendError("Firebase push is not configured in this APK build.");
             call.resolve();
             return;
         }
         try {
             super.register(call);
         } catch (Throwable t) {
-            call.reject("Push registration unavailable: " + t.getMessage());
+            String msg = t.getLocalizedMessage() != null ? t.getLocalizedMessage() : t.toString();
+            sendError(msg);
+            call.resolve();
         }
     }
 
     @Override
     @PluginMethod
     public void unregister(PluginCall call) {
-        if (!isFirebaseConfigured()) {
+        if (!JaTextNativePlugin.isFirebaseConfigured(getContext())) {
             call.resolve();
             return;
         }
         try {
             super.unregister(call);
-        } catch (Throwable t) {
+        } catch (Throwable ignored) {
             call.resolve();
         }
+    }
+
+    @PermissionCallback
+    private void permissionsCallback(PluginCall call) {
+        this.checkPermissions(call);
     }
 }
