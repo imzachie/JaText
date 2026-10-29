@@ -6,6 +6,7 @@ import type { JaUser, StatusPreference } from "./types";
 
 const SAVED_ACCOUNTS_STORAGE_KEY = "jatext:saved-accounts:v1";
 export const ACCOUNT_SLOT_CHANGE_EVENT = "jatext:account-slot-changed";
+export const SLOT_AUTH_INVALIDATED_EVENT = "jatext:slot-auth-invalidated";
 export const DEFAULT_ACCOUNT_SLOT_ID = "default";
 
 export interface SavedAccountEntry {
@@ -200,11 +201,14 @@ export function getDemoSessionKeyForSlot(slotId: string): string {
     : `jatext-demo-session-v1:${slotId}`;
 }
 
+const invalidatedAuthSlots = new Set<string>();
+
 export function hasStoredAuthForSlot(
   convexUrl: string | undefined,
   slotId: string,
 ): boolean {
   if (typeof window === "undefined") return false;
+  if (invalidatedAuthSlots.has(slotId)) return false;
   try {
     if (!convexUrl) {
       return Boolean(window.localStorage.getItem(getDemoSessionKeyForSlot(slotId)));
@@ -229,6 +233,7 @@ export async function clearDeadSlotTokensOnAuthFailure(
   slotId: string,
   convexUrl: string,
 ): Promise<void> {
+  invalidatedAuthSlots.add(slotId);
   const keys = getConvexAuthKeysForSlot(convexUrl, slotId);
   await Promise.all([
     deleteAuthItem(keys.jwtKey),
@@ -248,6 +253,9 @@ export async function clearDeadSlotTokensOnAuthFailure(
     } catch {
       // Ignore synthetic StorageEvent error in older WebViews.
     }
+    window.dispatchEvent(
+      new CustomEvent(SLOT_AUTH_INVALIDATED_EVENT, { detail: slotId }),
+    );
   }
 }
 
@@ -333,6 +341,7 @@ export async function syncActiveUserToSavedAccounts(
   if (!user?.id) return;
   const state = readStateFromStorage();
   const currentSlotId = state.activeSlotId;
+  invalidatedAuthSlots.delete(currentSlotId);
 
   const duplicateInOtherSlot = state.accounts.find(
     (acct) => acct.userId === user.id && acct.slotId !== currentSlotId,
@@ -340,6 +349,7 @@ export async function syncActiveUserToSavedAccounts(
 
   if (duplicateInOtherSlot) {
     const canonicalSlotId = duplicateInOtherSlot.slotId;
+    invalidatedAuthSlots.delete(canonicalSlotId);
     if (convexUrl) {
       const fromKeys = getConvexAuthKeysForSlot(convexUrl, currentSlotId);
       const toKeys = getConvexAuthKeysForSlot(convexUrl, canonicalSlotId);
