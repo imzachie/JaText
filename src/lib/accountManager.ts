@@ -35,6 +35,26 @@ const DEFAULT_STATE: MultiAccountState = {
 
 let cachedState: MultiAccountState | null = null;
 const listeners = new Set<() => void>();
+const slotCleanupHandlers = new Set<(slotId: string, mode: "full" | "clientOnly") => void>();
+
+export function registerSlotCleanupHandler(
+  handler: (slotId: string, mode: "full" | "clientOnly") => void,
+): () => void {
+  slotCleanupHandlers.add(handler);
+  return () => {
+    slotCleanupHandlers.delete(handler);
+  };
+}
+
+function invokeSlotCleanup(slotId: string, mode: "full" | "clientOnly"): void {
+  for (const handler of slotCleanupHandlers) {
+    try {
+      handler(slotId, mode);
+    } catch {
+      // Ignore cleanup errors.
+    }
+  }
+}
 
 function sanitizeAccountEntry(raw: unknown): SavedAccountEntry | null {
   if (!raw || typeof raw !== "object") return null;
@@ -180,6 +200,57 @@ export function getDemoSessionKeyForSlot(slotId: string): string {
     : `jatext-demo-session-v1:${slotId}`;
 }
 
+export function hasStoredAuthForSlot(
+  convexUrl: string | undefined,
+  slotId: string,
+): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (!convexUrl) {
+      return Boolean(window.localStorage.getItem(getDemoSessionKeyForSlot(slotId)));
+    }
+    const { jwtKey, refreshKey } = getConvexAuthKeysForSlot(convexUrl, slotId);
+    if (
+      window.localStorage.getItem(jwtKey) ||
+      window.localStorage.getItem(refreshKey)
+    ) {
+      return true;
+    }
+    if (Capacitor.isNativePlatform()) {
+      return readStateFromStorage().accounts.some((a) => a.slotId === slotId);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function clearDeadSlotTokensOnAuthFailure(
+  slotId: string,
+  convexUrl: string,
+): Promise<void> {
+  const keys = getConvexAuthKeysForSlot(convexUrl, slotId);
+  await Promise.all([
+    deleteAuthItem(keys.jwtKey),
+    deleteAuthItem(keys.refreshKey),
+    deleteAuthItem(keys.verifierKey),
+    deleteAuthItem(keys.fetchTimeKey),
+  ]);
+  if (typeof window !== "undefined") {
+    try {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: keys.jwtKey,
+          newValue: null,
+          storageArea: window.localStorage,
+        }),
+      );
+    } catch {
+      // Ignore synthetic StorageEvent error in older WebViews.
+    }
+  }
+}
+
 async function readAuthItem(key: string): Promise<string | null> {
   if (Capacitor.isNativePlatform()) {
     try {
@@ -283,6 +354,8 @@ export async function syncActiveUserToSavedAccounts(
       window.localStorage.setItem(getDemoSessionKeyForSlot(canonicalSlotId), user.id);
       window.localStorage.removeItem(getDemoSessionKeyForSlot(currentSlotId));
     }
+    invokeSlotCleanup(currentSlotId, "full");
+    invokeSlotCleanup(canonicalSlotId, "clientOnly");
 
     const updatedAccounts = state.accounts
       .filter((a) => a.slotId !== currentSlotId)
@@ -360,7 +433,6 @@ export async function switchToAccountSlot(
   if (!targetSlotId) return;
   if (state.activeSlotId === targetSlotId && state.returnToSlotId === null) return;
 
-  clearDecryptedSessionCaches();
   clearActiveE2EESession();
   await syncNativeActiveSlotTokens(targetSlotId, convexUrl);
 
@@ -392,7 +464,6 @@ export function beginAddAnotherAccount(): string {
     ? `slot_${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36)}`
     : state.activeSlotId;
 
-  clearDecryptedSessionCaches();
   clearActiveE2EESession();
 
   persistState({
@@ -425,6 +496,7 @@ export async function removeSavedAccountSlot(
   if (!slotIdToRemove || slotIdToRemove === state.activeSlotId) return;
 
   await clearSlotStoredTokens(slotIdToRemove, convexUrl);
+  invokeSlotCleanup(slotIdToRemove, "full");
   const remaining = state.accounts.filter((a) => a.slotId !== slotIdToRemove);
   const nextReturn =
     state.returnToSlotId === slotIdToRemove
@@ -446,7 +518,9 @@ export async function finalizeSignOutCurrentSlot(
   signedOutSlotId: string,
   convexUrl?: string,
 ): Promise<void> {
+  clearDecryptedSessionCaches();
   await clearSlotStoredTokens(signedOutSlotId, convexUrl);
+  invokeSlotCleanup(signedOutSlotId, "full");
   const state = readStateFromStorage();
   const remaining = state.accounts.filter((a) => a.slotId !== signedOutSlotId);
   const nextBest = [...remaining].sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0] ?? null;

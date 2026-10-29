@@ -12,11 +12,27 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { JaTextContext } from "./store";
 import {
+  clearDeadSlotTokensOnAuthFailure,
   finalizeSignOutCurrentSlot,
   getActiveAccountSlotId,
+  getConvexAuthKeysForSlot,
+  getMultiAccountState,
   getScopedStorageKey,
+  hasStoredAuthForSlot,
   syncActiveUserToSavedAccounts,
 } from "./accountManager";
+import {
+  getCachedDmConversation,
+  getCachedGroupConversation,
+  getSlotBootstrapCache,
+  isPlaceholderEncryptedText,
+  mergeLiveWithCachedMessages,
+  preloadSlotChatCache,
+  saveSlotBootstrapCache,
+  setCachedDmConversation,
+  setCachedGroupConversation,
+  useChatCacheVersion,
+} from "./chatCache";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
 import { ensureValidFileMime, normalizeImageFileForUpload } from "./imageUtils";
 import {
@@ -223,31 +239,112 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     bumpE2EEHydration((v) => v + 1);
   }, []);
   const e2eeSnapshot = useE2EESnapshot();
+  const convexUrl = import.meta.env.VITE_CONVEX_URL as string | undefined;
+  const slotId = getActiveAccountSlotId();
+  const cacheVersion = useChatCacheVersion();
+
+  useEffect(() => {
+    void preloadSlotChatCache(slotId);
+  }, [slotId]);
+
+  const hasStoredAuth = useMemo(
+    () => hasStoredAuthForSlot(convexUrl, slotId),
+    [authLoading, convexUrl, isAuthenticated, slotId],
+  );
+  const bootstrapCache = useMemo(() => {
+    void cacheVersion;
+    return getSlotBootstrapCache(slotId);
+  }, [cacheVersion, slotId]);
+  const cachedSlotMe = useMemo<JaUser | null>(() => {
+    if (bootstrapCache?.me) return bootstrapCache.me;
+    const saved = getMultiAccountState().accounts.find(
+      (a) => a.slotId === slotId && a.userId && a.username,
+    );
+    if (!saved) return null;
+    return {
+      id: saved.userId,
+      username: saved.username,
+      displayName: saved.displayName || saved.username,
+      email: saved.email,
+      bio: "",
+      pronouns: "",
+      avatarColor: saved.avatarColor || "#5865f2",
+      avatarUrl: saved.avatarUrl,
+      statusPreference: saved.statusPreference ?? "online",
+      onboardingComplete: true,
+    };
+  }, [bootstrapCache?.me, slotId]);
+
+  const canUseCachedSession = isAuthenticated || (authLoading && hasStoredAuth);
+
+  // Safety watchdog: if Convex auth stalls >8.5s while online with an expired/broken JWT,
+  // clear dead tokens so the slot never stays stuck in an unauthenticated limbo.
+  useEffect(() => {
+    if (!authLoading || isAuthenticated || !convexUrl) return;
+    const timer = window.setTimeout(() => {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      try {
+        const { jwtKey } = getConvexAuthKeysForSlot(convexUrl, slotId);
+        const rawJwt = window.localStorage.getItem(jwtKey);
+        if (!rawJwt) {
+          void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+          return;
+        }
+        const parts = rawJwt.split(".");
+        if (parts.length !== 3) {
+          void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+          return;
+        }
+        const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+        const payload = JSON.parse(window.atob(padded)) as { exp?: number };
+        if (!payload.exp || payload.exp * 1000 < Date.now()) {
+          void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+        }
+      } catch {
+        void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+      }
+    }, 8500);
+    return () => window.clearTimeout(timer);
+  }, [authLoading, convexUrl, isAuthenticated, slotId]);
+
   const previewsQuery = useQuery(
     api.messages.previews,
     isAuthenticated ? {} : "skip",
   ) as ChatPreview[] | undefined;
 
-  const me = useQuery(api.users.current, isAuthenticated ? {} : "skip") as
+  const meQuery = useQuery(api.users.current, isAuthenticated ? {} : "skip") as
     | JaUser
     | null
     | undefined;
 
-  useEffect(() => {
-    if (!isAuthenticated || !me?.id) return;
-    void syncActiveUserToSavedAccounts(
-      me,
-      import.meta.env.VITE_CONVEX_URL as string | undefined,
-    );
-  }, [
-    isAuthenticated,
-    me,
-  ]);
+  const me: JaUser | null | undefined = isAuthenticated
+    ? meQuery !== undefined
+      ? meQuery
+      : cachedSlotMe ?? undefined
+    : canUseCachedSession
+      ? cachedSlotMe ?? undefined
+      : null;
 
-  const rawFriends = (useQuery(
+  useEffect(() => {
+    if (!isAuthenticated || !meQuery?.id) return;
+    saveSlotBootstrapCache(slotId, { me: meQuery });
+    void syncActiveUserToSavedAccounts(meQuery, convexUrl);
+  }, [convexUrl, isAuthenticated, meQuery, slotId]);
+
+  const rawFriendsQuery = useQuery(
     api.friends.listFriends,
     isAuthenticated ? {} : "skip",
-  ) ?? []) as JaUser[];
+  ) as JaUser[] | undefined;
+  const rawFriends = useMemo(
+    () =>
+      rawFriendsQuery !== undefined
+        ? rawFriendsQuery
+        : canUseCachedSession
+          ? (bootstrapCache?.friends ?? [])
+          : [],
+    [bootstrapCache?.friends, canUseCachedSession, rawFriendsQuery],
+  );
   const [localUnfriendedIds, setLocalUnfriendedIds] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(getScopedStorageKey("jatext:unfriended:v1"));
@@ -256,22 +353,60 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       return [];
     }
   });
-  const rawPreviews = previewsQuery ?? [];
+  const rawPreviews = useMemo(() => previewsQuery ?? [], [previewsQuery]);
   const friends = useMemo(() => {
     const hiddenSet = new Set(localUnfriendedIds);
-    for (const p of rawPreviews) {
+    const previewSource =
+      previewsQuery !== undefined
+        ? rawPreviews
+        : canUseCachedSession
+          ? (bootstrapCache?.previews ?? [])
+          : [];
+    for (const p of previewSource) {
       if (p.body === "__JATEXT_CALL_SIG__:{\"kind\":\"unfriend\"}") {
         hiddenSet.add(p.friendId);
       }
     }
     return rawFriends.filter((f) => !hiddenSet.has(f.id));
-  }, [localUnfriendedIds, rawPreviews, rawFriends]);
+  }, [bootstrapCache?.previews, canUseCachedSession, localUnfriendedIds, previewsQuery, rawFriends, rawPreviews]);
+
+  useEffect(() => {
+    if (!isAuthenticated || rawFriendsQuery === undefined) return;
+    saveSlotBootstrapCache(slotId, { friends });
+  }, [friends, isAuthenticated, rawFriendsQuery, slotId]);
+
   const previews = useMemo(() => {
     // Reference e2eeSnapshot.version so previews re-decrypt immediately when keys arrive
     void e2eeSnapshot.version;
+    if (previewsQuery === undefined) {
+      return canUseCachedSession ? (bootstrapCache?.previews ?? []) : [];
+    }
     if (!me?.id) return rawPreviews;
-    return rawPreviews.map((p) => hydrateDecryptedChatPreview(p, me.id));
-  }, [e2eeSnapshot.version, me?.id, rawPreviews]);
+    const cachedByFriend = new Map(
+      (bootstrapCache?.previews ?? []).map((p) => [p.friendId, p]),
+    );
+    return rawPreviews.map((raw) => {
+      const hydrated = hydrateDecryptedChatPreview(raw, me.id);
+      if (isPlaceholderEncryptedText(hydrated.body)) {
+        const cached = cachedByFriend.get(hydrated.friendId);
+        if (
+          cached &&
+          cached.createdAt === hydrated.createdAt &&
+          cached.body &&
+          !isPlaceholderEncryptedText(cached.body)
+        ) {
+          return { ...hydrated, body: cached.body };
+        }
+      }
+      return hydrated;
+    });
+  }, [bootstrapCache?.previews, canUseCachedSession, e2eeSnapshot.version, me?.id, previewsQuery, rawPreviews]);
+
+  useEffect(() => {
+    if (!isAuthenticated || previewsQuery === undefined) return;
+    saveSlotBootstrapCache(slotId, { previews });
+  }, [isAuthenticated, previews, previewsQuery, slotId]);
+
   const incoming = (useQuery(
     api.friends.listIncoming,
     isAuthenticated ? {} : "skip",
@@ -284,6 +419,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     api.friends.activity,
     isAuthenticated ? {} : "skip",
   ) ?? []) as FriendActivity[];
+
+  const cachedDm = useMemo(() => {
+    void cacheVersion;
+    return canUseCachedSession && activeChatId && activeChatId !== OFFICIAL_COMMUNITY_ID
+      ? getCachedDmConversation(slotId, activeChatId)
+      : null;
+  }, [activeChatId, cacheVersion, canUseCachedSession, slotId]);
   const activeMessagesQuery = useQuery(
     api.messages.list,
     isAuthenticated && activeChatId && activeChatId !== OFFICIAL_COMMUNITY_ID
@@ -291,18 +433,70 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       : "skip",
   );
   useEffect(() => {
-    if (!activeMessagesQuery || !e2eeSnapshot.ready) return;
-    void scanDmRowsForE2EESignalsAsync(activeMessagesQuery as ChatMessage[]);
-  }, [activeMessagesQuery, e2eeSnapshot.myKeyId, e2eeSnapshot.ready]);
+    if (!e2eeSnapshot.ready) return;
+    if (activeMessagesQuery) {
+      void scanDmRowsForE2EESignalsAsync(activeMessagesQuery as ChatMessage[]);
+    } else if (cachedDm?.rawRows?.length) {
+      void scanDmRowsForE2EESignalsAsync(cachedDm.rawRows);
+    }
+  }, [activeMessagesQuery, cachedDm?.rawRows, e2eeSnapshot.myKeyId, e2eeSnapshot.ready]);
   const dmFold = useMemo(() => {
     void e2eeSnapshot.version;
     const peerId = activeChatId && activeChatId !== OFFICIAL_COMMUNITY_ID ? activeChatId : "";
-    const hydrated = ((activeMessagesQuery ?? []) as ChatMessage[]).map((row) =>
+    const sourceRows =
+      activeMessagesQuery !== undefined
+        ? (activeMessagesQuery as ChatMessage[])
+        : (cachedDm?.rawRows ?? []);
+    const hydrated = sourceRows.map((row) =>
       normalizeDirectMessage(hydrateDecryptedDmMessage(row, peerId, triggerE2EERerender)),
     );
-    return foldReactionSignals(hydrated, optimisticReactions);
-  }, [activeChatId, activeMessagesQuery, e2eeSnapshot.version, optimisticReactions, triggerE2EERerender]);
+    const folded = foldReactionSignals(hydrated, optimisticReactions);
+    if (activeMessagesQuery !== undefined) {
+      return {
+        ...folded,
+        messages: mergeLiveWithCachedMessages(folded.messages, cachedDm?.messages),
+      };
+    }
+    if (!cachedDm) {
+      return { ...folded, messages: [] as ChatMessage[] };
+    }
+    if (cachedDm.rawRows?.length && e2eeSnapshot.ready) {
+      return {
+        ...folded,
+        messages: mergeLiveWithCachedMessages(folded.messages, cachedDm.messages),
+      };
+    }
+    return {
+      ...folded,
+      messages: cachedDm.messages,
+    };
+  }, [
+    activeChatId,
+    activeMessagesQuery,
+    cachedDm,
+    e2eeSnapshot.ready,
+    e2eeSnapshot.version,
+    optimisticReactions,
+    triggerE2EERerender,
+  ]);
   const activeMessages = dmFold.messages;
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      !activeChatId ||
+      activeChatId === OFFICIAL_COMMUNITY_ID ||
+      activeMessagesQuery === undefined
+    ) {
+      return;
+    }
+    setCachedDmConversation(
+      slotId,
+      activeChatId,
+      activeMessages,
+      activeMessagesQuery as ChatMessage[],
+    );
+  }, [activeChatId, activeMessages, activeMessagesQuery, isAuthenticated, slotId]);
+
   const communityMessagesQuery = useQuery(
     api.community.list,
     isAuthenticated ? {} : "skip",
@@ -316,7 +510,20 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       ),
     [communityMessagesQuery, localCommunityReactions, optimisticReactions],
   );
-  const communityMessages = communityFold.messages;
+  const communityMessages = useMemo(
+    () =>
+      communityMessagesQuery !== undefined
+        ? communityFold.messages
+        : canUseCachedSession
+          ? (bootstrapCache?.communityMessages ?? [])
+          : [],
+    [bootstrapCache?.communityMessages, canUseCachedSession, communityFold.messages, communityMessagesQuery],
+  );
+  useEffect(() => {
+    if (!isAuthenticated || communityMessagesQuery === undefined) return;
+    saveSlotBootstrapCache(slotId, { communityMessages });
+  }, [communityMessages, communityMessagesQuery, isAuthenticated, slotId]);
+
   const communityTypingUsers = (useQuery(
     api.community.typingUsers,
     isAuthenticated ? {} : "skip",
@@ -337,32 +544,88 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       ? {}
       : "skip",
   ) ?? []) as CommunityUser[];
+
   const groupsQuery = useQuery(
     api.groups.listMine,
     isAuthenticated ? {} : "skip",
   ) as GroupSummary[] | undefined;
   const groups = useMemo(() => {
     void e2eeSnapshot.version;
-    const rawGroups = groupsQuery ?? [];
-    return rawGroups.map((rawGroup) => {
+    if (groupsQuery === undefined) {
+      return canUseCachedSession ? (bootstrapCache?.groups ?? []) : [];
+    }
+    const cachedByGroup = new Map(
+      (bootstrapCache?.groups ?? []).map((g) => [g.id, g]),
+    );
+    return groupsQuery.map((rawGroup) => {
       const group = me?.id
         ? hydrateDecryptedGroupSummary(rawGroup, me.id, me.username)
         : rawGroup;
       const formatted = formatGroupReactionPreview(group.lastMessage);
-      if (!formatted.isSignal) return group;
-      return {
-        ...group,
-        lastMessage: formatted.text,
-      };
+      const nextGroup = formatted.isSignal
+        ? { ...group, lastMessage: formatted.text }
+        : group;
+      if (isPlaceholderEncryptedText(nextGroup.lastMessage)) {
+        const cached = cachedByGroup.get(nextGroup.id);
+        if (
+          cached &&
+          cached.lastMessageAt === nextGroup.lastMessageAt &&
+          cached.lastMessage &&
+          !isPlaceholderEncryptedText(cached.lastMessage)
+        ) {
+          return { ...nextGroup, lastMessage: cached.lastMessage };
+        }
+      }
+      return nextGroup;
     });
-  }, [e2eeSnapshot.version, groupsQuery, me?.id, me?.username]);
+  }, [bootstrapCache?.groups, canUseCachedSession, e2eeSnapshot.version, groupsQuery, me?.id, me?.username]);
+
+  useEffect(() => {
+    if (!isAuthenticated || groupsQuery === undefined) return;
+    saveSlotBootstrapCache(slotId, { groups });
+  }, [groups, groupsQuery, isAuthenticated, slotId]);
+
+  const cachedGroup = useMemo(() => {
+    void cacheVersion;
+    return canUseCachedSession && activeGroupId
+      ? getCachedGroupConversation(slotId, activeGroupId)
+      : null;
+  }, [activeGroupId, cacheVersion, canUseCachedSession, slotId]);
   const groupDetailsQuery = useQuery(
     api.groups.get,
     isAuthenticated && activeGroupId
       ? { groupId: activeGroupId as Id<"groups"> }
       : "skip",
   );
-  const groupDetails = (groupDetailsQuery ?? null) as GroupDetails | null;
+  const liveOrCachedGroupDetails: GroupDetails | null =
+    groupDetailsQuery !== undefined
+      ? ((groupDetailsQuery ?? null) as GroupDetails | null)
+      : canUseCachedSession
+        ? (cachedGroup?.details ?? null)
+        : null;
+  const groupDetails = useMemo<GroupDetails | null>(() => {
+    if (liveOrCachedGroupDetails) return liveOrCachedGroupDetails;
+    if (!canUseCachedSession || !activeGroupId || groupDetailsQuery === null) return null;
+    const summary = groups.find((g) => g.id === activeGroupId);
+    if (!summary) return null;
+    return {
+      id: summary.id,
+      name: summary.name,
+      avatarUrl: summary.avatarUrl,
+      ownerId: summary.ownerId,
+      role: summary.role,
+      members: me
+        ? [
+            {
+              ...me,
+              role: summary.role,
+              muted: false,
+            },
+          ]
+        : [],
+    };
+  }, [activeGroupId, canUseCachedSession, groupDetailsQuery, groups, liveOrCachedGroupDetails, me]);
+
   const groupMessagesQuery = useQuery(
     api.groups.listMessages,
     isAuthenticated && activeGroupId
@@ -370,18 +633,76 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       : "skip",
   );
   useEffect(() => {
-    if (!groupMessagesQuery || !e2eeSnapshot.ready) return;
-    void scanGroupRowsForE2EESignalsAsync(groupMessagesQuery as GroupMessage[]);
-  }, [e2eeSnapshot.myKeyId, e2eeSnapshot.ready, groupMessagesQuery]);
+    if (!e2eeSnapshot.ready) return;
+    if (groupMessagesQuery) {
+      void scanGroupRowsForE2EESignalsAsync(groupMessagesQuery as GroupMessage[]);
+    } else if (cachedGroup?.rawRows?.length) {
+      void scanGroupRowsForE2EESignalsAsync(cachedGroup.rawRows);
+    }
+  }, [cachedGroup?.rawRows, e2eeSnapshot.myKeyId, e2eeSnapshot.ready, groupMessagesQuery]);
   const groupFold = useMemo(() => {
     void e2eeSnapshot.version;
     const gid = activeGroupId ?? "";
-    const hydrated = ((groupMessagesQuery ?? []) as GroupMessage[]).map((row) =>
+    const sourceRows =
+      groupMessagesQuery !== undefined
+        ? (groupMessagesQuery as GroupMessage[])
+        : (cachedGroup?.rawRows ?? []);
+    const hydrated = sourceRows.map((row) =>
       normalizeGroupMessage(hydrateDecryptedGroupMessage(row, gid, groupDetails, triggerE2EERerender)),
     );
-    return foldReactionSignals(hydrated, optimisticReactions);
-  }, [activeGroupId, e2eeSnapshot.version, groupDetails, groupMessagesQuery, optimisticReactions, triggerE2EERerender]);
+    const folded = foldReactionSignals(hydrated, optimisticReactions);
+    if (groupMessagesQuery !== undefined) {
+      return {
+        ...folded,
+        messages: mergeLiveWithCachedMessages(folded.messages, cachedGroup?.messages),
+      };
+    }
+    if (!cachedGroup) {
+      return { ...folded, messages: [] as GroupMessage[] };
+    }
+    if (cachedGroup.rawRows?.length && e2eeSnapshot.ready) {
+      return {
+        ...folded,
+        messages: mergeLiveWithCachedMessages(folded.messages, cachedGroup.messages),
+      };
+    }
+    return {
+      ...folded,
+      messages: cachedGroup.messages,
+    };
+  }, [
+    activeGroupId,
+    cachedGroup,
+    e2eeSnapshot.ready,
+    e2eeSnapshot.version,
+    groupDetails,
+    groupMessagesQuery,
+    optimisticReactions,
+    triggerE2EERerender,
+  ]);
   const groupMessages = groupFold.messages;
+  useEffect(() => {
+    if (!isAuthenticated || !activeGroupId) return;
+    if (groupDetailsQuery === undefined && groupMessagesQuery === undefined) return;
+    setCachedGroupConversation(slotId, activeGroupId, {
+      ...(groupDetailsQuery !== undefined
+        ? { details: (groupDetailsQuery ?? null) as GroupDetails | null }
+        : {}),
+      ...(groupMessagesQuery !== undefined
+        ? {
+            messages: groupMessages,
+            rawRows: groupMessagesQuery as GroupMessage[],
+          }
+        : {}),
+    });
+  }, [
+    activeGroupId,
+    groupDetailsQuery,
+    groupMessages,
+    groupMessagesQuery,
+    isAuthenticated,
+    slotId,
+  ]);
   const groupTypingUsers = (useQuery(
     api.groups.typingUsers,
     isAuthenticated && activeGroupId ? { groupId: activeGroupId as Id<"groups"> } : "skip",
@@ -1541,14 +1862,24 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const leaveGroup = useCallback<JaTextStore["leaveGroup"]>(
     async (groupId) => {
       await leaveGroupMut({ groupId: groupId as Id<"groups"> });
+      setCachedGroupConversation(slotId, groupId, {
+        details: null,
+        messages: [],
+        rawRows: [],
+      });
     },
-    [leaveGroupMut],
+    [leaveGroupMut, slotId],
   );
   const deleteGroup = useCallback<JaTextStore["deleteGroup"]>(
     async (groupId) => {
       await deleteGroupMut({ groupId: groupId as Id<"groups"> });
+      setCachedGroupConversation(slotId, groupId, {
+        details: null,
+        messages: [],
+        rawRows: [],
+      });
     },
-    [deleteGroupMut],
+    [deleteGroupMut, slotId],
   );
 
   const signInEmail = useCallback<JaTextStore["signInEmail"]>(
@@ -2175,8 +2506,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         friendId: friendId as Id<"users">,
         deleteHistory: true,
       });
+      setCachedDmConversation(slotId, friendId, [], []);
     },
-    [updateConversationMut],
+    [slotId, updateConversationMut],
   );
 
   const setUserBlocked = useCallback<JaTextStore["setUserBlocked"]>(
@@ -2229,7 +2561,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const fetchMessagesWithUser = useCallback<JaTextStore["fetchMessagesWithUser"]>(
     async (otherId) => {
-      if (!isAuthenticated || !otherId || otherId === OFFICIAL_COMMUNITY_ID) return [];
+      if (!otherId || otherId === OFFICIAL_COMMUNITY_ID) return [];
+      if (!isAuthenticated) {
+        return getCachedDmConversation(slotId, otherId)?.messages ?? [];
+      }
       const rows = ((await convex.query(api.messages.list, {
         otherId: otherId as Id<"users">,
       })) ?? []) as ChatMessage[];
@@ -2238,37 +2573,58 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         rows.map((r) => hydrateDecryptedDmMessageAsync(r, otherId, triggerE2EERerender)),
       );
       const hydrated = decryptedRows.map((r) => normalizeDirectMessage(r));
-      return foldReactionSignals(hydrated).messages;
+      const folded = foldReactionSignals(hydrated).messages;
+      const merged = mergeLiveWithCachedMessages(
+        folded,
+        getCachedDmConversation(slotId, otherId)?.messages,
+      );
+      setCachedDmConversation(slotId, otherId, merged, rows);
+      return merged;
     },
-    [convex, isAuthenticated, triggerE2EERerender],
+    [convex, isAuthenticated, slotId, triggerE2EERerender],
   );
 
   const fetchGroupMessages = useCallback<JaTextStore["fetchGroupMessages"]>(
     async (groupId) => {
-      if (!isAuthenticated || !groupId) return [];
+      if (!groupId) return [];
+      if (!isAuthenticated) {
+        return getCachedGroupConversation(slotId, groupId)?.messages ?? [];
+      }
       const rows = ((await convex.query(api.groups.listMessages, {
         groupId: groupId as Id<"groups">,
       })) ?? []) as GroupMessage[];
       await scanGroupRowsForE2EESignalsAsync(rows);
-      const details = activeGroupId === groupId ? groupDetails : null;
+      const existingCached = getCachedGroupConversation(slotId, groupId);
+      const details =
+        activeGroupId === groupId ? groupDetails : (existingCached?.details ?? null);
       const decryptedRows = await Promise.all(
         rows.map((r) => hydrateDecryptedGroupMessageAsync(r, groupId, details, triggerE2EERerender)),
       );
       const hydrated = decryptedRows.map((r) => normalizeGroupMessage(r));
-      return foldReactionSignals(hydrated).messages;
+      const folded = foldReactionSignals(hydrated).messages;
+      const merged = mergeLiveWithCachedMessages(folded, existingCached?.messages);
+      setCachedGroupConversation(slotId, groupId, {
+        messages: merged,
+        rawRows: rows,
+      });
+      return merged;
     },
-    [activeGroupId, convex, groupDetails, isAuthenticated, triggerE2EERerender],
+    [activeGroupId, convex, groupDetails, isAuthenticated, slotId, triggerE2EERerender],
   );
 
   const fetchGroupDetails = useCallback<JaTextStore["fetchGroupDetails"]>(
     async (groupId) => {
-      if (!isAuthenticated || !groupId) return null;
-      const details = await convex.query(api.groups.get, {
+      if (!groupId) return null;
+      if (!isAuthenticated) {
+        return getCachedGroupConversation(slotId, groupId)?.details ?? null;
+      }
+      const details = ((await convex.query(api.groups.get, {
         groupId: groupId as Id<"groups">,
-      });
-      return (details ?? null) as GroupDetails | null;
+      })) ?? null) as GroupDetails | null;
+      setCachedGroupConversation(slotId, groupId, { details });
+      return details;
     },
-    [convex, isAuthenticated],
+    [convex, isAuthenticated, slotId],
   );
 
   /* ------------------------------------------------------------------ */
@@ -2280,7 +2636,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const lastPushedAutoSyncSigRef = useRef<string>("");
 
   useEffect(() => {
-    if (!isAuthenticated || !me?.id) {
+    if (!canUseCachedSession || !me?.id) {
       setAutoSyncSettled(false);
       lastPushedAutoSyncSigRef.current = "";
       return;
@@ -2291,7 +2647,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       if (!cancelled) setAutoSyncSettled(true);
     }, 1500);
     void ensureUserE2EEInitialized(me.id).then(async (state) => {
-      if (cancelled) return;
+      if (cancelled || !isAuthenticated) return;
       if (e2eeServerSupportedRef.current !== false) {
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2311,7 +2667,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [convex, isAuthenticated, me?.id]);
+  }, [canUseCachedSession, convex, isAuthenticated, me?.id]);
 
   // Zero-password automatic account keyring sync across all devices logged into the same account
   const pushAutoSyncedKeyring = useCallback(async () => {
@@ -2427,6 +2783,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     const syncKeys = async () => {
+      // Let interactive UI and the currently open conversation settle first
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 900);
+      });
+      if (cancelled) return;
+
       // Opportunistic server directory lookup if Convex e2ee module is deployed
       if (e2eeServerSupportedRef.current !== false && friends.length > 0) {
         try {
@@ -2443,7 +2805,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Announce our signed E2EE identity key in each friend pair WITHOUT clobbering other devices' keys!
+      // Announce our signed E2EE identity key in each friend pair + pre-warm local DM cache!
       const mySigPacket = serializeIdentitySignal(state.primaryIdentity);
       for (const friend of friends) {
         if (cancelled) return;
@@ -2456,38 +2818,62 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
             otherId: friend.id as Id<"users">,
           })) ?? []) as ChatMessage[];
           await scanDmRowsForE2EESignalsAsync(rows);
+
+          if (!cancelled) {
+            const recentRows = rows.length > 250 ? rows.slice(-250) : rows;
+            const decryptedRows = await Promise.all(
+              recentRows.map((r) =>
+                hydrateDecryptedDmMessageAsync(r, friend.id, triggerE2EERerender, {
+                  skipRemoteAttachments: true,
+                }),
+              ),
+            );
+            const normalized = decryptedRows.map((r) => normalizeDirectMessage(r));
+            const folded = foldReactionSignals(normalized).messages;
+            const existingCached = getCachedDmConversation(slotId, friend.id);
+            setCachedDmConversation(
+              slotId,
+              friend.id,
+              mergeLiveWithCachedMessages(folded, existingCached?.messages),
+              recentRows,
+            );
+          }
+
           const myExistingRows = rows.filter(
             (r) => r.senderId === me.id && parseIdentitySignal(r.body, me.id) !== null,
           );
           const alreadyAnnounced = myExistingRows.some(
             (r) => parseIdentitySignal(r.body, me.id)?.keyId === state.primaryIdentity.keyId,
           );
-          if (alreadyAnnounced) {
-            continue;
-          }
-          if (myExistingRows.length >= 4) {
-            // Recycle oldest slot only if 4+ historical keys exist
-            await editMessageMut({
-              messageId: myExistingRows[0].id as Id<"messages">,
-              body: mySigPacket,
-            }).catch(async () => {
+          if (!alreadyAnnounced) {
+            if (myExistingRows.length >= 4) {
+              // Recycle oldest slot only if 4+ historical keys exist
+              await editMessageMut({
+                messageId: myExistingRows[0].id as Id<"messages">,
+                body: mySigPacket,
+              }).catch(async () => {
+                await sendMessageMut({
+                  receiverId: friend.id as Id<"users">,
+                  body: mySigPacket,
+                });
+              });
+            } else {
               await sendMessageMut({
                 receiverId: friend.id as Id<"users">,
                 body: mySigPacket,
               });
-            });
-          } else {
-            await sendMessageMut({
-              receiverId: friend.id as Id<"users">,
-              body: mySigPacket,
-            });
+            }
           }
         } catch {
           announcedDmKeysRef.current.delete(syncTag);
         }
+
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 40);
+        });
       }
 
-      // Sync group identity announcements & group epoch envelopes
+      // Sync group identity announcements, group epoch envelopes, & pre-warm local Group cache!
       for (const grp of groupsQuery ?? []) {
         if (cancelled) return;
         const grpSyncTag = `${me.id}:${grp.id}:${state.primaryIdentity.keyId}`;
@@ -2495,10 +2881,47 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         announcedGroupKeysRef.current.add(grpSyncTag);
 
         try {
-          const rows = ((await convex.query(api.groups.listMessages, {
-            groupId: grp.id as Id<"groups">,
-          })) ?? []) as GroupMessage[];
+          const existingGrp = getCachedGroupConversation(slotId, grp.id);
+          const needsDetailsFetch =
+            !existingGrp?.details ||
+            existingGrp.details.members.length !== grp.memberCount ||
+            existingGrp.details.name !== grp.name ||
+            existingGrp.details.avatarUrl !== grp.avatarUrl;
+          const [rawRowsResult, rawDetailsResult] = await Promise.all([
+            convex.query(api.groups.listMessages, {
+              groupId: grp.id as Id<"groups">,
+            }),
+            needsDetailsFetch
+              ? convex.query(api.groups.get, {
+                  groupId: grp.id as Id<"groups">,
+                })
+              : Promise.resolve(existingGrp?.details ?? null),
+          ]);
+          const rows = (rawRowsResult ?? []) as GroupMessage[];
+          const resolvedDetails = ((rawDetailsResult ?? existingGrp?.details) ?? null) as GroupDetails | null;
           await scanGroupRowsForE2EESignalsAsync(rows);
+
+          if (!cancelled) {
+            const recentRows = rows.length > 250 ? rows.slice(-250) : rows;
+            const decryptedRows = await Promise.all(
+              recentRows.map((r) =>
+                hydrateDecryptedGroupMessageAsync(
+                  r,
+                  grp.id,
+                  resolvedDetails,
+                  triggerE2EERerender,
+                  { skipRemoteAttachments: true },
+                ),
+              ),
+            );
+            const normalized = decryptedRows.map((r) => normalizeGroupMessage(r));
+            const folded = foldReactionSignals(normalized).messages;
+            setCachedGroupConversation(slotId, grp.id, {
+              ...(resolvedDetails ? { details: resolvedDetails } : {}),
+              messages: mergeLiveWithCachedMessages(folded, existingGrp?.messages),
+              rawRows: recentRows,
+            });
+          }
 
           const myOwnIkRows = rows.filter(
             (r) => r.senderId === me.id && parseIdentitySignal(r.body, me.id) !== null,
@@ -2538,6 +2961,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         } catch {
           announcedGroupKeysRef.current.delete(grpSyncTag);
         }
+
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 40);
+        });
       }
     };
 
@@ -2559,12 +2986,14 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     me?.id,
     sendGroupMessageMut,
     sendMessageMut,
+    slotId,
+    triggerE2EERerender,
   ]);
 
   // Auto-reconcile active group's identity announcement + wrap all held epoch secrets across all member devices
   const wrappedGroupMembersCacheRef = useRef(new Set<string>());
   useEffect(() => {
-    if (!activeGroupId || !groupDetails || !groupMessagesQuery || !me?.id || !e2eeSnapshot.ready) {
+    if (!activeGroupId || !liveOrCachedGroupDetails || !groupMessagesQuery || !me?.id || !e2eeSnapshot.ready) {
       return;
     }
     let cancelled = false;
@@ -2624,7 +3053,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           }
 
           const missingGuards: string[] = [];
-          for (const m of groupDetails.members) {
+          for (const m of liveOrCachedGroupDetails.members) {
             if (m.id === me.id) continue;
             const peer = state.peerKeys[m.id];
             if (!peer) continue;
@@ -2666,8 +3095,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     distributeGroupEpochToMembers,
     e2eeSnapshot.ready,
     e2eeSnapshot.version,
-    groupDetails,
     groupMessagesQuery,
+    liveOrCachedGroupDetails,
     me?.id,
     sendGroupMessageMut,
   ]);
@@ -2984,13 +3413,15 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const value: JaTextStore = {
     mode: "convex",
-    loading: authLoading || (isAuthenticated && me === undefined),
-    me: isAuthenticated ? (me ?? null) : null,
+    loading: (authLoading && !cachedSlotMe) || (isAuthenticated && me === undefined),
+    me: canUseCachedSession ? (me ?? null) : null,
     friends,
     incoming,
     outgoing,
     previews,
-    previewsReady: !isAuthenticated || previewsQuery !== undefined,
+    previewsReady: canUseCachedSession
+      ? Boolean(isAuthenticated && previewsQuery !== undefined && groupsQuery !== undefined)
+      : true,
     friendActivities,
     notificationsEnabled: notificationPreferences.notificationsEnabled,
     pushRegistrationStatus,
@@ -2999,12 +3430,16 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     setActiveChatId: setActiveChatIdForStore,
     activeMessages,
     activeMessagesReady:
-      !isAuthenticated ||
+      !canUseCachedSession ||
       !activeChatId ||
       activeChatId === OFFICIAL_COMMUNITY_ID ||
-      activeMessagesQuery !== undefined,
+      activeMessagesQuery !== undefined ||
+      cachedDm !== null,
     communityMessages,
-    communityMessagesReady: !isAuthenticated || communityMessagesQuery !== undefined,
+    communityMessagesReady:
+      !canUseCachedSession ||
+      communityMessagesQuery !== undefined ||
+      bootstrapCache?.communityMessages !== undefined,
     communityPermissions,
     communityDirectory,
     groups,
@@ -3012,7 +3447,11 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     setActiveGroupId,
     groupDetails,
     groupMessages,
-    groupMessagesReady: !isAuthenticated || !activeGroupId || groupMessagesQuery !== undefined,
+    groupMessagesReady:
+      !canUseCachedSession ||
+      !activeGroupId ||
+      groupMessagesQuery !== undefined ||
+      cachedGroup !== null,
     groupTypingUsers,
     communityTypingUsers,
     blockedUserIds,

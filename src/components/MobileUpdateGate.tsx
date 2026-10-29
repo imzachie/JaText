@@ -3,7 +3,6 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { JaTextNative, type AppVersionInfo } from "../lib/nativeBridge";
 import { AnimatedModal } from "./AnimatedModal";
-import { Phone } from "./CallIcons";
 import {
   BellIcon,
   RocketIcon,
@@ -327,6 +326,10 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
               <li>
+                <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Instant Local Chat &amp; Group Chat Caching — Opens Immediately in 0ms
+              </li>
+              <li>
                 <SwitchAccountIcon size={15} style={{ color: "var(--accent)" }} />{" "}
                 Direct Multi-Account Switching — Add Accounts &amp; Switch Instantly in 1 Tap
               </li>
@@ -341,9 +344,6 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
               <li>
                 <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
                 Readable On-Device E2EE Push Notifications &amp; Reliable Voice/Video Calling
-              </li>
-              <li>
-                <Phone size={15} /> Fast &amp; Smooth 60 FPS Mobile Experience
               </li>
             </ul>
             <button
