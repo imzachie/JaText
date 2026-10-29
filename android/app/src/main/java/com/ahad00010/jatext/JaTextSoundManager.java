@@ -8,6 +8,7 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
@@ -38,9 +39,10 @@ import java.util.Set;
  */
 public final class JaTextSoundManager {
 
-    public static final String DEFAULT_MESSAGES_CHANNEL_ID = "jatext_messages_default_v2";
-    public static final String CUSTOM_MESSAGES_CHANNEL_ID = "jatext_messages_custom_v2";
-    public static final String INCOMING_CALL_CHANNEL_ID = "jatext_incoming_calls_v2";
+    // v3 channel ensures existing installs pick up the +70% louder bundled jatext_notification.mp3!
+    public static final String DEFAULT_MESSAGES_CHANNEL_ID = "jatext_messages_default_v3";
+    public static final String CUSTOM_MESSAGES_CHANNEL_ID = "jatext_messages_custom_v3";
+    public static final String INCOMING_CALL_CHANNEL_ID = "jatext_incoming_calls_v3";
     public static final int INCOMING_CALL_NOTIFICATION_ID = 9413;
 
     private static final String SYS_CHANNEL_PREFIX = "jatext_msg_sys_";
@@ -51,11 +53,16 @@ public final class JaTextSoundManager {
     private static MediaPlayer activePreviewPlayer = null;
     private static MediaPlayer activeNotifPlayer = null;
     private static Vibrator activeVibrator = null;
+    private static volatile boolean ringtoneActive = false;
     private static PowerManager.WakeLock incomingWakeLock = null;
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
     private static Runnable incomingTimeoutRunnable = null;
 
     private JaTextSoundManager() {}
+
+    public static boolean isIncomingRingtoneActive() {
+        return ringtoneActive;
+    }
 
     public static Uri getBundledDefaultNotificationUri(Context ctx) {
         return Uri.parse("android.resource://" + ctx.getPackageName() + "/" + R.raw.jatext_notification);
@@ -97,9 +104,11 @@ public final class JaTextSoundManager {
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return DEFAULT_MESSAGES_CHANNEL_ID;
 
-        // Clean up legacy v1 channel that used generic OS beep
+        // Clean up legacy v1/v2 channels so Android loads the louder v3 notification sound
         try {
             nm.deleteNotificationChannel("messages");
+            nm.deleteNotificationChannel("jatext_messages_default_v2");
+            nm.deleteNotificationChannel("jatext_messages_custom_v2");
         } catch (Throwable ignored) {}
 
         AudioAttributes notifAttrs = new AudioAttributes.Builder()
@@ -107,7 +116,7 @@ public final class JaTextSoundManager {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build();
 
-        // Always keep default JaText channel registered (also referenced by AndroidManifest meta-data)
+        // Always keep default JaText channel registered (referenced by AndroidManifest meta-data)
         NotificationChannel defaultChannel = new NotificationChannel(
             DEFAULT_MESSAGES_CHANNEL_ID,
             "Messages (JaText Default)",
@@ -202,6 +211,7 @@ public final class JaTextSoundManager {
                 );
                 mp.setDataSource(file.getAbsolutePath());
                 mp.setLooping(false);
+                mp.setVolume(1.0f, 1.0f);
                 mp.setOnCompletionListener(player -> {
                     synchronized (LOCK) {
                         if (activeNotifPlayer == player) activeNotifPlayer = null;
@@ -276,7 +286,6 @@ public final class JaTextSoundManager {
         }
         String prefix = "ringtone".equalsIgnoreCase(category) ? "custom_ringtone" : "custom_notification";
         File outFile = new File(dir, prefix + "_" + System.currentTimeMillis() + "." + ext);
-        // Clean older custom files of the same category to avoid storage bloat
         File[] existing = dir.listFiles();
         if (existing != null) {
             for (File f : existing) {
@@ -304,7 +313,15 @@ public final class JaTextSoundManager {
         stopSoundPreview();
         synchronized (LOCK) {
             try {
-                MediaPlayer mp = createConfiguredPlayer(ctx, category, mode, uriOrPath, loop, false);
+                // Previews always play on USAGE_MEDIA so users can hear them even on vibrate mode!
+                MediaPlayer mp = createConfiguredPlayer(
+                    ctx,
+                    category,
+                    mode,
+                    uriOrPath,
+                    loop,
+                    AudioAttributes.USAGE_MEDIA
+                );
                 if (mp == null) return;
                 if (!loop) {
                     mp.setOnCompletionListener(player -> {
@@ -332,29 +349,69 @@ public final class JaTextSoundManager {
         SharedPreferences sp = JaTextE2EEDecryptor.prefs(ctx);
         if (sp.getBoolean("is_dnd", false)) return;
 
-        String mode = sp.getString("ringtone_mode", "default");
-        String uriStr = sp.getString("ringtone_uri", "");
-
         synchronized (LOCK) {
-            stopPlayerQuietly(activeRingtonePlayer);
-            activeRingtonePlayer = null;
-
-            boolean canPlayAudio = true;
+            // If already actively playing the incoming ringtone (e.g. started 100ms earlier by
+            // native call wakeup before JS mounted), keep it playing without resetting to 0:00!
             try {
-                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
-                if (am != null && am.getRingerMode() != AudioManager.RINGER_MODE_NORMAL) {
-                    canPlayAudio = false;
+                if (activeRingtonePlayer != null && activeRingtonePlayer.isPlaying()) {
+                    ringtoneActive = true;
+                    return;
                 }
             } catch (Throwable ignored) {}
 
-            if (canPlayAudio) {
+            stopPlayerQuietly(activeRingtonePlayer);
+            activeRingtonePlayer = null;
+            ringtoneActive = true;
+
+            String mode = sp.getString("ringtone_mode", "default");
+            String uriStr = sp.getString("ringtone_uri", "");
+
+            boolean playAudio = true;
+            int audioUsage = AudioAttributes.USAGE_NOTIFICATION_RINGTONE;
+            try {
+                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    int ringerMode = am.getRingerMode();
+                    int ringVol = am.getStreamVolume(AudioManager.STREAM_RING);
+                    int musicVol = am.getStreamVolume(AudioManager.STREAM_MUSIC);
+                    if (ringerMode == AudioManager.RINGER_MODE_SILENT) {
+                        playAudio = false;
+                    } else if (ringerMode == AudioManager.RINGER_MODE_NORMAL && ringVol > 0) {
+                        audioUsage = AudioAttributes.USAGE_NOTIFICATION_RINGTONE;
+                    } else if (musicVol > 0) {
+                        // Phone ringer switch is on Vibrate or Ring volume is 0 while Media volume
+                        // is turned up -> play on USAGE_MEDIA so incoming voice/video calls are audible!
+                        audioUsage = AudioAttributes.USAGE_MEDIA;
+                    } else {
+                        playAudio = false;
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            if (playAudio) {
                 try {
-                    MediaPlayer mp = createConfiguredPlayer(ctx, "ringtone", mode, uriStr, true, true);
+                    MediaPlayer mp = createConfiguredPlayer(ctx, "ringtone", mode, uriStr, true, audioUsage);
                     if (mp != null) {
                         mp.start();
                         activeRingtonePlayer = mp;
                     }
-                } catch (Throwable ignored) {}
+                } catch (Throwable ignored) {
+                    // Fallback to USAGE_MEDIA with bundled raw ringtone if custom/system URI failed
+                    try {
+                        MediaPlayer fallbackMp = createConfiguredPlayer(
+                            ctx,
+                            "ringtone",
+                            "default",
+                            "",
+                            true,
+                            AudioAttributes.USAGE_MEDIA
+                        );
+                        if (fallbackMp != null) {
+                            fallbackMp.start();
+                            activeRingtonePlayer = fallbackMp;
+                        }
+                    } catch (Throwable ignored2) {}
+                }
             }
 
             startCallVibration(ctx);
@@ -363,10 +420,26 @@ public final class JaTextSoundManager {
 
     public static void stopIncomingRingtoneLoop() {
         synchronized (LOCK) {
+            ringtoneActive = false;
             stopPlayerQuietly(activeRingtonePlayer);
             activeRingtonePlayer = null;
             stopCallVibration();
         }
+    }
+
+    /**
+     * Called when MainActivity comes to the foreground while an incoming call is ringing.
+     * Dismisses the heads-up notification card (since the full-screen JaText CallOverlay is now
+     * visible!) WITHOUT stopping the looping ringtone or vibration!
+     */
+    public static void onMainActivityResumed(Context ctx) {
+        if (ctx == null) return;
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                nm.cancel("incoming_call", INCOMING_CALL_NOTIFICATION_ID);
+            }
+        } catch (Throwable ignored) {}
     }
 
     @SuppressWarnings("deprecation")
@@ -381,111 +454,115 @@ public final class JaTextSoundManager {
         SharedPreferences sp = JaTextE2EEDecryptor.prefs(ctx);
         if (sp.getBoolean("is_dnd", false)) return;
 
-        // 1. Wake up screen immediately even if device is sleeping / locked
-        synchronized (LOCK) {
-            try {
-                PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
-                if (pm != null) {
-                    if (incomingWakeLock != null && incomingWakeLock.isHeld()) {
-                        incomingWakeLock.release();
+        // 1. Always start the looping call ringtone + vibration immediately!
+        startIncomingRingtoneLoop(ctx);
+        MainActivity.setCallLockScreenMode(true);
+
+        // If user is already actively looking at JaText on an unlocked, interactive screen,
+        // the CallOverlay UI is already right in front of them — just arm the 60s safety timeout!
+        boolean needsWakeOrForegroundLaunch = !MainActivity.isActivelyVisibleUnlocked(ctx);
+
+        if (needsWakeOrForegroundLaunch) {
+            // 2. Wake up screen immediately even if device is sleeping / locked / in Doze
+            synchronized (LOCK) {
+                try {
+                    PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+                    if (pm != null) {
+                        if (incomingWakeLock != null && incomingWakeLock.isHeld()) {
+                            incomingWakeLock.release();
+                        }
+                        incomingWakeLock = pm.newWakeLock(
+                            PowerManager.FULL_WAKE_LOCK |
+                            PowerManager.ACQUIRE_CAUSES_WAKEUP |
+                            PowerManager.ON_AFTER_RELEASE,
+                            "JaText::IncomingCallWake"
+                        );
+                        incomingWakeLock.setReferenceCounted(false);
+                        incomingWakeLock.acquire(INCOMING_CALL_RING_TIMEOUT_MS);
                     }
-                    incomingWakeLock = pm.newWakeLock(
-                        PowerManager.FULL_WAKE_LOCK |
-                        PowerManager.ACQUIRE_CAUSES_WAKEUP |
-                        PowerManager.ON_AFTER_RELEASE,
-                        "JaText::IncomingCallWake"
+                } catch (Throwable ignored) {}
+            }
+
+            // 3. Build incoming call launch intent for MainActivity
+            Bundle extras = new Bundle();
+            extras.putBoolean("incomingCallWake", true);
+            if (callerId != null) extras.putString("senderId", callerId);
+            if (groupId != null) extras.putString("groupId", groupId);
+            extras.putString("type", "incoming_call");
+            extras.putString("callMode", isVideo ? "video" : "voice");
+
+            Intent launchIntent = new Intent(ctx, MainActivity.class);
+            launchIntent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK |
+                Intent.FLAG_ACTIVITY_SINGLE_TOP |
+                Intent.FLAG_ACTIVITY_CLEAR_TOP |
+                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            );
+            launchIntent.putExtras(extras);
+
+            PendingIntent fullScreenPi = PendingIntent.getActivity(
+                ctx,
+                INCOMING_CALL_NOTIFICATION_ID,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            );
+
+            // 4. Post high-priority CATEGORY_CALL full-screen intent notification
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        nm.deleteNotificationChannel("jatext_incoming_calls_v2");
+                    } catch (Throwable ignored) {}
+                    NotificationChannel ch = new NotificationChannel(
+                        INCOMING_CALL_CHANNEL_ID,
+                        "Incoming Calls",
+                        NotificationManager.IMPORTANCE_HIGH
                     );
-                    incomingWakeLock.setReferenceCounted(false);
-                    incomingWakeLock.acquire(INCOMING_CALL_RING_TIMEOUT_MS);
+                    ch.setDescription("Full-screen alerts for incoming JaText voice and video calls");
+                    ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                    ch.enableVibration(true);
+                    ch.setSound(null, null);
+                    nm.createNotificationChannel(ch);
                 }
+
+                int iconRes = ctx.getApplicationInfo().icon;
+                if (iconRes == 0) {
+                    iconRes = android.R.drawable.sym_call_incoming;
+                }
+
+                String safeTitle = (callerTitle != null && !callerTitle.isEmpty())
+                    ? callerTitle
+                    : "Incoming JaText Call";
+                String subtitle = isVideo
+                    ? "Incoming video call · Tap to answer"
+                    : "Incoming voice call · Tap to answer";
+
+                NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, INCOMING_CALL_CHANNEL_ID)
+                    .setSmallIcon(iconRes)
+                    .setContentTitle(safeTitle)
+                    .setContentText(subtitle)
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setCategory(NotificationCompat.CATEGORY_CALL)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setOngoing(true)
+                    .setAutoCancel(true)
+                    .setTimeoutAfter(INCOMING_CALL_RING_TIMEOUT_MS)
+                    .setContentIntent(fullScreenPi)
+                    .setFullScreenIntent(fullScreenPi, true)
+                    .addAction(android.R.drawable.sym_call_incoming, "Answer / View Call", fullScreenPi);
+
+                nm.notify("incoming_call", INCOMING_CALL_NOTIFICATION_ID, builder.build());
+            }
+
+            // 5. Directly launch MainActivity to the foreground immediately (works when minimized
+            // and over lock screen when Display Over Other Apps / Full Screen Intent is enabled!)
+            try {
+                ctx.startActivity(launchIntent);
             } catch (Throwable ignored) {}
         }
 
-        // 2. Build incoming call launch intent for MainActivity
-        Bundle extras = new Bundle();
-        extras.putBoolean("incomingCallWake", true);
-        if (callerId != null) extras.putString("senderId", callerId);
-        if (groupId != null) extras.putString("groupId", groupId);
-        extras.putString("type", "incoming_call");
-        extras.putString("callMode", isVideo ? "video" : "voice");
-
-        Intent launchIntent = new Intent(ctx, MainActivity.class);
-        launchIntent.addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK |
-            Intent.FLAG_ACTIVITY_SINGLE_TOP |
-            Intent.FLAG_ACTIVITY_CLEAR_TOP |
-            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-        );
-        launchIntent.putExtras(extras);
-
-        PendingIntent fullScreenPi = PendingIntent.getActivity(
-            ctx,
-            INCOMING_CALL_NOTIFICATION_ID,
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-
-        // 3. Post high-priority CATEGORY_CALL full-screen intent notification
-        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                NotificationChannel ch = new NotificationChannel(
-                    INCOMING_CALL_CHANNEL_ID,
-                    "Incoming Calls",
-                    NotificationManager.IMPORTANCE_HIGH
-                );
-                ch.setDescription("Full-screen alerts for incoming JaText voice and video calls");
-                ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-                ch.enableVibration(true);
-                ch.setSound(null, null);
-                nm.createNotificationChannel(ch);
-            }
-
-            int iconRes = ctx.getApplicationInfo().icon;
-            if (iconRes == 0) {
-                iconRes = android.R.drawable.sym_call_incoming;
-            }
-
-            String safeTitle = (callerTitle != null && !callerTitle.isEmpty())
-                ? callerTitle
-                : "Incoming JaText Call";
-            String subtitle = isVideo
-                ? "Incoming video call · Tap to answer"
-                : "Incoming voice call · Tap to answer";
-
-            NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, INCOMING_CALL_CHANNEL_ID)
-                .setSmallIcon(iconRes)
-                .setContentTitle(safeTitle)
-                .setContentText(subtitle)
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setOngoing(true)
-                .setAutoCancel(true)
-                .setTimeoutAfter(INCOMING_CALL_RING_TIMEOUT_MS)
-                .setContentIntent(fullScreenPi)
-                .setFullScreenIntent(fullScreenPi, true)
-                .addAction(android.R.drawable.sym_call_incoming, "Open Call", fullScreenPi);
-
-            nm.notify("incoming_call", INCOMING_CALL_NOTIFICATION_ID, builder.build());
-        }
-
-        // 4. Start looping call ringtone right away while waking up
-        startIncomingRingtoneLoop(ctx);
-
-        // 5. Directly launch MainActivity to the foreground immediately when minimized or unlocked!
-        try {
-            KeyguardManager km = (KeyguardManager) ctx.getSystemService(Context.KEYGUARD_SERVICE);
-            boolean locked = km != null && km.isKeyguardLocked();
-            if (!locked || android.provider.Settings.canDrawOverlays(ctx)) {
-                ctx.startActivity(launchIntent);
-            } else {
-                // Even when locked, attempt activity launch alongside fullScreenIntent
-                ctx.startActivity(launchIntent);
-            }
-        } catch (Throwable ignored) {}
-
-        // 6. Auto-dismiss native wake alert after 1 minute (60s) if unanswered
+        // 6. Auto-stop native ringtone/wakeup after 1 minute (60s) if unanswered
         if (incomingTimeoutRunnable != null) {
             mainHandler.removeCallbacks(incomingTimeoutRunnable);
         }
@@ -500,6 +577,7 @@ public final class JaTextSoundManager {
             incomingTimeoutRunnable = null;
         }
         stopIncomingRingtoneLoop();
+        MainActivity.setCallLockScreenMode(false);
         synchronized (LOCK) {
             if (incomingWakeLock != null) {
                 try {
@@ -524,19 +602,17 @@ public final class JaTextSoundManager {
         String mode,
         String uriOrPath,
         boolean loop,
-        boolean asRingtoneUsage
+        int audioUsage
     ) throws Exception {
         MediaPlayer mp = new MediaPlayer();
         mp.setAudioAttributes(
             new AudioAttributes.Builder()
-                .setUsage(
-                    asRingtoneUsage
-                        ? AudioAttributes.USAGE_NOTIFICATION_RINGTONE
-                        : ("ringtone".equalsIgnoreCase(category)
-                            ? AudioAttributes.USAGE_NOTIFICATION_RINGTONE
-                            : AudioAttributes.USAGE_NOTIFICATION)
+                .setUsage(audioUsage)
+                .setContentType(
+                    audioUsage == AudioAttributes.USAGE_MEDIA
+                        ? AudioAttributes.CONTENT_TYPE_MUSIC
+                        : AudioAttributes.CONTENT_TYPE_SONIFICATION
                 )
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
         );
 
@@ -553,12 +629,24 @@ public final class JaTextSoundManager {
         }
 
         if (!sourceSet) {
-            Uri fallback = "ringtone".equalsIgnoreCase(category)
-                ? getBundledDefaultRingtoneUri(ctx)
-                : getBundledDefaultNotificationUri(ctx);
-            mp.setDataSource(ctx, fallback);
+            int rawResId = "ringtone".equalsIgnoreCase(category)
+                ? R.raw.jatext_ringtone
+                : R.raw.jatext_notification;
+            AssetFileDescriptor afd = ctx.getResources().openRawResourceFd(rawResId);
+            if (afd == null) {
+                mp.release();
+                return null;
+            }
+            try {
+                mp.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+            } finally {
+                try {
+                    afd.close();
+                } catch (Throwable ignored) {}
+            }
         }
 
+        mp.setVolume(1.0f, 1.0f);
         mp.setLooping(loop);
         mp.prepare();
         return mp;

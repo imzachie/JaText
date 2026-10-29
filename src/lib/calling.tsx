@@ -1472,16 +1472,17 @@ export function CallProvider({ children }: { children: ReactNode }) {
         timestamp: invite.ts || Date.now(),
       });
 
-      if (Capacitor.isNativePlatform() && document.visibilityState !== "visible") {
-        void JaTextNative.triggerIncomingCallWake({
-          senderId: caller.id,
-          callerTitle: caller.displayName,
-          isVideo: invite.mode === "video",
-        }).catch(() => undefined);
-      }
-
-      if (soundsEnabled && !preview.isMuted && me.statusPreference !== "dnd") {
-        startIncomingCallRingtone();
+      if (!preview.isMuted && me.statusPreference !== "dnd") {
+        if (Capacitor.isNativePlatform()) {
+          void JaTextNative.triggerIncomingCallWake({
+            senderId: caller.id,
+            callerTitle: caller.displayName,
+            isVideo: invite.mode === "video",
+          }).catch(() => undefined);
+        }
+        if (soundsEnabled) {
+          startIncomingCallRingtone();
+        }
       }
 
       ringTimeoutRef.current = window.setTimeout(() => {

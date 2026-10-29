@@ -109,7 +109,7 @@ export interface ActiveGroupCallSession {
   callId: string;
   group: GroupSummary;
   mode: CallMode;
-  phase: "incoming" | "joining" | "connected";
+  phase: "incoming" | "joining" | "connected" | "dismissed";
   hostId: string;
   hostName: string;
   startedAt: number | null;
@@ -141,6 +141,8 @@ export interface GroupCallContextValue {
   joinGroupCall: (invite: GroupCallInvitePayload, withVideo?: boolean, inviteMsgId?: string) => Promise<void>;
   acceptIncomingGroupCall: (withVideo: boolean) => Promise<void>;
   declineIncomingGroupCall: () => void;
+  retryDismissedGroupCall: () => Promise<void>;
+  closeDismissedGroupCall: () => void;
   leaveGroupCall: () => Promise<void>;
   toggleMute: () => void;
   toggleDeafen: () => void;
@@ -913,16 +915,17 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         timestamp: invite.ts || now,
       });
 
-      if (Capacitor.isNativePlatform() && document.visibilityState !== "visible") {
-        void JaTextNative.triggerIncomingCallWake({
-          groupId: grp.id,
-          callerTitle: `${invite.hostName} · ${grp.name}`,
-          isVideo: invite.mode === "video",
-        }).catch(() => undefined);
-      }
-
-      if (soundsEnabled && me.statusPreference !== "dnd") {
-        startIncomingCallRingtone();
+      if (me.statusPreference !== "dnd") {
+        if (Capacitor.isNativePlatform()) {
+          void JaTextNative.triggerIncomingCallWake({
+            groupId: grp.id,
+            callerTitle: `${invite.hostName} · ${grp.name}`,
+            isVideo: invite.mode === "video",
+          }).catch(() => undefined);
+        }
+        if (soundsEnabled) {
+          startIncomingCallRingtone();
+        }
       }
 
       ringTimeoutRef.current = window.setTimeout(() => {
@@ -930,7 +933,8 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         if (cur && cur.callId === invite.callId && cur.phase === "incoming") {
           updateCallHistoryStatus(invite.callId, { state: "missed" });
           cleanupAllGroupCallResources();
-          setGroupSession(null);
+          setMinimized(false);
+          setGroupSession({ ...cur, phase: "dismissed" });
         }
       }, GROUP_RING_TIMEOUT_MS);
     };
@@ -1078,11 +1082,18 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
 
   // 15-second heartbeat while actively connected in a group call (edits our own single join signal row)
   useEffect(() => {
-    if (!groupSession || groupSession.phase === "incoming" || !me) return;
+    if (
+      !groupSession ||
+      groupSession.phase === "incoming" ||
+      groupSession.phase === "dismissed" ||
+      !me
+    ) {
+      return;
+    }
     const heartbeat = window.setInterval(() => {
       const cur = sessionRef.current;
       const sigId = myJoinSignalIdRef.current;
-      if (!cur || cur.phase === "incoming") return;
+      if (!cur || cur.phase === "incoming" || cur.phase === "dismissed") return;
       const header = `${GROUP_CALL_SIGNAL_PREFIX}${JSON.stringify({
         callId: cur.callId,
         groupId: cur.group.id,
@@ -1108,7 +1119,14 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
 
   // Process mesh signaling packets while in a group call (joining or connected)
   useEffect(() => {
-    if (!groupSession || groupSession.phase === "incoming" || !me) return;
+    if (
+      !groupSession ||
+      groupSession.phase === "incoming" ||
+      groupSession.phase === "dismissed" ||
+      !me
+    ) {
+      return;
+    }
     let cancelled = false;
     const fallbackTimers = new Map<string, number>();
 
@@ -1499,9 +1517,14 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   const startGroupCall = useCallback(
     async (group: GroupSummary, mode: CallMode) => {
       if (!me) return;
-      if (sessionRef.current) {
+      if (sessionRef.current && sessionRef.current.phase !== "dismissed") {
         setMinimized(false);
         return;
+      }
+      if (sessionRef.current?.phase === "dismissed") {
+        cleanupAllGroupCallResources();
+        sessionRef.current = null;
+        setGroupSession(null);
       }
       setCallError(null);
       try {
@@ -2356,6 +2379,22 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
 
   const canScreenShare = true;
 
+  const closeDismissedGroupCall = useCallback(() => {
+    cleanupAllGroupCallResources();
+    sessionRef.current = null;
+    setGroupSession(null);
+  }, [cleanupAllGroupCallResources]);
+
+  const retryDismissedGroupCall = useCallback(async () => {
+    const cur = sessionRef.current;
+    if (!cur) return;
+    const { group, mode } = cur;
+    cleanupAllGroupCallResources();
+    sessionRef.current = null;
+    setGroupSession(null);
+    await startGroupCall(group, mode);
+  }, [cleanupAllGroupCallResources, startGroupCall]);
+
   const value = useMemo<GroupCallContextValue>(
     () => ({
       groupSession,
@@ -2382,6 +2421,8 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       joinGroupCall,
       acceptIncomingGroupCall,
       declineIncomingGroupCall,
+      retryDismissedGroupCall,
+      closeDismissedGroupCall,
       leaveGroupCall,
       toggleMute,
       toggleDeafen,
@@ -2406,6 +2447,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       canScreenShare,
       captions,
       captionsEnabled,
+      closeDismissedGroupCall,
       closeMobileSharePicker,
       declineIncomingGroupCall,
       facingMode,
@@ -2426,6 +2468,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       participants,
       playSoundboard,
       reactions,
+      retryDismissedGroupCall,
       sendCallReaction,
       sharedMediaVideoElement,
       startGroupCall,

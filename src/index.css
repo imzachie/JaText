@@ -1697,8 +1697,13 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
   .sidebar {
     width: 100%;
     height: 100%;
-    transform: translateZ(0);
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
     backface-visibility: hidden;
+    will-change: transform, opacity;
+    transition:
+      transform 235ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 235ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .main-pane {
     position: absolute;
@@ -1711,18 +1716,53 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-w
     pointer-events: none;
     z-index: 2;
     background: var(--bg);
-    transform: translateZ(0);
+    transform: translate3d(100%, 0, 0);
+    opacity: 1;
     backface-visibility: hidden;
+    will-change: transform;
+    box-shadow: -12px 0 28px rgba(0, 0, 0, 0.42);
+    transition:
+      transform 235ms cubic-bezier(0.22, 1, 0.36, 1),
+      visibility 0s linear 235ms;
   }
   .app-shell.chat-open .sidebar {
-    visibility: hidden;
+    transform: translate3d(-22%, 0, 0);
+    opacity: 0.68;
     pointer-events: none;
   }
   .app-shell.chat-open .main-pane {
     visibility: visible;
     pointer-events: auto;
+    transform: translate3d(0, 0, 0);
+    transition:
+      transform 235ms cubic-bezier(0.22, 1, 0.36, 1),
+      visibility 0s linear 0s;
   }
-  .back-btn { display: inline-flex; }
+  .app-shell.chat-closing .sidebar {
+    visibility: visible;
+    pointer-events: auto;
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+  .app-shell.chat-closing .main-pane {
+    visibility: visible;
+    pointer-events: none;
+    transform: translate3d(100%, 0, 0);
+    transition:
+      transform 235ms cubic-bezier(0.22, 1, 0.36, 1),
+      visibility 0s linear 235ms;
+  }
+  .back-btn {
+    display: inline-flex;
+    transition:
+      transform 140ms cubic-bezier(0.22, 1, 0.36, 1),
+      background-color 140ms ease,
+      color 140ms ease;
+  }
+  .back-btn:active {
+    transform: scale(0.86) translate3d(-3px, 0, 0);
+    background: rgba(255, 255, 255, 0.08);
+  }
   .msg-col { max-width: 80%; }
   .group-msg-col { max-width: 86%; }
   .mention-autocomplete {
@@ -6807,6 +6847,128 @@ input:focus, textarea:focus {
   .sound-settings-grid {
     grid-template-columns: 1fr;
   }
+
+  /* Strip expensive multi-layer bubble shadows & add tactile 60fps micro-interactions */
+  .msg-bubble {
+    box-shadow: none;
+  }
+  .day-divider {
+    contain: content;
+  }
+  .icon-btn,
+  .send-btn,
+  .friend-row,
+  .ghost-btn,
+  .primary-btn {
+    transition:
+      transform 130ms cubic-bezier(0.22, 1, 0.36, 1),
+      background-color 140ms ease,
+      opacity 130ms ease;
+  }
+  .icon-btn:active,
+  .send-btn:active {
+    transform: scale(0.88) translateZ(0);
+  }
+  .friend-row:active {
+    transform: scale(0.985) translateZ(0);
+  }
+}
+
+/* ---------------- Startup Permissions Prompt ---------------- */
+.startup-perms-card {
+  width: min(440px, calc(100vw - 28px));
+  padding: 26px 22px 22px;
+  border-radius: 22px;
+}
+
+.startup-perms-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+}
+
+.startup-perms-icon-wrap {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: rgba(155, 108, 255, 0.16);
+  border: 1px solid rgba(155, 108, 255, 0.32);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.startup-perms-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.startup-perms-desc {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  max-width: 360px;
+}
+
+.startup-perms-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  text-align: left;
+}
+
+.startup-perm-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.startup-perm-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.startup-perm-info strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.startup-perm-btn {
+  flex: none;
+  padding: 8px 14px;
+  font-size: 13px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.startup-perms-footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.startup-perms-footer > button {
+  min-width: 104px;
 }
 
 

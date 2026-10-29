@@ -140,7 +140,9 @@ export interface JaTextNativePlugin {
     canDrawOverlays: boolean;
     canFullScreenIntent: boolean;
   }>;
-  openCallWakeSettings(options: { kind: "overlay" | "fullscreen" }): Promise<void>;
+  openCallWakeSettings(options: {
+    kind: "overlay" | "fullscreen" | "notifications";
+  }): Promise<void>;
   addListener(
     eventName: "speechTranscript",
     listenerFunc: (event: SpeechTranscriptEvent) => void,

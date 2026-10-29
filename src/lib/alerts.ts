@@ -243,15 +243,81 @@ export async function fetchDeviceSystemSounds(
 
 let audioContext: AudioContext | null = null;
 let defaultNotifAudio: HTMLAudioElement | null = null;
+let defaultRingtoneAudio: HTMLAudioElement | null = null;
 let activeWebRingtoneAudio: HTMLAudioElement | null = null;
 let activeWebPreviewAudio: HTMLAudioElement | null = null;
+let webRingtoneFallbackInterval: number | null = null;
 let ringtoneLoopToken = 0;
+
+if (typeof window !== "undefined" && !Capacitor.isNativePlatform()) {
+  const unlockWebAudioOnce = () => {
+    try {
+      audioContext ??= new window.AudioContext();
+      if (audioContext.state === "suspended") {
+        void audioContext.resume().catch(() => undefined);
+      }
+      if (!defaultNotifAudio) {
+        defaultNotifAudio = new Audio(DEFAULT_NOTIFICATION_SOUND_URL);
+        defaultNotifAudio.preload = "auto";
+      }
+      if (!defaultRingtoneAudio) {
+        defaultRingtoneAudio = new Audio(DEFAULT_CALL_RINGTONE_URL);
+        defaultRingtoneAudio.preload = "auto";
+      }
+    } catch {
+      // Ignore
+    }
+    window.removeEventListener("pointerdown", unlockWebAudioOnce, true);
+    window.removeEventListener("keydown", unlockWebAudioOnce, true);
+  };
+  window.addEventListener("pointerdown", unlockWebAudioOnce, { capture: true, passive: true });
+  window.addEventListener("keydown", unlockWebAudioOnce, { capture: true, passive: true });
+}
 
 function stopWebAudioElement(el: HTMLAudioElement | null) {
   if (!el) return;
   try {
     el.pause();
     el.currentTime = 0;
+  } catch {
+    // Ignore
+  }
+}
+
+function clearWebRingtoneFallback() {
+  if (webRingtoneFallbackInterval !== null && typeof window !== "undefined") {
+    window.clearInterval(webRingtoneFallbackInterval);
+    webRingtoneFallbackInterval = null;
+  }
+}
+
+function playSynthRingtonePulse() {
+  if (typeof window === "undefined" || typeof window.AudioContext === "undefined") return;
+  try {
+    audioContext ??= new window.AudioContext();
+    if (audioContext.state === "suspended") {
+      void audioContext.resume().catch(() => undefined);
+    }
+    const ctx = audioContext;
+    const now = ctx.currentTime;
+    const notes = [
+      { f: 659.25, t: 0, d: 0.18 },
+      { f: 783.99, t: 0.2, d: 0.18 },
+      { f: 1046.5, t: 0.4, d: 0.3 },
+    ];
+    for (const n of notes) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(n.f, now + n.t);
+      gain.gain.setValueAtTime(0.0001, now + n.t);
+      gain.gain.exponentialRampToValueAtTime(0.14, now + n.t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + n.t + n.d);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + n.t);
+      osc.stop(now + n.t + n.d + 0.02);
+    }
   } catch {
     // Ignore
   }
@@ -309,11 +375,11 @@ export function playMessageSound(direction: "sent" | "received") {
       if (url === DEFAULT_NOTIFICATION_SOUND_URL) {
         defaultNotifAudio ??= new Audio(DEFAULT_NOTIFICATION_SOUND_URL);
         defaultNotifAudio.currentTime = 0;
-        defaultNotifAudio.volume = 0.9;
+        defaultNotifAudio.volume = 1.0;
         await defaultNotifAudio.play();
       } else {
         const audio = new Audio(url);
-        audio.volume = 0.9;
+        audio.volume = 1.0;
         await audio.play();
       }
     } catch {
@@ -341,6 +407,7 @@ export function startIncomingCallRingtone() {
 
   stopWebAudioElement(activeWebRingtoneAudio);
   activeWebRingtoneAudio = null;
+  clearWebRingtoneFallback();
 
   void (async () => {
     let url = DEFAULT_CALL_RINGTONE_URL;
@@ -350,20 +417,43 @@ export function startIncomingCallRingtone() {
       if (customUrl) url = customUrl;
     }
     if (token !== ringtoneLoopToken) return;
+    const audio =
+      url === DEFAULT_CALL_RINGTONE_URL
+        ? (defaultRingtoneAudio ??= new Audio(DEFAULT_CALL_RINGTONE_URL))
+        : new Audio(url);
+    audio.currentTime = 0;
+    audio.loop = true;
+    audio.volume = 0.95;
+    activeWebRingtoneAudio = audio;
     try {
-      const audio = new Audio(url);
-      audio.loop = true;
-      audio.volume = 0.92;
-      activeWebRingtoneAudio = audio;
       await audio.play();
     } catch {
-      // Browser may block autoplay until user interaction
+      // Browser blocked autoplay prior to user interaction — run synthesized loop + resume on first gesture
+      if (token !== ringtoneLoopToken || typeof window === "undefined") return;
+      playSynthRingtonePulse();
+      webRingtoneFallbackInterval = window.setInterval(() => {
+        if (token !== ringtoneLoopToken) {
+          clearWebRingtoneFallback();
+          return;
+        }
+        playSynthRingtonePulse();
+      }, 2200);
+      const retryOnGesture = () => {
+        window.removeEventListener("pointerdown", retryOnGesture, true);
+        window.removeEventListener("keydown", retryOnGesture, true);
+        if (token !== ringtoneLoopToken) return;
+        clearWebRingtoneFallback();
+        void audio.play().catch(() => undefined);
+      };
+      window.addEventListener("pointerdown", retryOnGesture, { capture: true, passive: true });
+      window.addEventListener("keydown", retryOnGesture, { capture: true, passive: true });
     }
   })();
 }
 
 export function stopIncomingCallRingtone() {
   ringtoneLoopToken++;
+  clearWebRingtoneFallback();
   stopWebAudioElement(activeWebRingtoneAudio);
   activeWebRingtoneAudio = null;
   if (Capacitor.isNativePlatform()) {

@@ -249,9 +249,29 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
     throw new Error("Encrypted message exceeds maximum allowed wire length.");
   }
 
+  let finalDmWire = encryptedWire;
+  if (wireBody.startsWith("__JATEXT_CALL__:")) {
+    if (wireBody.includes('"state":"ringing"')) {
+      const callMode = wireBody.includes('"mode":"video"') ? "video" : "voice";
+      finalDmWire = `${encryptedWire}\n(__JATEXT_CALL_DM_RINGING__:${callMode})`;
+    } else if (
+      wireBody.includes('"state":"missed"') ||
+      wireBody.includes('"state":"ended"') ||
+      wireBody.includes('"state":"declined"')
+    ) {
+      finalDmWire = `${encryptedWire}\n(__JATEXT_CALL_DM_ENDED__)`;
+    }
+  } else if (wireBody.startsWith("__JATEXT_CALL_SIG__:")) {
+    if (wireBody.includes('"type":"hangup"') || wireBody.includes('"type":"decline"')) {
+      finalDmWire = `${encryptedWire}\n(__JATEXT_CALL_CANCEL__)`;
+    } else if (wireBody.includes('"type":"claim"') || wireBody.includes('"type":"answer"')) {
+      finalDmWire = `${encryptedWire}\n(__JATEXT_CALL_CLAIM__)`;
+    }
+  }
+
   return {
     encrypted: true,
-    wireBody: encryptedWire,
+    wireBody: finalDmWire,
     ...(attachmentId !== undefined
       ? {
           attachmentId,
@@ -377,9 +397,10 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
     if (
       wireBody.startsWith("__JATEXT_CALL_GRP__:") &&
       wireBody.includes('"state":"active"') &&
-      encryptedWire.length + 30 <= 3980
+      encryptedWire.length + 38 <= 3980
     ) {
-      finalWire = `${encryptedWire}\n(__JATEXT_CALL_GRP_ACTIVE__)`;
+      const grpMode = wireBody.includes('"mode":"video"') ? "video" : "voice";
+      finalWire = `${encryptedWire}\n(__JATEXT_CALL_GRP_ACTIVE__:${grpMode})`;
     } else {
       const cleanTextForMentions = stripBubbleStyleFromText(wireBody);
       const wantsEveryone =

@@ -37,14 +37,33 @@ function getFirebaseApp() {
   return { app, projectId: credentials.project_id };
 }
 
-function summarizeReadablePushBody(body: string, fallback: string): string {
-  if (body.includes("__JATEXT_CALL__:")) {
-    return body.includes('"mode":"video"') ? "Incoming video call" : "Incoming voice call";
+function detectCallInfo(body: string): { isCall: boolean; isVideo: boolean } {
+  if (body.includes("(__JATEXT_CALL_DM_RINGING__:video)") || body.includes("(__JATEXT_CALL_GRP_ACTIVE__:video)")) {
+    return { isCall: true, isVideo: true };
   }
-  if (body.includes("__JATEXT_CALL_GRP__:")) {
-    return body.includes('"mode":"video"')
-      ? "Incoming group video call"
-      : "Incoming group voice call";
+  if (
+    body.includes("(__JATEXT_CALL_DM_RINGING__:voice)") ||
+    body.includes("(__JATEXT_CALL_GRP_ACTIVE__:voice)") ||
+    body.includes("(__JATEXT_CALL_GRP_ACTIVE__)")
+  ) {
+    return { isCall: true, isVideo: false };
+  }
+  if (body.includes("__JATEXT_CALL__:") && body.includes('"state":"ringing"')) {
+    return { isCall: true, isVideo: body.includes('"mode":"video"') };
+  }
+  if (body.includes("__JATEXT_CALL_GRP__:") && body.includes('"state":"active"')) {
+    return { isCall: true, isVideo: body.includes('"mode":"video"') };
+  }
+  return { isCall: false, isVideo: false };
+}
+
+function summarizeReadablePushBody(body: string, fallback: string): string {
+  const callInfo = detectCallInfo(body);
+  if (callInfo.isCall) {
+    if (body.includes("__JATEXT_CALL_GRP__:") || body.includes("__JATEXT_CALL_GRP_ACTIVE__")) {
+      return callInfo.isVideo ? "Incoming group video call" : "Incoming group voice call";
+    }
+    return callInfo.isVideo ? "Incoming video call" : "Incoming voice call";
   }
   const stripped = body
     .replace(/__JATEXT_BUBBLE__:[^\n]*\n?/, "")
@@ -90,41 +109,50 @@ export const sendMessageNotification = internalAction({
       throw err;
     }
 
-    const isCall =
-      body.includes("__JATEXT_CALL__:") || body.includes("__JATEXT_CALL_GRP__:");
-    const cleanNotificationBody = summarizeReadablePushBody(
-      body,
-      body.includes("__JATEXT_E2EE_V1__:") ? "Sent you a message" : "Sent you an attachment",
-    );
+    const isCallCancel = body === "__JATEXT_CALL_CANCEL__";
+    const callInfo = isCallCancel ? { isCall: false, isVideo: false } : detectCallInfo(body);
+    const isEncrypted = body.includes("__JATEXT_E2EE_V1__:");
+    const cleanNotificationBody = isCallCancel
+      ? ""
+      : summarizeReadablePushBody(
+          body,
+          isEncrypted ? "Encrypted message" : "Sent you an attachment",
+        );
 
     const includeRawWire =
-      (body.includes("__JATEXT_E2EE_V1__:") || isCall) && body.length <= 3500;
+      !isCallCancel && (isEncrypted || callInfo.isCall) && body.length <= 3500;
+
+    const resolvedTitle =
+      title ?? (callInfo.isCall ? senderName : `New message from ${senderName}`);
+    const resolvedType = isCallCancel
+      ? "call_cancel"
+      : callInfo.isCall
+        ? "call"
+        : groupId
+          ? "group_mention"
+          : "message";
 
     let response;
     try {
+      // CRITICAL: Send pure DATA-ONLY high-priority FCM without a top-level `notification` block!
+      // On Android, any top-level `notification` block causes Google Play Services to intercept
+      // pushes in the OS tray when locked/minimized, bypassing JaTextFirebaseMessagingService
+      // (which breaks E2EE decryption, custom sounds, and lock-screen incoming-call wakeup).
       response = await getMessaging(appInfo.app).sendEachForMulticast({
         tokens: devices.map((device) => device.token),
-        notification: {
-          title:
-            title ??
-            (isCall ? senderName : `New message from ${senderName}`),
-          body: cleanNotificationBody,
-        },
         data: {
+          title: resolvedTitle,
+          body: cleanNotificationBody,
           senderId,
+          isEncrypted: isEncrypted ? "1" : "0",
+          type: resolvedType,
+          ...(callInfo.isCall ? { callMode: callInfo.isVideo ? "video" : "voice" } : {}),
           ...(includeRawWire ? { rawWire: body } : {}),
-          ...(groupId
-            ? { groupId, type: isCall ? "call" : "group_mention" }
-            : { type: isCall ? "call" : "message" }),
+          ...(groupId ? { groupId } : {}),
         },
         android: {
           priority: "high",
-          notification: {
-            channelId: isCall
-              ? "jatext_incoming_calls_v2"
-              : "jatext_messages_default_v2",
-            sound: "default",
-          },
+          ttl: callInfo.isCall || isCallCancel ? 60_000 : 86_400_000,
         },
       });
     } catch (error) {
@@ -190,27 +218,24 @@ export const sendAnnouncementNotification = internalAction({
     const cleanBody = summarizeReadablePushBody(body, `New announcement from ${senderName}`);
     const title = "JaText Announcements";
 
-    // FCM sendEachForMulticast supports up to 500 tokens per batch
+    // Pure DATA-ONLY high-priority FCM so JaTextFirebaseMessagingService always plays
+    // the boosted JaText Notification sound (or user custom sound) even when locked/minimized!
     for (let offset = 0; offset < devices.length; offset += 500) {
       const batch = devices.slice(offset, offset + 500);
       const response = await getMessaging(app).sendEachForMulticast({
         tokens: batch.map((d) => d.token),
-        notification: {
+        data: {
           title,
           body: cleanBody,
-        },
-        data: {
           senderId,
           chatId: "__jatext_community__",
           type: "announcement",
+          isEncrypted: "0",
           rawWire: cleanBody,
         },
         android: {
           priority: "high",
-          notification: {
-            channelId: "jatext_messages_default_v2",
-            sound: "default",
-          },
+          ttl: 86_400_000,
         },
       });
 

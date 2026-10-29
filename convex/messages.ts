@@ -9,6 +9,7 @@ import {
   isValidReactionEmoji,
   pairKey,
   requireUser,
+  scheduleCallCancelPush,
   scheduleMessagePush,
 } from "./lib";
 
@@ -201,6 +202,19 @@ export const send = mutation({
             ? `Sent ${args.attachmentName}`
             : "Sent you an attachment");
       await scheduleMessagePush(ctx, me, args.receiverId, pushBody, insertedId);
+    } else if (
+      trimmedBody.includes("(__JATEXT_CALL_CANCEL__)") ||
+      trimmedBody.includes('"type":"hangup"') ||
+      trimmedBody.includes('"type":"decline"')
+    ) {
+      await scheduleCallCancelPush(ctx, me._id, args.receiverId);
+      await scheduleCallCancelPush(ctx, me._id, me._id);
+    } else if (
+      trimmedBody.includes("(__JATEXT_CALL_CLAIM__)") ||
+      trimmedBody.includes('"type":"claim"') ||
+      trimmedBody.includes('"type":"answer"')
+    ) {
+      await scheduleCallCancelPush(ctx, me._id, me._id);
     }
   },
 });
@@ -353,6 +367,15 @@ export const edit = mutation({
       throw new Error("Message cannot be empty.");
     if (text.length > 4000) throw new Error("Messages can be up to 4,000 characters.");
     await ctx.db.patch(messageId, { body: text, editedAt: Date.now() });
+    if (
+      text.includes("(__JATEXT_CALL_DM_ENDED__)") ||
+      (text.startsWith("__JATEXT_CALL__:") &&
+        (text.includes('"state":"missed"') ||
+          text.includes('"state":"ended"') ||
+          text.includes('"state":"declined"')))
+    ) {
+      await scheduleCallCancelPush(ctx, me._id, message.receiverId);
+    }
   },
 });
 

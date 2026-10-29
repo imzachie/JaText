@@ -328,7 +328,7 @@ export const send = mutation({
     const isGroupCallInvite =
       (finalBody.includes("__JATEXT_CALL_GRP__:") &&
         finalBody.includes('"state":"active"')) ||
-      finalBody.includes("(__JATEXT_CALL_GRP_ACTIVE__)");
+      finalBody.includes("(__JATEXT_CALL_GRP_ACTIVE__");
 
     let mentionedUserIds: Id<"users">[] = [];
     let allOtherMemberIds: Id<"users">[] = [];

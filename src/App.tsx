@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { ChatView } from "./components/ChatView";
@@ -8,11 +8,13 @@ import { CommunityChatView } from "./components/CommunityChatView";
 import { GroupChatView } from "./components/GroupChatView";
 import { LoginPage } from "./components/LoginPage";
 import { MobileUpdateGate } from "./components/MobileUpdateGate";
+import { StartupPermissionsModal } from "./components/StartupPermissionsModal";
 import { Onboarding } from "./components/Onboarding";
 import { NotificationWelcome } from "./components/NotificationWelcome";
 import { ProfileModal } from "./components/ProfileCard";
 import { SettingsModal } from "./components/Settings";
 import { AccountSwitcherModal } from "./components/AccountSwitcherModal";
+import { closeTopmostAnimatedModal } from "./components/AnimatedModal";
 import { LockIcon } from "./components/E2EEModals";
 import { Sidebar } from "./components/Sidebar";
 import { MessageCircleIcon } from "./components/UiIcons";
@@ -23,6 +25,7 @@ import {
   parseCallInvite,
   useCall,
 } from "./lib/calling";
+import { flushPendingDrafts } from "./lib/drafts";
 import {
   getActiveE2EEState,
   getAllMyIdentities,
@@ -42,6 +45,7 @@ import {
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
 
 const NOTIFICATION_WELCOME_KEY = "jatext-notification-welcome-seen-v1";
+const MOBILE_SLIDE_MS = 235;
 
 function isPlaceholderNotificationText(text: string | null | undefined): boolean {
   if (!text) return true;
@@ -52,6 +56,7 @@ function isPlaceholderNotificationText(text: string | null | undefined): boolean
   return (
     lower === "encrypted message" ||
     lower === "🔒 encrypted message" ||
+    lower === "new message" ||
     lower.includes("sent an encrypted message") ||
     lower.includes("mentioned you in an encrypted message") ||
     lower.startsWith("decrypting") ||
@@ -75,7 +80,15 @@ function MobileUpdateHost() {
   const store = useJaText();
   if (!Capacitor.isNativePlatform()) return null;
   const readyForWelcome = !store.loading && Boolean(store.me?.onboardingComplete);
-  return <MobileUpdateGate readyForWelcome={readyForWelcome} />;
+  return (
+    <>
+      <StartupPermissionsModal
+        ready={readyForWelcome}
+        onPermissionsUpdated={() => void store.refreshPushRegistration()}
+      />
+      <MobileUpdateGate readyForWelcome={readyForWelcome} />
+    </>
+  );
 }
 
 function AppContent() {
@@ -103,6 +116,10 @@ function AppContent() {
   const [profileUser, setProfileUser] = useState<JaUser | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
+  const [isMobileClosing, setIsMobileClosing] = useState(false);
+  const mobileCloseTimerRef = useRef<number | null>(null);
+  const closingTargetKeyRef = useRef<string>("");
+  const firebasePushActiveRef = useRef(false);
   const e2eeSnapshot = useE2EESnapshot();
   const [notificationWelcomeSeen, setNotificationWelcomeSeen] = useState(
     () => localStorage.getItem(NOTIFICATION_WELCOME_KEY) === "true",
@@ -111,19 +128,16 @@ function AppContent() {
   const previousPreviews = useRef<Map<string, string> | null>(null);
   const previousGroups = useRef<Map<string, string> | null>(null);
   const previousAnnouncementId = useRef<string | null | undefined>(undefined);
-  const navigationStateRef = useRef({
-    activeChatId,
-    activeGroupId,
-    hasProfile: Boolean(profileUser),
-    settingsOpen,
-    accountSwitcherOpen,
-    callFullScreen: false,
-    groupCallFullScreen: false,
-  });
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     syncSoundPreferencesToNative(loadNotificationPreferences());
+    void JaTextNative.checkPushSupport()
+      .then((res) => {
+        firebasePushActiveRef.current = Boolean(res.firebaseConfigured);
+      })
+      .catch(() => undefined);
+
     const stateListener = CapacitorApp.addListener("appStateChange", ({ isActive }) => {
       isNativeActiveRef.current = isActive;
     });
@@ -161,6 +175,68 @@ function AppContent() {
   );
   const activeCommunity = activeChatId === OFFICIAL_COMMUNITY_ID;
   const activeGroup = !!store.activeGroupId;
+  const hasActivePane = Boolean(activeFriend || activeCommunity || activeGroup);
+
+  const activePaneKey = activeGroupId
+    ? `grp:${activeGroupId}`
+    : activeChatId
+      ? `chat:${activeChatId}`
+      : "";
+
+  // If user taps a different chat in Sidebar while a back slide-out was mid-flight, cancel close timer
+  useEffect(() => {
+    if (isMobileClosing && activePaneKey && activePaneKey !== closingTargetKeyRef.current) {
+      if (mobileCloseTimerRef.current !== null) {
+        window.clearTimeout(mobileCloseTimerRef.current);
+        mobileCloseTimerRef.current = null;
+      }
+      closingTargetKeyRef.current = "";
+      setIsMobileClosing(false);
+    }
+  }, [activePaneKey, isMobileClosing]);
+
+  useEffect(() => {
+    return () => {
+      if (mobileCloseTimerRef.current !== null) {
+        window.clearTimeout(mobileCloseTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleMobileAnimatedBack = useCallback(() => {
+    flushPendingDrafts();
+    const isMobileViewport = typeof window !== "undefined" && window.innerWidth <= 820;
+    if (!isMobileViewport || (!activeGroupId && !activeChatId)) {
+      if (activeGroupId) setActiveGroupId(null);
+      if (activeChatId) setActiveChatId(null);
+      return;
+    }
+
+    if (isMobileClosing) return;
+    closingTargetKeyRef.current = activeGroupId ? `grp:${activeGroupId}` : `chat:${activeChatId}`;
+    setIsMobileClosing(true);
+
+    if (mobileCloseTimerRef.current !== null) {
+      window.clearTimeout(mobileCloseTimerRef.current);
+    }
+    mobileCloseTimerRef.current = window.setTimeout(() => {
+      mobileCloseTimerRef.current = null;
+      closingTargetKeyRef.current = "";
+      setActiveGroupId(null);
+      setActiveChatId(null);
+      setIsMobileClosing(false);
+    }, MOBILE_SLIDE_MS);
+  }, [activeChatId, activeGroupId, isMobileClosing, setActiveChatId, setActiveGroupId]);
+
+  const navigationStateRef = useRef({
+    activeChatId,
+    activeGroupId,
+    hasProfile: Boolean(profileUser),
+    settingsOpen,
+    accountSwitcherOpen,
+    callFullScreen: false,
+    groupCallFullScreen: false,
+  });
 
   // keep the open profile card fresh if that user's data changes
   const freshProfileUser = useMemo(() => {
@@ -259,10 +335,8 @@ function AppContent() {
       const isPendingE2EE =
         Boolean(previous) &&
         previous?.get(preview.friendId) !== sig &&
-        (preview.body === "Encrypted message" ||
-          preview.body === "🔒 Encrypted message" ||
-          preview.body.includes("__JATEXT_E2EE_V1__:")) &&
-        now - preview.createdAt < 2500;
+        isPlaceholderNotificationText(preview.body) &&
+        now - preview.createdAt < 12_000;
       if (isPendingE2EE) {
         pendingHydration = true;
         const prevSig = previous?.get(preview.friendId);
@@ -279,7 +353,7 @@ function AppContent() {
     if (pendingHydration) {
       fallbackTimer = window.setTimeout(() => {
         previousPreviews.current = new Map(current);
-      }, 2600);
+      }, 12_200);
     }
 
     for (const preview of previews) {
@@ -309,11 +383,17 @@ function AppContent() {
         playMessageSound("received");
       }
 
-      const readableText = formatPreviewMessageText(preview.body) || "Sent you an attachment";
+      const readableText = formatPreviewMessageText(preview.body);
 
-      // Only show system notifications when the app/tab is minimized or hidden — NEVER while in the app!
-      if (notificationsEnabled && !appInForeground) {
+      // Only show system notifications when minimized/hidden — NEVER while in the app!
+      // On Android with FCM active, native JaTextFirebaseMessagingService handles background pushes directly.
+      if (
+        notificationsEnabled &&
+        !appInForeground &&
+        (!Capacitor.isNativePlatform() || !firebasePushActiveRef.current)
+      ) {
         const dispatchDmNotification = (finalText: string) => {
+          if (isPlaceholderNotificationText(finalText)) return;
           if (Capacitor.isNativePlatform()) {
             void JaTextNative.showDecryptedNotification({
               tag: `dm:${friend.id}`,
@@ -357,7 +437,7 @@ function AppContent() {
             })
             .catch(() => undefined);
         } else {
-          dispatchDmNotification(readableText);
+          dispatchDmNotification(readableText || "Sent you an attachment");
         }
       }
     }
@@ -390,10 +470,8 @@ function AppContent() {
       const isPendingGroupE2EE =
         Boolean(previous) &&
         previous?.get(group.id) !== sig &&
-        (group.lastMessage === "Encrypted message" ||
-          group.lastMessage === "🔒 Encrypted message" ||
-          group.lastMessage.includes("__JATEXT_E2EE_V1__:")) &&
-        now - group.lastMessageAt < 2500;
+        isPlaceholderNotificationText(group.lastMessage) &&
+        now - group.lastMessageAt < 12_000;
       if (isPendingGroupE2EE) {
         const prevSig = previous?.get(group.id);
         if (prevSig !== undefined) current.set(group.id, prevSig);
@@ -425,10 +503,15 @@ function AppContent() {
 
       const senderLabel = group.lastSenderName || "Someone";
       const title = `${senderLabel} mentioned you in ${group.name}`;
-      const readableGroupBody = formatPreviewMessageText(group.lastMessage) || "Open group chat";
+      const readableGroupBody = formatPreviewMessageText(group.lastMessage);
 
-      if (notificationsEnabled && !appInForeground) {
+      if (
+        notificationsEnabled &&
+        !appInForeground &&
+        (!Capacitor.isNativePlatform() || !firebasePushActiveRef.current)
+      ) {
         const dispatchGroupNotification = (finalGroupBody: string) => {
+          if (isPlaceholderNotificationText(finalGroupBody)) return;
           if (Capacitor.isNativePlatform()) {
             void JaTextNative.showDecryptedNotification({
               tag: `group:${group.id}`,
@@ -472,7 +555,7 @@ function AppContent() {
             })
             .catch(() => undefined);
         } else {
-          dispatchGroupNotification(readableGroupBody);
+          dispatchGroupNotification(readableGroupBody || "Open group chat");
         }
       }
     }
@@ -529,7 +612,11 @@ function AppContent() {
           : formatPreviewMessageText(latest.body) ||
             (latest.attachmentName ? `Shared ${latest.attachmentName}` : "New announcement");
 
-    if (notificationsEnabled && !appInForeground) {
+    if (
+      notificationsEnabled &&
+      !appInForeground &&
+      (!Capacitor.isNativePlatform() || !firebasePushActiveRef.current)
+    ) {
       if (Capacitor.isNativePlatform()) {
         void JaTextNative.showDecryptedNotification({
           tag: "community:announcements",
@@ -570,9 +657,17 @@ function AppContent() {
       settingsOpen,
       accountSwitcherOpen,
       callFullScreen: Boolean(
-        callSession && !callMinimized && callSession.phase !== "incoming",
+        callSession &&
+          !callMinimized &&
+          callSession.phase !== "incoming" &&
+          callSession.phase !== "dismissed",
       ),
-      groupCallFullScreen: Boolean(groupCallSession && !groupCallMinimized),
+      groupCallFullScreen: Boolean(
+        groupCallSession &&
+          !groupCallMinimized &&
+          groupCallSession.phase !== "incoming" &&
+          groupCallSession.phase !== "dismissed",
+      ),
     };
   }, [
     accountSwitcherOpen,
@@ -594,26 +689,26 @@ function AppContent() {
         setGroupCallMinimized(true);
       } else if (navigation.callFullScreen) {
         setCallMinimized(true);
+      } else if (closeTopmostAnimatedModal()) {
+        return;
       } else if (navigation.accountSwitcherOpen) {
         setAccountSwitcherOpen(false);
       } else if (navigation.settingsOpen) {
         setSettingsOpen(false);
       } else if (navigation.hasProfile) {
         setProfileUser(null);
-      } else if (navigation.activeGroupId) {
-        setActiveGroupId(null);
-      } else if (navigation.activeChatId) {
-        setActiveChatId(null);
+      } else if (navigation.activeGroupId || navigation.activeChatId) {
+        handleMobileAnimatedBack();
       } else if (canGoBack) {
         window.history.back();
       } else {
-        void CapacitorApp.exitApp();
+        void CapacitorApp.minimizeApp().catch(() => CapacitorApp.exitApp());
       }
     });
     return () => {
       void listener.then((handle) => handle.remove());
     };
-  }, [setActiveChatId, setActiveGroupId, setCallMinimized, setGroupCallMinimized]);
+  }, [handleMobileAnimatedBack, setCallMinimized, setGroupCallMinimized]);
 
   useEffect(() => {
     const preventNativeContextMenu = (event: MouseEvent) => event.preventDefault();
@@ -649,46 +744,64 @@ function AppContent() {
 
   if (!store.me.onboardingComplete) return <Onboarding />;
 
+  const renderMainPaneContent = () => {
+    if (activeCommunity) {
+      return (
+        <CommunityChatView
+          onOpenProfile={setProfileUser}
+          onBack={handleMobileAnimatedBack}
+        />
+      );
+    }
+    if (activeGroup) {
+      return (
+        <GroupChatView
+          key={store.activeGroupId}
+          onOpenProfile={setProfileUser}
+          onBack={handleMobileAnimatedBack}
+        />
+      );
+    }
+    if (activeFriend) {
+      return (
+        <ChatView
+          key={activeFriend.id}
+          friend={activeFriend}
+          onOpenProfile={setProfileUser}
+          onBack={handleMobileAnimatedBack}
+        />
+      );
+    }
+    return (
+      <div className="no-chat">
+        <img className="logo-icon no-chat-logo" src="/jatext-logo-icon.png" alt="" />
+        <h2>
+          Pick a chat <MessageCircleIcon size={22} style={{ color: "var(--accent)" }} />
+        </h2>
+        <p className="muted">
+          Choose a friend on the left to start texting, or add someone new
+          by their username.
+        </p>
+        <p className="muted small">
+          Tip: click anyone's profile picture to see their profile card —
+          banner, bio, pronouns and avatar color included.
+        </p>
+      </div>
+    );
+  };
+
   return (
-    <div className={`app-shell ${activeFriend || activeCommunity || activeGroup ? "chat-open" : ""}`}>
+    <div
+      className={`app-shell ${hasActivePane && !isMobileClosing ? "chat-open" : ""} ${
+        hasActivePane && isMobileClosing ? "chat-closing" : ""
+      }`}
+    >
       <Sidebar
         onOpenProfile={setProfileUser}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenAccountSwitcher={() => setAccountSwitcherOpen(true)}
       />
-      <main className="main-pane">
-        {activeCommunity ? (
-          <CommunityChatView onOpenProfile={setProfileUser} onBack={() => setActiveChatId(null)} />
-        ) : activeGroup ? (
-          <GroupChatView
-            key={store.activeGroupId}
-            onOpenProfile={setProfileUser}
-            onBack={() => setActiveGroupId(null)}
-          />
-        ) : activeFriend ? (
-          <ChatView
-            key={activeFriend.id}
-            friend={activeFriend}
-            onOpenProfile={setProfileUser}
-            onBack={() => store.setActiveChatId(null)}
-          />
-        ) : (
-          <div className="no-chat">
-            <img className="logo-icon no-chat-logo" src="/jatext-logo-icon.png" alt="" />
-            <h2>
-              Pick a chat <MessageCircleIcon size={22} style={{ color: "var(--accent)" }} />
-            </h2>
-            <p className="muted">
-              Choose a friend on the left to start texting, or add someone new
-              by their username.
-            </p>
-            <p className="muted small">
-              Tip: click anyone's profile picture to see their profile card —
-              banner, bio, pronouns and avatar color included.
-            </p>
-          </div>
-        )}
-      </main>
+      <main className="main-pane">{renderMainPaneContent()}</main>
 
       {freshProfileUser && (
         <ProfileModal

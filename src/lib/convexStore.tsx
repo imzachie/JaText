@@ -2848,14 +2848,24 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       if (cancelled) return;
 
       // Opportunistic server directory lookup if Convex e2ee module is deployed
-      if (e2eeServerSupportedRef.current !== false && friends.length > 0) {
+      if (e2eeServerSupportedRef.current !== false) {
         try {
+          // Ensure our converged canonical identity is also published in e2eeUserKeys!
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const bundles = (await convex.query("e2ee:getUserIdentities" as any, {
-            userIds: friends.map((f) => f.id as Id<"users">),
-          })) as PublicIdentityBundle[];
-          for (const b of bundles) {
-            await ingestPeerIdentityBundle(b);
+          await convex.mutation("e2ee:publishIdentity" as any, {
+            keyId: state.primaryIdentity.keyId,
+            dhPubB64: state.primaryIdentity.dhPubB64,
+            sigPubB64: state.primaryIdentity.sigPubB64,
+            selfSigB64: state.primaryIdentity.selfSigB64,
+          });
+          if (friends.length > 0) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const bundles = (await convex.query("e2ee:getUserIdentities" as any, {
+              userIds: friends.map((f) => f.id as Id<"users">),
+            })) as PublicIdentityBundle[];
+            for (const b of bundles) {
+              await ingestPeerIdentityBundle(b);
+            }
           }
           e2eeServerSupportedRef.current = true;
         } catch {

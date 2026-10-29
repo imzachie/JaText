@@ -326,24 +326,24 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
               <li>
-                <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Readable Decrypted Mobile Notifications, Group Mentions &amp; JaText Announcements
-              </li>
-              <li>
-                <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                JaText (Default), Phone System &amp; Custom Notification + Call Ringtone Sounds
-              </li>
-              <li>
                 <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Instant Lock-Screen Call Wakeup, Looping Ringtone &amp; 1-Minute Call Dismissed UI
+                Instant Lock-Screen &amp; Minimized Call Wakeup + Looping Call Ringtone
               </li>
               <li>
                 <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Instant Sent / Delivered / Read Status &amp; Admin-Only @everyone Group Mentions
+                One-Tap Startup Call Overlay &amp; Notification Permission Setup
+              </li>
+              <li>
+                <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                100% Readable Decrypted Mobile Notifications &amp; +70% Boosted Default Alert Audio
+              </li>
+              <li>
+                <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                60fps Animated Mobile Back Navigation Across Chats, Groups &amp; Modals
               </li>
               <li>
                 <SwitchAccountIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Locked 60–120fps Hardware-Accelerated Mobile Scrolling &amp; Windowed Chats
+                Group @Mentions, Admin @everyone, JaText Announcements &amp; Custom Sounds
               </li>
             </ul>
             <button

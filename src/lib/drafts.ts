@@ -7,6 +7,7 @@ type DraftsMap = Record<string, string>;
 
 let cachedDrafts: DraftsMap | null = null;
 let cachedSlotKey = "";
+let flushTimer: number | null = null;
 const listeners = new Set<() => void>();
 
 function readDraftsFromStorage(): DraftsMap {
@@ -41,13 +42,16 @@ function readDraftsFromStorage(): DraftsMap {
   return cachedDrafts;
 }
 
-function persistDrafts(next: DraftsMap) {
+function flushDraftsNow() {
+  if (flushTimer !== null && typeof window !== "undefined") {
+    window.clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  if (!cachedDrafts) return;
   const activeKey = getScopedStorageKey(DRAFTS_STORAGE_KEY);
-  cachedSlotKey = activeKey;
-  cachedDrafts = next;
   if (typeof window !== "undefined") {
     try {
-      window.localStorage.setItem(activeKey, JSON.stringify(next));
+      window.localStorage.setItem(activeKey, JSON.stringify(cachedDrafts));
     } catch {
       // Ignore quota errors.
     }
@@ -55,6 +59,26 @@ function persistDrafts(next: DraftsMap) {
   for (const listener of listeners) {
     listener();
   }
+}
+
+function persistDraftsDebounced(next: DraftsMap, immediate = false) {
+  const activeKey = getScopedStorageKey(DRAFTS_STORAGE_KEY);
+  cachedSlotKey = activeKey;
+  cachedDrafts = next;
+
+  if (immediate || typeof window === "undefined") {
+    flushDraftsNow();
+    return;
+  }
+
+  if (flushTimer !== null) {
+    window.clearTimeout(flushTimer);
+  }
+  // Debounce disk I/O + Sidebar store notifications so typing runs at a locked 60-120fps!
+  flushTimer = window.setTimeout(() => {
+    flushTimer = null;
+    flushDraftsNow();
+  }, 360);
 }
 
 export function getDraft(scopeKey: string): string {
@@ -67,14 +91,17 @@ export function setDraft(scopeKey: string, value: string): void {
     if (!(scopeKey in current)) return;
     const next = { ...current };
     delete next[scopeKey];
-    persistDrafts(next);
+    persistDraftsDebounced(next, false);
     return;
   }
   if (current[scopeKey] === value) return;
-  persistDrafts({
-    ...current,
-    [scopeKey]: value,
-  });
+  persistDraftsDebounced(
+    {
+      ...current,
+      [scopeKey]: value,
+    },
+    false,
+  );
 }
 
 export function clearDraft(scopeKey: string): void {
@@ -82,26 +109,35 @@ export function clearDraft(scopeKey: string): void {
   if (!(scopeKey in current)) return;
   const next = { ...current };
   delete next[scopeKey];
-  persistDrafts(next);
+  persistDraftsDebounced(next, true);
+}
+
+export function flushPendingDrafts(): void {
+  if (flushTimer !== null) {
+    flushDraftsNow();
+  }
 }
 
 function subscribeDrafts(listener: () => void): () => void {
   listeners.add(listener);
   if (typeof window !== "undefined") {
-    window.addEventListener(ACCOUNT_SLOT_CHANGE_EVENT, listener);
+    const onSlotChange = () => {
+      flushPendingDrafts();
+      cachedDrafts = null;
+      cachedSlotKey = "";
+      listener();
+    };
+    window.addEventListener(ACCOUNT_SLOT_CHANGE_EVENT, onSlotChange);
+    return () => {
+      listeners.delete(listener);
+      window.removeEventListener(ACCOUNT_SLOT_CHANGE_EVENT, onSlotChange);
+    };
   }
   return () => {
     listeners.delete(listener);
-    if (typeof window !== "undefined") {
-      window.removeEventListener(ACCOUNT_SLOT_CHANGE_EVENT, listener);
-    }
   };
 }
 
 export function useDraftsMap(): DraftsMap {
-  return useSyncExternalStore(
-    subscribeDrafts,
-    readDraftsFromStorage,
-    () => ({}),
-  );
+  return useSyncExternalStore(subscribeDrafts, readDraftsFromStorage, () => ({}));
 }

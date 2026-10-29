@@ -23,7 +23,7 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
     @Override
     public void load() {
         try {
-            if (MainActivity.isAppInForeground()) {
+            if (MainActivity.isActivelyVisibleUnlocked(getContext())) {
                 PushNotificationsPlugin.lastMessage = null;
             }
             super.load();
@@ -54,9 +54,10 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
     @Override
     public void fireNotification(RemoteMessage remoteMessage) {
         if (remoteMessage == null) return;
+        Context ctx = getContext();
 
-        // When the user has JaText open in the foreground, NEVER show a system notification!
-        if (MainActivity.isAppInForeground()) {
+        // When the user has JaText actively open on an unlocked, interactive screen, NEVER show a system notification!
+        if (MainActivity.isActivelyVisibleUnlocked(ctx)) {
             JSObject remoteMessageData = new JSObject();
             JSObject data = new JSObject();
             remoteMessageData.put("id", remoteMessage.getMessageId());
@@ -68,7 +69,6 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
             return;
         }
 
-        Context ctx = getContext();
         if (ctx == null) return;
 
         final Context appCtx = ctx.getApplicationContext();
@@ -87,6 +87,8 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
         final String groupId = data != null ? data.get("groupId") : null;
         final String chatId = data != null ? data.get("chatId") : null;
         final String type = data != null ? data.get("type") : null;
+        final String callMode = data != null ? data.get("callMode") : null;
+        final boolean isEncrypted = data != null && "1".equals(data.get("isEncrypted"));
         final String msgId = remoteMessage.getMessageId();
 
         new Thread(() -> {
@@ -98,6 +100,8 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
                 groupId,
                 chatId,
                 type,
+                callMode,
+                isEncrypted,
                 msgId
             );
         }).start();

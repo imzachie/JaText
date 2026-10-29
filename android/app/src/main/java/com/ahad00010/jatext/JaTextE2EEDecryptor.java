@@ -145,6 +145,7 @@ public final class JaTextE2EEDecryptor {
         String lower = t.toLowerCase();
         return lower.equals("encrypted message") ||
             lower.equals("🔒 encrypted message") ||
+            lower.equals("sent you a message") ||
             lower.contains("sent an encrypted message") ||
             lower.contains("mentioned you in an encrypted message") ||
             lower.equals("new message") ||
@@ -167,27 +168,53 @@ public final class JaTextE2EEDecryptor {
         String groupId,
         String chatId,
         String type,
+        String callMode,
+        boolean isEncryptedHint,
         String msgId
     ) {
-        if (ctx == null || MainActivity.isAppInForeground()) return;
+        if (ctx == null) return;
 
-        // Check fast-path call hint from rawBody / push type
-        boolean looksLikeCall = "call".equals(type) || "incoming_call".equals(type) ||
+        if ("call_cancel".equals(type)) {
+            JaTextSoundManager.cancelIncomingCallWakeup(ctx);
+            return;
+        }
+
+        if (MainActivity.isActivelyVisibleUnlocked(ctx)) {
+            return;
+        }
+
+        // Fast-path instant incoming call wakeup (0ms, zero network latency!)
+        boolean isCallFastPath =
+            "call".equals(type) ||
+            "incoming_call".equals(type) ||
             (rawBody != null && (
-                rawBody.contains("__JATEXT_CALL__:") ||
-                rawBody.contains("__JATEXT_CALL_GRP__:") ||
-                rawBody.contains("Incoming voice call") ||
-                rawBody.contains("Incoming video call")
+                rawBody.contains("(__JATEXT_CALL_DM_RINGING__:") ||
+                rawBody.contains("(__JATEXT_CALL_GRP_ACTIVE__") ||
+                (rawBody.contains("__JATEXT_CALL__:") && rawBody.contains("\"state\":\"ringing\"")) ||
+                (rawBody.contains("__JATEXT_CALL_GRP__:") && rawBody.contains("\"state\":\"active\""))
             ));
 
+        if (isCallFastPath) {
+            boolean isVideo =
+                "video".equalsIgnoreCase(callMode) ||
+                (rawBody != null && (
+                    rawBody.contains("RINGING__:video)") ||
+                    rawBody.contains("ACTIVE__:video)") ||
+                    rawBody.contains("\"mode\":\"video\"")
+                ));
+            String callerTitle = cleanCallerTitle(title);
+            JaTextSoundManager.triggerIncomingCallWakeup(ctx, senderId, groupId, callerTitle, isVideo);
+            return;
+        }
+
+        String effectiveRaw = rawBody;
+        if (isEncryptedHint && (effectiveRaw == null || !effectiveRaw.contains(E2EE_MARKER))) {
+            effectiveRaw = "Encrypted message";
+        }
+
         // Always inspect/decrypt the real wire body so E2EE call invites & E2EE texts are resolved!
-        ResolvedPushContent resolved = resolvePushContent(ctx, rawBody, senderId, groupId);
+        ResolvedPushContent resolved = resolvePushContent(ctx, effectiveRaw, senderId, groupId);
         if (resolved == null) {
-            if (looksLikeCall) {
-                boolean isVideo = rawBody != null && rawBody.toLowerCase().contains("video");
-                String callerTitle = cleanCallerTitle(title);
-                JaTextSoundManager.triggerIncomingCallWakeup(ctx, senderId, groupId, callerTitle, isVideo);
-            }
             return;
         }
 
@@ -206,7 +233,11 @@ public final class JaTextE2EEDecryptor {
         if (!areNotificationsAllowed(ctx)) {
             return;
         }
-        if (resolved.readableBody == null || resolved.readableBody.isEmpty()) {
+        if (
+            resolved.readableBody == null ||
+            resolved.readableBody.isEmpty() ||
+            resolved.readableBody.contains(E2EE_MARKER)
+        ) {
             return;
         }
 
@@ -431,12 +462,14 @@ public final class JaTextE2EEDecryptor {
             return null;
         }
 
-        // Collect any peer identity keys or group epoch keys directly from the conversation rows!
+        // Collect ALL peer identity keys across devices or group epoch keys directly from Convex!
         List<String> extraPeerDhKeys = new ArrayList<>();
         if (senderId != null && !senderId.isEmpty() && groupId == null) {
-            String fetchedPeerDh = fetchPeerDhKeyFromConvex(convexUrl, activeJwt, senderId);
-            if (fetchedPeerDh != null && !fetchedPeerDh.isEmpty()) {
-                extraPeerDhKeys.add(fetchedPeerDh);
+            List<String> fetchedPeerDhs = fetchPeerDhKeysFromConvex(convexUrl, activeJwt, senderId);
+            for (String dh : fetchedPeerDhs) {
+                if (dh != null && !dh.isEmpty() && !extraPeerDhKeys.contains(dh)) {
+                    extraPeerDhKeys.add(dh);
+                }
             }
         }
         JSONObject extraGroupEpochs = new JSONObject();
@@ -509,7 +542,8 @@ public final class JaTextE2EEDecryptor {
         return null;
     }
 
-    private static String fetchPeerDhKeyFromConvex(String convexUrl, String jwt, String peerUserId) {
+    private static List<String> fetchPeerDhKeysFromConvex(String convexUrl, String jwt, String peerUserId) {
+        List<String> keys = new ArrayList<>();
         try {
             JSONArray userIds = new JSONArray();
             userIds.put(peerUserId);
@@ -525,14 +559,20 @@ public final class JaTextE2EEDecryptor {
                 ? convexUrl.substring(0, convexUrl.length() - 1)
                 : convexUrl;
             JSONObject res = postJson(base + "/api/query", reqBody.toString(), jwt);
-            if (res == null || !"success".equals(res.optString("status"))) return null;
+            if (res == null || !"success".equals(res.optString("status"))) return keys;
             JSONArray arr = res.optJSONArray("value");
-            if (arr == null || arr.length() == 0) return null;
-            JSONObject first = arr.optJSONObject(0);
-            return first != null ? first.optString("dhPubB64", null) : null;
-        } catch (Throwable ignored) {
-            return null;
-        }
+            if (arr == null) return keys;
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject item = arr.optJSONObject(i);
+                if (item != null) {
+                    String dh = item.optString("dhPubB64", "");
+                    if (!dh.isEmpty() && !keys.contains(dh)) {
+                        keys.add(dh);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return keys;
     }
 
     private static JSONObject executeConvexQuery(

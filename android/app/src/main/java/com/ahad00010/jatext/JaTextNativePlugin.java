@@ -913,7 +913,7 @@ public class JaTextNativePlugin extends Plugin {
     @PluginMethod
     public void showDecryptedNotification(PluginCall call) {
         Context ctx = getContext();
-        if (ctx != null && !MainActivity.isAppInForeground() && JaTextE2EEDecryptor.areNotificationsAllowed(ctx)) {
+        if (ctx != null && !MainActivity.isActivelyVisibleUnlocked(ctx) && JaTextE2EEDecryptor.areNotificationsAllowed(ctx)) {
             final Context appCtx = ctx.getApplicationContext();
             final String tag = call.getString("tag");
             final String title = call.getString("title");
@@ -930,7 +930,11 @@ public class JaTextNativePlugin extends Plugin {
                         senderId,
                         groupId
                     );
-                    if (resolved == null || resolved.isEmpty()) {
+                    if (
+                        resolved == null ||
+                        resolved.isEmpty() ||
+                        JaTextE2EEDecryptor.isPlaceholderOrEncryptedPreview(resolved)
+                    ) {
                         return;
                     }
                     finalBody = resolved;
@@ -954,7 +958,7 @@ public class JaTextNativePlugin extends Plugin {
     @PluginMethod
     public void triggerIncomingCallWake(PluginCall call) {
         Context ctx = getContext();
-        if (ctx != null && !MainActivity.isAppInForeground()) {
+        if (ctx != null) {
             String senderId = call.getString("senderId", null);
             String groupId = call.getString("groupId", null);
             String callerTitle = call.getString("callerTitle", "Incoming JaText Call");
@@ -1119,6 +1123,9 @@ public class JaTextNativePlugin extends Plugin {
                         Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
                         Uri.parse("package:" + ctx.getPackageName())
                     );
+                } else if ("notifications".equals(kind) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                    intent.putExtra(Settings.EXTRA_APP_PACKAGE, ctx.getPackageName());
                 } else {
                     intent = new Intent(
                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,

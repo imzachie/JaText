@@ -207,6 +207,19 @@ export async function scheduleAnnouncementPush(
   });
 }
 
+export async function scheduleCallCancelPush(
+  ctx: MutationCtx,
+  senderId: Id<"users">,
+  receiverId: Id<"users">,
+) {
+  await ctx.scheduler.runAfter(0, internal.pushActions.sendMessageNotification, {
+    receiverId,
+    senderId,
+    senderName: "JaText",
+    body: "__JATEXT_CALL_CANCEL__",
+  });
+}
+
 /** All friend user-ids for `userId` (accepted in either direction). */
 export async function friendIds(
   ctx: Ctx,
