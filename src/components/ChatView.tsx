@@ -222,6 +222,12 @@ const ChatHistory = memo(function ChatHistory({
         initialScrollAllowedRef.current = false;
       }}
     >
+      {!messagesReady && messages.length === 0 && (
+        <div className="empty-box center">
+          <div className="spinner" style={{ width: 28, height: 28 }} />
+          <p className="muted small">Loading messages…</p>
+        </div>
+      )}
       {messagesReady && messages.length === 0 && (
         <div className="empty-box center">
           <Avatar user={friend} size={72} onClick={() => onOpenProfile(friend)} />

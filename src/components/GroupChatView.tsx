@@ -296,6 +296,12 @@ const GroupChatHistory = memo(function GroupChatHistory({
         initialScrollAllowedRef.current = false;
       }}
     >
+      {!messagesReady && messages.length === 0 && (
+        <div className="empty-box center">
+          <div className="spinner" style={{ width: 28, height: 28 }} />
+          <span className="muted small">Loading group messages…</span>
+        </div>
+      )}
       {messagesReady && messages.length === 0 && (
         <div className="empty-box center">
           <strong>

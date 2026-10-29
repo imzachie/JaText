@@ -867,6 +867,7 @@ export async function hydrateDecryptedDmMessageAsync(
   raw: ChatMessage,
   peerUserId: string,
   triggerRerender: () => void,
+  options?: { skipRemoteAttachments?: boolean },
 ): Promise<ChatMessage> {
   if (!raw.unsentAt && isEncryptedWireBody(raw.body)) {
     const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
@@ -876,17 +877,19 @@ export async function hydrateDecryptedDmMessageAsync(
       senderId: raw.senderId,
       receiverId: raw.receiverId,
     });
-    if (cached.payload?.att && raw.attachmentUrl) {
-      try {
-        await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.att);
-      } catch {
-        // Ignore transient attachment fetch failure
-      }
-    } else if (cached.payload?.stk?.att && raw.attachmentUrl) {
-      try {
-        await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.stk.att);
-      } catch {
-        // Ignore transient sticker fetch failure
+    if (!options?.skipRemoteAttachments) {
+      if (cached.payload?.att && raw.attachmentUrl) {
+        try {
+          await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.att);
+        } catch {
+          // Ignore transient attachment fetch failure
+        }
+      } else if (cached.payload?.stk?.att && raw.attachmentUrl) {
+        try {
+          await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.stk.att);
+        } catch {
+          // Ignore transient sticker fetch failure
+        }
       }
     }
   }
@@ -898,6 +901,7 @@ export async function hydrateDecryptedGroupMessageAsync(
   groupId: string,
   groupDetails: GroupDetails | null,
   triggerRerender: () => void,
+  options?: { skipRemoteAttachments?: boolean },
 ): Promise<GroupMessage> {
   if (!raw.unsentAt && isEncryptedWireBody(raw.body)) {
     const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
@@ -907,17 +911,19 @@ export async function hydrateDecryptedGroupMessageAsync(
       senderId: raw.senderId,
       groupId,
     });
-    if (cached.payload?.att && raw.attachmentUrl) {
-      try {
-        await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.att);
-      } catch {
-        // Ignore transient attachment fetch failure
-      }
-    } else if (cached.payload?.stk?.att && raw.attachmentUrl) {
-      try {
-        await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.stk.att);
-      } catch {
-        // Ignore transient sticker fetch failure
+    if (!options?.skipRemoteAttachments) {
+      if (cached.payload?.att && raw.attachmentUrl) {
+        try {
+          await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.att);
+        } catch {
+          // Ignore transient attachment fetch failure
+        }
+      } else if (cached.payload?.stk?.att && raw.attachmentUrl) {
+        try {
+          await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.stk.att);
+        } catch {
+          // Ignore transient sticker fetch failure
+        }
       }
     }
   }
