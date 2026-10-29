@@ -465,6 +465,16 @@ export function setCachedDmConversation(
   const visible = messages.filter((m) => !m.body.startsWith("__JATEXT_CALL_SIG__:"));
   const capped = visible.slice(-MAX_CACHED_MESSAGES_PER_CHAT);
   const existing = slotData.dms[friendId];
+  const recentExistingStatuses = existing
+    ? existing.messages
+        .slice(-12)
+        .map((m) => `${m.id}:${m.deliveryStatus}`)
+        .join("|")
+    : "";
+  const recentNextStatuses = capped
+    .slice(-12)
+    .map((m) => `${m.id}:${m.deliveryStatus}`)
+    .join("|");
   if (
     existing &&
     existing.messages.length === capped.length &&
@@ -472,6 +482,7 @@ export function setCachedDmConversation(
     existing.messages.at(-1)?.body === capped.at(-1)?.body &&
     existing.messages.at(-1)?.editedAt === capped.at(-1)?.editedAt &&
     existing.messages.at(-1)?.unsentAt === capped.at(-1)?.unsentAt &&
+    recentExistingStatuses === recentNextStatuses &&
     (existing.messages.at(-1)?.reactions?.length ?? 0) ===
       (capped.at(-1)?.reactions?.length ?? 0)
   ) {

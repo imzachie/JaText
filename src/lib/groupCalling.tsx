@@ -23,6 +23,7 @@ import {
   type FloatingCallReaction,
   type SoundboardEffectId,
 } from "./calling";
+import { startIncomingCallRingtone, stopIncomingCallRingtone } from "./alerts";
 import { updateCallHistoryStatus, upsertCallHistoryEntry } from "./callHistory";
 import { JaTextNative, configureNativeCallAudio, ensureNativeMediaPermissions } from "./nativeBridge";
 import {
@@ -38,7 +39,7 @@ import {
 import { useJaText } from "./store";
 import type { GroupMessage, GroupSummary, JaUser } from "./types";
 
-const GROUP_RING_TIMEOUT_MS = 45_000;
+const GROUP_RING_TIMEOUT_MS = 60_000;
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -451,6 +452,10 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const stopRingingTimers = useCallback(() => {
+    stopIncomingCallRingtone();
+    if (Capacitor.isNativePlatform()) {
+      void JaTextNative.cancelIncomingCallWake().catch(() => undefined);
+    }
     if (ringIntervalRef.current !== null) {
       window.clearInterval(ringIntervalRef.current);
       ringIntervalRef.current = null;
@@ -908,11 +913,16 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         timestamp: invite.ts || now,
       });
 
+      if (Capacitor.isNativePlatform() && document.visibilityState !== "visible") {
+        void JaTextNative.triggerIncomingCallWake({
+          groupId: grp.id,
+          callerTitle: `${invite.hostName} · ${grp.name}`,
+          isVideo: invite.mode === "video",
+        }).catch(() => undefined);
+      }
+
       if (soundsEnabled && me.statusPreference !== "dnd") {
-        playCallRingChime("incoming");
-        ringIntervalRef.current = window.setInterval(() => {
-          playCallRingChime("incoming");
-        }, 2600);
+        startIncomingCallRingtone();
       }
 
       ringTimeoutRef.current = window.setTimeout(() => {

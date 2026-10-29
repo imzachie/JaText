@@ -187,38 +187,46 @@ export const heartbeat = mutation({
         lastActiveAt: now,
       });
     }
-    const friends = await friendIds(ctx, me._id);
-    await Promise.all(
-      friends.map(async (friendId) => {
-        if (
-          (await hasBlocked(ctx, me._id, friendId)) ||
-          (await hasBlocked(ctx, friendId, me._id))
-        ) {
-          return;
-        }
-        const messages = await ctx.db
-          .query("messages")
-          .withIndex("by_pair", (q) =>
-            q.eq("pairKey", pairKey(me._id, friendId)),
-          )
-          .order("desc")
-          .take(100);
-        await Promise.all(
-          messages
-            .filter(
-              (message) =>
-                message.senderId === friendId &&
-                message.receiverId === me._id &&
-                message.deliveryStatus === "delivered" &&
-                !message.hiddenFor?.includes(me._id) &&
-                !message.unsentAt,
-            )
-            .map((message) =>
-              ctx.db.patch(message._id, { deliveryStatus: "sent" }),
-            ),
-        );
-      }),
+    const hasRegisteredPhone = Boolean(
+      await ctx.db
+        .query("pushDevices")
+        .withIndex("by_user", (q) => q.eq("userId", me._id))
+        .first(),
     );
+    if (hasRegisteredPhone) {
+      const friends = await friendIds(ctx, me._id);
+      await Promise.all(
+        friends.map(async (friendId) => {
+          if (
+            (await hasBlocked(ctx, me._id, friendId)) ||
+            (await hasBlocked(ctx, friendId, me._id))
+          ) {
+            return;
+          }
+          const messages = await ctx.db
+            .query("messages")
+            .withIndex("by_pair", (q) =>
+              q.eq("pairKey", pairKey(me._id, friendId)),
+            )
+            .order("desc")
+            .take(100);
+          await Promise.all(
+            messages
+              .filter(
+                (message) =>
+                  message.senderId === friendId &&
+                  message.receiverId === me._id &&
+                  message.deliveryStatus === "delivered" &&
+                  !message.hiddenFor?.includes(me._id) &&
+                  !message.unsentAt,
+              )
+              .map((message) =>
+                ctx.db.patch(message._id, { deliveryStatus: "sent" }),
+              ),
+          );
+        }),
+      );
+    }
     await ctx.scheduler.runAfter(90_001, internal.users.expirePresence, {
       userId: me._id,
       expectedLastSeenAt: now,

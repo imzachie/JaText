@@ -1,13 +1,17 @@
 package com.ahad00010.jatext;
 
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.service.notification.StatusBarNotification;
+import android.view.Display;
+import android.view.View;
+import android.view.WindowManager;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
@@ -28,16 +32,33 @@ public class MainActivity extends BridgeActivity {
         this.initialPlugins.add(SafePushNotificationsPlugin.class);
         super.onCreate(savedInstanceState);
         appInForeground = true;
-        ensureMessagesNotificationChannel();
+        applyHighRefreshRateAndLockScreenFlags(getIntent());
+        JaTextSoundManager.ensureActiveMessageChannel(this);
         if (getBridge() != null) {
             getBridge().registerPlugin(SafePushNotificationsPlugin.class);
-            if (getBridge().getWebView() != null) {
-                getBridge().getWebView().getSettings().setMediaPlaybackRequiresUserGesture(false);
-                JaTextWebView.installReceiveContentSupport(getBridge().getWebView());
+            WebView webView = getBridge().getWebView();
+            if (webView != null) {
+                WebSettings ws = webView.getSettings();
+                ws.setMediaPlaybackRequiresUserGesture(false);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    ws.setOffscreenPreRaster(true);
+                }
+                webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+                webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+                JaTextWebView.installReceiveContentSupport(webView);
             }
         }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         applyStatusBarAppearance();
+        dispatchIncomingCallLaunchIfPresent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        applyHighRefreshRateAndLockScreenFlags(intent);
+        dispatchIncomingCallLaunchIfPresent(intent);
     }
 
     @Override
@@ -51,7 +72,15 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         appInForeground = true;
+        JaTextSoundManager.cancelIncomingCallWakeup(this);
         clearDeliveredMessageNotifications();
+        try {
+            if (getBridge() != null && getBridge().getWebView() != null) {
+                WebView webView = getBridge().getWebView();
+                webView.onResume();
+                webView.resumeTimers();
+            }
+        } catch (Throwable ignored) {}
     }
 
     @Override
@@ -65,7 +94,6 @@ public class MainActivity extends BridgeActivity {
         appInForeground = false;
         super.onStop();
         keepWebViewAliveForActiveMedia();
-        // Re-assert WebView resume right after Android ViewRootImpl dispatches window-stop
         mainHandler.postDelayed(this::keepWebViewAliveForActiveMedia, 140L);
         mainHandler.postDelayed(this::keepWebViewAliveForActiveMedia, 480L);
     }
@@ -74,8 +102,9 @@ public class MainActivity extends BridgeActivity {
     public void onDestroy() {
         appInForeground = false;
         mainHandler.removeCallbacksAndMessages(null);
+        JaTextSoundManager.stopSoundPreview();
         try {
-            stopService(new android.content.Intent(this, CallKeepAliveService.class));
+            stopService(new Intent(this, CallKeepAliveService.class));
         } catch (Throwable ignored) {}
         super.onDestroy();
     }
@@ -86,6 +115,69 @@ public class MainActivity extends BridgeActivity {
         if (hasFocus) {
             appInForeground = true;
             applyStatusBarAppearance();
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void applyHighRefreshRateAndLockScreenFlags(Intent intent) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true);
+                setTurnScreenOn(true);
+            } else {
+                getWindow().addFlags(
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                );
+            }
+            if (intent != null && intent.getBooleanExtra("incomingCallWake", false)) {
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+        } catch (Throwable ignored) {}
+
+        // Request the highest native refresh rate (60Hz / 90Hz / 120Hz) supported by the display
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                Display display = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    ? getDisplay()
+                    : getWindowManager().getDefaultDisplay();
+                if (display != null) {
+                    Display.Mode current = display.getMode();
+                    Display.Mode[] modes = display.getSupportedModes();
+                    Display.Mode best = current;
+                    for (Display.Mode mode : modes) {
+                        if (
+                            mode.getPhysicalWidth() == current.getPhysicalWidth() &&
+                            mode.getPhysicalHeight() == current.getPhysicalHeight() &&
+                            mode.getRefreshRate() > best.getRefreshRate()
+                        ) {
+                            best = mode;
+                        }
+                    }
+                    if (best.getModeId() != current.getModeId()) {
+                        WindowManager.LayoutParams lp = getWindow().getAttributes();
+                        lp.preferredDisplayModeId = best.getModeId();
+                        getWindow().setAttributes(lp);
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private void dispatchIncomingCallLaunchIfPresent(Intent intent) {
+        if (intent == null) return;
+        Bundle extras = intent.getExtras();
+        if (extras == null) return;
+        String type = extras.getString("type", "");
+        boolean isCallWake = extras.getBoolean("incomingCallWake", false) || "incoming_call".equals(type);
+        String senderId = extras.getString("senderId");
+        String groupId = extras.getString("groupId");
+        String chatId = extras.getString("chatId");
+        if (isCallWake || senderId != null || groupId != null || chatId != null) {
+            mainHandler.postDelayed(
+                () -> JaTextNativePlugin.emitNotificationOpen(senderId, groupId, chatId, isCallWake),
+                120L
+            );
         }
     }
 
@@ -137,23 +229,5 @@ public class MainActivity extends BridgeActivity {
         WindowInsetsControllerCompat insetsController =
             WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         insetsController.setAppearanceLightStatusBars(false);
-    }
-
-    private void ensureMessagesNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                NotificationManager nm = getSystemService(NotificationManager.class);
-                if (nm != null) {
-                    NotificationChannel channel = new NotificationChannel(
-                        "messages",
-                        "Messages",
-                        NotificationManager.IMPORTANCE_HIGH
-                    );
-                    channel.setDescription("New JaText messages and call alerts");
-                    channel.enableVibration(true);
-                    nm.createNotificationChannel(channel);
-                }
-            } catch (Throwable ignored) {}
-        }
     }
 }

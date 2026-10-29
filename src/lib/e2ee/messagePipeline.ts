@@ -267,9 +267,10 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
   wireBody: string;
   file?: File;
   sticker?: StickerMedia;
+  canMentionEveryone?: boolean;
   uploadFile: (file: File) => Promise<TStorageId>;
 }): Promise<PreparedEncryptedWrite<TStorageId> | null> {
-  const { groupId, wireBody, file, sticker, uploadFile } = params;
+  const { groupId, wireBody, file, sticker, canMentionEveryone = false, uploadFile } = params;
   const state = getActiveE2EEState();
   if (!state) return null;
   const epochEntry = getLatestGroupEpoch(groupId);
@@ -368,9 +369,46 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
     },
   });
 
+  // Append lightweight mention routing metadata on a second line so Convex push dispatch
+  // notifies mentioned group members (and @everyone ONLY for group owner / moderators)
+  // while keeping message text end-to-end encrypted inside the v1 JSON envelope.
+  let finalWire = encryptedWire;
+  if (!silentSignal && wireBody) {
+    if (
+      wireBody.startsWith("__JATEXT_CALL_GRP__:") &&
+      wireBody.includes('"state":"active"') &&
+      encryptedWire.length + 30 <= 3980
+    ) {
+      finalWire = `${encryptedWire}\n(__JATEXT_CALL_GRP_ACTIVE__)`;
+    } else {
+      const cleanTextForMentions = stripBubbleStyleFromText(wireBody);
+      const wantsEveryone =
+        canMentionEveryone && /(?:^|[\s(])@everyone\b/i.test(cleanTextForMentions);
+      if (wantsEveryone) {
+        if (encryptedWire.length + 13 <= 3980) {
+          finalWire = `${encryptedWire}\n(@everyone)`;
+        }
+      } else {
+        const handles = new Set<string>();
+        const re = /(?:^|[\s(])@([a-z0-9._]{3,20})\b/gi;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(cleanTextForMentions)) !== null) {
+          const h = m[1].toLowerCase();
+          if (h !== "everyone") handles.add(`@${h}`);
+        }
+        if (handles.size > 0) {
+          const suffix = `\n(${Array.from(handles).slice(0, 25).join(" ")})`;
+          if (encryptedWire.length + suffix.length <= 3980) {
+            finalWire = `${encryptedWire}${suffix}`;
+          }
+        }
+      }
+    }
+  }
+
   return {
     encrypted: true,
-    wireBody: encryptedWire,
+    wireBody: finalWire,
     ...(attachmentId !== undefined
       ? {
           attachmentId,
@@ -593,10 +631,14 @@ function extractClientMentions(
   senderId: string,
   groupDetails: GroupDetails | null,
 ): { mentionsEveryone: boolean; mentionedUserIds: string[] } {
-  const mentionsEveryone = /(?:^|[\s(])@everyone\b/i.test(body);
+  const rawWantsEveryone = /(?:^|[\s(])@everyone\b/i.test(body);
   if (!groupDetails) {
-    return { mentionsEveryone, mentionedUserIds: [] };
+    return { mentionsEveryone: false, mentionedUserIds: [] };
   }
+  const senderMember = groupDetails.members.find((m) => m.id === senderId);
+  const senderCanMentionEveryone =
+    senderMember?.role === "owner" || senderMember?.role === "moderator";
+  const mentionsEveryone = rawWantsEveryone && senderCanMentionEveryone;
   if (mentionsEveryone) {
     return {
       mentionsEveryone: true,
@@ -772,7 +814,11 @@ export function hydrateDecryptedGroupMessage(
   };
 }
 
-export function hydrateDecryptedChatPreview(preview: ChatPreview, myUserId: string): ChatPreview {
+export function hydrateDecryptedChatPreview(
+  preview: ChatPreview,
+  myUserId: string,
+  triggerRerender?: () => void,
+): ChatPreview {
   if (!isEncryptedWireBody(preview.body)) return preview;
   const receiverId = preview.senderId === myUserId ? preview.friendId : myUserId;
   const cacheKey = buildMessageDecryptCacheKey(
@@ -787,6 +833,8 @@ export function hydrateDecryptedChatPreview(preview: ChatPreview, myUserId: stri
       rawBody: preview.body,
       senderId: preview.senderId,
       receiverId,
+    }).then(() => {
+      triggerRerender?.();
     });
     return { ...preview, body: "Encrypted message" };
   }
@@ -807,10 +855,46 @@ export function hydrateDecryptedChatPreview(preview: ChatPreview, myUserId: stri
   return { ...preview, body: summary };
 }
 
+export async function decryptWirePreviewAsync(params: {
+  rawBody: string;
+  senderId: string;
+  receiverId?: string;
+  groupId?: string;
+  cacheHint: string;
+}): Promise<string | null> {
+  if (!params.rawBody) return null;
+  if (!isEncryptedWireBody(params.rawBody)) {
+    return stripBubbleStyleFromText(params.rawBody) || null;
+  }
+  const cacheKey = buildMessageDecryptCacheKey(params.cacheHint, params.rawBody, 0);
+  const res = await decryptWireMessageCached({
+    cacheKey,
+    rawBody: params.rawBody,
+    senderId: params.senderId,
+    receiverId: params.receiverId,
+    groupId: params.groupId,
+  });
+  if (!res.payload) return null;
+  const p = res.payload;
+  const clean = stripBubbleStyleFromText(p.b);
+  return (
+    clean ||
+    (p.att?.t?.startsWith("audio/")
+      ? "Voice note"
+      : p.att
+        ? p.att.n || "Attachment"
+        : p.stk
+          ? p.stk.n || "Sticker"
+          : null)
+  );
+}
+
 export function hydrateDecryptedGroupSummary(
   group: GroupSummary,
   myUserId: string,
   myUsername?: string,
+  triggerRerender?: () => void,
+  allowedEveryoneSenderIds?: ReadonlySet<string>,
 ): GroupSummary {
   if (!isEncryptedWireBody(group.lastMessage)) return group;
   const cacheKey = buildMessageDecryptCacheKey(
@@ -825,6 +909,8 @@ export function hydrateDecryptedGroupSummary(
       rawBody: group.lastMessage,
       senderId: group.lastSenderId ?? "",
       groupId: group.id,
+    }).then(() => {
+      triggerRerender?.();
     });
     return { ...group, lastMessage: "Encrypted message" };
   }
@@ -843,13 +929,17 @@ export function hydrateDecryptedGroupSummary(
           ? p.stk.n || "Sticker"
           : "Encrypted message");
 
+  const senderAllowedEveryone =
+    !allowedEveryoneSenderIds ||
+    (group.lastSenderId ? allowedEveryoneSenderIds.has(group.lastSenderId) : false);
+
   const mentionedMe =
     group.lastMentionedMe ||
     Boolean(
       cleanGroupPreviewBody &&
         group.lastSenderId &&
         group.lastSenderId !== myUserId &&
-        (/(?:^|[\s(])@everyone\b/i.test(cleanGroupPreviewBody) ||
+        ((senderAllowedEveryone && /(?:^|[\s(])@everyone\b/i.test(cleanGroupPreviewBody)) ||
           (myUsername &&
             new RegExp(`(?:^|[\\s(])@${myUsername.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(
               cleanGroupPreviewBody,

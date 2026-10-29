@@ -1,7 +1,18 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { areFriends, isValidReactionEmoji, pairKey, profileOf, requireUser, scheduleGroupMentionPush, scheduleMessagePush, type Ctx } from "./lib";
+import {
+  areFriends,
+  initialDmDeliveryStatus,
+  isValidReactionEmoji,
+  pairKey,
+  profileOf,
+  requireUser,
+  scheduleGroupCallPush,
+  scheduleGroupMentionPush,
+  scheduleMessagePush,
+  type Ctx,
+} from "./lib";
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 
@@ -295,7 +306,17 @@ export const send = mutation({
       forwardedFromId = forwardedMessage.senderId;
     }
     const finalBody = (text || forwardedMessage?.body || "").slice(0, 4000);
-    const mentionsEveryone = /(?:^|[\s(])@everyone\b/i.test(finalBody);
+    const canMentionEveryone =
+      membership.role === "owner" || membership.role === "moderator";
+    const rawRequestsEveryone = /(?:^|[\s(])@everyone\b/i.test(finalBody);
+    if (
+      rawRequestsEveryone &&
+      !canMentionEveryone &&
+      !finalBody.includes("__JATEXT_E2EE_V1__:")
+    ) {
+      throw new ConvexError("Only the group owner or moderators can mention @everyone.");
+    }
+    const mentionsEveryone = rawRequestsEveryone && canMentionEveryone;
     const rawHandles = new Set<string>();
     const mentionRegex = /(?:^|[\s(])@([a-z0-9._]{3,20})\b/gi;
     let match: RegExpExecArray | null;
@@ -304,21 +325,26 @@ export const send = mutation({
       if (handle !== "everyone") rawHandles.add(handle);
     }
 
+    const isGroupCallInvite =
+      (finalBody.includes("__JATEXT_CALL_GRP__:") &&
+        finalBody.includes('"state":"active"')) ||
+      finalBody.includes("(__JATEXT_CALL_GRP_ACTIVE__)");
+
     let mentionedUserIds: Id<"users">[] = [];
-    if (mentionsEveryone || rawHandles.size > 0) {
+    let allOtherMemberIds: Id<"users">[] = [];
+    if (mentionsEveryone || rawHandles.size > 0 || isGroupCallInvite) {
       const groupMembers = await ctx.db
         .query("groupMembers")
         .withIndex("by_group", (q) => q.eq("groupId", args.groupId))
         .collect();
+      allOtherMemberIds = groupMembers
+        .map((member) => member.userId)
+        .filter((userId) => userId !== me._id);
       if (mentionsEveryone) {
-        mentionedUserIds = groupMembers
-          .map((member) => member.userId)
-          .filter((userId) => userId !== me._id);
-      } else {
+        mentionedUserIds = allOtherMemberIds;
+      } else if (rawHandles.size > 0) {
         const memberDocs = await Promise.all(
-          groupMembers
-            .filter((member) => member.userId !== me._id)
-            .map((member) => ctx.db.get(member.userId)),
+          allOtherMemberIds.map((userId) => ctx.db.get(userId)),
         );
         mentionedUserIds = memberDocs
           .filter(
@@ -347,12 +373,18 @@ export const send = mutation({
       ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
     });
 
-    if (mentionedUserIds.length > 0) {
+    if (isGroupCallInvite && allOtherMemberIds.length > 0) {
       const group = await ctx.db.get(args.groupId);
       const groupName = group?.name ?? "Group chat";
-      const pushBody = finalBody.includes("__JATEXT_E2EE_V1__:")
-        ? "🔒 Mentioned you in an encrypted message"
-        : finalBody || "Mentioned you in an attachment";
+      await Promise.all(
+        allOtherMemberIds.map((targetUserId) =>
+          scheduleGroupCallPush(ctx, me, args.groupId, groupName, targetUserId, finalBody),
+        ),
+      );
+    } else if (mentionedUserIds.length > 0) {
+      const group = await ctx.db.get(args.groupId);
+      const groupName = group?.name ?? "Group chat";
+      const pushBody = finalBody || "Mentioned you in an attachment";
       await Promise.all(
         mentionedUserIds.map((targetUserId) =>
           scheduleGroupMentionPush(
@@ -438,7 +470,8 @@ export const forward = mutation({
       if (!(await areFriends(ctx, me._id, targetUserId)))
         throw new Error("You can only forward messages to accepted friends.");
       const pair = pairKey(me._id, targetUserId);
-      await ctx.db.insert("messages", {
+      const initialStatus = await initialDmDeliveryStatus(ctx, me._id, targetUserId);
+      const insertedId = await ctx.db.insert("messages", {
         senderId: me._id,
         receiverId: targetUserId,
         pairKey: pair,
@@ -451,11 +484,17 @@ export const forward = mutation({
         attachmentUrl: source.attachmentUrl ?? source.stickerUrl,
         stickerKey: source.stickerKey,
         forwardedFromId: source.senderId,
-        deliveryStatus: "delivered",
+        deliveryStatus: initialStatus,
       });
       const meDoc = await ctx.db.get(me._id);
       if (meDoc && targetUserId) {
-        await scheduleMessagePush(ctx, meDoc, targetUserId, source.body || "Forwarded you a message");
+        await scheduleMessagePush(
+          ctx,
+          meDoc,
+          targetUserId,
+          source.body || "Forwarded you a message",
+          insertedId,
+        );
       }
     } else {
       throw new Error("Choose where to forward this message.");

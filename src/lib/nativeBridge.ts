@@ -38,6 +38,18 @@ export interface AppVersionInfo {
   canInstallPackages: boolean;
 }
 
+export interface DeviceSystemSoundItem {
+  title: string;
+  uri: string;
+}
+
+export interface NotificationOpenEvent {
+  senderId?: string;
+  groupId?: string;
+  chatId?: string;
+  incomingCallWake?: boolean;
+}
+
 export interface JaTextNativePlugin {
   checkPushSupport(): Promise<{ firebaseConfigured: boolean }>;
   getAppVersionInfo(): Promise<AppVersionInfo>;
@@ -81,6 +93,8 @@ export interface JaTextNativePlugin {
     identitiesJson: string;
     peersJson: string;
     groupsJson: string;
+    authJwt?: string;
+    authRefreshToken?: string;
   }): Promise<void>;
   showDecryptedNotification(options: {
     tag: string;
@@ -88,7 +102,45 @@ export interface JaTextNativePlugin {
     body: string;
     senderId?: string;
     groupId?: string;
+    chatId?: string;
   }): Promise<void>;
+  triggerIncomingCallWake(options: {
+    senderId?: string;
+    groupId?: string;
+    callerTitle?: string;
+    isVideo?: boolean;
+  }): Promise<void>;
+  cancelIncomingCallWake(): Promise<void>;
+  startNativeRingtone(): Promise<void>;
+  stopNativeRingtone(): Promise<void>;
+  listDeviceSounds(options: {
+    category: "notification" | "ringtone";
+  }): Promise<{ sounds: DeviceSystemSoundItem[] }>;
+  setSoundPreferences(options: {
+    notifMode?: string;
+    notifUri?: string;
+    notifLabel?: string;
+    ringMode?: string;
+    ringUri?: string;
+    ringLabel?: string;
+  }): Promise<void>;
+  saveCustomSound(options: {
+    category: "notification" | "ringtone";
+    fileName: string;
+    base64: string;
+  }): Promise<{ path: string; fileName: string }>;
+  previewSound(options: {
+    category: "notification" | "ringtone";
+    mode: string;
+    uri?: string;
+    loop?: boolean;
+  }): Promise<void>;
+  stopSoundPreview(): Promise<void>;
+  checkCallWakePermissions(): Promise<{
+    canDrawOverlays: boolean;
+    canFullScreenIntent: boolean;
+  }>;
+  openCallWakeSettings(options: { kind: "overlay" | "fullscreen" }): Promise<void>;
   addListener(
     eventName: "speechTranscript",
     listenerFunc: (event: SpeechTranscriptEvent) => void,
@@ -112,6 +164,10 @@ export interface JaTextNativePlugin {
   addListener(
     eventName: "richContentPaste",
     listenerFunc: (event: RichContentPasteEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "notificationOpen",
+    listenerFunc: (event: NotificationOpenEvent) => void,
   ): Promise<PluginListenerHandle>;
 }
 

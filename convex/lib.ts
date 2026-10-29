@@ -89,11 +89,34 @@ export async function hasBlocked(
     .unique());
 }
 
+export async function initialDmDeliveryStatus(
+  ctx: Ctx,
+  senderId: Id<"users">,
+  receiverId: Id<"users">,
+): Promise<"sent" | "delivered"> {
+  const receiver = await ctx.db.get(receiverId);
+  if (
+    !receiver ||
+    receiver.statusPreference === "dnd" ||
+    (await hasBlocked(ctx, receiverId, senderId))
+  ) {
+    return "delivered";
+  }
+  const phoneDevice = await ctx.db
+    .query("pushDevices")
+    .withIndex("by_user", (q) => q.eq("userId", receiverId))
+    .first();
+  // "sent" means sending/sent to the recipient's registered phone with a notification;
+  // "delivered" is reserved for desktop-only recipients (no phone registered) or unreachable phones.
+  return phoneDevice ? "sent" : "delivered";
+}
+
 export async function scheduleMessagePush(
   ctx: MutationCtx,
   sender: Doc<"users">,
   receiverId: Id<"users">,
   body: string,
+  messageId?: Id<"messages">,
 ) {
   const receiver = await ctx.db.get(receiverId);
   if (
@@ -109,6 +132,7 @@ export async function scheduleMessagePush(
     senderId: sender._id,
     senderName: sender.displayName ?? sender.name ?? "Someone",
     body,
+    ...(messageId ? { messageId } : {}),
   });
 }
 
@@ -139,6 +163,46 @@ export async function scheduleGroupMentionPush(
       ? `${senderName} mentioned @everyone in ${groupName}`
       : `${senderName} mentioned you in ${groupName}`,
     groupId,
+    body,
+  });
+}
+
+export async function scheduleGroupCallPush(
+  ctx: MutationCtx,
+  sender: Doc<"users">,
+  groupId: Id<"groups">,
+  groupName: string,
+  receiverId: Id<"users">,
+  body: string,
+) {
+  const receiver = await ctx.db.get(receiverId);
+  if (
+    !receiver ||
+    receiver.statusPreference === "dnd" ||
+    (await hasBlocked(ctx, receiverId, sender._id))
+  ) {
+    return;
+  }
+
+  const senderName = sender.displayName ?? sender.name ?? "Someone";
+  await ctx.scheduler.runAfter(0, internal.pushActions.sendMessageNotification, {
+    receiverId,
+    senderId: sender._id,
+    senderName,
+    title: `${senderName} started a call in ${groupName}`,
+    groupId,
+    body,
+  });
+}
+
+export async function scheduleAnnouncementPush(
+  ctx: MutationCtx,
+  sender: Doc<"users">,
+  body: string,
+) {
+  await ctx.scheduler.runAfter(0, internal.pushActions.sendAnnouncementNotification, {
+    senderId: sender._id,
+    senderName: sender.displayName ?? sender.name ?? "JaText",
     body,
   });
 }

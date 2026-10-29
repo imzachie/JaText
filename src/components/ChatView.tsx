@@ -96,14 +96,35 @@ interface MessageMenuState {
   canEdit: boolean;
 }
 
+const CHAT_TIME_FMT = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+const CHAT_DAY_FMT = new Intl.DateTimeFormat([], {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+});
+const chatTimeCache = new Map<number, string>();
+
 function fmtTime(ts: number) {
-  return new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const minuteBucket = Math.floor(ts / 60_000);
+  let cached = chatTimeCache.get(minuteBucket);
+  if (!cached) {
+    cached = CHAT_TIME_FMT.format(new Date(ts));
+    if (chatTimeCache.size > 600) chatTimeCache.clear();
+    chatTimeCache.set(minuteBucket, cached);
+  }
+  return cached;
 }
 function fmtDay(ts: number) {
   const d = new Date(ts);
-  const today = new Date();
-  if (d.toDateString() === today.toDateString()) return "Today";
-  return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  const now = new Date();
+  if (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  ) {
+    return "Today";
+  }
+  return CHAT_DAY_FMT.format(d);
 }
 
 function getConversationMessages(
@@ -211,10 +232,51 @@ const ChatHistory = memo(function ChatHistory({
     if (dist > 12) cancelBubbleTouchHold();
   }
 
+  const [visibleCount, setVisibleCount] = useState(50);
+  const prependAnchorRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
+  const prevFriendIdRef = useRef(friend.id);
+  if (prevFriendIdRef.current !== friend.id) {
+    prevFriendIdRef.current = friend.id;
+    prependAnchorRef.current = null;
+    if (visibleCount !== 50) {
+      setVisibleCount(50);
+    }
+  }
+
+  const windowedMessages = useMemo(
+    () =>
+      messages.length > visibleCount
+        ? messages.slice(messages.length - visibleCount)
+        : messages,
+    [messages, visibleCount],
+  );
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current;
+    const el = messagesRef.current;
+    if (anchor && el) {
+      prependAnchorRef.current = null;
+      const delta = el.scrollHeight - anchor.prevHeight;
+      if (delta > 0) {
+        el.scrollTop = anchor.prevTop + delta;
+      }
+    }
+  }, [windowedMessages.length, messagesRef]);
+
+  const handleMessagesScroll = () => {
+    const el = messagesRef.current;
+    if (!el) return;
+    if (el.scrollTop < 260 && visibleCount < messages.length && !prependAnchorRef.current) {
+      prependAnchorRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+      setVisibleCount((cur) => Math.min(messages.length, cur + 60));
+    }
+  };
+
   return (
     <div
       className="messages"
       ref={messagesRef}
+      onScroll={handleMessagesScroll}
       onWheel={() => {
         initialScrollAllowedRef.current = false;
       }}
@@ -222,13 +284,13 @@ const ChatHistory = memo(function ChatHistory({
         initialScrollAllowedRef.current = false;
       }}
     >
-      {!messagesReady && messages.length === 0 && (
+      {!messagesReady && windowedMessages.length === 0 && (
         <div className="empty-box center">
           <div className="spinner" style={{ width: 28, height: 28 }} />
           <p className="muted small">Loading messages…</p>
         </div>
       )}
-      {messagesReady && messages.length === 0 && (
+      {messagesReady && windowedMessages.length === 0 && (
         <div className="empty-box center">
           <Avatar user={friend} size={72} onClick={() => onOpenProfile(friend)} />
           <p>
@@ -238,10 +300,10 @@ const ChatHistory = memo(function ChatHistory({
           <p className="muted small">Send the first message below — photos &amp; files work too!</p>
         </div>
       )}
-      {messages.map((message, index) => {
+      {windowedMessages.map((message, index) => {
         const day = fmtDay(message.createdAt);
         const showDay =
-          index === 0 || fmtDay(messages[index - 1].createdAt) !== day;
+          index === 0 || fmtDay(windowedMessages[index - 1].createdAt) !== day;
         const mine = message.senderId === me.id;
         const wpSignal = !message.unsentAt
           ? parseWallpaperSignal(message.body, message.attachmentUrl)
@@ -719,10 +781,13 @@ export function ChatView({
       ),
     [activeMessages, friend.id, store.activeChatId],
   );
-  const incomingMessageCount = useMemo(
-    () => conversationMessages.filter((message) => message.senderId === friend.id).length,
-    [conversationMessages, friend.id],
-  );
+  const unreadIncomingSignature = useMemo(() => {
+    const unread = conversationMessages.filter(
+      (message) => message.senderId === friend.id && message.deliveryStatus !== "read",
+    );
+    if (unread.length === 0) return "";
+    return `${unread.length}:${unread.at(-1)?.id ?? ""}`;
+  }, [conversationMessages, friend.id]);
   const { messages: displayedMessages, matchedPendingIds } = useMemo(
     () => getConversationMessages(pendingMessages, conversationMessages, friend.id),
     [conversationMessages, friend.id, pendingMessages],
@@ -980,11 +1045,11 @@ export function ChatView({
   );
 
   useEffect(() => {
-    if (incomingMessageCount === 0) return;
+    if (!unreadIncomingSignature || !store.activeMessagesReady) return;
     void markMessagesRead(friend.id).catch((cause: unknown) => {
       setError(friendlyError(cause, "Couldn't update read status."));
     });
-  }, [friend.id, incomingMessageCount, markMessagesRead]);
+  }, [friend.id, markMessagesRead, store.activeMessagesReady, unreadIncomingSignature]);
 
   useEffect(
     () => () => {
@@ -1090,7 +1155,7 @@ export function ChatView({
           attachmentName: sentFile?.name,
           attachmentType: sentFile?.type,
           createdAt: sentAt,
-          deliveryStatus: "delivered",
+          deliveryStatus: "sent",
         },
       ]);
       window.requestAnimationFrame(scrollToBottom);

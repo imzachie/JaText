@@ -388,7 +388,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       (bootstrapCache?.previews ?? []).map((p) => [p.friendId, p]),
     );
     return rawPreviews.map((raw) => {
-      const hydrated = hydrateDecryptedChatPreview(raw, me.id);
+      const hydrated = hydrateDecryptedChatPreview(raw, me.id, triggerE2EERerender);
       if (isPlaceholderEncryptedText(hydrated.body)) {
         const cached = cachedByFriend.get(hydrated.friendId);
         if (
@@ -402,7 +402,15 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       }
       return hydrated;
     });
-  }, [bootstrapCache?.previews, canUseCachedSession, e2eeSnapshot.version, me?.id, previewsQuery, rawPreviews]);
+  }, [
+    bootstrapCache?.previews,
+    canUseCachedSession,
+    e2eeSnapshot.version,
+    me?.id,
+    previewsQuery,
+    rawPreviews,
+    triggerE2EERerender,
+  ]);
 
   useEffect(() => {
     if (!isAuthenticated || previewsQuery === undefined) return;
@@ -561,7 +569,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     );
     return groupsQuery.map((rawGroup) => {
       const group = me?.id
-        ? hydrateDecryptedGroupSummary(rawGroup, me.id, me.username)
+        ? hydrateDecryptedGroupSummary(
+            rawGroup,
+            me.id,
+            me.username,
+            triggerE2EERerender,
+          )
         : rawGroup;
       const formatted = formatGroupReactionPreview(group.lastMessage);
       const nextGroup = formatted.isSignal
@@ -580,7 +593,15 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       }
       return nextGroup;
     });
-  }, [bootstrapCache?.groups, canUseCachedSession, e2eeSnapshot.version, groupsQuery, me?.id, me?.username]);
+  }, [
+    bootstrapCache?.groups,
+    canUseCachedSession,
+    e2eeSnapshot.version,
+    groupsQuery,
+    me?.id,
+    me?.username,
+    triggerE2EERerender,
+  ]);
 
   useEffect(() => {
     if (!isAuthenticated || groupsQuery === undefined) return;
@@ -946,13 +967,23 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           Date.now() - lastActivityAt < 5 * 60_000,
       }).catch(() => undefined);
     };
+    const onVisibilityOrFocus = () => {
+      if (document.visibilityState === "visible") {
+        lastActivityAt = Date.now();
+        heartbeat();
+      }
+    };
     const events: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "touchstart", "mousemove"];
     events.forEach((event) => window.addEventListener(event, markActive, { passive: true }));
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
     heartbeat();
-    const interval = window.setInterval(heartbeat, 30_000);
+    const interval = window.setInterval(heartbeat, 25_000);
     return () => {
       window.clearInterval(interval);
       events.forEach((event) => window.removeEventListener(event, markActive));
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };
   }, [heartbeatMut, isAuthenticated]);
 
@@ -1410,6 +1441,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const sendGroupMessage = useCallback<JaTextStore["sendGroupMessage"]>(
     async (groupId, body, file, replyToId, forwardedFromId) => {
       const trimmed = body.trim();
+      const targetGroupRole =
+        (activeGroupId === groupId ? groupDetails?.role : undefined) ??
+        groupsQuery?.find((g) => g.id === groupId)?.role ??
+        "member";
+      const canMentionEveryone =
+        targetGroupRole === "owner" || targetGroupRole === "moderator";
+
+      if (
+        !isControlPayload(trimmed) &&
+        /(?:^|[\s(])@everyone\b/i.test(trimmed) &&
+        !canMentionEveryone
+      ) {
+        throw new Error("Only the group owner or moderators can mention @everyone.");
+      }
+
       const style = isControlPayload(trimmed) ? "default" : getSavedOutgoingBubbleStyle();
       const wireBody = style === "default" ? trimmed : attachBubbleStyleToOutgoing(trimmed, style);
       const wireFile = file && style !== "default" ? attachBubbleStyleToFile(file, style) : file;
@@ -1421,6 +1467,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           groupId,
           wireBody,
           file: wireFile,
+          canMentionEveryone,
           uploadFile: upload,
         });
         if (enc) {
@@ -1452,7 +1499,14 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         ...(forwardedFromId ? { forwardedFromId: forwardedFromId as Id<"groupMessages"> } : {}),
       });
     },
-    [ensureGroupEpochReadyForSend, sendGroupMessageMut, upload],
+    [
+      activeGroupId,
+      ensureGroupEpochReadyForSend,
+      groupDetails?.role,
+      groupsQuery,
+      sendGroupMessageMut,
+      upload,
+    ],
   );
   const sendGroupSticker = useCallback<JaTextStore["sendGroupSticker"]>(
     async (groupId, sticker, replyToId) => {
@@ -2546,16 +2600,16 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
 
   const setNotificationsEnabled = useCallback((enabled: boolean) => {
-    setNotificationPreferences((current) => {
-      const next = { ...current, notificationsEnabled: enabled };
+    setNotificationPreferences(() => {
+      const next = { ...loadNotificationPreferences(), notificationsEnabled: enabled };
       saveNotificationPreferences(next);
       return next;
     });
   }, []);
 
   const setSoundsEnabled = useCallback((enabled: boolean) => {
-    setNotificationPreferences((current) => {
-      const next = { ...current, soundsEnabled: enabled };
+    setNotificationPreferences(() => {
+      const next = { ...loadNotificationPreferences(), soundsEnabled: enabled };
       saveNotificationPreferences(next);
       return next;
     });

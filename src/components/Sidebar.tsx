@@ -43,12 +43,20 @@ import {
   UsersIcon,
 } from "./UiIcons";
 
+const SIDEBAR_TIME_FMT = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+const SIDEBAR_DATE_FMT = new Intl.DateTimeFormat([], { month: "short", day: "numeric" });
+
 function fmtTime(ts: number) {
   const d = new Date(ts);
-  const today = new Date();
-  if (d.toDateString() === today.toDateString())
-    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  const now = new Date();
+  if (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  ) {
+    return SIDEBAR_TIME_FMT.format(d);
+  }
+  return SIDEBAR_DATE_FMT.format(d);
 }
 
 /** "morning" | "afternoon" | "evening" | "night" based on local time. */

@@ -105,7 +105,9 @@ public final class JaTextE2EEDecryptor {
         boolean isDnd,
         String identitiesJson,
         String peersJson,
-        String groupsJson
+        String groupsJson,
+        String authJwt,
+        String authRefreshToken
     ) {
         if (ctx == null) return;
         SharedPreferences.Editor ed = prefs(ctx).edit();
@@ -126,7 +128,255 @@ public final class JaTextE2EEDecryptor {
         if (groupsJson != null) {
             ed.putString("groups_json", groupsJson);
         }
+        if (authJwt != null && !authJwt.isEmpty()) {
+            ed.putString("auth_jwt", authJwt);
+        }
+        if (authRefreshToken != null && !authRefreshToken.isEmpty()) {
+            ed.putString("auth_refresh", authRefreshToken);
+        }
         ed.apply();
+    }
+
+    public static boolean isPlaceholderOrEncryptedPreview(String text) {
+        if (text == null) return true;
+        String t = text.trim();
+        if (t.isEmpty()) return true;
+        if (t.contains(E2EE_MARKER)) return true;
+        String lower = t.toLowerCase();
+        return lower.equals("encrypted message") ||
+            lower.equals("🔒 encrypted message") ||
+            lower.contains("sent an encrypted message") ||
+            lower.contains("mentioned you in an encrypted message") ||
+            lower.equals("new message") ||
+            lower.startsWith("decrypting") ||
+            lower.startsWith("🔒 decrypting") ||
+            lower.startsWith("waiting for this message");
+    }
+
+    /**
+     * Unified background/locked/minimized push handler:
+     * - Wakes screen + launches MainActivity + loops ringtone immediately for incoming calls!
+     * - Decrypts E2EE messages & group mentions on-device so heads-up and notification shade
+     *   ALWAYS display the actual message text!
+     */
+    public static void handleBackgroundPush(
+        Context ctx,
+        String title,
+        String rawBody,
+        String senderId,
+        String groupId,
+        String chatId,
+        String type,
+        String msgId
+    ) {
+        if (ctx == null || MainActivity.isAppInForeground()) return;
+
+        // Check fast-path call hint from rawBody / push type
+        boolean looksLikeCall = "call".equals(type) || "incoming_call".equals(type) ||
+            (rawBody != null && (
+                rawBody.contains("__JATEXT_CALL__:") ||
+                rawBody.contains("__JATEXT_CALL_GRP__:") ||
+                rawBody.contains("Incoming voice call") ||
+                rawBody.contains("Incoming video call")
+            ));
+
+        // Always inspect/decrypt the real wire body so E2EE call invites & E2EE texts are resolved!
+        ResolvedPushContent resolved = resolvePushContent(ctx, rawBody, senderId, groupId);
+        if (resolved == null) {
+            if (looksLikeCall) {
+                boolean isVideo = rawBody != null && rawBody.toLowerCase().contains("video");
+                String callerTitle = cleanCallerTitle(title);
+                JaTextSoundManager.triggerIncomingCallWakeup(ctx, senderId, groupId, callerTitle, isVideo);
+            }
+            return;
+        }
+
+        if (resolved.isIncomingCall) {
+            String callerTitle = cleanCallerTitle(title);
+            JaTextSoundManager.triggerIncomingCallWakeup(
+                ctx,
+                senderId,
+                groupId,
+                callerTitle,
+                resolved.isVideoCall
+            );
+            return;
+        }
+
+        if (!areNotificationsAllowed(ctx)) {
+            return;
+        }
+        if (resolved.readableBody == null || resolved.readableBody.isEmpty()) {
+            return;
+        }
+
+        String tag;
+        if ("announcement".equals(type) || "__jatext_community__".equals(chatId)) {
+            tag = "community:announcements";
+        } else if (groupId != null && !groupId.isEmpty()) {
+            tag = "group:" + groupId;
+        } else if (senderId != null && !senderId.isEmpty()) {
+            tag = "dm:" + senderId;
+        } else {
+            tag = msgId != null ? msgId : String.valueOf(System.currentTimeMillis());
+        }
+
+        Bundle launchExtras = new Bundle();
+        if (msgId != null) launchExtras.putString("google.message_id", msgId);
+        if (senderId != null) launchExtras.putString("senderId", senderId);
+        if (groupId != null) launchExtras.putString("groupId", groupId);
+        if (chatId != null) launchExtras.putString("chatId", chatId);
+        if (type != null) launchExtras.putString("type", type);
+
+        postSystemMessageNotification(
+            ctx,
+            tag,
+            title != null && !title.isEmpty() ? title : "JaText",
+            resolved.readableBody,
+            launchExtras
+        );
+    }
+
+    private static String cleanCallerTitle(String rawTitle) {
+        if (rawTitle == null || rawTitle.trim().isEmpty()) return "Incoming JaText Call";
+        String t = rawTitle.trim();
+        if (t.startsWith("New message from ")) {
+            return t.substring("New message from ".length()).trim();
+        }
+        return t;
+    }
+
+    public static final class ResolvedPushContent {
+        public final String readableBody;
+        public final boolean isIncomingCall;
+        public final boolean isVideoCall;
+
+        ResolvedPushContent(String readableBody, boolean isIncomingCall, boolean isVideoCall) {
+            this.readableBody = readableBody;
+            this.isIncomingCall = isIncomingCall;
+            this.isVideoCall = isVideoCall;
+        }
+    }
+
+    public static ResolvedPushContent resolvePushContent(
+        Context ctx,
+        String rawBody,
+        String senderId,
+        String groupId
+    ) {
+        if (rawBody != null) {
+            String trimmed = rawBody.trim();
+            if (trimmed.startsWith(SIGNAL_PREFIX)) {
+                return null;
+            }
+            ResolvedPushContent directCall = inspectRawForActiveCall(trimmed);
+            if (directCall != null) {
+                return directCall;
+            }
+            if (!isPlaceholderOrEncryptedPreview(trimmed)) {
+                String plain = cleanPlainPreview(trimmed);
+                if (plain == null || plain.isEmpty()) return null;
+                boolean callHint = plain.equals("Incoming video call") ||
+                    plain.equals("Incoming voice call") ||
+                    plain.equals("Incoming group video call") ||
+                    plain.equals("Incoming group voice call");
+                return new ResolvedPushContent(plain, callHint, plain.contains("video"));
+            }
+            // Try direct inline decrypt first when rawWire was included in FCM data
+            if (trimmed.contains(E2EE_MARKER)) {
+                String myUserId = prefs(ctx).getString("user_id", "");
+                if (myUserId != null && !myUserId.isEmpty() && senderId != null && !senderId.isEmpty()) {
+                    ResolvedPushContent inlineDecrypted = tryDecryptWireContent(
+                        ctx,
+                        trimmed,
+                        senderId,
+                        myUserId,
+                        groupId,
+                        null,
+                        null
+                    );
+                    if (inlineDecrypted != null) {
+                        if (!inlineDecrypted.isIncomingCall &&
+                            (inlineDecrypted.readableBody == null || inlineDecrypted.readableBody.isEmpty())) {
+                            return null;
+                        }
+                        return inlineDecrypted;
+                    }
+                }
+            }
+        }
+
+        // Fetch full latest message(s) from Convex and decrypt on-device (like WhatsApp)
+        try {
+            ResolvedPushContent fromConvex = fetchAndDecryptLatestContentFromConvex(ctx, senderId, groupId);
+            if (fromConvex != null) {
+                if (!fromConvex.isIncomingCall &&
+                    (fromConvex.readableBody == null || fromConvex.readableBody.isEmpty())) {
+                    return null;
+                }
+                return fromConvex;
+            }
+        } catch (Throwable ignored) {}
+
+        if (rawBody != null && !isPlaceholderOrEncryptedPreview(rawBody)) {
+            String fallbackPlain = cleanPlainPreview(rawBody);
+            if (fallbackPlain != null && !fallbackPlain.isEmpty()) {
+                return new ResolvedPushContent(fallbackPlain, false, false);
+            }
+        }
+        return new ResolvedPushContent("Sent you a message", false, false);
+    }
+
+    private static ResolvedPushContent inspectRawForActiveCall(String raw) {
+        if (raw == null) return null;
+        String s = raw.replace("\u200B", "").replace("\u200C", "").replace("\u2063", "").trim();
+        if (s.startsWith("__JATEXT_BUBBLE__:")) {
+            int nl = s.indexOf('\n');
+            s = nl >= 0 ? s.substring(nl + 1).trim() : "";
+        }
+        long now = System.currentTimeMillis();
+        if (s.startsWith("__JATEXT_CALL__:")) {
+            try {
+                JSONObject obj = new JSONObject(s.substring("__JATEXT_CALL__:".length()).trim());
+                String state = obj.optString("state", "");
+                String mode = obj.optString("mode", "voice");
+                long ts = obj.optLong("ts", 0L);
+                if ("ringing".equals(state) && (ts <= 0L || now - ts < 60_000L)) {
+                    boolean video = "video".equals(mode);
+                    return new ResolvedPushContent(
+                        video ? "Incoming video call" : "Incoming voice call",
+                        true,
+                        video
+                    );
+                }
+                if ("missed".equals(state)) {
+                    return new ResolvedPushContent(
+                        "video".equals(mode) ? "Missed video call" : "Missed voice call",
+                        false,
+                        false
+                    );
+                }
+                return null;
+            } catch (Throwable ignored) {}
+        }
+        if (s.startsWith("__JATEXT_CALL_GRP__:")) {
+            try {
+                JSONObject obj = new JSONObject(s.substring("__JATEXT_CALL_GRP__:".length()).trim());
+                String state = obj.optString("state", "");
+                String mode = obj.optString("mode", "voice");
+                long ts = obj.optLong("ts", 0L);
+                if ("active".equals(state) && (ts <= 0L || now - ts < 60_000L)) {
+                    boolean video = "video".equals(mode);
+                    return new ResolvedPushContent(
+                        video ? "Incoming group video call" : "Incoming group voice call",
+                        true,
+                        video
+                    );
+                }
+                return null;
+            } catch (Throwable ignored) {}
+        }
+        return null;
     }
 
     /**
@@ -140,44 +390,11 @@ public final class JaTextE2EEDecryptor {
         String senderId,
         String groupId
     ) {
-        if (rawBody != null) {
-            String trimmed = rawBody.trim();
-            if (trimmed.startsWith(SIGNAL_PREFIX)) {
-                return null;
-            }
-            if (!trimmed.contains(E2EE_MARKER)) {
-                return cleanPlainPreview(trimmed);
-            }
-            // Try direct inline decrypt first in case body wasn't truncated
-            String myUserId = prefs(ctx).getString("user_id", "");
-            if (myUserId != null && !myUserId.isEmpty() && senderId != null && !senderId.isEmpty()) {
-                String inlineDecrypted = tryDecryptWireBody(
-                    ctx,
-                    trimmed,
-                    senderId,
-                    myUserId,
-                    groupId,
-                    null,
-                    null
-                );
-                if (inlineDecrypted != null) {
-                    return inlineDecrypted.isEmpty() ? null : inlineDecrypted;
-                }
-            }
-        }
-
-        // Fetch full latest message(s) from Convex and decrypt on-device (like WhatsApp)
-        try {
-            String fromConvex = fetchAndDecryptLatestFromConvex(ctx, senderId, groupId);
-            if (fromConvex != null) {
-                return fromConvex.isEmpty() ? null : fromConvex;
-            }
-        } catch (Throwable ignored) {}
-
-        return "New message";
+        ResolvedPushContent content = resolvePushContent(ctx, rawBody, senderId, groupId);
+        return content != null ? content.readableBody : null;
     }
 
-    private static String fetchAndDecryptLatestFromConvex(
+    private static ResolvedPushContent fetchAndDecryptLatestContentFromConvex(
         Context ctx,
         String senderId,
         String groupId
@@ -196,11 +413,13 @@ public final class JaTextE2EEDecryptor {
             return null;
         }
 
-        JSONObject queryRes = executeConvexQuery(convexUrl, jwt, senderId, groupId);
+        String activeJwt = jwt;
+        JSONObject queryRes = executeConvexQuery(convexUrl, activeJwt, senderId, groupId);
         if (queryRes == null || !"success".equals(queryRes.optString("status"))) {
             String refreshed = tryRefreshConvexJwt(ctx, convexUrl);
             if (refreshed != null && !refreshed.isEmpty()) {
-                queryRes = executeConvexQuery(convexUrl, refreshed, senderId, groupId);
+                activeJwt = refreshed;
+                queryRes = executeConvexQuery(convexUrl, activeJwt, senderId, groupId);
             }
         }
         if (queryRes == null || !"success".equals(queryRes.optString("status"))) {
@@ -214,6 +433,12 @@ public final class JaTextE2EEDecryptor {
 
         // Collect any peer identity keys or group epoch keys directly from the conversation rows!
         List<String> extraPeerDhKeys = new ArrayList<>();
+        if (senderId != null && !senderId.isEmpty() && groupId == null) {
+            String fetchedPeerDh = fetchPeerDhKeyFromConvex(convexUrl, activeJwt, senderId);
+            if (fetchedPeerDh != null && !fetchedPeerDh.isEmpty()) {
+                extraPeerDhKeys.add(fetchedPeerDh);
+            }
+        }
         JSONObject extraGroupEpochs = new JSONObject();
 
         for (int i = 0; i < rows.length(); i++) {
@@ -227,7 +452,7 @@ public final class JaTextE2EEDecryptor {
                     String kind = pkt.optString("kind", "");
                     if ("e2ee_ik".equals(kind) && !myUserId.equals(rowSender)) {
                         String dh = pkt.optString("dh", "");
-                        if (!dh.isEmpty()) extraPeerDhKeys.add(dh);
+                        if (!dh.isEmpty() && !extraPeerDhKeys.contains(dh)) extraPeerDhKeys.add(dh);
                     } else if ("e2ee_gk".equals(kind) && groupId != null) {
                         int ep = pkt.optInt("ep", 0);
                         String secret = tryUnwrapGroupEpochSignal(ctx, pkt, rowSender, myUserId);
@@ -248,7 +473,7 @@ public final class JaTextE2EEDecryptor {
         // Walk backwards from newest message to find the latest incoming user-visible message
         for (int i = rows.length() - 1; i >= 0; i--) {
             JSONObject row = rows.optJSONObject(i);
-            if (row == null || row.has("unsentAt") && !row.isNull("unsentAt")) continue;
+            if (row == null || (row.has("unsentAt") && !row.isNull("unsentAt"))) continue;
             String rowSender = row.optString("senderId", "");
             if (myUserId.equals(rowSender)) continue;
             if (senderId != null && !senderId.isEmpty() && groupId == null && !senderId.equals(rowSender)) {
@@ -260,7 +485,7 @@ public final class JaTextE2EEDecryptor {
             }
             if (body.contains(E2EE_MARKER)) {
                 String rowReceiver = row.optString("receiverId", myUserId);
-                String dec = tryDecryptWireBody(
+                ResolvedPushContent dec = tryDecryptWireContent(
                     ctx,
                     body,
                     rowSender,
@@ -269,17 +494,45 @@ public final class JaTextE2EEDecryptor {
                     extraPeerDhKeys,
                     extraGroupEpochs
                 );
-                if (dec != null && !dec.isEmpty()) {
+                if (dec != null && (dec.isIncomingCall || (dec.readableBody != null && !dec.readableBody.isEmpty()))) {
                     return dec;
                 }
             } else {
+                ResolvedPushContent callCheck = inspectRawForActiveCall(body);
+                if (callCheck != null) return callCheck;
                 String clean = cleanPlainPreview(body);
                 if (clean != null && !clean.isEmpty()) {
-                    return clean;
+                    return new ResolvedPushContent(clean, false, false);
                 }
             }
         }
         return null;
+    }
+
+    private static String fetchPeerDhKeyFromConvex(String convexUrl, String jwt, String peerUserId) {
+        try {
+            JSONArray userIds = new JSONArray();
+            userIds.put(peerUserId);
+            JSONObject argsObj = new JSONObject();
+            argsObj.put("userIds", userIds);
+            JSONArray argsArr = new JSONArray();
+            argsArr.put(argsObj);
+            JSONObject reqBody = new JSONObject();
+            reqBody.put("path", "e2ee:getUserIdentities");
+            reqBody.put("format", "convex_encoded_json");
+            reqBody.put("args", argsArr);
+            String base = convexUrl.endsWith("/")
+                ? convexUrl.substring(0, convexUrl.length() - 1)
+                : convexUrl;
+            JSONObject res = postJson(base + "/api/query", reqBody.toString(), jwt);
+            if (res == null || !"success".equals(res.optString("status"))) return null;
+            JSONArray arr = res.optJSONArray("value");
+            if (arr == null || arr.length() == 0) return null;
+            JSONObject first = arr.optJSONObject(0);
+            return first != null ? first.optString("dhPubB64", null) : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private static JSONObject executeConvexQuery(
@@ -470,7 +723,7 @@ public final class JaTextE2EEDecryptor {
         return null;
     }
 
-    private static String tryDecryptWireBody(
+    private static ResolvedPushContent tryDecryptWireContent(
         Context ctx,
         String wireBody,
         String senderId,
@@ -483,6 +736,10 @@ public final class JaTextE2EEDecryptor {
             int idx = wireBody.indexOf(E2EE_MARKER);
             if (idx < 0) return null;
             String jsonPart = wireBody.substring(idx + E2EE_MARKER.length()).trim();
+            int nl = jsonPart.indexOf('\n');
+            if (nl >= 0) {
+                jsonPart = jsonPart.substring(0, nl).trim();
+            }
             JSONObject env = new JSONObject(jsonPart);
             if (env.optInt("v", 0) != 1) return null;
 
@@ -514,7 +771,13 @@ public final class JaTextE2EEDecryptor {
             JSONObject payload = new JSONObject(
                 new String(plainPayloadBytes, StandardCharsets.UTF_8)
             );
-            return formatDecryptedPayload(payload);
+            String rawPayloadBody = payload.optString("b", "");
+            ResolvedPushContent callContent = inspectRawForActiveCall(rawPayloadBody);
+            if (callContent != null) {
+                return callContent;
+            }
+            String formatted = formatDecryptedPayload(payload);
+            return new ResolvedPushContent(formatted, false, false);
         } catch (Throwable ignored) {
             return null;
         }
@@ -753,6 +1016,14 @@ public final class JaTextE2EEDecryptor {
         if (s.startsWith("__JATEXT_WALLPAPER__:") || s.startsWith("__JATEXT_WP__:")) {
             return "Updated the chat wallpaper";
         }
+        s = s
+            .replaceAll("\\|\\|[\\s\\S]+?\\|\\|", "▒▒▒")
+            .replaceAll("\\*\\*\\*(.+?)\\*\\*\\*", "$1")
+            .replaceAll("\\*\\*(.+?)\\*\\*", "$1")
+            .replaceAll("__(.+?)__", "$1")
+            .replaceAll("~~(.+?)~~", "$1")
+            .replaceAll("`([^`]+)`", "$1")
+            .trim();
         return s;
     }
 
@@ -770,16 +1041,7 @@ public final class JaTextE2EEDecryptor {
             (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return;
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                "messages",
-                "Messages",
-                NotificationManager.IMPORTANCE_HIGH
-            );
-            channel.setDescription("New JaText messages and call alerts");
-            channel.enableVibration(true);
-            nm.createNotificationChannel(channel);
-        }
+        String channelId = JaTextSoundManager.ensureActiveMessageChannel(ctx);
 
         Intent launchIntent = new Intent(ctx, MainActivity.class);
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -801,13 +1063,15 @@ public final class JaTextE2EEDecryptor {
         }
 
         String safeTitle = (title != null && !title.isEmpty()) ? title : "JaText";
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, "messages")
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, channelId)
             .setSmallIcon(iconRes)
             .setContentTitle(safeTitle)
             .setContentText(body)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setTicker(safeTitle + ": " + body)
+            .setStyle(new NotificationCompat.BigTextStyle().setBigContentTitle(safeTitle).bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(pi);
 
@@ -815,6 +1079,7 @@ public final class JaTextE2EEDecryptor {
             ? tag
             : String.valueOf(System.currentTimeMillis());
         nm.notify(resolvedTag, 1001, builder.build());
+        JaTextSoundManager.playCustomNotificationSoundIfNeeded(ctx);
     }
 
     /* ------------------------------------------------------------------ */
