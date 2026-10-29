@@ -425,12 +425,33 @@ export function mergeLiveWithCachedMessages<
   return changed ? out : liveMessages;
 }
 
+function isEphemeralWebRtcSignal(body?: string | null): boolean {
+  if (!body || !body.startsWith("__JATEXT_CALL_SIG__:")) return false;
+  if (
+    body.includes('"e2ee_ik"') ||
+    body.includes('"e2ee_gk"') ||
+    body.includes('"e2ee_vf"') ||
+    body.includes('"reaction"') ||
+    body.includes('"unfriend"') ||
+    body.includes('"refriend"')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function trimRawRowsForCache<T extends { body: string }>(rows?: T[]): T[] | undefined {
+  if (!rows) return undefined;
+  const nonWebRtc = rows.filter((r) => !isEphemeralWebRtcSignal(r.body));
+  return nonWebRtc.slice(-MAX_CACHED_MESSAGES_PER_CHAT);
+}
+
 export function getCachedDmConversation(
   slotId: string,
   friendId: string | null | undefined,
-): CachedDmEntry | undefined {
-  if (!friendId) return undefined;
-  return getOrInitMemorySlot(slotId).dms[friendId];
+): CachedDmEntry | null {
+  if (!friendId) return null;
+  return getOrInitMemorySlot(slotId).dms[friendId] ?? null;
 }
 
 export function setCachedDmConversation(
@@ -441,7 +462,8 @@ export function setCachedDmConversation(
 ): void {
   if (!friendId) return;
   const slotData = getOrInitMemorySlot(slotId);
-  const capped = messages.slice(-MAX_CACHED_MESSAGES_PER_CHAT);
+  const visible = messages.filter((m) => !m.body.startsWith("__JATEXT_CALL_SIG__:"));
+  const capped = visible.slice(-MAX_CACHED_MESSAGES_PER_CHAT);
   const existing = slotData.dms[friendId];
   if (
     existing &&
@@ -455,21 +477,25 @@ export function setCachedDmConversation(
   ) {
     return;
   }
+  const wasMissing = !existing;
   slotData.dms[friendId] = {
     messages: capped,
-    rawRows: rawRows?.slice(-MAX_CACHED_MESSAGES_PER_CHAT),
+    rawRows: trimRawRowsForCache(rawRows),
     updatedAt: Date.now(),
   };
   slotData.updatedAt = Date.now();
   schedulePersistSlotToIdb(slotId);
+  if (wasMissing) {
+    notifyCacheListeners();
+  }
 }
 
 export function getCachedGroupConversation(
   slotId: string,
   groupId: string | null | undefined,
-): CachedGroupEntry | undefined {
-  if (!groupId) return undefined;
-  return getOrInitMemorySlot(slotId).groups[groupId];
+): CachedGroupEntry | null {
+  if (!groupId) return null;
+  return getOrInitMemorySlot(slotId).groups[groupId] ?? null;
 }
 
 export function setCachedGroupConversation(
@@ -487,11 +513,13 @@ export function setCachedGroupConversation(
   const nextDetails = patch.details !== undefined ? patch.details : (existing?.details ?? null);
   const nextMessages =
     patch.messages !== undefined
-      ? patch.messages.slice(-MAX_CACHED_MESSAGES_PER_CHAT)
+      ? patch.messages
+          .filter((m) => !m.body.startsWith("__JATEXT_CALL_SIG__:"))
+          .slice(-MAX_CACHED_MESSAGES_PER_CHAT)
       : (existing?.messages ?? []);
   const nextRawRows =
     patch.rawRows !== undefined
-      ? patch.rawRows.slice(-MAX_CACHED_MESSAGES_PER_CHAT)
+      ? trimRawRowsForCache(patch.rawRows)
       : existing?.rawRows;
 
   if (
@@ -510,6 +538,7 @@ export function setCachedGroupConversation(
     return;
   }
 
+  const wasMissing = !existing;
   slotData.groups[groupId] = {
     details: nextDetails,
     messages: nextMessages,
@@ -518,6 +547,9 @@ export function setCachedGroupConversation(
   };
   slotData.updatedAt = Date.now();
   schedulePersistSlotToIdb(slotId);
+  if (wasMissing) {
+    notifyCacheListeners();
+  }
 }
 
 export async function clearSlotChatCache(slotId: string): Promise<void> {

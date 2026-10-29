@@ -1,4 +1,4 @@
-import { StrictMode, useEffect } from "react";
+import { StrictMode, useEffect, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { Capacitor } from "@capacitor/core";
 import { ConvexReactClient } from "convex/react";
@@ -6,7 +6,9 @@ import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import App from "./App";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import {
+  SLOT_AUTH_INVALIDATED_EVENT,
   clearDeadSlotTokensOnAuthFailure,
+  getConvexAuthKeysForSlot,
   getConvexStorageNamespaceForSlot,
   registerSlotCleanupHandler,
   syncNativeActiveSlotTokens,
@@ -33,6 +35,34 @@ const nativeAuthStorage =
     : undefined;
 
 const slotClients = new Map<string, ConvexReactClient>();
+const slotAuthEpochs = new Map<string, number>();
+let authEpochStoreVersion = 0;
+const authEpochListeners = new Set<() => void>();
+
+function bumpSlotAuthEpoch(slotId: string): void {
+  slotAuthEpochs.set(slotId, (slotAuthEpochs.get(slotId) ?? 0) + 1);
+  authEpochStoreVersion += 1;
+  for (const listener of authEpochListeners) {
+    listener();
+  }
+}
+
+function subscribeAuthEpoch(listener: () => void): () => void {
+  authEpochListeners.add(listener);
+  return () => {
+    authEpochListeners.delete(listener);
+  };
+}
+
+function useSlotAuthEpoch(slotId: string): number {
+  const version = useSyncExternalStore(
+    subscribeAuthEpoch,
+    () => authEpochStoreVersion,
+    () => 0,
+  );
+  void version;
+  return slotAuthEpochs.get(slotId) ?? 0;
+}
 
 function isLikelyNetworkFailure(err: unknown): boolean {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
@@ -42,20 +72,55 @@ function isLikelyNetworkFailure(err: unknown): boolean {
   );
 }
 
+function isJwtStillValid(jwt: string | null | undefined, minRemainingMs = 10_000): boolean {
+  if (!jwt) return false;
+  try {
+    const parts = jwt.split(".");
+    if (parts.length !== 3) return false;
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(window.atob(padded)) as { exp?: number };
+    return typeof payload.exp === "number" && payload.exp * 1000 > Date.now() + minRemainingMs;
+  } catch {
+    return false;
+  }
+}
+
 function createResilientSlotClient(url: string, slotId: string): ConvexReactClient {
-  const client = new ConvexReactClient(url);
+  // Reuse still-valid cached JWTs on startup instead of burning @convex-dev/auth's
+  // single-use refreshToken on every reload/account switch across tabs & devices.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const client = new ConvexReactClient(url, { initialAuthTokenReuse: true } as any);
   const origSetAuth = client.setAuth.bind(client);
   client.setAuth = (fetchToken, onChange, onRefreshChange) => {
     const safeFetchToken: typeof fetchToken = async (args) => {
       try {
         return await fetchToken(args);
       } catch (err) {
-        // Prevent @convex-dev/auth refresh exceptions from crashing Convex's
-        // AuthenticationManager after stopSocket() (which otherwise leaves
-        // isConvexAuthenticated === null / "Loading JaText…" stuck forever).
+        // 1. If we still hold a non-expired JWT (e.g. preemptive refresh failed because
+        //    another device rotated the single-use refreshToken), keep the live session!
+        let fallbackJwt: string | null = null;
+        try {
+          fallbackJwt = (await fetchToken({ forceRefreshToken: false })) ?? null;
+        } catch {
+          fallbackJwt = null;
+        }
+        if (!fallbackJwt && typeof window !== "undefined") {
+          try {
+            const { jwtKey } = getConvexAuthKeysForSlot(url, slotId);
+            fallbackJwt = window.localStorage.getItem(jwtKey);
+          } catch {
+            fallbackJwt = null;
+          }
+        }
+        if (isJwtStillValid(fallbackJwt, 8_000)) {
+          return fallbackJwt;
+        }
+
+        // 2. If the token is genuinely expired AND the refresh rejection is not a transient
+        //    network outage, clear the broken tokens and reset AuthProvider cleanly to Login.
         if (!isLikelyNetworkFailure(err)) {
           await clearDeadSlotTokensOnAuthFailure(slotId, url).catch(() => undefined);
-          await clearSlotChatCache(slotId).catch(() => undefined);
         }
         return null;
       }
@@ -82,6 +147,16 @@ function closeSlotConvexClient(slotId: string): void {
   }
 }
 
+if (typeof window !== "undefined") {
+  window.addEventListener(SLOT_AUTH_INVALIDATED_EVENT, (event) => {
+    const slotId = (event as CustomEvent<string>).detail;
+    if (typeof slotId === "string" && slotId) {
+      closeSlotConvexClient(slotId);
+      bumpSlotAuthEpoch(slotId);
+    }
+  });
+}
+
 registerSlotCleanupHandler((slotId, mode) => {
   closeSlotConvexClient(slotId);
   if (mode === "full") {
@@ -91,6 +166,7 @@ registerSlotCleanupHandler((slotId, mode) => {
 
 export function Root() {
   const { activeSlotId } = useMultiAccountState();
+  const authEpoch = useSlotAuthEpoch(activeSlotId);
 
   // Warm IndexedDB chat & group message caches immediately for this account slot
   void preloadSlotChatCache(activeSlotId);
@@ -105,9 +181,10 @@ export function Root() {
   if (convexUrl) {
     const slotClient = getOrCreateSlotConvexClient(convexUrl, activeSlotId);
     const slotNamespace = getConvexStorageNamespaceForSlot(convexUrl, activeSlotId);
+    const providerKey = `${activeSlotId}:${authEpoch}`;
     return (
       <ConvexAuthProvider
-        key={activeSlotId}
+        key={providerKey}
         client={slotClient}
         storage={nativeAuthStorage}
         storageNamespace={slotNamespace}
@@ -116,7 +193,7 @@ export function Root() {
           new URLSearchParams(window.location.search).has("code")
         }
       >
-        <ConvexStoreProvider key={activeSlotId}>
+        <ConvexStoreProvider key={providerKey}>
           <App />
         </ConvexStoreProvider>
       </ConvexAuthProvider>

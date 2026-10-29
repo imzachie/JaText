@@ -284,10 +284,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     const timer = window.setTimeout(() => {
       if (typeof navigator !== "undefined" && navigator.onLine === false) return;
       try {
-        const { jwtKey } = getConvexAuthKeysForSlot(convexUrl, slotId);
+        const { jwtKey, refreshKey } = getConvexAuthKeysForSlot(convexUrl, slotId);
         const rawJwt = window.localStorage.getItem(jwtKey);
         if (!rawJwt) {
-          void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+          if (!Capacitor.isNativePlatform() && !window.localStorage.getItem(refreshKey)) {
+            void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+          }
           return;
         }
         const parts = rawJwt.split(".");
@@ -460,7 +462,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     if (!cachedDm) {
       return { ...folded, messages: [] as ChatMessage[] };
     }
-    if (cachedDm.rawRows?.length && e2eeSnapshot.ready) {
+    if (cachedDm.rawRows?.length && e2eeSnapshot.ready && folded.messages.length > 0) {
       return {
         ...folded,
         messages: mergeLiveWithCachedMessages(folded.messages, cachedDm.messages),
@@ -660,7 +662,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     if (!cachedGroup) {
       return { ...folded, messages: [] as GroupMessage[] };
     }
-    if (cachedGroup.rawRows?.length && e2eeSnapshot.ready) {
+    if (cachedGroup.rawRows?.length && e2eeSnapshot.ready && folded.messages.length > 0) {
       return {
         ...folded,
         messages: mergeLiveWithCachedMessages(folded.messages, cachedGroup.messages),
@@ -2642,10 +2644,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       return;
     }
     let cancelled = false;
-    // Offline fallback: if stickerLibrary doesn't load within 1.5s, proceed with local identity
-    const timer = window.setTimeout(() => {
-      if (!cancelled) setAutoSyncSettled(true);
-    }, 1500);
+    // Offline/timeout fallback: once authenticated, if stickerLibrary doesn't settle within 1.5s, proceed
+    const timer = isAuthenticated
+      ? window.setTimeout(() => {
+          if (!cancelled) setAutoSyncSettled(true);
+        }, 1500)
+      : null;
     void ensureUserE2EEInitialized(me.id).then(async (state) => {
       if (cancelled || !isAuthenticated) return;
       if (e2eeServerSupportedRef.current !== false) {
@@ -2665,7 +2669,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     });
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [canUseCachedSession, convex, isAuthenticated, me?.id]);
 
@@ -2783,9 +2787,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     const syncKeys = async () => {
-      // Let interactive UI and the currently open conversation settle first
+      // Brief settle so the currently open chat gets immediate priority
       await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 900);
+        window.setTimeout(resolve, 200);
       });
       if (cancelled) return;
 
@@ -2805,9 +2809,18 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      // Sort friends by most-recent preview activity first so active chats cache immediately
+      const previewTsByFriend = new Map<string, number>();
+      for (const p of getSlotBootstrapCache(slotId)?.previews ?? []) {
+        previewTsByFriend.set(p.friendId, p.createdAt ?? 0);
+      }
+      const prioritizedFriends = [...friends].sort(
+        (a, b) => (previewTsByFriend.get(b.id) ?? 0) - (previewTsByFriend.get(a.id) ?? 0),
+      );
+
       // Announce our signed E2EE identity key in each friend pair + pre-warm local DM cache!
       const mySigPacket = serializeIdentitySignal(state.primaryIdentity);
-      for (const friend of friends) {
+      for (const friend of prioritizedFriends) {
         if (cancelled) return;
         const syncTag = `${me.id}:${friend.id}:${state.primaryIdentity.keyId}`;
         if (announcedDmKeysRef.current.has(syncTag)) continue;
@@ -2874,7 +2887,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       }
 
       // Sync group identity announcements, group epoch envelopes, & pre-warm local Group cache!
-      for (const grp of groupsQuery ?? []) {
+      const prioritizedGroups = [...(groupsQuery ?? [])].sort(
+        (a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0),
+      );
+      for (const grp of prioritizedGroups) {
         if (cancelled) return;
         const grpSyncTag = `${me.id}:${grp.id}:${state.primaryIdentity.keyId}`;
         if (announcedGroupKeysRef.current.has(grpSyncTag)) continue;
@@ -3434,12 +3450,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       !activeChatId ||
       activeChatId === OFFICIAL_COMMUNITY_ID ||
       activeMessagesQuery !== undefined ||
-      cachedDm !== null,
+      Boolean(cachedDm && cachedDm.messages.length > 0),
     communityMessages,
     communityMessagesReady:
       !canUseCachedSession ||
       communityMessagesQuery !== undefined ||
-      bootstrapCache?.communityMessages !== undefined,
+      Boolean(bootstrapCache?.communityMessages?.length),
     communityPermissions,
     communityDirectory,
     groups,
@@ -3451,7 +3467,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       !canUseCachedSession ||
       !activeGroupId ||
       groupMessagesQuery !== undefined ||
-      cachedGroup !== null,
+      Boolean(cachedGroup && cachedGroup.messages.length > 0),
     groupTypingUsers,
     communityTypingUsers,
     blockedUserIds,
