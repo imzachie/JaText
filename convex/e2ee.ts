@@ -2,7 +2,11 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireUser } from "./lib";
 
-/** Publish or update the signed E2EE public identity bundle for the current user. */
+/**
+ * Publish or update a signed E2EE public identity bundle for the current user.
+ * Supports multiple concurrent devices per account (up to 6 active device keys)
+ * so outgoing DMs (`wra`) and group epochs (`kwraps`) always wrap for every device!
+ */
 export const publishIdentity = mutation({
   args: {
     keyId: v.string(),
@@ -12,48 +16,55 @@ export const publishIdentity = mutation({
   },
   handler: async (ctx, args) => {
     const me = await requireUser(ctx);
-    const existing = await ctx.db
+    const existingRows = await ctx.db
       .query("e2eeUserKeys")
       .withIndex("by_user", (q) => q.eq("userId", me._id))
-      .unique();
+      .collect();
     const now = Date.now();
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        keyId: args.keyId,
+    const matching = existingRows.find((row) => row.keyId === args.keyId);
+    if (matching) {
+      await ctx.db.patch(matching._id, {
         dhPubB64: args.dhPubB64,
         sigPubB64: args.sigPubB64,
         selfSigB64: args.selfSigB64,
         updatedAt: now,
       });
-    } else {
-      await ctx.db.insert("e2eeUserKeys", {
-        userId: me._id,
-        keyId: args.keyId,
-        dhPubB64: args.dhPubB64,
-        sigPubB64: args.sigPubB64,
-        selfSigB64: args.selfSigB64,
-        updatedAt: now,
-      });
+      return;
+    }
+
+    await ctx.db.insert("e2eeUserKeys", {
+      userId: me._id,
+      keyId: args.keyId,
+      dhPubB64: args.dhPubB64,
+      sigPubB64: args.sigPubB64,
+      selfSigB64: args.selfSigB64,
+      updatedAt: now,
+    });
+
+    if (existingRows.length >= 6) {
+      const sortedOldest = [...existingRows].sort((a, b) => a.updatedAt - b.updatedAt);
+      const toRemove = sortedOldest.slice(0, existingRows.length - 5);
+      await Promise.all(toRemove.map((row) => ctx.db.delete(row._id)));
     }
   },
 });
 
-/** Fetch signed E2EE public identity bundles for a list of users. */
+/** Fetch all signed E2EE public identity bundles across every device for a list of users. */
 export const getUserIdentities = query({
   args: { userIds: v.array(v.id("users")) },
   handler: async (ctx, { userIds }) => {
     await requireUser(ctx);
     const unique = [...new Set(userIds)];
-    const rows = await Promise.all(
+    const perUserRows = await Promise.all(
       unique.map((uid) =>
         ctx.db
           .query("e2eeUserKeys")
           .withIndex("by_user", (q) => q.eq("userId", uid))
-          .unique(),
+          .collect(),
       ),
     );
-    return rows
-      .filter((r) => r !== null)
+    return perUserRows
+      .flatMap((rows) => [...rows].sort((a, b) => a.updatedAt - b.updatedAt))
       .map((r) => ({
         userId: r.userId as string,
         keyId: r.keyId,

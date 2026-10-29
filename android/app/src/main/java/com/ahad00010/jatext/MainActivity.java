@@ -1,12 +1,15 @@
 package com.ahad00010.jatext;
 
+import android.app.KeyguardManager;
 import android.app.NotificationManager;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.service.notification.StatusBarNotification;
 import android.view.Display;
 import android.view.View;
@@ -16,14 +19,66 @@ import android.webkit.WebView;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
+import java.lang.ref.WeakReference;
 
 public class MainActivity extends BridgeActivity {
 
     private static volatile boolean appInForeground = false;
+    private static volatile WeakReference<MainActivity> activeInstanceRef = new WeakReference<>(null);
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     public static boolean isAppInForeground() {
         return appInForeground;
+    }
+
+    /**
+     * Returns true ONLY when JaText is actively resumed in front of the user AND the physical
+     * display is interactive (screen ON) AND the keyguard is unlocked (unless an incoming/active
+     * call explicitly bypassed the lock screen).
+     */
+    public static boolean isActivelyVisibleUnlocked(Context ctx) {
+        if (!appInForeground) return false;
+        if (ctx == null) return appInForeground;
+        try {
+            PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+            if (pm != null && !pm.isInteractive()) {
+                return false;
+            }
+            KeyguardManager km = (KeyguardManager) ctx.getSystemService(Context.KEYGUARD_SERVICE);
+            if (km != null && km.isKeyguardLocked()) {
+                return false;
+            }
+        } catch (Throwable ignored) {}
+        return true;
+    }
+
+    @SuppressWarnings("deprecation")
+    public static void setCallLockScreenMode(boolean enabled) {
+        MainActivity act = activeInstanceRef.get();
+        if (act == null) return;
+        act.runOnUiThread(() -> {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    act.setShowWhenLocked(enabled);
+                    act.setTurnScreenOn(enabled);
+                } else if (enabled) {
+                    act.getWindow().addFlags(
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                    );
+                } else {
+                    act.getWindow().clearFlags(
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                    );
+                }
+                if (enabled) {
+                    act.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                } else if (!CallKeepAliveService.isCallActive()) {
+                    act.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                }
+            } catch (Throwable ignored) {}
+        });
     }
 
     @Override
@@ -31,6 +86,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(JaTextNativePlugin.class);
         this.initialPlugins.add(SafePushNotificationsPlugin.class);
         super.onCreate(savedInstanceState);
+        activeInstanceRef = new WeakReference<>(this);
         appInForeground = true;
         applyHighRefreshRateAndLockScreenFlags(getIntent());
         JaTextSoundManager.ensureActiveMessageChannel(this);
@@ -64,6 +120,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onStart() {
         super.onStart();
+        activeInstanceRef = new WeakReference<>(this);
         appInForeground = true;
         clearDeliveredMessageNotifications();
     }
@@ -71,8 +128,11 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        activeInstanceRef = new WeakReference<>(this);
         appInForeground = true;
-        JaTextSoundManager.cancelIncomingCallWakeup(this);
+        // CRITICAL: Do NOT stop the looping call ringtone on resume — only clear the shade banner
+        // once MainActivity is visible so the incoming call UI keeps ringing for the full 60s!
+        JaTextSoundManager.onMainActivityResumed(this);
         clearDeliveredMessageNotifications();
         try {
             if (getBridge() != null && getBridge().getWebView() != null) {
@@ -85,6 +145,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onPause() {
+        appInForeground = false;
         super.onPause();
         keepWebViewAliveForActiveMedia();
     }
@@ -101,6 +162,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         appInForeground = false;
+        if (activeInstanceRef.get() == this) {
+            activeInstanceRef = new WeakReference<>(null);
+        }
         mainHandler.removeCallbacksAndMessages(null);
         JaTextSoundManager.stopSoundPreview();
         try {
@@ -113,27 +177,33 @@ public class MainActivity extends BridgeActivity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
-            appInForeground = true;
             applyStatusBarAppearance();
         }
     }
 
     @SuppressWarnings("deprecation")
     private void applyHighRefreshRateAndLockScreenFlags(Intent intent) {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                setShowWhenLocked(true);
-                setTurnScreenOn(true);
-            } else {
-                getWindow().addFlags(
-                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
-                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-                );
-            }
-            if (intent != null && intent.getBooleanExtra("incomingCallWake", false)) {
+        boolean isCallWake = false;
+        if (intent != null && intent.getExtras() != null) {
+            Bundle extras = intent.getExtras();
+            isCallWake =
+                extras.getBoolean("incomingCallWake", false) ||
+                "incoming_call".equals(extras.getString("type"));
+        }
+        if (isCallWake || JaTextSoundManager.isIncomingRingtoneActive() || CallKeepAliveService.isCallActive()) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    setShowWhenLocked(true);
+                    setTurnScreenOn(true);
+                } else {
+                    getWindow().addFlags(
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                    );
+                }
                 getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-            }
-        } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {}
+        }
 
         // Request the highest native refresh rate (60Hz / 90Hz / 120Hz) supported by the display
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -174,6 +244,9 @@ public class MainActivity extends BridgeActivity {
         String groupId = extras.getString("groupId");
         String chatId = extras.getString("chatId");
         if (isCallWake || senderId != null || groupId != null || chatId != null) {
+            // Clear intent extras after reading so normal later resumes don't re-trigger call wake
+            intent.removeExtra("incomingCallWake");
+            intent.removeExtra("type");
             mainHandler.postDelayed(
                 () -> JaTextNativePlugin.emitNotificationOpen(senderId, groupId, chatId, isCallWake),
                 120L
@@ -182,7 +255,11 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void keepWebViewAliveForActiveMedia() {
-        if (!CallKeepAliveService.isCallActive() && !ScreenCaptureService.isCapturing()) {
+        if (
+            !CallKeepAliveService.isCallActive() &&
+            !ScreenCaptureService.isCapturing() &&
+            !JaTextSoundManager.isIncomingRingtoneActive()
+        ) {
             return;
         }
         try {
@@ -205,7 +282,8 @@ public class MainActivity extends BridgeActivity {
                         int id = notif.getId();
                         if (
                             id != ScreenCaptureService.NOTIFICATION_ID &&
-                            id != CallKeepAliveService.NOTIFICATION_ID
+                            id != CallKeepAliveService.NOTIFICATION_ID &&
+                            id != JaTextSoundManager.INCOMING_CALL_NOTIFICATION_ID
                         ) {
                             if (notif.getTag() != null) {
                                 nm.cancel(notif.getTag(), id);
@@ -228,6 +306,9 @@ public class MainActivity extends BridgeActivity {
         }
         WindowInsetsControllerCompat insetsController =
             WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
-        insetsController.setAppearanceLightStatusBars(false);
+        if (insetsController != null) {
+            insetsController.setAppearanceLightStatusBars(false);
+            insetsController.setAppearanceLightNavigationBars(false);
+        }
     }
 }

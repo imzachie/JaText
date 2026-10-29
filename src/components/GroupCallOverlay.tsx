@@ -121,6 +121,8 @@ export function GroupCallOverlay() {
     sharedMediaVideoElement,
     acceptIncomingGroupCall,
     declineIncomingGroupCall,
+    retryDismissedGroupCall,
+    closeDismissedGroupCall,
     leaveGroupCall,
     toggleMute,
     toggleDeafen,
@@ -191,6 +193,62 @@ export function GroupCallOverlay() {
   const hasLocalVideo =
     (!isCameraOff || isScreenSharing) &&
     Boolean(localStream && localStream.getVideoTracks().length > 0);
+
+  if (groupSession.phase === "dismissed") {
+    return (
+      <div className="call-incoming-backdrop">
+        <div className="call-incoming-sheet call-dismissed-sheet">
+          <div className="call-incoming-badge call-dismissed-badge">
+            <PhoneOff size={14} /> Call dismissed
+          </div>
+          <div className="call-incoming-avatar-pulse call-dismissed-avatar">
+            {groupSession.group.avatarUrl ? (
+              <img
+                src={groupSession.group.avatarUrl}
+                alt=""
+                style={{ width: 88, height: 88, borderRadius: "50%", objectFit: "cover" }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: 88,
+                  height: 88,
+                  borderRadius: "50%",
+                  background: "rgba(155, 108, 255, 0.25)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <UsersIcon size={38} />
+              </div>
+            )}
+          </div>
+          <h2 className="call-incoming-name">{groupSession.group.name}</h2>
+          <p className="call-incoming-sub muted">
+            Group call went unanswered for 1 minute
+          </p>
+          <div className="call-dismissed-actions">
+            <button
+              type="button"
+              className="ghost-btn call-dismissed-btn"
+              onClick={closeDismissedGroupCall}
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              className="primary-btn call-dismissed-btn"
+              onClick={() => void retryDismissedGroupCall()}
+            >
+              {groupSession.mode === "video" ? <Video size={16} /> : <Phone size={16} />}
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (groupSession.phase === "incoming") {
     return (
