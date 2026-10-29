@@ -31,12 +31,34 @@ import {
   useE2EESnapshot,
 } from "./lib/e2ee/keystore";
 import { GroupCallProvider, useGroupCall } from "./lib/groupCalling";
+import { getActiveAccountSlotId, getConvexAuthKeysForSlot } from "./lib/accountManager";
 import { JaTextNative } from "./lib/nativeBridge";
 import { useJaText } from "./lib/store";
-import { playMessageSound } from "./lib/alerts";
+import {
+  loadNotificationPreferences,
+  playMessageSound,
+  syncSoundPreferencesToNative,
+} from "./lib/alerts";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
 
 const NOTIFICATION_WELCOME_KEY = "jatext-notification-welcome-seen-v1";
+
+function isPlaceholderNotificationText(text: string | null | undefined): boolean {
+  if (!text) return true;
+  const t = text.trim();
+  if (!t) return true;
+  if (t.includes("__JATEXT_E2EE_V1__:")) return true;
+  const lower = t.toLowerCase();
+  return (
+    lower === "encrypted message" ||
+    lower === "🔒 encrypted message" ||
+    lower.includes("sent an encrypted message") ||
+    lower.includes("mentioned you in an encrypted message") ||
+    lower.startsWith("decrypting") ||
+    lower.startsWith("🔒 decrypting") ||
+    lower.startsWith("waiting for this message")
+  );
+}
 
 export default function App() {
   return (
@@ -88,6 +110,7 @@ function AppContent() {
   const isNativeActiveRef = useRef(true);
   const previousPreviews = useRef<Map<string, string> | null>(null);
   const previousGroups = useRef<Map<string, string> | null>(null);
+  const previousAnnouncementId = useRef<string | null | undefined>(undefined);
   const navigationStateRef = useRef({
     activeChatId,
     activeGroupId,
@@ -100,13 +123,37 @@ function AppContent() {
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
-    const listener = CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+    syncSoundPreferencesToNative(loadNotificationPreferences());
+    const stateListener = CapacitorApp.addListener("appStateChange", ({ isActive }) => {
       isNativeActiveRef.current = isActive;
     });
+    const openListener = JaTextNative.addListener(
+      "notificationOpen",
+      ({ senderId, groupId, chatId, incomingCallWake }) => {
+        if (incomingCallWake) {
+          setCallMinimized(false);
+          setGroupCallMinimized(false);
+          if (groupId) {
+            setActiveGroupId(groupId);
+          } else if (senderId) {
+            setActiveChatId(senderId);
+          }
+          return;
+        }
+        if (chatId === OFFICIAL_COMMUNITY_ID) {
+          setActiveChatId(OFFICIAL_COMMUNITY_ID);
+        } else if (groupId) {
+          setActiveGroupId(groupId);
+        } else if (senderId) {
+          setActiveChatId(senderId);
+        }
+      },
+    );
     return () => {
-      void listener.then((handle) => handle.remove());
+      void stateListener.then((handle) => handle.remove());
+      void openListener.then((handle) => handle.remove());
     };
-  }, []);
+  }, [setActiveChatId, setActiveGroupId, setCallMinimized, setGroupCallMinimized]);
 
   const activeFriend = useMemo(
     () => store.friends.find((f) => f.id === store.activeChatId) ?? null,
@@ -170,14 +217,29 @@ function AppContent() {
       }
     }
 
+    const convexUrl = (import.meta.env.VITE_CONVEX_URL as string | undefined) ?? "";
+    let authJwt: string | undefined;
+    let authRefreshToken: string | undefined;
+    if (convexUrl) {
+      try {
+        const keys = getConvexAuthKeysForSlot(convexUrl, getActiveAccountSlotId());
+        authJwt = localStorage.getItem(keys.jwtKey) ?? undefined;
+        authRefreshToken = localStorage.getItem(keys.refreshKey) ?? undefined;
+      } catch {
+        // Ignore storage read failure
+      }
+    }
+
     void JaTextNative.syncE2EENotificationState({
-      convexUrl: import.meta.env.VITE_CONVEX_URL as string | undefined,
+      convexUrl: convexUrl || undefined,
       userId: me.id,
       notificationsEnabled,
       isDnd: me.statusPreference === "dnd",
       identitiesJson: JSON.stringify(identities),
       peersJson: JSON.stringify(peers),
       groupsJson: JSON.stringify(groupEpochs),
+      authJwt,
+      authRefreshToken,
     }).catch(() => undefined);
   }, [e2eeSnapshot.version, me?.id, me?.statusPreference, notificationsEnabled]);
 
@@ -251,27 +313,51 @@ function AppContent() {
 
       // Only show system notifications when the app/tab is minimized or hidden — NEVER while in the app!
       if (notificationsEnabled && !appInForeground) {
-        if (Capacitor.isNativePlatform()) {
-          void JaTextNative.showDecryptedNotification({
-            tag: `dm:${friend.id}`,
-            title: `New message from ${friend.displayName}`,
-            body: readableText,
-            senderId: friend.id,
-          }).catch(() => undefined);
-        } else if ("Notification" in window && Notification.permission === "granted") {
-          try {
-            const notification = new Notification(`Message from ${friend.displayName}`, {
-              body: readableText,
-              tag: `jatext-${friend.id}`,
-            });
-            notification.onclick = () => {
-              window.focus();
-              setActiveChatId(friend.id);
-              notification.close();
-            };
-          } catch {
-            // Mobile browsers / WebViews disallow direct Notification construction.
+        const dispatchDmNotification = (finalText: string) => {
+          if (Capacitor.isNativePlatform()) {
+            void JaTextNative.showDecryptedNotification({
+              tag: `dm:${friend.id}`,
+              title: `New message from ${friend.displayName}`,
+              body: finalText,
+              senderId: friend.id,
+            }).catch(() => undefined);
+          } else if ("Notification" in window && Notification.permission === "granted") {
+            try {
+              const notification = new Notification(`Message from ${friend.displayName}`, {
+                body: finalText,
+                tag: `jatext-${friend.id}`,
+              });
+              notification.onclick = () => {
+                window.focus();
+                setActiveChatId(friend.id);
+                notification.close();
+              };
+            } catch {
+              // Mobile browsers / WebViews disallow direct Notification construction.
+            }
           }
+        };
+
+        if (isPlaceholderNotificationText(readableText)) {
+          void store
+            .fetchMessagesWithUser(friend.id)
+            .then((rows) => {
+              const latest = [...rows]
+                .reverse()
+                .find((m) => m.senderId === friend.id && !m.unsentAt && !isHiddenCallSignal(m.body));
+              const resolved = latest
+                ? formatPreviewMessageText(latest.body) ||
+                  (latest.attachmentType?.startsWith("audio/")
+                    ? "Voice note"
+                    : latest.attachmentName || "Sent you an attachment")
+                : "";
+              if (resolved && !isPlaceholderNotificationText(resolved)) {
+                dispatchDmNotification(resolved);
+              }
+            })
+            .catch(() => undefined);
+        } else {
+          dispatchDmNotification(readableText);
         }
       }
     }
@@ -287,6 +373,7 @@ function AppContent() {
     previewsReady,
     setActiveChatId,
     soundsEnabled,
+    store,
   ]);
 
   useEffect(() => {
@@ -341,27 +428,51 @@ function AppContent() {
       const readableGroupBody = formatPreviewMessageText(group.lastMessage) || "Open group chat";
 
       if (notificationsEnabled && !appInForeground) {
-        if (Capacitor.isNativePlatform()) {
-          void JaTextNative.showDecryptedNotification({
-            tag: `group:${group.id}`,
-            title,
-            body: readableGroupBody,
-            groupId: group.id,
-          }).catch(() => undefined);
-        } else if ("Notification" in window && Notification.permission === "granted") {
-          try {
-            const notification = new Notification(title, {
-              body: readableGroupBody,
-              tag: `jatext-group-${group.id}`,
-            });
-            notification.onclick = () => {
-              window.focus();
-              setActiveGroupId(group.id);
-              notification.close();
-            };
-          } catch {
-            // Mobile browsers / WebViews disallow direct Notification construction.
+        const dispatchGroupNotification = (finalGroupBody: string) => {
+          if (Capacitor.isNativePlatform()) {
+            void JaTextNative.showDecryptedNotification({
+              tag: `group:${group.id}`,
+              title,
+              body: finalGroupBody,
+              groupId: group.id,
+            }).catch(() => undefined);
+          } else if ("Notification" in window && Notification.permission === "granted") {
+            try {
+              const notification = new Notification(title, {
+                body: finalGroupBody,
+                tag: `jatext-group-${group.id}`,
+              });
+              notification.onclick = () => {
+                window.focus();
+                setActiveGroupId(group.id);
+                notification.close();
+              };
+            } catch {
+              // Mobile browsers / WebViews disallow direct Notification construction.
+            }
           }
+        };
+
+        if (isPlaceholderNotificationText(readableGroupBody)) {
+          void store
+            .fetchGroupMessages(group.id)
+            .then((rows) => {
+              const latest = [...rows]
+                .reverse()
+                .find((m) => m.senderId !== me.id && !m.unsentAt && !isHiddenCallSignal(m.body));
+              const resolved = latest
+                ? formatPreviewMessageText(latest.body) ||
+                  latest.stickerName ||
+                  latest.attachmentName ||
+                  "Mentioned you in group"
+                : "";
+              if (resolved && !isPlaceholderNotificationText(resolved)) {
+                dispatchGroupNotification(resolved);
+              }
+            })
+            .catch(() => undefined);
+        } else {
+          dispatchGroupNotification(readableGroupBody);
         }
       }
     }
@@ -372,6 +483,83 @@ function AppContent() {
     previewsReady,
     setActiveGroupId,
     soundsEnabled,
+    store,
+  ]);
+
+  // JaText Announcements watcher: notify everyone whenever a new announcement is posted!
+  useEffect(() => {
+    if (!me || !store.communityMessagesReady) {
+      previousAnnouncementId.current = undefined;
+      return;
+    }
+
+    const visibleAnnouncements = store.communityMessages.filter((m) => !m.unsentAt);
+    const latest = visibleAnnouncements.at(-1) ?? null;
+    const latestId = latest?.id ?? null;
+
+    if (previousAnnouncementId.current === undefined) {
+      previousAnnouncementId.current = latestId;
+      return;
+    }
+
+    if (!latest || latestId === previousAnnouncementId.current) {
+      return;
+    }
+    previousAnnouncementId.current = latestId;
+
+    if (latest.senderId === me.id || me.statusPreference === "dnd") {
+      return;
+    }
+
+    const appInForeground = Capacitor.isNativePlatform()
+      ? isNativeActiveRef.current && document.visibilityState === "visible"
+      : document.visibilityState === "visible";
+
+    if (soundsEnabled && appInForeground) {
+      playMessageSound("received");
+    }
+
+    const announcementBody =
+      latest.type === "poll"
+        ? `Poll: ${latest.body}`
+        : latest.type === "sticker"
+          ? latest.stickerName
+            ? `Sticker: ${latest.stickerName}`
+            : "Posted a sticker"
+          : formatPreviewMessageText(latest.body) ||
+            (latest.attachmentName ? `Shared ${latest.attachmentName}` : "New announcement");
+
+    if (notificationsEnabled && !appInForeground) {
+      if (Capacitor.isNativePlatform()) {
+        void JaTextNative.showDecryptedNotification({
+          tag: "community:announcements",
+          title: "JaText Announcements",
+          body: announcementBody,
+          chatId: OFFICIAL_COMMUNITY_ID,
+        }).catch(() => undefined);
+      } else if ("Notification" in window && Notification.permission === "granted") {
+        try {
+          const notification = new Notification("JaText Announcements", {
+            body: announcementBody,
+            tag: "jatext-announcements",
+          });
+          notification.onclick = () => {
+            window.focus();
+            setActiveChatId(OFFICIAL_COMMUNITY_ID);
+            notification.close();
+          };
+        } catch {
+          // Mobile browsers / WebViews disallow direct Notification construction.
+        }
+      }
+    }
+  }, [
+    me,
+    notificationsEnabled,
+    setActiveChatId,
+    soundsEnabled,
+    store.communityMessages,
+    store.communityMessagesReady,
   ]);
 
   useLayoutEffect(() => {

@@ -2,7 +2,17 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { query, mutation } from "./_generated/server";
 import type { Ctx } from "./lib";
-import { areFriends, isJaTextOwner, isValidReactionEmoji, pairKey, profileOf, requireUser, scheduleMessagePush } from "./lib";
+import {
+  areFriends,
+  initialDmDeliveryStatus,
+  isJaTextOwner,
+  isValidReactionEmoji,
+  pairKey,
+  profileOf,
+  requireUser,
+  scheduleAnnouncementPush,
+  scheduleMessagePush,
+} from "./lib";
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 
@@ -201,9 +211,10 @@ export const sendText = mutation({
     if (forwardedFromId && (!forwardedMessage || forwardedMessage.hiddenFor?.includes(me._id) || forwardedMessage.unsentAt))
       throw new Error("The forwarded announcement is unavailable.");
     const forwardedSender = forwardedMessage ? await ctx.db.get(forwardedMessage.senderId) : null;
+    const announcementBody = (text || forwardedMessage?.body || "").slice(0, 4000);
     await ctx.db.insert("communityMessages", {
       senderId: me._id,
-      body: (text || forwardedMessage?.body || "").slice(0, 4000),
+      body: announcementBody,
       type: !text && !attachmentId && forwardedMessage?.type === "sticker" ? "sticker" : "text",
       replyToId,
       forwardedFromName: forwardedSender?.displayName ?? forwardedSender?.name,
@@ -216,6 +227,17 @@ export const sendText = mutation({
       stickerName: forwardedMessage?.stickerName,
       stickerKey: forwardedMessage?.stickerKey,
     });
+    if (
+      !announcementBody.startsWith("__JATEXT_REACT__:") &&
+      !announcementBody.startsWith("__JATEXT_CALL_SIG__:")
+    ) {
+      await scheduleAnnouncementPush(
+        ctx,
+        me,
+        announcementBody ||
+          (attachmentName ? `Shared ${attachmentName}` : "Posted a new announcement"),
+      );
+    }
   },
 });
 
@@ -244,6 +266,11 @@ export const sendSticker = mutation({
       stickerKey: args.stickerKey,
       replyToId: args.replyToId,
     });
+    await scheduleAnnouncementPush(
+      ctx,
+      me,
+      args.stickerName ? `Posted sticker: ${args.stickerName}` : "Posted a sticker",
+    );
   },
 });
 
@@ -281,7 +308,8 @@ export const forward = mutation({
     } else if (targetUserId) {
       if (!(await areFriends(ctx, me._id, targetUserId))) throw new Error("You can only forward messages to accepted friends.");
       const pair = pairKey(me._id, targetUserId);
-      await ctx.db.insert("messages", {
+      const initialStatus = await initialDmDeliveryStatus(ctx, me._id, targetUserId);
+      const insertedId = await ctx.db.insert("messages", {
         senderId: me._id,
         receiverId: targetUserId,
         pairKey: pair,
@@ -294,10 +322,18 @@ export const forward = mutation({
         attachmentUrl: source.attachmentUrl ?? source.stickerUrl,
         stickerKey: source.stickerKey,
         forwardedFromId: source.senderId,
-        deliveryStatus: "delivered",
+        deliveryStatus: initialStatus,
       });
       const meDoc = await ctx.db.get(me._id);
-      if (meDoc) await scheduleMessagePush(ctx, meDoc, targetUserId, source.body || "Forwarded you a message");
+      if (meDoc) {
+        await scheduleMessagePush(
+          ctx,
+          meDoc,
+          targetUserId,
+          source.body || "Forwarded you a message",
+          insertedId,
+        );
+      }
     } else if (targetCommunity) {
       const { canModerate } = await communityRole(ctx, me._id);
       if (!canModerate) throw new Error("Only JaText community moderators can post.");
@@ -317,6 +353,11 @@ export const forward = mutation({
         forwardedFromName: sender?.displayName ?? sender?.name,
         forwardedFromId: source.senderId,
       });
+      await scheduleAnnouncementPush(
+        ctx,
+        me,
+        source.body || "Posted a new announcement",
+      );
     } else {
       throw new Error("Choose where to forward this message.");
     }
@@ -450,6 +491,7 @@ export const createPoll = mutation({
       type: "poll",
       pollOptions: cleanOptions.map((option) => option.slice(0, 120)),
     });
+    await scheduleAnnouncementPush(ctx, me, `Poll: ${cleanQuestion.slice(0, 200)}`);
   },
 });
 

@@ -1396,16 +1396,16 @@ export function DemoStoreProvider({
   );
 
   const setNotificationsEnabled = useCallback((enabled: boolean) => {
-    setNotificationPreferences((current) => {
-      const next = { ...current, notificationsEnabled: enabled };
+    setNotificationPreferences(() => {
+      const next = { ...loadNotificationPreferences(), notificationsEnabled: enabled };
       saveNotificationPreferences(next);
       return next;
     });
   }, []);
 
   const setSoundsEnabled = useCallback((enabled: boolean) => {
-    setNotificationPreferences((current) => {
-      const next = { ...current, soundsEnabled: enabled };
+    setNotificationPreferences(() => {
+      const next = { ...loadNotificationPreferences(), soundsEnabled: enabled };
       saveNotificationPreferences(next);
       return next;
     });

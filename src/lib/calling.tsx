@@ -10,6 +10,7 @@ import {
 } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { startIncomingCallRingtone, stopIncomingCallRingtone } from "./alerts";
 import { updateCallHistoryStatus, upsertCallHistoryEntry } from "./callHistory";
 import { parseWallpaperSignal, stripBubbleStyleFromText } from "./chatCustomization";
 import { JaTextNative, configureNativeCallAudio, ensureNativeMediaPermissions } from "./nativeBridge";
@@ -30,7 +31,7 @@ export const CALL_INVITE_PREFIX = "__JATEXT_CALL__:";
 export const CALL_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:";
 export const GROUP_CALL_INVITE_PREFIX = "__JATEXT_CALL_GRP__:";
 export const GROUP_CALL_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:GRP:";
-const CALL_RING_TIMEOUT_MS = 42_000;
+const CALL_RING_TIMEOUT_MS = 60_000;
 export const CALL_DEVICE_SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 
 export async function acquireSwitchedCameraTrack(
@@ -177,7 +178,13 @@ export interface CallConnectionStats {
   connectionState: string;
 }
 
-export type ActiveCallPhase = "outgoing" | "incoming" | "connecting" | "connected" | "ended";
+export type ActiveCallPhase =
+  | "outgoing"
+  | "incoming"
+  | "connecting"
+  | "connected"
+  | "dismissed"
+  | "ended";
 
 export interface ActiveCallSession {
   callId: string;
@@ -218,6 +225,8 @@ export interface CallContextValue {
   startCall: (peer: JaUser, mode: CallMode) => Promise<void>;
   acceptIncomingCall: (withVideo: boolean) => Promise<void>;
   declineIncomingCall: () => Promise<void>;
+  retryDismissedCall: () => Promise<void>;
+  closeDismissedCall: () => void;
   endCall: () => Promise<void>;
   toggleMute: () => void;
   toggleDeafen: () => void;
@@ -714,6 +723,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const stopRingingTimers = useCallback(() => {
+    stopIncomingCallRingtone();
+    if (Capacitor.isNativePlatform()) {
+      void JaTextNative.cancelIncomingCallWake().catch(() => undefined);
+    }
     if (ringIntervalRef.current !== null) {
       window.clearInterval(ringIntervalRef.current);
       ringIntervalRef.current = null;
@@ -1205,9 +1218,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const startCall = useCallback(
     async (peer: JaUser, mode: CallMode) => {
       if (!me) return;
-      if (sessionRef.current) {
+      if (sessionRef.current && sessionRef.current.phase !== "dismissed") {
         setMinimized(false);
         return;
+      }
+      if (sessionRef.current?.phase === "dismissed") {
+        cleanupCallResources();
+        sessionRef.current = null;
+        setSession(null);
       }
       setCallError(null);
 
@@ -1387,13 +1405,15 @@ export function CallProvider({ children }: { children: ReactNode }) {
                 )
                 .catch(() => undefined);
             }
+            updateCallHistoryStatus(callId, { state: "missed" });
             void sendSignalPacket(peer.id, {
               callId,
               type: "hangup",
               ts: Date.now(),
             }).catch(() => undefined);
             cleanupCallResources();
-            setSession(null);
+            setMinimized(false);
+            setSession({ ...cur, phase: "dismissed" });
           }
         }, CALL_RING_TIMEOUT_MS);
       } catch {
@@ -1452,11 +1472,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
         timestamp: invite.ts || Date.now(),
       });
 
+      if (Capacitor.isNativePlatform() && document.visibilityState !== "visible") {
+        void JaTextNative.triggerIncomingCallWake({
+          senderId: caller.id,
+          callerTitle: caller.displayName,
+          isVideo: invite.mode === "video",
+        }).catch(() => undefined);
+      }
+
       if (soundsEnabled && !preview.isMuted && me.statusPreference !== "dnd") {
-        playCallRingChime("incoming");
-        ringIntervalRef.current = window.setInterval(() => {
-          playCallRingChime("incoming");
-        }, 2500);
+        startIncomingCallRingtone();
       }
 
       ringTimeoutRef.current = window.setTimeout(() => {
@@ -1464,7 +1489,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (cur && cur.callId === invite.callId && cur.phase === "incoming") {
           updateCallHistoryStatus(invite.callId, { state: "missed" });
           cleanupCallResources();
-          setSession(null);
+          setMinimized(false);
+          setSession({ ...cur, phase: "dismissed" });
         }
       }, CALL_RING_TIMEOUT_MS);
       break;
@@ -1473,7 +1499,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   // Process signaling packets while a call is active (outgoing, incoming, connecting, connected)
   useEffect(() => {
-    if (!session || !me) return;
+    if (!session || session.phase === "dismissed" || !me) return;
     let cancelled = false;
 
     const inspectMessages = async (messages: ChatMessage[]) => {
@@ -1522,7 +1548,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (invite && invite.callId === session.callId) {
           if (invite.state === "missed" || invite.state === "ended" || invite.state === "declined") {
             cleanupCallResources();
-            setSession(null);
+            if (session.phase === "incoming" || session.phase === "outgoing") {
+              setMinimized(false);
+              setSession((cur) => (cur ? { ...cur, phase: "dismissed" } : null));
+            } else {
+              setSession(null);
+            }
             return;
           }
           if (invite.state === "connected" && session.phase === "incoming") {
@@ -1599,7 +1630,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
           }
           if (soundsEnabled) playCallRingChime("ended");
           cleanupCallResources();
-          setSession(null);
+          if (!wasConnected) {
+            setMinimized(false);
+            setSession((cur) => (cur ? { ...cur, phase: "dismissed" } : null));
+          } else {
+            setSession(null);
+          }
           return;
         }
 
@@ -2581,6 +2617,22 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   const canScreenShare = true;
 
+  const closeDismissedCall = useCallback(() => {
+    cleanupCallResources();
+    sessionRef.current = null;
+    setSession(null);
+  }, [cleanupCallResources]);
+
+  const retryDismissedCall = useCallback(async () => {
+    const cur = sessionRef.current;
+    if (!cur) return;
+    const { peer, mode } = cur;
+    cleanupCallResources();
+    sessionRef.current = null;
+    setSession(null);
+    await startCall(peer, mode);
+  }, [cleanupCallResources, startCall]);
+
   const contextValue = useMemo<CallContextValue>(
     () => ({
       session,
@@ -2611,6 +2663,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
       startCall,
       acceptIncomingCall,
       declineIncomingCall,
+      retryDismissedCall,
+      closeDismissedCall,
       endCall,
       toggleMute,
       toggleDeafen,
@@ -2636,6 +2690,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       canScreenShare,
       captions,
       captionsEnabled,
+      closeDismissedCall,
       closeMobileSharePicker,
       declineIncomingCall,
       endCall,
@@ -2659,6 +2714,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       reactions,
       reconnectIce,
       remoteStream,
+      retryDismissedCall,
       sendCallReaction,
       session,
       sharedMediaVideoElement,

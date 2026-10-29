@@ -134,6 +134,8 @@ export function CallOverlay() {
     sharedMediaVideoElement,
     acceptIncomingCall,
     declineIncomingCall,
+    retryDismissedCall,
+    closeDismissedCall,
     endCall,
     toggleMute,
     toggleDeafen,
@@ -322,6 +324,44 @@ export function CallOverlay() {
     (!isCameraOff || isScreenSharing) &&
     Boolean(localStream && localStream.getVideoTracks().length > 0);
   const isNative = Capacitor.isNativePlatform();
+
+  // Call Dismissed Modal (shown after 1-minute ring timeout or unanswered/declined call)
+  if (session.phase === "dismissed") {
+    return (
+      <div className="call-incoming-backdrop">
+        <div className="call-incoming-sheet call-dismissed-sheet">
+          <div className="call-incoming-badge dismissed">
+            <PhoneOff size={14} /> Call dismissed
+          </div>
+          <div className="call-incoming-avatar-pulse dismissed">
+            <Avatar user={session.peer} size={88} ringWidth={3} />
+          </div>
+          <h2 className="call-incoming-name">{session.peer.displayName}</h2>
+          <p className="call-incoming-handle">@{session.peer.username}</p>
+          <p className="call-dismissed-status-text">Call dismissed</p>
+
+          <div className="call-dismissed-actions">
+            <button
+              type="button"
+              className="btn ghost call-dismissed-btn"
+              onClick={closeDismissedCall}
+            >
+              <X size={17} />
+              <span>Close</span>
+            </button>
+            <button
+              type="button"
+              className="btn primary call-dismissed-btn"
+              onClick={() => void retryDismissedCall()}
+            >
+              <RefreshCw size={17} />
+              <span>Retry</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Incoming Call Modal
   if (session.phase === "incoming") {

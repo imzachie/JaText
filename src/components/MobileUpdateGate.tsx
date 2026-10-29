@@ -326,24 +326,24 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
               <li>
-                <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Instant Local Chat &amp; Group Chat Caching — Opens Immediately in 0ms
-              </li>
-              <li>
-                <SwitchAccountIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Direct Multi-Account Switching — Add Accounts &amp; Switch Instantly in 1 Tap
-              </li>
-              <li>
-                <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Self-Healing Group E2EE Key Sync &amp; 1-Tap Security Code Verification
+                <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Readable Decrypted Mobile Notifications, Group Mentions &amp; JaText Announcements
               </li>
               <li>
                 <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Crisp Fit-Wrapped Image &amp; Sticker Custom Bubbles + Vector SVG UI Icons
+                JaText (Default), Phone System &amp; Custom Notification + Call Ringtone Sounds
               </li>
               <li>
-                <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Readable On-Device E2EE Push Notifications &amp; Reliable Voice/Video Calling
+                <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Instant Lock-Screen Call Wakeup, Looping Ringtone &amp; 1-Minute Call Dismissed UI
+              </li>
+              <li>
+                <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Instant Sent / Delivered / Read Status &amp; Admin-Only @everyone Group Mentions
+              </li>
+              <li>
+                <SwitchAccountIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Locked 60–120fps Hardware-Accelerated Mobile Scrolling &amp; Windowed Chats
               </li>
             </ul>
             <button

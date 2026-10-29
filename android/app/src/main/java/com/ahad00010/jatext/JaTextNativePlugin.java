@@ -24,6 +24,7 @@ import android.view.WindowManager;
 import androidx.activity.result.ActivityResult;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -57,6 +58,7 @@ import java.util.List;
 public class JaTextNativePlugin extends Plugin {
 
     private static volatile JaTextNativePlugin activeInstance;
+    private static volatile JSObject pendingOpenPayload = null;
 
     private SpeechRecognizer speechRecognizer;
     private volatile boolean speechCaptureActive = false;
@@ -67,6 +69,31 @@ public class JaTextNativePlugin extends Plugin {
     public void load() {
         super.load();
         activeInstance = this;
+        if (pendingOpenPayload != null) {
+            JSObject payload = pendingOpenPayload;
+            pendingOpenPayload = null;
+            notifyListeners("notificationOpen", payload, true);
+        }
+    }
+
+    public static void emitNotificationOpen(
+        String senderId,
+        String groupId,
+        String chatId,
+        boolean incomingCallWake
+    ) {
+        JSObject payload = new JSObject();
+        if (senderId != null) payload.put("senderId", senderId);
+        if (groupId != null) payload.put("groupId", groupId);
+        if (chatId != null) payload.put("chatId", chatId);
+        payload.put("incomingCallWake", incomingCallWake);
+
+        JaTextNativePlugin inst = activeInstance;
+        if (inst != null) {
+            inst.notifyListeners("notificationOpen", payload, true);
+        } else {
+            pendingOpenPayload = payload;
+        }
     }
 
     public static void emitScreenFrame(String base64Jpeg, int width, int height) {
@@ -866,15 +893,19 @@ public class JaTextNativePlugin extends Plugin {
 
     @PluginMethod
     public void syncE2EENotificationState(PluginCall call) {
+        Boolean notificationsEnabled = call.getBoolean("notificationsEnabled", true);
+        Boolean isDnd = call.getBoolean("isDnd", false);
         JaTextE2EEDecryptor.syncState(
             getContext(),
             call.getString("convexUrl"),
             call.getString("userId"),
-            call.getBoolean("notificationsEnabled", true),
-            call.getBoolean("isDnd", false),
+            notificationsEnabled != null ? notificationsEnabled : true,
+            isDnd != null ? isDnd : false,
             call.getString("identitiesJson"),
             call.getString("peersJson"),
-            call.getString("groupsJson")
+            call.getString("groupsJson"),
+            call.getString("authJwt"),
+            call.getString("authRefreshToken")
         );
         call.resolve();
     }
@@ -882,17 +913,221 @@ public class JaTextNativePlugin extends Plugin {
     @PluginMethod
     public void showDecryptedNotification(PluginCall call) {
         Context ctx = getContext();
+        if (ctx != null && !MainActivity.isAppInForeground() && JaTextE2EEDecryptor.areNotificationsAllowed(ctx)) {
+            final Context appCtx = ctx.getApplicationContext();
+            final String tag = call.getString("tag");
+            final String title = call.getString("title");
+            final String rawBody = call.getString("body");
+            final String senderId = call.getString("senderId");
+            final String groupId = call.getString("groupId");
+            final String chatId = call.getString("chatId");
+            new Thread(() -> {
+                String finalBody = rawBody;
+                if (JaTextE2EEDecryptor.isPlaceholderOrEncryptedPreview(finalBody)) {
+                    String resolved = JaTextE2EEDecryptor.resolveNotificationBody(
+                        appCtx,
+                        finalBody,
+                        senderId,
+                        groupId
+                    );
+                    if (resolved == null || resolved.isEmpty()) {
+                        return;
+                    }
+                    finalBody = resolved;
+                }
+                Bundle extras = new Bundle();
+                if (senderId != null) extras.putString("senderId", senderId);
+                if (groupId != null) extras.putString("groupId", groupId);
+                if (chatId != null) extras.putString("chatId", chatId);
+                extras.putString(
+                    "type",
+                    chatId != null && "__jatext_community__".equals(chatId)
+                        ? "announcement"
+                        : (groupId != null ? "group_mention" : "message")
+                );
+                JaTextE2EEDecryptor.postSystemMessageNotification(appCtx, tag, title, finalBody, extras);
+            }).start();
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void triggerIncomingCallWake(PluginCall call) {
+        Context ctx = getContext();
         if (ctx != null && !MainActivity.isAppInForeground()) {
-            String tag = call.getString("tag");
-            String title = call.getString("title");
-            String body = call.getString("body");
-            String senderId = call.getString("senderId");
-            String groupId = call.getString("groupId");
-            Bundle extras = new Bundle();
-            if (senderId != null) extras.putString("senderId", senderId);
-            if (groupId != null) extras.putString("groupId", groupId);
-            extras.putString("type", groupId != null ? "group_mention" : "message");
-            JaTextE2EEDecryptor.postSystemMessageNotification(ctx, tag, title, body, extras);
+            String senderId = call.getString("senderId", null);
+            String groupId = call.getString("groupId", null);
+            String callerTitle = call.getString("callerTitle", "Incoming JaText Call");
+            Boolean isVideo = call.getBoolean("isVideo", false);
+            JaTextSoundManager.triggerIncomingCallWakeup(
+                ctx.getApplicationContext(),
+                senderId,
+                groupId,
+                callerTitle,
+                isVideo != null && isVideo
+            );
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void cancelIncomingCallWake(PluginCall call) {
+        Context ctx = getContext();
+        JaTextSoundManager.cancelIncomingCallWakeup(ctx != null ? ctx.getApplicationContext() : null);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void startNativeRingtone(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx != null) {
+            JaTextSoundManager.startIncomingRingtoneLoop(ctx.getApplicationContext());
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void stopNativeRingtone(PluginCall call) {
+        JaTextSoundManager.stopIncomingRingtoneLoop();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void listDeviceSounds(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            JSObject empty = new JSObject();
+            empty.put("sounds", new JSArray());
+            call.resolve(empty);
+            return;
+        }
+        final Context appCtx = ctx.getApplicationContext();
+        final String category = call.getString("category", "notification");
+        new Thread(() -> {
+            JSArray sounds = JaTextSoundManager.listDeviceSounds(appCtx, category);
+            JSObject res = new JSObject();
+            res.put("sounds", sounds);
+            call.resolve(res);
+        }).start();
+    }
+
+    @PluginMethod
+    public void setSoundPreferences(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx != null) {
+            JaTextSoundManager.saveSoundPreferences(
+                ctx.getApplicationContext(),
+                call.getString("notifMode", null),
+                call.getString("notifUri", null),
+                call.getString("notifLabel", null),
+                call.getString("ringMode", null),
+                call.getString("ringUri", null),
+                call.getString("ringLabel", null)
+            );
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void saveCustomSound(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("Context unavailable");
+            return;
+        }
+        final Context appCtx = ctx.getApplicationContext();
+        final String category = call.getString("category", "notification");
+        final String fileName = call.getString("fileName", "custom.mp3");
+        final String base64 = call.getString("base64", "");
+        if (base64 == null || base64.isEmpty()) {
+            call.reject("Empty audio payload");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                byte[] decoded = Base64.decode(base64, Base64.DEFAULT);
+                File saved = JaTextSoundManager.saveCustomSoundFile(appCtx, category, fileName, decoded);
+                JSObject res = new JSObject();
+                res.put("path", saved.getAbsolutePath());
+                res.put("fileName", fileName);
+                call.resolve(res);
+            } catch (Throwable t) {
+                call.reject("Failed to save custom sound: " + t.getMessage());
+            }
+        }).start();
+    }
+
+    @PluginMethod
+    public void previewSound(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx != null) {
+            String category = call.getString("category", "notification");
+            String mode = call.getString("mode", "default");
+            String uri = call.getString("uri", "");
+            Boolean loop = call.getBoolean("loop", false);
+            JaTextSoundManager.previewSound(
+                ctx.getApplicationContext(),
+                category,
+                mode,
+                uri,
+                loop != null && loop
+            );
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void stopSoundPreview(PluginCall call) {
+        JaTextSoundManager.stopSoundPreview();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void checkCallWakePermissions(PluginCall call) {
+        Context ctx = getContext();
+        JSObject res = new JSObject();
+        boolean canDrawOverlays = true;
+        boolean canFullScreenIntent = true;
+        if (ctx != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                canDrawOverlays = Settings.canDrawOverlays(ctx);
+            }
+            if (Build.VERSION.SDK_INT >= 34) {
+                try {
+                    android.app.NotificationManager nm =
+                        (android.app.NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+                    if (nm != null) {
+                        canFullScreenIntent = nm.canUseFullScreenIntent();
+                    }
+                } catch (Throwable ignored) {}
+            }
+        }
+        res.put("canDrawOverlays", canDrawOverlays);
+        res.put("canFullScreenIntent", canFullScreenIntent);
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void openCallWakeSettings(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx != null) {
+            String kind = call.getString("kind", "overlay");
+            try {
+                Intent intent;
+                if ("fullscreen".equals(kind) && Build.VERSION.SDK_INT >= 34) {
+                    intent = new Intent(
+                        Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                        Uri.parse("package:" + ctx.getPackageName())
+                    );
+                } else {
+                    intent = new Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + ctx.getPackageName())
+                    );
+                }
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(intent);
+            } catch (Throwable ignored) {}
         }
         call.resolve();
     }

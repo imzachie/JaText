@@ -121,15 +121,36 @@ type MentionCandidate =
       member: GroupMember;
     };
 
+const GROUP_TIME_FMT = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+const GROUP_DAY_FMT = new Intl.DateTimeFormat([], {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+});
+const groupTimeCache = new Map<number, string>();
+
 function fmtTime(ts: number) {
-  return new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const minuteBucket = Math.floor(ts / 60_000);
+  let cached = groupTimeCache.get(minuteBucket);
+  if (!cached) {
+    cached = GROUP_TIME_FMT.format(new Date(ts));
+    if (groupTimeCache.size > 600) groupTimeCache.clear();
+    groupTimeCache.set(minuteBucket, cached);
+  }
+  return cached;
 }
 
 function fmtDay(ts: number) {
   const d = new Date(ts);
-  const today = new Date();
-  if (d.toDateString() === today.toDateString()) return "Today";
-  return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  const now = new Date();
+  if (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  ) {
+    return "Today";
+  }
+  return GROUP_DAY_FMT.format(d);
 }
 
 function isImageAttachment(attachmentType?: string, attachmentName?: string, attachmentUrl?: string) {
@@ -284,11 +305,45 @@ const GroupChatHistory = memo(function GroupChatHistory({
     }
   };
 
+  const [visibleCount, setVisibleCount] = useState(50);
+  const prependAnchorRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
+  const firstMsgKey = messages[0]?.id ?? "";
+  const windowedMessages = useMemo(
+    () =>
+      messages.length > visibleCount
+        ? messages.slice(messages.length - visibleCount)
+        : messages,
+    [messages, visibleCount],
+  );
+  void firstMsgKey;
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current;
+    const el = messagesRef.current;
+    if (anchor && el) {
+      prependAnchorRef.current = null;
+      const delta = el.scrollHeight - anchor.prevHeight;
+      if (delta > 0) {
+        el.scrollTop = anchor.prevTop + delta;
+      }
+    }
+  }, [windowedMessages.length, messagesRef]);
+
+  const handleGroupScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    onScroll(event);
+    const el = messagesRef.current;
+    if (!el) return;
+    if (el.scrollTop < 260 && visibleCount < messages.length && !prependAnchorRef.current) {
+      prependAnchorRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+      setVisibleCount((cur) => Math.min(messages.length, cur + 60));
+    }
+  };
+
   return (
     <div
       className="messages group-messages"
       ref={messagesRef}
-      onScroll={onScroll}
+      onScroll={handleGroupScroll}
       onWheel={() => {
         initialScrollAllowedRef.current = false;
       }}
@@ -296,26 +351,26 @@ const GroupChatHistory = memo(function GroupChatHistory({
         initialScrollAllowedRef.current = false;
       }}
     >
-      {!messagesReady && messages.length === 0 && (
+      {!messagesReady && windowedMessages.length === 0 && (
         <div className="empty-box center">
           <div className="spinner" style={{ width: 28, height: 28 }} />
           <span className="muted small">Loading group messages…</span>
         </div>
       )}
-      {messagesReady && messages.length === 0 && (
+      {messagesReady && windowedMessages.length === 0 && (
         <div className="empty-box center">
           <strong>
             This is the beginning of the group{" "}
             <SparklesIcon size={16} style={{ color: "var(--accent)" }} />
           </strong>
           <span className="muted small">
-            Say hello, share photos or stickers, or type <code>@everyone</code> to notify the group!
+            Say hello, share photos or stickers, or mention a member with <code>@username</code>!
           </span>
         </div>
       )}
-      {messages.map((message, index) => {
+      {windowedMessages.map((message, index) => {
         const day = fmtDay(message.createdAt);
-        const showDay = index === 0 || fmtDay(messages[index - 1].createdAt) !== day;
+        const showDay = index === 0 || fmtDay(windowedMessages[index - 1].createdAt) !== day;
         const mine = message.senderId === me.id;
         const wpSignal = !message.unsentAt
           ? parseWallpaperSignal(message.body, message.attachmentUrl)
@@ -708,6 +763,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
   members,
   summaryMemberCount,
   myId,
+  canMentionEveryone,
   activityByUserId,
   hasFile,
   hasForwardedMessage,
@@ -730,6 +786,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
   members: GroupMember[];
   summaryMemberCount: number;
   myId: string;
+  canMentionEveryone: boolean;
   activityByUserId: Map<string, FriendActivity>;
   hasFile: boolean;
   hasForwardedMessage: boolean;
@@ -785,7 +842,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
     if (!activeMentionMatch) return [];
     const q = activeMentionMatch.query.toLowerCase();
     const list: MentionCandidate[] = [];
-    if ("everyone".includes(q)) {
+    if (canMentionEveryone && "everyone".includes(q)) {
       const count = members.length || summaryMemberCount;
       list.push({
         kind: "everyone",
@@ -814,7 +871,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
       list.push({ kind: "member", handle: member.username, member });
     }
     return list;
-  }, [activeMentionMatch, members, myId, summaryMemberCount]);
+  }, [activeMentionMatch, canMentionEveryone, members, myId, summaryMemberCount]);
 
   const safeMentionIndex =
     mentionCandidates.length > 0 ? Math.min(mentionIndex, mentionCandidates.length - 1) : 0;
@@ -1711,6 +1768,13 @@ export function GroupChatView({
 
   async function handleSubmitDraft(submittedBody: string) {
     if (!groupId) return;
+    const myGroupRole = group?.role ?? summary?.role ?? "member";
+    const iCanMentionEveryone = myGroupRole === "owner" || myGroupRole === "moderator";
+    if (/(?:^|[\s(])@everyone\b/i.test(submittedBody) && !iCanMentionEveryone) {
+      setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: submittedBody }));
+      setError("Only the group owner or moderators can mention @everyone.");
+      return;
+    }
     if (editingMessage) {
       if (!submittedBody) return;
       const targetId = editingMessage.id;
@@ -2342,6 +2406,7 @@ export function GroupChatView({
       )}
 
       <GroupChatHistory
+        key={groupId ?? "group"}
         messages={displayedMessages}
         messagesReady={conversationReady}
         me={meSummary}
@@ -2451,6 +2516,10 @@ export function GroupChatView({
           members={group?.members ?? EMPTY_GROUP_MEMBERS}
           summaryMemberCount={summary?.memberCount ?? 0}
           myId={store.me?.id ?? ""}
+          canMentionEveryone={
+            (group?.role ?? summary?.role) === "owner" ||
+            (group?.role ?? summary?.role) === "moderator"
+          }
           activityByUserId={activityByUserId}
           hasFile={Boolean(file)}
           hasForwardedMessage={Boolean(forwardedMessage)}

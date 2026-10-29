@@ -1,7 +1,14 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { areFriends, hasBlocked, pairKey, requireUser, scheduleMessagePush } from "./lib";
+import {
+  areFriends,
+  hasBlocked,
+  initialDmDeliveryStatus,
+  pairKey,
+  requireUser,
+  scheduleMessagePush,
+} from "./lib";
 
 const mediaType = v.union(
   v.literal("gif"),
@@ -400,7 +407,8 @@ export const send = mutation({
       });
     }
 
-    await ctx.db.insert("messages", {
+    const initialStatus = await initialDmDeliveryStatus(ctx, me._id, args.receiverId);
+    const insertedId = await ctx.db.insert("messages", {
       senderId: me._id,
       receiverId: args.receiverId,
       pairKey: pairKey(me._id, args.receiverId),
@@ -411,9 +419,15 @@ export const send = mutation({
       attachmentType:
         args.mediaType === "gif" ? "image/gif" : "image/*",
       stickerKey: args.mediaKey,
-      deliveryStatus: "delivered",
+      deliveryStatus: initialStatus,
     });
-    await scheduleMessagePush(ctx, me, args.receiverId, "Sent you a GIF or sticker");
+    await scheduleMessagePush(
+      ctx,
+      me,
+      args.receiverId,
+      "Sent you a GIF or sticker",
+      insertedId,
+    );
 
     const recent = await ctx.db
       .query("stickerLibrary")

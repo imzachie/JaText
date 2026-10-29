@@ -1,13 +1,9 @@
 package com.ahad00010.jatext;
 
 import android.Manifest;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Build;
-import androidx.core.app.NotificationCompat;
+import android.os.Bundle;
 import com.capacitorjs.plugins.pushnotifications.PushNotificationsPlugin;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
@@ -37,6 +33,25 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
     }
 
     @Override
+    protected void handleOnNewIntent(Intent data) {
+        if (data != null && data.getExtras() != null) {
+            Bundle extras = data.getExtras();
+            boolean isCallWake =
+                extras.getBoolean("incomingCallWake", false) ||
+                "incoming_call".equals(extras.getString("type"));
+            String senderId = extras.getString("senderId");
+            String groupId = extras.getString("groupId");
+            String chatId = extras.getString("chatId");
+            if (isCallWake || senderId != null || groupId != null || chatId != null) {
+                JaTextNativePlugin.emitNotificationOpen(senderId, groupId, chatId, isCallWake);
+            }
+        }
+        try {
+            super.handleOnNewIntent(data);
+        } catch (Throwable ignored) {}
+    }
+
+    @Override
     public void fireNotification(RemoteMessage remoteMessage) {
         if (remoteMessage == null) return;
 
@@ -53,61 +68,39 @@ public class SafePushNotificationsPlugin extends PushNotificationsPlugin {
             return;
         }
 
-        // App is minimized / backgrounded: show Android system notification!
-        postBackgroundSystemNotification(remoteMessage);
-    }
+        Context ctx = getContext();
+        if (ctx == null) return;
 
-    private void postBackgroundSystemNotification(RemoteMessage remoteMessage) {
-        try {
-            Context ctx = getContext();
-            if (ctx == null || !JaTextE2EEDecryptor.areNotificationsAllowed(ctx)) return;
-            RemoteMessage.Notification notif = remoteMessage.getNotification();
-            Map<String, String> data = remoteMessage.getData();
-
-            String title = notif != null && notif.getTitle() != null
-                ? notif.getTitle()
-                : data.get("title");
-            String rawBody = notif != null && notif.getBody() != null
+        final Context appCtx = ctx.getApplicationContext();
+        final RemoteMessage.Notification notif = remoteMessage.getNotification();
+        final Map<String, String> data = remoteMessage.getData();
+        final String title = notif != null && notif.getTitle() != null
+            ? notif.getTitle()
+            : (data != null ? data.get("title") : null);
+        final String rawWire = data != null ? data.get("rawWire") : null;
+        final String rawBody = (rawWire != null && !rawWire.isEmpty())
+            ? rawWire
+            : (notif != null && notif.getBody() != null
                 ? notif.getBody()
-                : data.get("body");
-            String senderId = data.get("senderId");
-            String groupId = data.get("groupId");
-            if ((title == null || title.isEmpty()) && (rawBody == null || rawBody.isEmpty())) {
-                return;
-            }
+                : (data != null ? data.get("body") : null));
+        final String senderId = data != null ? data.get("senderId") : null;
+        final String groupId = data != null ? data.get("groupId") : null;
+        final String chatId = data != null ? data.get("chatId") : null;
+        final String type = data != null ? data.get("type") : null;
+        final String msgId = remoteMessage.getMessageId();
 
-            String readableBody = JaTextE2EEDecryptor.resolveNotificationBody(
-                ctx,
+        new Thread(() -> {
+            JaTextE2EEDecryptor.handleBackgroundPush(
+                appCtx,
+                title,
                 rawBody,
                 senderId,
-                groupId
+                groupId,
+                chatId,
+                type,
+                msgId
             );
-            if (readableBody == null || readableBody.isEmpty()) {
-                return;
-            }
-
-            String msgId = remoteMessage.getMessageId() != null
-                ? remoteMessage.getMessageId()
-                : String.valueOf(System.currentTimeMillis());
-            android.os.Bundle extras = new android.os.Bundle();
-            extras.putString("google.message_id", msgId);
-            for (Map.Entry<String, String> entry : data.entrySet()) {
-                extras.putString(entry.getKey(), entry.getValue());
-            }
-
-            String tag = (groupId != null && !groupId.isEmpty())
-                ? "group:" + groupId
-                : (senderId != null && !senderId.isEmpty())
-                    ? "dm:" + senderId
-                    : msgId;
-            JaTextE2EEDecryptor.postSystemMessageNotification(
-                ctx,
-                tag,
-                title != null ? title : "JaText",
-                readableBody,
-                extras
-            );
-        } catch (Throwable ignored) {}
+        }).start();
     }
 
     @Override

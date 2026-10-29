@@ -532,7 +532,9 @@ export function parseEncryptedWireBody(body?: string | null): AnyEncryptedEnvelo
   if (!body) return null;
   const idx = body.indexOf(E2EE_WIRE_MARKER);
   if (idx === -1) return null;
-  const rawJson = body.slice(idx + E2EE_WIRE_MARKER.length).trim();
+  const afterMarker = body.slice(idx + E2EE_WIRE_MARKER.length).trim();
+  const nlIdx = afterMarker.indexOf("\n");
+  const rawJson = (nlIdx >= 0 ? afterMarker.slice(0, nlIdx) : afterMarker).trim();
   try {
     const parsed = JSON.parse(rawJson) as AnyEncryptedEnvelope;
     if (!parsed || parsed.v !== 1 || (parsed.c !== "dm" && parsed.c !== "grp")) {

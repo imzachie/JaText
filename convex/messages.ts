@@ -5,6 +5,7 @@ import {
   areFriends,
   friendIds,
   hasBlocked,
+  initialDmDeliveryStatus,
   isValidReactionEmoji,
   pairKey,
   requireUser,
@@ -173,33 +174,33 @@ export const send = mutation({
       }
     }
 
-    await ctx.db.insert("messages", {
+    const trimmedBody = args.body.trim();
+    const isSilentSignal = trimmedBody.startsWith("__JATEXT_CALL_SIG__:");
+    const initialStatus = isSilentSignal
+      ? "delivered"
+      : await initialDmDeliveryStatus(ctx, me._id, args.receiverId);
+
+    const insertedId = await ctx.db.insert("messages", {
       senderId: me._id,
       receiverId: args.receiverId,
       pairKey: pairKey(me._id, args.receiverId),
-      body: args.body.trim(),
+      body: trimmedBody,
       attachmentId: args.attachmentId,
       attachmentName: args.attachmentName,
       attachmentType: args.attachmentType,
       replyToId: args.replyToId,
-      deliveryStatus: "delivered",
+      deliveryStatus: initialStatus,
     });
 
-    const trimmedBody = args.body.trim();
-    if (!trimmedBody.startsWith("__JATEXT_CALL_SIG__:")) {
-      const pushSummary = trimmedBody.includes("__JATEXT_E2EE_V1__:")
-        ? "🔒 Sent an encrypted message"
-        : trimmedBody.startsWith("__JATEXT_CALL__:")
-          ? trimmedBody.includes('"mode":"video"')
-            ? "📹 Incoming video call"
-            : "📞 Incoming voice call"
-          : trimmedBody ||
-            (args.attachmentType?.startsWith("audio/")
-              ? "🎤 Sent a voice note"
-              : args.attachmentName
-                ? `Sent ${args.attachmentName}`
-                : "Sent you an attachment");
-      await scheduleMessagePush(ctx, me, args.receiverId, pushSummary);
+    if (!isSilentSignal) {
+      const pushBody =
+        trimmedBody ||
+        (args.attachmentType?.startsWith("audio/")
+          ? "Sent a voice note"
+          : args.attachmentName
+            ? `Sent ${args.attachmentName}`
+            : "Sent you an attachment");
+      await scheduleMessagePush(ctx, me, args.receiverId, pushBody, insertedId);
     }
   },
 });
@@ -226,7 +227,8 @@ export const forward = mutation({
     if (await hasBlocked(ctx, me._id, receiverId))
       throw new Error("You blocked this person. Unblock them to forward messages.");
 
-    await ctx.db.insert("messages", {
+    const initialStatus = await initialDmDeliveryStatus(ctx, me._id, receiverId);
+    const insertedId = await ctx.db.insert("messages", {
       senderId: me._id,
       receiverId,
       pairKey: pairKey(me._id, receiverId),
@@ -237,9 +239,15 @@ export const forward = mutation({
       attachmentType: source.attachmentType,
       stickerKey: source.stickerKey,
       forwardedFromId: source.senderId,
-      deliveryStatus: "delivered",
+      deliveryStatus: initialStatus,
     });
-    await scheduleMessagePush(ctx, me, receiverId, source.body || "Forwarded you a message");
+    await scheduleMessagePush(
+      ctx,
+      me,
+      receiverId,
+      source.body || "Forwarded you a message",
+      insertedId,
+    );
   },
 });
 
