@@ -279,85 +279,85 @@ export function ProfileForm({
 
   return (
     <form className="profile-form" onSubmit={onSubmit}>
-      {/* ---------- live profile preview / uploads ---------- */}
-      <div
-        className="pf-preview"
-        style={{ "--profile-outline": color.hex } as CSSProperties}
-      >
-        <div
-          className="pf-banner"
-          style={
-            bannerPreview
-              ? { backgroundImage: `url(${bannerPreview})` }
-              : { background: color.gradient }
-          }
-          onClick={() => bannerInput.current?.click()}
-          title="Click to set your banner"
-        >
-          <span className="pf-banner-hint">
-            <ImageIcon size={14} /> {bannerPreview ? "Change banner" : "Add a banner"}
-          </span>
-          {bannerPreview && (
-            <button
-              type="button"
-              className="mini-btn pf-remove-banner"
-              onClick={(e) => {
-                e.stopPropagation();
-                setBanner({ kind: "removed" });
-              }}
-            >
-              Remove
-            </button>
-          )}
-        </div>
-        <input
-          ref={bannerInput}
-          type="file"
-          accept="image/*"
-          hidden
-          onChange={(e) => pickImage(e.target.files?.[0], setBanner)}
-        />
-
-        <div className="pf-avatar-zone">
-          <div
-            className="pf-avatar-click"
-            onClick={() => pfpInput.current?.click()}
-            title="Click to set your profile picture"
-          >
-            <Avatar user={previewUser} size={96} ringWidth={4} />
-            <span className="pf-avatar-edit">
-              <EditIcon size={14} />
-            </span>
-          </div>
-          <input
-            ref={pfpInput}
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={(e) => pickImage(e.target.files?.[0], setAvatar)}
-          />
-          <div className="pf-preview-names">
-            <strong>{previewUser.displayName}</strong>
-            <span className="muted">
-              @{previewUser.username}
-              {pronouns ? ` · ${pronouns}` : ""}
-            </span>
-            {bio && <span className="pf-preview-bio">{bio}</span>}
-            <span className="muted small">
-              This is how your profile looks when someone clicks your profile picture
-            </span>
-          </div>
-          {avatarPreview && (
-            <button type="button" className="mini-btn" onClick={() => setAvatar({ kind: "removed" })}>
-              Remove photo
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* ---------- fields ---------- */}
+      {/* ---------- live profile preview / uploads (Profile & Onboarding only) ---------- */}
       {sectionMode !== "socials" && (
         <>
+          <div
+            className="pf-preview"
+            style={{ "--profile-outline": color.hex } as CSSProperties}
+          >
+            <div
+              className="pf-banner"
+              style={
+                bannerPreview
+                  ? { backgroundImage: `url(${bannerPreview})` }
+                  : { background: color.gradient }
+              }
+              onClick={() => bannerInput.current?.click()}
+              title="Click to set your banner"
+            >
+              <span className="pf-banner-hint">
+                <ImageIcon size={14} /> {bannerPreview ? "Change banner" : "Add a banner"}
+              </span>
+              {bannerPreview && (
+                <button
+                  type="button"
+                  className="mini-btn pf-remove-banner"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setBanner({ kind: "removed" });
+                  }}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+            <input
+              ref={bannerInput}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => pickImage(e.target.files?.[0], setBanner)}
+            />
+
+            <div className="pf-avatar-zone">
+              <div
+                className="pf-avatar-click"
+                onClick={() => pfpInput.current?.click()}
+                title="Click to set your profile picture"
+              >
+                <Avatar user={previewUser} size={96} ringWidth={4} />
+                <span className="pf-avatar-edit">
+                  <EditIcon size={14} />
+                </span>
+              </div>
+              <input
+                ref={pfpInput}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => pickImage(e.target.files?.[0], setAvatar)}
+              />
+              <div className="pf-preview-names">
+                <strong>{previewUser.displayName}</strong>
+                <span className="muted">
+                  @{previewUser.username}
+                  {pronouns ? ` · ${pronouns}` : ""}
+                </span>
+                {bio && <span className="pf-preview-bio">{bio}</span>}
+                <span className="muted small">
+                  This is how your profile looks when someone clicks your profile picture
+                </span>
+              </div>
+              {avatarPreview && (
+                <button type="button" className="mini-btn" onClick={() => setAvatar({ kind: "removed" })}>
+                  Remove photo
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ---------- fields ---------- */}
           <label>
             Display name
             <input

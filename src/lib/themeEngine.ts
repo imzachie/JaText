@@ -334,6 +334,43 @@ const listeners = new Set<() => void>();
 let activeUserScope = "global";
 const configByScope = new Map<string, JaTextThemeConfig>();
 let mediaListenerBound = false;
+let lastAppliedSignature = "";
+let rafApplyHandle: number | null = null;
+let persistTimerHandle: number | null = null;
+let pendingPersistScope: string | null = null;
+
+function writeScopeToStorage(scope: string, cfg: JaTextThemeConfig): void {
+  if (typeof window === "undefined") return;
+  try {
+    const serialized = JSON.stringify(cfg);
+    window.localStorage.setItem(`${STORAGE_KEY_PREFIX}${scope}`, serialized);
+    window.localStorage.setItem(GLOBAL_STORAGE_KEY, serialized);
+  } catch {
+    // ignore quota errors
+  }
+}
+
+export function flushThemePersistence(): void {
+  if (persistTimerHandle !== null && typeof window !== "undefined") {
+    window.clearTimeout(persistTimerHandle);
+    persistTimerHandle = null;
+  }
+  if (pendingPersistScope) {
+    const scope = pendingPersistScope;
+    pendingPersistScope = null;
+    const cfg = configByScope.get(scope);
+    if (cfg) writeScopeToStorage(scope, cfg);
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushThemePersistence);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      flushThemePersistence();
+    }
+  });
+}
 
 export function normalizeHexColor(raw: string, fallback = "#9b6cff"): string {
   const clean = raw.trim().replace(/^#/, "");
@@ -711,6 +748,10 @@ export function applyThemeToDocument(config: JaTextThemeConfig): void {
     };
   }
 
+  const signature = `${mode}|${hasGradient}|${vars.bg}|${vars.bgImage}|${vars.panel}|${vars.panel2}|${vars.border}|${vars.text}|${vars.muted}|${vars.accent}|${vars.accentDark}`;
+  if (signature === lastAppliedSignature) return;
+  lastAppliedSignature = signature;
+
   root.dataset.jtMode = mode;
   root.dataset.jtGradient = hasGradient ? "true" : "false";
   root.style.setProperty("--bg", vars.bg);
@@ -731,6 +772,7 @@ export function setThemeUserScope(userId: string | null | undefined): void {
     applyThemeToDocument(loadConfigForScope(nextScope));
     return;
   }
+  flushThemePersistence();
   activeUserScope = nextScope;
   const cfg = loadConfigForScope(nextScope);
   applyThemeToDocument(cfg);
@@ -743,20 +785,44 @@ export function getThemeConfig(): JaTextThemeConfig {
 
 export function updateThemeConfig(
   patch: Partial<JaTextThemeConfig> | ((prev: JaTextThemeConfig) => JaTextThemeConfig),
+  options?: { continuous?: boolean },
 ): JaTextThemeConfig {
   const prev = getThemeConfig();
   const rawNext = typeof patch === "function" ? patch(prev) : { ...prev, ...patch };
   const next = sanitizeConfig(rawNext);
   configByScope.set(activeUserScope, next);
-  if (typeof window !== "undefined") {
-    try {
-      const serialized = JSON.stringify(next);
-      window.localStorage.setItem(`${STORAGE_KEY_PREFIX}${activeUserScope}`, serialized);
-      window.localStorage.setItem(GLOBAL_STORAGE_KEY, serialized);
-    } catch {
-      // ignore quota errors
+
+  if (options?.continuous && typeof window !== "undefined") {
+    pendingPersistScope = activeUserScope;
+    if (persistTimerHandle !== null) {
+      window.clearTimeout(persistTimerHandle);
     }
+    persistTimerHandle = window.setTimeout(() => {
+      persistTimerHandle = null;
+      flushThemePersistence();
+    }, 160);
+
+    if (rafApplyHandle === null) {
+      rafApplyHandle = window.requestAnimationFrame(() => {
+        rafApplyHandle = null;
+        const latest = getThemeConfig();
+        applyThemeToDocument(latest);
+        emitChange();
+      });
+    }
+    return next;
   }
+
+  if (rafApplyHandle !== null && typeof window !== "undefined") {
+    window.cancelAnimationFrame(rafApplyHandle);
+    rafApplyHandle = null;
+  }
+  pendingPersistScope = null;
+  if (persistTimerHandle !== null && typeof window !== "undefined") {
+    window.clearTimeout(persistTimerHandle);
+    persistTimerHandle = null;
+  }
+  writeScopeToStorage(activeUserScope, next);
   applyThemeToDocument(next);
   emitChange();
   return next;

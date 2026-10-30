@@ -124,10 +124,21 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.3.4",
+    date: "October 30, 2026",
+    headline: "Categorised Settings, 1:1 Theme Engine, Custom Theme Builder & 60 FPS Mobile Optimisations",
+    latest: true,
+    bullets: [
+      "Reorganised Settings into clear desktop and mobile categories (Profile, Appearance, Socials, Alerts & Audio, Encryption, and Legal Policies) with a focused Socials & Website editor.",
+      "Added app-wide Light, Ash, Dark, Onyx, and System modes plus 22 preset gradient colour themes, direct swatch hover tooltips, and cross-device theme sync.",
+      "Shipped the live Custom Theme side drawer with Dark/Light base toggle, multi-stop colour gradient bar, 2D saturation-brightness picker, hue slider, hex/eyedropper input, gradient direction, and colour intensity.",
+      "Updated the Hero page to an eye-friendly dark slate background with the official JaText logo, removed em dashes across the app, and optimised mobile GPU compositing and VSync touch dragging for locked 60 FPS.",
+    ],
+  },
+  {
     version: "v3.3.3",
     date: "October 30, 2026",
     headline: "/chats Web Route, Group History Controls & Rich Link Previews",
-    latest: true,
     bullets: [
       "Moved the full JaText web app to jatext.vercel.app/chats while keeping the native Android APK opening directly into your chats.",
       "Restricted permanent 'Delete group' (2-step exact-name confirmation) strictly to the group owner and added 'Remove chat' for owners, moderators, and members to clear group chat history without leaving the group.",
@@ -231,7 +242,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.3.3 · Live
+                v3.3.4 · Live
               </span>
             </span>
           </a>
@@ -350,7 +361,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.3.3 (Build 32)</strong>
+                    <strong>v3.3.4 (Build 33)</strong>
                     <span>Web &amp; Signed APK</span>
                   </div>
                 </div>
@@ -720,7 +731,7 @@ export function LandingHeroPage() {
               <h2>Ready to jump into your chats?</h2>
               <p>
                 Launch the full JaText web app at <strong>jatext.vercel.app/chats</strong> or grab
-                the latest signed Android Release APK (v3.3.3).
+                the latest signed Android Release APK (v3.3.4).
               </p>
             </div>
             <div className="jt-cta-banner-actions">
@@ -739,7 +750,7 @@ export function LandingHeroPage() {
                 href="/downloads/JaText-release.apk"
                 className="jt-btn-secondary jt-btn-lg"
               >
-                Get Android APK (v3.3.3)
+                Get Android APK (v3.3.4)
               </a>
             </div>
           </div>
@@ -751,7 +762,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.3.3</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.3.4</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

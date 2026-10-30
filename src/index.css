@@ -7799,7 +7799,6 @@ body {
   background-image: var(--app-bg-image, none);
   background-attachment: fixed;
   background-size: cover;
-  transition: background-color 180ms ease, color 180ms ease;
 }
 
 html[data-jt-gradient="true"] .app-shell,
@@ -7873,12 +7872,13 @@ html[data-jt-mode="light"] select {
 .modal-card.settings-shell-modal {
   width: min(920px, 100%);
   max-width: 920px;
-  height: min(720px, 88dvh);
-  max-height: 88dvh;
+  height: min(720px, 88vh);
+  max-height: 88vh;
   padding: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  contain: layout style;
 }
 
 .settings-layout {
@@ -8105,14 +8105,51 @@ html[data-jt-mode="light"] select {
   min-height: 24px;
 }
 
-.appearance-hover-pill {
-  padding: 3px 10px;
-  border-radius: 8px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .theme-tile[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 9px);
+    left: 50%;
+    transform: translate3d(-50%, 4px, 0);
+    padding: 5px 10px;
+    border-radius: 8px;
+    background: #111216;
+    color: #f3f4f8;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 30;
+    transition: opacity 120ms ease, transform 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .theme-tile[data-tooltip]::before {
+    content: "";
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    transform: translate3d(-50%, 4px, 0);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid #111216;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 31;
+    transition: opacity 120ms ease, transform 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .theme-tile[data-tooltip]:hover::after,
+  .theme-tile[data-tooltip]:hover::before,
+  .theme-tile[data-tooltip]:focus-visible::after,
+  .theme-tile[data-tooltip]:focus-visible::before {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0);
+  }
 }
 
 .default-themes-row {
@@ -8430,6 +8467,7 @@ html[data-jt-mode="light"] select {
   cursor: crosshair;
   touch-action: none;
   border: 1px solid var(--border);
+  contain: strict;
 }
 
 .custom-theme-sv-white {
@@ -8621,12 +8659,56 @@ html[data-jt-mode="light"] select {
   background: var(--bg);
 }
 
-/* Mobile Responsive Settings Categories & Custom Theme Drawer */
+/* Mobile Responsive Settings Categories, Custom Theme Drawer & 60 FPS GPU Optimisations */
+@keyframes settingsMobileSlideIn {
+  from {
+    opacity: 0;
+    transform: translate3d(18px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes settingsMobileListIn {
+  from {
+    opacity: 0;
+    transform: translate3d(-14px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes mobileThemeSheetIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 26px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes mobileThemeSheetOut {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, 26px, 0);
+  }
+}
+
 @media (max-width: 760px) {
   .modal-card.settings-shell-modal {
     width: 100%;
-    height: min(92dvh, 780px);
-    max-height: 92dvh;
+    height: min(92vh, 780px);
+    max-height: 92%;
     border-radius: 20px;
   }
 
@@ -8638,14 +8720,23 @@ html[data-jt-mode="light"] select {
     display: none;
   }
 
+  .settings-layout.mobile-view-list .settings-sidebar {
+    animation: settingsMobileListIn 170ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
   .settings-layout.mobile-view-detail .settings-sidebar {
     display: none;
+  }
+
+  .settings-layout.mobile-view-detail .settings-content-pane {
+    animation: settingsMobileSlideIn 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .settings-sidebar {
     border-right: none;
     background: var(--panel);
     padding: 18px 16px 22px;
+    overscroll-behavior-y: contain;
   }
 
   .settings-sidebar-brand {
@@ -8658,6 +8749,10 @@ html[data-jt-mode="light"] select {
     padding: 12px 13px;
   }
 
+  .settings-nav-item:active {
+    transform: scale3d(0.985, 0.985, 1);
+  }
+
   .settings-nav-copy small {
     display: block;
   }
@@ -8668,6 +8763,7 @@ html[data-jt-mode="light"] select {
 
   .settings-content-pane {
     padding: 16px 16px 26px;
+    overscroll-behavior-y: contain;
   }
 
   .settings-mobile-detail-bar {
@@ -8704,10 +8800,74 @@ html[data-jt-mode="light"] select {
     right: 0;
     bottom: 0;
     width: 100%;
-    max-height: 82dvh;
+    max-height: 82%;
     border-left: none;
     border-top: 1px solid var(--border);
     border-radius: 22px 22px 0 0;
+    animation: mobileThemeSheetIn 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .custom-theme-drawer.closing {
+    animation: mobileThemeSheetOut 155ms ease-in both;
+  }
+}
+
+/* ==========================================================================
+   Mobile 60 FPS GPU Compositing & Zero-Blur-Stall Optimisations
+   ========================================================================== */
+
+button,
+a,
+label,
+[role="button"],
+[role="radio"],
+[role="tab"],
+.friend-row,
+.settings-nav-item,
+.theme-tile {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
+  body {
+    background-attachment: scroll !important;
+  }
+
+  /* Avoid expensive multi-pass Gaussian blur texture readbacks on mobile GPUs */
+  html[data-jt-gradient="true"] .sidebar,
+  html[data-jt-gradient="true"] .chat-header,
+  html[data-jt-gradient="true"] .composer,
+  .modal-backdrop,
+  .custom-theme-drawer,
+  .message-context-menu {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .sidebar,
+  .main-pane,
+  .modal-card,
+  .custom-theme-drawer,
+  .message-context-menu {
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  .messages,
+  .sidebar-tab-pane,
+  .settings-content-pane,
+  .custom-theme-drawer-body {
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .theme-tile:hover {
+    transform: none;
+  }
+
+  .theme-tile:active {
+    transform: scale3d(0.94, 0.94, 1);
   }
 }
 
