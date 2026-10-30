@@ -132,7 +132,7 @@ function AppContent() {
 
   useEffect(() => {
     if (me?.id && me.syncedTheme) {
-      applyRemoteSyncedThemeIfChanged(me.id, me.syncedTheme);
+      applyRemoteSyncedThemeIfChanged(me.id, me.syncedTheme, false);
     }
   }, [me?.id, me?.syncedTheme]);
   const [isMobileClosing, setIsMobileClosing] = useState(false);

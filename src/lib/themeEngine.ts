@@ -43,6 +43,7 @@ export interface SyncedThemePayload {
     ang: number;
     int: number;
   };
+  u?: number;
 }
 
 export interface JaTextThemeConfig {
@@ -51,6 +52,7 @@ export interface JaTextThemeConfig {
   presetId: ColourThemeId;
   custom: CustomGradientTheme;
   syncAcrossDevices: boolean;
+  updatedAt?: number;
 }
 
 export interface DefaultThemeOption {
@@ -328,6 +330,7 @@ const DEFAULT_CONFIG: JaTextThemeConfig = {
     intensity: 60,
   },
   syncAcrossDevices: true,
+  updatedAt: 0,
 };
 
 const listeners = new Set<() => void>();
@@ -338,6 +341,52 @@ let lastAppliedSignature = "";
 let rafApplyHandle: number | null = null;
 let persistTimerHandle: number | null = null;
 let pendingPersistScope: string | null = null;
+let remoteSyncHandler: ((payload: SyncedThemePayload) => Promise<void> | void) | null = null;
+let remoteSyncTimerHandle: ReturnType<typeof setTimeout> | null = null;
+let pendingRemotePayload: SyncedThemePayload | null = null;
+
+export function registerThemeRemoteSyncHandler(
+  handler: ((payload: SyncedThemePayload) => Promise<void> | void) | null,
+): void {
+  remoteSyncHandler = handler;
+  if (handler && pendingRemotePayload) {
+    const queued = pendingRemotePayload;
+    pendingRemotePayload = null;
+    if (remoteSyncTimerHandle !== null) {
+      clearTimeout(remoteSyncTimerHandle);
+      remoteSyncTimerHandle = null;
+    }
+    try {
+      void handler(queued);
+    } catch {
+      // ignore remote sync handler errors
+    }
+  }
+}
+
+function scheduleRemoteThemePush(payload: SyncedThemePayload, immediate = false): void {
+  pendingRemotePayload = payload;
+  if (remoteSyncTimerHandle !== null) {
+    clearTimeout(remoteSyncTimerHandle);
+    remoteSyncTimerHandle = null;
+  }
+  const run = () => {
+    remoteSyncTimerHandle = null;
+    if (!remoteSyncHandler || !pendingRemotePayload) return;
+    const nextPayload = pendingRemotePayload;
+    pendingRemotePayload = null;
+    try {
+      void remoteSyncHandler(nextPayload);
+    } catch {
+      // ignore remote sync handler errors
+    }
+  };
+  if (immediate || typeof window === "undefined") {
+    run();
+  } else {
+    remoteSyncTimerHandle = setTimeout(run, 260);
+  }
+}
 
 function writeScopeToStorage(scope: string, cfg: JaTextThemeConfig): void {
   if (typeof window === "undefined") return;
@@ -359,7 +408,14 @@ export function flushThemePersistence(): void {
     const scope = pendingPersistScope;
     pendingPersistScope = null;
     const cfg = configByScope.get(scope);
-    if (cfg) writeScopeToStorage(scope, cfg);
+    if (cfg) {
+      writeScopeToStorage(scope, cfg);
+      if (cfg.syncAcrossDevices && scope !== "global") {
+        scheduleRemoteThemePush(toSyncedThemePayload(cfg), true);
+      }
+    }
+  } else if (pendingRemotePayload) {
+    scheduleRemoteThemePush(pendingRemotePayload, true);
   }
 }
 
@@ -368,6 +424,21 @@ if (typeof window !== "undefined") {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       flushThemePersistence();
+    }
+  });
+  window.addEventListener("storage", (e) => {
+    if (!e.newValue) return;
+    const scopedKey = `${STORAGE_KEY_PREFIX}${activeUserScope}`;
+    if (e.key !== scopedKey && e.key !== GLOBAL_STORAGE_KEY) return;
+    try {
+      const incoming = sanitizeConfig(JSON.parse(e.newValue) as Partial<JaTextThemeConfig>);
+      const cur = configByScope.get(activeUserScope);
+      if (cur && JSON.stringify(cur) === JSON.stringify(incoming)) return;
+      configByScope.set(activeUserScope, incoming);
+      applyThemeToDocument(incoming);
+      emitChange();
+    } catch {
+      // ignore malformed storage events
     }
   });
 }
@@ -495,6 +566,10 @@ function sanitizeConfig(raw: Partial<JaTextThemeConfig> | null | undefined): JaT
     },
     syncAcrossDevices:
       typeof raw.syncAcrossDevices === "boolean" ? raw.syncAcrossDevices : true,
+    updatedAt:
+      typeof raw.updatedAt === "number" && Number.isFinite(raw.updatedAt) && raw.updatedAt > 0
+        ? Math.round(raw.updatedAt)
+        : 0,
   };
 }
 
@@ -785,11 +860,12 @@ export function getThemeConfig(): JaTextThemeConfig {
 
 export function updateThemeConfig(
   patch: Partial<JaTextThemeConfig> | ((prev: JaTextThemeConfig) => JaTextThemeConfig),
-  options?: { continuous?: boolean },
+  options?: { continuous?: boolean; skipRemoteSync?: boolean },
 ): JaTextThemeConfig {
   const prev = getThemeConfig();
   const rawNext = typeof patch === "function" ? patch(prev) : { ...prev, ...patch };
-  const next = sanitizeConfig(rawNext);
+  const now = Date.now();
+  const next = sanitizeConfig({ ...rawNext, updatedAt: now });
   configByScope.set(activeUserScope, next);
 
   if (options?.continuous && typeof window !== "undefined") {
@@ -800,7 +876,7 @@ export function updateThemeConfig(
     persistTimerHandle = window.setTimeout(() => {
       persistTimerHandle = null;
       flushThemePersistence();
-    }, 160);
+    }, 180);
 
     if (rafApplyHandle === null) {
       rafApplyHandle = window.requestAnimationFrame(() => {
@@ -825,15 +901,20 @@ export function updateThemeConfig(
   writeScopeToStorage(activeUserScope, next);
   applyThemeToDocument(next);
   emitChange();
+
+  if (!options?.skipRemoteSync && next.syncAcrossDevices && activeUserScope !== "global") {
+    scheduleRemoteThemePush(toSyncedThemePayload(next));
+  }
   return next;
 }
 
 export function toSyncedThemePayload(cfg: JaTextThemeConfig): SyncedThemePayload {
+  const u = cfg.updatedAt && cfg.updatedAt > 0 ? cfg.updatedAt : Date.now();
   if (cfg.kind === "default") {
-    return { k: "d", d: cfg.defaultId };
+    return { k: "d", d: cfg.defaultId, u };
   }
   if (cfg.kind === "preset") {
-    return { k: "p", p: cfg.presetId };
+    return { k: "p", p: cfg.presetId, u };
   }
   return {
     k: "c",
@@ -843,26 +924,93 @@ export function toSyncedThemePayload(cfg: JaTextThemeConfig): SyncedThemePayload
       ang: cfg.custom.angle,
       int: cfg.custom.intensity,
     },
+    u,
   };
 }
+
+export function isSameSyncedThemeShape(
+  a: SyncedThemePayload | undefined,
+  b: SyncedThemePayload | undefined,
+): boolean {
+  if (!a || !b || a.k !== b.k) return false;
+  if (a.k === "d") return a.d === b.d;
+  if (a.k === "p") return a.p === b.p;
+  if (a.k === "c") {
+    if (!a.c || !b.c) return false;
+    return (
+      a.c.a === b.c.a &&
+      a.c.ang === b.c.ang &&
+      a.c.int === b.c.int &&
+      a.c.cols.length === b.c.cols.length &&
+      a.c.cols.every((col, idx) => col.toLowerCase() === b.c!.cols[idx]?.toLowerCase())
+    );
+  }
+  return false;
+}
+
+const backfilledUsers = new Set<string>();
 
 export function applyRemoteSyncedThemeIfChanged(
   userId: string,
   remote: SyncedThemePayload | undefined,
+  serverProfileLoaded = true,
 ): void {
-  if (!userId || !remote) return;
+  if (!userId) return;
   const current = loadConfigForScope(userId);
   if (!current.syncAcrossDevices) return;
 
-  const currentPayload = JSON.stringify(toSyncedThemePayload(current));
-  const remotePayload = JSON.stringify(remote);
-  if (currentPayload === remotePayload) return;
+  if (!remote) {
+    if (
+      serverProfileLoaded &&
+      !backfilledUsers.has(userId) &&
+      ((current.updatedAt ?? 0) > 0 ||
+        current.kind !== "default" ||
+        current.defaultId !== "dark")
+    ) {
+      backfilledUsers.add(userId);
+      scheduleRemoteThemePush(toSyncedThemePayload(current));
+    }
+    return;
+  }
 
+  const localPayload = toSyncedThemePayload(current);
+  if (isSameSyncedThemeShape(localPayload, remote)) {
+    if (remote.u && remote.u > (current.updatedAt ?? 0)) {
+      const synced = sanitizeConfig({ ...current, updatedAt: remote.u });
+      configByScope.set(userId, synced);
+      writeScopeToStorage(userId, synced);
+    }
+    return;
+  }
+
+  const localTs = current.updatedAt ?? 0;
+  if (localTs > 0) {
+    if (remote.u && remote.u < localTs) {
+      // Remote payload is older than our local pick; push our newer theme up.
+      scheduleRemoteThemePush(localPayload);
+      return;
+    }
+    if (!remote.u && Date.now() - localTs < 5_000) {
+      return;
+    }
+  }
+
+  const appliedTs = remote.u && remote.u > 0 ? remote.u : Date.now();
   let next: JaTextThemeConfig = current;
   if (remote.k === "d" && remote.d) {
-    next = sanitizeConfig({ ...current, kind: "default", defaultId: remote.d });
+    next = sanitizeConfig({
+      ...current,
+      kind: "default",
+      defaultId: remote.d,
+      updatedAt: appliedTs,
+    });
   } else if (remote.k === "p" && remote.p) {
-    next = sanitizeConfig({ ...current, kind: "preset", presetId: remote.p });
+    next = sanitizeConfig({
+      ...current,
+      kind: "preset",
+      presetId: remote.p,
+      updatedAt: appliedTs,
+    });
   } else if (remote.k === "c" && remote.c) {
     next = sanitizeConfig({
       ...current,
@@ -873,19 +1021,12 @@ export function applyRemoteSyncedThemeIfChanged(
         angle: remote.c.ang,
         intensity: remote.c.int,
       },
+      updatedAt: appliedTs,
     });
   }
 
   configByScope.set(userId, next);
-  if (typeof window !== "undefined") {
-    try {
-      const serialized = JSON.stringify(next);
-      window.localStorage.setItem(`${STORAGE_KEY_PREFIX}${userId}`, serialized);
-      window.localStorage.setItem(GLOBAL_STORAGE_KEY, serialized);
-    } catch {
-      // ignore storage errors
-    }
-  }
+  writeScopeToStorage(userId, next);
   if (activeUserScope === userId) {
     applyThemeToDocument(next);
     emitChange();

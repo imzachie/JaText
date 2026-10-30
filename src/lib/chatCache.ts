@@ -563,6 +563,104 @@ export function setCachedGroupConversation(
   }
 }
 
+export function markCachedDmMessagesRead(slotId: string, friendId: string): void {
+  if (!friendId) return;
+  let mutated = false;
+  const slotData = getOrInitMemorySlot(slotId);
+  const existing = slotData.dms[friendId];
+  if (existing) {
+    let dmChanged = false;
+    const nextMessages = existing.messages.map((m) => {
+      if (m.senderId === friendId && m.deliveryStatus !== "read") {
+        dmChanged = true;
+        return { ...m, deliveryStatus: "read" as const };
+      }
+      return m;
+    });
+    const nextRaw = existing.rawRows?.map((m) => {
+      if (m.senderId === friendId && m.deliveryStatus !== "read") {
+        dmChanged = true;
+        return { ...m, deliveryStatus: "read" as const };
+      }
+      return m;
+    });
+    if (dmChanged) {
+      slotData.dms[friendId] = {
+        messages: nextMessages,
+        rawRows: nextRaw,
+        updatedAt: Date.now(),
+      };
+      slotData.updatedAt = Date.now();
+      schedulePersistSlotToIdb(slotId);
+      mutated = true;
+    }
+  }
+
+  const boot = memoryBootstrap.get(slotId);
+  if (boot) {
+    let bootChanged = false;
+    const nextPreviews = boot.previews.map((p) => {
+      if (p.friendId === friendId && (p.unreadCount ?? 0) > 0) {
+        bootChanged = true;
+        return {
+          ...p,
+          unreadCount: 0,
+        };
+      }
+      return p;
+    });
+    if (bootChanged) {
+      const nextBoot: SlotBootstrapCache = {
+        ...boot,
+        previews: nextPreviews,
+        updatedAt: Date.now(),
+      };
+      memoryBootstrap.set(slotId, nextBoot);
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(getBootstrapStorageKey(slotId), JSON.stringify(nextBoot));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      mutated = true;
+    }
+  }
+
+  if (mutated) {
+    notifyCacheListeners();
+  }
+}
+
+export function markCachedBootstrapGroupRead(slotId: string, groupId: string): void {
+  if (!groupId) return;
+  const boot = memoryBootstrap.get(slotId);
+  if (!boot) return;
+  let bootChanged = false;
+  const nextGroups = boot.groups.map((g) => {
+    if (g.id === groupId && ((g.unreadCount ?? 0) > 0 || g.lastMentionedMe)) {
+      bootChanged = true;
+      return { ...g, unreadCount: 0, lastMentionedMe: false };
+    }
+    return g;
+  });
+  if (!bootChanged) return;
+  const nextBoot: SlotBootstrapCache = {
+    ...boot,
+    groups: nextGroups,
+    updatedAt: Date.now(),
+  };
+  memoryBootstrap.set(slotId, nextBoot);
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(getBootstrapStorageKey(slotId), JSON.stringify(nextBoot));
+    } catch {
+      // ignore storage quota errors
+    }
+  }
+  notifyCacheListeners();
+}
+
 export async function clearSlotChatCache(slotId: string): Promise<void> {
   const prevTimer = writeDebounceTimers.get(slotId);
   if (prevTimer !== undefined && typeof window !== "undefined") {

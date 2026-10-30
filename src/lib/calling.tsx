@@ -259,8 +259,20 @@ const RTC_CONFIG: RTCConfiguration = {
 };
 
 export function isHiddenCallSignal(body?: string | null): boolean {
-  return Boolean(
-    body?.startsWith(CALL_SIGNAL_PREFIX) || body?.startsWith(GROUP_CALL_SIGNAL_PREFIX),
+  if (!body) return false;
+  return (
+    body.startsWith(CALL_SIGNAL_PREFIX) ||
+    body.startsWith(GROUP_CALL_SIGNAL_PREFIX) ||
+    body.startsWith("__JATEXT_REACT__:") ||
+    body.startsWith("__JATEXT_SEEN__:") ||
+    body.startsWith("__JATEXT_GROUP_SEEN_V1__:") ||
+    body.startsWith("__JATEXT_IK_V1__:") ||
+    body.startsWith("__JATEXT_GK_V1__:") ||
+    body.startsWith("__JATEXT_E2EE_IK__:") ||
+    body.startsWith("__JATEXT_E2EE_GK__:") ||
+    body.startsWith("__JATEXT_E2EE_VER__:") ||
+    body.includes("(__JATEXT_CALL_CANCEL__") ||
+    body.includes("(__JATEXT_CALL_CLAIM__")
   );
 }
 

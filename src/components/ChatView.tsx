@@ -14,6 +14,8 @@ import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Phone, Video } from "./CallIcons";
 import { playMessageSound } from "../lib/alerts";
+import { CONVERSATION_MARKED_READ_EVENT } from "../lib/convexStore";
+import { getUserChatPrefs } from "../lib/userChatPrefs";
 import { isChatActivelyVisibleToUser } from "../lib/nativeBridge";
 import { useChatAutoScrollAndKeyboard } from "../lib/useChatAutoScrollAndKeyboard";
 import {
@@ -248,6 +250,17 @@ const ChatHistory = memo(function ChatHistory({
   const [highlightedJumpId, setHighlightedJumpId] = useState<string | null>(null);
   const [firstUnreadMessageId, setFirstUnreadMessageId] = useState<string | null>(null);
   const capturedUnreadForFriendRef = useRef<string | null>(null);
+  const initialDmUnreadCutoffRef = useRef<{ friendId: string | null; cutoff: number }>({
+    friendId: null,
+    cutoff: 0,
+  });
+  if (initialDmUnreadCutoffRef.current.friendId !== friend.id) {
+    const dmPrefs = getUserChatPrefs(me.id).dms[friend.id];
+    initialDmUnreadCutoffRef.current = {
+      friendId: friend.id,
+      cutoff: dmPrefs?.lastReadAt ?? 0,
+    };
+  }
   const prependAnchorRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
   const prevFriendIdRef = useRef(friend.id);
   if (prevFriendIdRef.current !== friend.id) {
@@ -262,19 +275,63 @@ const ChatHistory = memo(function ChatHistory({
     }
   }
 
+  const myLatestSentDmTs = useMemo(() => {
+    let maxTs = 0;
+    for (const m of messages) {
+      if (m.senderId === me.id && m.createdAt > maxTs) {
+        maxTs = m.createdAt;
+      }
+    }
+    return maxTs;
+  }, [me.id, messages]);
+
   useEffect(() => {
     if (!messagesReady || capturedUnreadForFriendRef.current === friend.id) return;
     capturedUnreadForFriendRef.current = friend.id;
+    const effectiveCutoff = Math.max(initialDmUnreadCutoffRef.current.cutoff, myLatestSentDmTs);
     const firstUnread = messages.find(
       (m) =>
         m.senderId === friend.id &&
         m.receiverId === me.id &&
         !m.unsentAt &&
         m.deliveryStatus !== "read" &&
+        m.createdAt > effectiveCutoff &&
         !isHiddenCallSignal(m.body),
     );
     setFirstUnreadMessageId(firstUnread?.id ?? null);
-  }, [friend.id, me.id, messages, messagesReady]);
+  }, [friend.id, me.id, messages, messagesReady, myLatestSentDmTs]);
+
+  const prevMySentDmTsRef = useRef(0);
+  useEffect(() => {
+    if (prevMySentDmTsRef.current > 0 && myLatestSentDmTs > prevMySentDmTsRef.current) {
+      setFirstUnreadMessageId(null);
+    }
+    prevMySentDmTsRef.current = myLatestSentDmTs;
+  }, [myLatestSentDmTs]);
+
+  useEffect(() => {
+    if (!firstUnreadMessageId) return;
+    let timer: number | null = null;
+    let cancelled = false;
+    void isChatActivelyVisibleToUser().then((visible) => {
+      if (cancelled || !visible) return;
+      timer = window.setTimeout(() => {
+        setFirstUnreadMessageId(null);
+      }, 4500);
+    });
+    const onMarkedDone = (e: Event) => {
+      const detail = (e as CustomEvent<{ friendId?: string }>).detail;
+      if (detail?.friendId === friend.id) {
+        setFirstUnreadMessageId(null);
+      }
+    };
+    window.addEventListener(CONVERSATION_MARKED_READ_EVENT, onMarkedDone);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener(CONVERSATION_MARKED_READ_EVENT, onMarkedDone);
+    };
+  }, [firstUnreadMessageId, friend.id]);
 
   useEffect(() => {
     const attemptJump = () => {
@@ -1148,7 +1205,12 @@ export function ChatView({
   );
 
   useEffect(() => {
-    if (!unreadIncomingSignature || !store.activeMessagesReady || chatClosing || store.activeChatId !== friend.id) {
+    if (chatClosing || !me?.id || store.activeChatId !== friend.id) {
+      return;
+    }
+    const dmPrefs = getUserChatPrefs(me.id).dms[friend.id];
+    const hasLocalUnread = (dmPrefs?.unreadTimestamps.length ?? 0) > 0;
+    if (!unreadIncomingSignature && !hasLocalUnread) {
       return;
     }
     let cancelled = false;
@@ -1156,6 +1218,7 @@ export function ChatView({
       if (cancelled || chatClosing || store.activeChatId !== friend.id) return;
       const activelyViewing = await isChatActivelyVisibleToUser();
       if (!cancelled && activelyViewing) {
+        if (!store.activeMessagesReady && !hasLocalUnread) return;
         void markMessagesRead(friend.id).catch((cause: unknown) => {
           setError(friendlyError(cause, "Couldn't update read status."));
         });
@@ -1184,7 +1247,7 @@ export function ChatView({
         void nativeSub.then((h) => h.remove());
       }
     };
-  }, [chatClosing, friend.id, markMessagesRead, store.activeChatId, store.activeMessagesReady, unreadIncomingSignature]);
+  }, [chatClosing, friend.id, markMessagesRead, me?.id, store.activeChatId, store.activeMessagesReady, unreadIncomingSignature]);
 
   useEffect(
     () => () => {

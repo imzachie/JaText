@@ -20,7 +20,7 @@ import {
   COLOUR_THEME_PRESETS,
   CUSTOM_TILE_SWATCH,
   DEFAULT_THEME_OPTIONS,
-  toSyncedThemePayload,
+  flushThemePersistence,
   updateThemeConfig,
   useJaTextTheme,
   type ColourThemeId,
@@ -81,7 +81,6 @@ export function SettingsModal({
   const {
     me,
     signOut,
-    saveProfile,
     mode,
     notificationsEnabled,
     pushRegistrationStatus,
@@ -167,38 +166,26 @@ export function SettingsModal({
     setMobileMenuView("detail");
   }
 
-  function persistSyncedThemeIfEnabled(nextCfg = theme) {
-    if (!nextCfg.syncAcrossDevices) return;
-    void saveProfile({
-      displayName: currentUser.displayName,
-      username: currentUser.username,
-      bio: currentUser.bio,
-      pronouns: currentUser.pronouns,
-      avatarColor: currentUser.avatarColor,
-      syncedTheme: toSyncedThemePayload(nextCfg),
-    }).catch(() => undefined);
-  }
-
   function handleSelectDefaultTheme(id: DefaultThemeId) {
-    const next = updateThemeConfig({
+    updateThemeConfig({
       kind: "default",
       defaultId: id,
     });
-    persistSyncedThemeIfEnabled(next);
+    flushThemePersistence();
   }
 
   function handleSelectPresetTheme(id: ColourThemeId) {
-    const next = updateThemeConfig({
+    updateThemeConfig({
       kind: "preset",
       presetId: id,
     });
-    persistSyncedThemeIfEnabled(next);
+    flushThemePersistence();
   }
 
   function handleToggleThemeSync(syncAcrossDevices: boolean) {
-    const next = updateThemeConfig({ syncAcrossDevices });
+    updateThemeConfig({ syncAcrossDevices });
     if (syncAcrossDevices) {
-      persistSyncedThemeIfEnabled(next);
+      flushThemePersistence();
     }
   }
 
@@ -1053,7 +1040,7 @@ export function SettingsModal({
                     <div className="settings-inline-legal-card" style={{ marginTop: 4 }}>
                       <h4>App Version &amp; Updates</h4>
                       <p className="muted small">
-                        Installed release: <strong>JaText v3.3.4 (Build 33)</strong>. JaText checks
+                        Installed release: <strong>JaText v3.3.5 (Build 34)</strong>. JaText checks
                         for updates automatically on launch, or you can check manually below.
                       </p>
                       <button

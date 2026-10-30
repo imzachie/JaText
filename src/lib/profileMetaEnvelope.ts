@@ -18,18 +18,22 @@ function isSafeHttpUrl(raw: unknown): raw is string {
 function sanitizeSyncedTheme(raw: unknown): SyncedThemePayload | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const obj = raw as Partial<SyncedThemePayload>;
+  const u =
+    typeof obj.u === "number" && Number.isFinite(obj.u) && obj.u > 0
+      ? Math.round(obj.u)
+      : undefined;
   if (obj.k === "d" && typeof obj.d === "string") {
-    return { k: "d", d: obj.d };
+    return u ? { k: "d", d: obj.d, u } : { k: "d", d: obj.d };
   }
   if (obj.k === "p" && typeof obj.p === "string") {
-    return { k: "p", p: obj.p };
+    return u ? { k: "p", p: obj.p, u } : { k: "p", p: obj.p };
   }
   if (obj.k === "c" && obj.c && typeof obj.c === "object") {
     const cols = Array.isArray(obj.c.cols)
       ? obj.c.cols.filter((c) => typeof c === "string").slice(0, 5)
       : [];
     if (cols.length > 0) {
-      return {
+      const base: SyncedThemePayload = {
         k: "c",
         c: {
           a: obj.c.a === "l" ? "l" : "d",
@@ -38,6 +42,8 @@ function sanitizeSyncedTheme(raw: unknown): SyncedThemePayload | undefined {
           int: typeof obj.c.int === "number" ? Math.round(obj.c.int) : 60,
         },
       };
+      if (u) base.u = u;
+      return base;
     }
   }
   return undefined;
@@ -107,6 +113,7 @@ export function unpackAvatarColorWithMeta(
   rawColor: string | undefined,
   explicitSocials?: UserSocialLink[],
   explicitWebsite?: UserWebsiteLink,
+  explicitSyncedTheme?: SyncedThemePayload,
 ): {
   avatarColor: string;
   socials?: UserSocialLink[];
@@ -116,7 +123,9 @@ export function unpackAvatarColorWithMeta(
   const avatarColor = stripProfileMetaFromColorId(rawColor);
   let socials = explicitSocials && explicitSocials.length > 0 ? explicitSocials : undefined;
   let website = explicitWebsite?.url ? explicitWebsite : undefined;
-  let syncedTheme: SyncedThemePayload | undefined;
+  let syncedTheme: SyncedThemePayload | undefined = explicitSyncedTheme
+    ? sanitizeSyncedTheme(explicitSyncedTheme)
+    : undefined;
 
   if (rawColor) {
     const idx = rawColor.indexOf(META_DELIMITER);
@@ -158,7 +167,8 @@ export function unpackAvatarColorWithMeta(
               : url;
           website = { title, url };
         }
-        syncedTheme = sanitizeSyncedTheme(parsed.t);
+        const parsedTheme = sanitizeSyncedTheme(parsed.t);
+        if (parsedTheme) syncedTheme = parsedTheme;
       } catch {
         // Ignore malformed metadata suffix and keep clean base color.
       }
