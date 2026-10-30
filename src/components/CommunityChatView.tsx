@@ -1,8 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from "react";
-import { useQuery } from "convex/react";
-import type { Id } from "../../convex/_generated/dataModel";
-import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
+import type { PollVoter } from "../lib/types";
 import { playMessageSound } from "../lib/alerts";
 import { useChatAutoScrollAndKeyboard } from "../lib/useChatAutoScrollAndKeyboard";
 import {
@@ -131,9 +129,26 @@ function CommunityVoterDialog({
   poll: CommunityMessage;
   onClose: () => void;
 }) {
-  const voterQuery = useQuery(api.community.voters, {
-    pollId: poll.id as Id<"communityMessages">,
-  });
+  const store = useJaText();
+  const [voterQuery, setVoterQuery] = useState<PollVoter[] | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    if (!store.getCommunityPollVoters) {
+      setVoterQuery([]);
+      return;
+    }
+    void store
+      .getCommunityPollVoters(poll.id)
+      .then((list) => {
+        if (!cancelled) setVoterQuery(list);
+      })
+      .catch(() => {
+        if (!cancelled) setVoterQuery([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [poll.id, store]);
   const voters = voterQuery ?? [];
   return (
     <AnimatedModal
@@ -190,7 +205,7 @@ function CommunityVoterDialog({
 }
 
 function CommunityTypingStatus() {
-  const typingUsers = useQuery(api.community.typingUsers, {});
+  const { communityTypingUsers: typingUsers } = useJaText();
   if (!typingUsers?.length) return null;
   const names = typingUsers.map((user) => user.displayName || user.username);
   return (
@@ -1500,7 +1515,7 @@ export function CommunityChatView({
       </div>
 
       {error && <div className="error-box community-error" role="alert">{error}</div>}
-      {store.mode === "convex" && <CommunityTypingStatus />}
+      {store.mode !== "demo" && <CommunityTypingStatus />}
 
       {file && (
         <div className="attach-preview">
@@ -1614,7 +1629,7 @@ export function CommunityChatView({
           )}
         </AnimatedModal>
       )}
-      {voterPoll && store.mode === "convex" && <CommunityVoterDialog poll={voterPoll} onClose={() => setVoterPollId(null)} />}
+      {voterPoll && store.mode !== "demo" && <CommunityVoterDialog poll={voterPoll} onClose={() => setVoterPollId(null)} />}
 
       {messageMenu && (
         <ContextMenu x={messageMenu.x} y={messageMenu.y} label="Message actions" className={`message-context-menu ${messageMenuClosing ? "closing" : ""}`} onClose={closeMessageMenu}>

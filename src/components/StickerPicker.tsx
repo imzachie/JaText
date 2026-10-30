@@ -146,12 +146,12 @@ export function StickerPicker({
       setUploadFile(null);
       return;
     }
-    const maxSize = store.mode === "demo" ? 1024 * 1024 : 10 * 1024 * 1024;
+    const maxSize = store.mode === "demo" ? 1024 * 1024 : 4 * 1024 * 1024;
     if (file.size > maxSize) {
       setError(
         store.mode === "demo"
-          ? "Demo uploads must be 1 MB or smaller. Connect a live deployment for larger files."
-          : "Images must be 10 MB or smaller.",
+          ? "Demo uploads must be 1 MB or smaller."
+          : "Images and GIFs must be 4 MB or smaller.",
       );
       setUploadFile(null);
       return;
@@ -305,7 +305,7 @@ export function StickerPicker({
                   <strong>Choose an image or GIF</strong>
                   <small>
                     JPG, PNG, GIF, WebP and more · up to{" "}
-                    {store.mode === "demo" ? "1 MB" : "10 MB"}
+                    {store.mode === "demo" ? "1 MB" : "4 MB"}
                   </small>
                 </button>
               )}

@@ -124,10 +124,20 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.4.0",
+    date: "October 30, 2026",
+    headline: "Full Turso (libSQL) Cloud Migration, Built-In 30-Day Auth & CDN Media Storage",
+    latest: true,
+    bullets: [
+      "Migrated JaText's entire database, auth, media storage, and real-time sync engine to Turso (libSQL) with automatic zero-touch schema setup.",
+      "Replaced external auth dependencies with built-in scrypt Email/Password authentication, Google OAuth 2.0 on both Web (/chats) and Android, and multi-tab 30-day sessions.",
+      "Preserved 100% of zero-knowledge E2EE, 1:1 and Group WebRTC calls with audio screen sharing, custom synced themes, custom bubbles, polls, and Android background push decryption.",
+    ],
+  },
+  {
     version: "v3.3.7",
     date: "October 30, 2026",
-    headline: "Mobile Login Scroll & Tap Fix, Convex Auth Env Schema & Live Auth Health Diagnostics",
-    latest: true,
+    headline: "Mobile Login Scroll & Tap Fix, Auth Env Schema & Live Health Diagnostics",
     bullets: [
       "Fixed mobile Login and Onboarding scrolling & button/input tapping inside locked mobile viewports, with zero permanent transform hit-test offsets.",
       "Declared all Convex Auth environment variables in convex.config.ts, added live Convex backend health diagnostics on sign-in errors, and gave Light-theme error boxes crisp contrast.",
@@ -273,7 +283,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.3.7 · Live
+                v3.4.0 · Live
               </span>
             </span>
           </a>
@@ -392,7 +402,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.3.7 (Build 36)</strong>
+                    <strong>v3.4.0 (Build 37)</strong>
                     <span>Web &amp; Signed APK</span>
                   </div>
                 </div>
@@ -762,7 +772,7 @@ export function LandingHeroPage() {
               <h2>Ready to jump into your chats?</h2>
               <p>
                 Launch the full JaText web app at <strong>jatext.vercel.app/chats</strong> or grab
-                the latest signed Android Release APK (v3.3.7).
+                the latest signed Android Release APK (v3.4.0).
               </p>
             </div>
             <div className="jt-cta-banner-actions">
@@ -781,7 +791,7 @@ export function LandingHeroPage() {
                 href="/downloads/JaText-release.apk"
                 className="jt-btn-secondary jt-btn-lg"
               >
-                Get Android APK (v3.3.7)
+                Get Android APK (v3.4.0)
               </a>
             </div>
           </div>
@@ -793,7 +803,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.3.7</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.4.0</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

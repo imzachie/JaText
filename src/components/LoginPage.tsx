@@ -1,9 +1,10 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   cancelAddAnotherAccount,
   switchToAccountSlot,
   useMultiAccountState,
 } from "../lib/accountManager";
+import { consumePendingOAuthError, PUBLIC_TURSO_API_ORIGIN } from "../lib/tursoClient";
 import { useJaText } from "../lib/store";
 import { Avatar } from "./Avatar";
 import { LegalModal, type LegalTab } from "./LegalModal";
@@ -16,7 +17,7 @@ import {
   UsersIcon,
 } from "./UiIcons";
 
-const CONVEX_URL = import.meta.env.VITE_CONVEX_URL as string | undefined;
+const BACKEND_ORIGIN = PUBLIC_TURSO_API_ORIGIN;
 
 function GoogleIcon() {
   return (
@@ -48,13 +49,21 @@ export function LoginPage() {
   const [gEmail, setGEmail] = useState("Alex@example.com");
   const [legalTab, setLegalTab] = useState<LegalTab | null>(null);
 
+  useEffect(() => {
+    const oauthErr = consumePendingOAuthError();
+    if (oauthErr) {
+      setErrorSource("google");
+      setError(oauthErr);
+    }
+  }, []);
+
   async function resolveAuthError(
     err: unknown,
-    context: "signin" | "signup" | "google",
+    _context: "signin" | "signup" | "google",
   ): Promise<string> {
     const raw = err instanceof Error ? err.message : String(err ?? "");
-    if (/exceeded.*free plan|usage limit|deployments? ha(s|ve) been disabled/i.test(raw)) {
-      return "Convex backend is temporarily paused because the deployment reached its Convex plan/usage limit in dashboard.convex.dev.";
+    if (/TURSO_DATABASE_URL|TURSO_AUTH_TOKEN|not configured yet/i.test(raw)) {
+      return "Turso database is not connected yet. Add TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in Vercel Environment Variables and redeploy.";
     }
     if (/failed to fetch|networkerror|load failed|network request failed|fetch failed|offline/i.test(raw)) {
       return "Network error while reaching JaText. Check your internet connection and try again.";
@@ -67,36 +76,6 @@ export function LoginPage() {
     }
     if (/already exists/i.test(raw)) {
       return "An account with this email already exists. Switch to 'Sign in' or tap 'Continue with Google' above.";
-    }
-    if (
-      /\[CONVEX |server error|called by client|invalidaccountid|invalidsecret|invalid credentials/i.test(
-        raw,
-      )
-    ) {
-      // Probe a read-only public query to distinguish a paused/over-quota Convex deployment
-      // from an auth-specific failure.
-      if (store.mode === "convex") {
-        try {
-          await store.checkUsername("jatext_probe");
-        } catch (probeErr) {
-          const probeMsg =
-            probeErr instanceof Error ? probeErr.message : String(probeErr ?? "");
-          if (/exceeded.*free plan|usage limit|deployments? ha(s|ve) been disabled/i.test(probeMsg)) {
-            return "JaText's Convex database reached its Convex Free Plan / usage limit and paused function execution. Open dashboard.convex.dev -> Settings / Usage to re-enable it.";
-          }
-          if (/\[CONVEX |server error/i.test(probeMsg)) {
-            return "JaText's Convex backend is currently returning a server error across queries and auth. Check dashboard.convex.dev -> Logs / Settings for your deployment.";
-          }
-        }
-      }
-
-      if (context === "google") {
-        return "Convex Auth returned a server error starting Google OAuth. Verify SITE_URL, AUTH_GOOGLE_ID, AUTH_GOOGLE_SECRET, JWT_PRIVATE_KEY, and JWKS in Convex Dashboard -> Settings -> Environment Variables.";
-      }
-      if (context === "signup") {
-        return "Could not create account. This email may already be registered (try 'Sign in' or 'Continue with Google'), or use an 8+ character password.";
-      }
-      return "Incorrect email or password, or Convex Auth environment keys need attention. If your account uses Google, tap 'Continue with Google' above.";
     }
     return raw.trim() || "Something went wrong. Please try again.";
   }
@@ -168,7 +147,7 @@ export function LoginPage() {
               <button
                 type="button"
                 className="ghost-btn login-back-account-btn"
-                onClick={() => cancelAddAnotherAccount(CONVEX_URL)}
+                onClick={() => cancelAddAnotherAccount(BACKEND_ORIGIN)}
               >
                 <ArrowLeftIcon size={15} />
                 <span>
@@ -195,7 +174,7 @@ export function LoginPage() {
                     key={acct.slotId}
                     type="button"
                     className="login-saved-account-btn"
-                    onClick={() => switchToAccountSlot(acct.slotId, CONVEX_URL)}
+                      onClick={() => switchToAccountSlot(acct.slotId, BACKEND_ORIGIN)}
                   >
                     <Avatar
                       user={{
@@ -323,8 +302,7 @@ export function LoginPage() {
 
           {store.mode === "demo" ? (
             <p className="muted small center">
-              Running in <strong>demo mode</strong> (no Convex URL set yet). Your data
-              lives in this browser. Add <code>VITE_CONVEX_URL</code> to go live on Convex.
+              Running in <strong>demo mode</strong>. Your data lives in this browser.
             </p>
           ) : null}
 

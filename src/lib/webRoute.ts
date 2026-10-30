@@ -12,7 +12,8 @@ let oauthLatchedToChats = false;
 function promoteOAuthLandingUrlIfNeeded(): boolean {
   if (typeof window === "undefined" || Capacitor.isNativePlatform()) return false;
   const params = new URLSearchParams(window.location.search);
-  const hasCode = params.has("code");
+  const hasCode =
+    params.has("code") || params.has("tursoToken") || params.has("authError");
   let hasReturnFlag = false;
   try {
     hasReturnFlag = window.sessionStorage.getItem(OAUTH_RETURN_CHATS_FLAG) === "1";

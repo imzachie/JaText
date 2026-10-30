@@ -8,6 +8,7 @@ import {
 } from "../lib/accountManager";
 import { useCall } from "../lib/calling";
 import { useGroupCall } from "../lib/groupCalling";
+import { PUBLIC_TURSO_API_ORIGIN } from "../lib/tursoClient";
 import { useJaText } from "../lib/store";
 import type { JaUser } from "../lib/types";
 import { AnimatedModal } from "./AnimatedModal";
@@ -39,7 +40,7 @@ export function AccountSwitcherModal({ onClose }: { onClose: () => void }) {
   const { session: callSession, endCall } = useCall();
   const { groupSession: groupCallSession, leaveGroupCall } = useGroupCall();
   const { activeSlotId, accounts } = useMultiAccountState();
-  const convexUrl = import.meta.env.VITE_CONVEX_URL as string | undefined;
+  const convexUrl = PUBLIC_TURSO_API_ORIGIN;
 
   const sortedAccounts = useMemo(() => {
     const list = [...accounts];

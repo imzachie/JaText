@@ -39,7 +39,8 @@ import {
   useE2EESnapshot,
 } from "./lib/e2ee/keystore";
 import { GroupCallProvider, useGroupCall } from "./lib/groupCalling";
-import { getActiveAccountSlotId, getConvexAuthKeysForSlot } from "./lib/accountManager";
+import { getActiveAccountSlotId, getTursoTokenForSlotSync } from "./lib/accountManager";
+import { PUBLIC_TURSO_API_ORIGIN } from "./lib/tursoClient";
 import { JaTextNative } from "./lib/nativeBridge";
 import { useJaText } from "./lib/store";
 import {
@@ -311,21 +312,15 @@ function AppContent() {
       }
     }
 
-    const convexUrl = (import.meta.env.VITE_CONVEX_URL as string | undefined) ?? "";
     let authJwt: string | undefined;
-    let authRefreshToken: string | undefined;
-    if (convexUrl) {
-      try {
-        const keys = getConvexAuthKeysForSlot(convexUrl, getActiveAccountSlotId());
-        authJwt = localStorage.getItem(keys.jwtKey) ?? undefined;
-        authRefreshToken = localStorage.getItem(keys.refreshKey) ?? undefined;
-      } catch {
-        // Ignore storage read failure
-      }
+    try {
+      authJwt = getTursoTokenForSlotSync(getActiveAccountSlotId()) ?? undefined;
+    } catch {
+      // Ignore storage read failure
     }
 
     void JaTextNative.syncE2EENotificationState({
-      convexUrl: convexUrl || undefined,
+      convexUrl: PUBLIC_TURSO_API_ORIGIN,
       userId: me.id,
       notificationsEnabled,
       isDnd: me.statusPreference === "dnd",
@@ -333,7 +328,7 @@ function AppContent() {
       peersJson: JSON.stringify(peers),
       groupsJson: JSON.stringify(groupEpochs),
       authJwt,
-      authRefreshToken,
+      authRefreshToken: undefined,
     }).catch(() => undefined);
   }, [e2eeSnapshot.version, me?.id, me?.statusPreference, notificationsEnabled]);
 

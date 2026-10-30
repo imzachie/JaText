@@ -201,19 +201,52 @@ export function getDemoSessionKeyForSlot(slotId: string): string {
     : `jatext-demo-session-v1:${slotId}`;
 }
 
+export function getTursoTokenKeyForSlot(slotId = getActiveAccountSlotId()): string {
+  return slotId === DEFAULT_ACCOUNT_SLOT_ID
+    ? "jatext:turso-jwt:v1"
+    : `jatext:turso-jwt:v1:${slotId}`;
+}
+
+export function getTursoTokenForSlotSync(slotId = getActiveAccountSlotId()): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(getTursoTokenKeyForSlot(slotId));
+  } catch {
+    return null;
+  }
+}
+
+export async function setTursoTokenForSlot(
+  slotId: string,
+  token: string,
+  apiOrigin?: string,
+): Promise<void> {
+  invalidatedAuthSlots.delete(slotId);
+  const key = getTursoTokenKeyForSlot(slotId);
+  await writeAuthItem(key, token, apiOrigin);
+}
+
 const invalidatedAuthSlots = new Set<string>();
 
 export function hasStoredAuthForSlot(
-  convexUrl: string | undefined,
+  backendIdentifier: string | undefined,
   slotId: string,
 ): boolean {
   if (typeof window === "undefined") return false;
   if (invalidatedAuthSlots.has(slotId)) return false;
   try {
-    if (!convexUrl) {
+    const tursoToken = window.localStorage.getItem(getTursoTokenKeyForSlot(slotId));
+    if (tursoToken) return true;
+    if (!backendIdentifier) {
       return Boolean(window.localStorage.getItem(getDemoSessionKeyForSlot(slotId)));
     }
-    const { jwtKey, refreshKey } = getConvexAuthKeysForSlot(convexUrl, slotId);
+    if (backendIdentifier === "turso" || backendIdentifier.includes("vercel.app")) {
+      if (Capacitor.isNativePlatform()) {
+        return readStateFromStorage().accounts.some((a) => a.slotId === slotId);
+      }
+      return false;
+    }
+    const { jwtKey, refreshKey } = getConvexAuthKeysForSlot(backendIdentifier, slotId);
     if (
       window.localStorage.getItem(jwtKey) ||
       window.localStorage.getItem(refreshKey)
@@ -231,28 +264,21 @@ export function hasStoredAuthForSlot(
 
 export async function clearDeadSlotTokensOnAuthFailure(
   slotId: string,
-  convexUrl: string,
+  convexUrl?: string,
 ): Promise<void> {
   invalidatedAuthSlots.add(slotId);
-  const keys = getConvexAuthKeysForSlot(convexUrl, slotId);
-  await Promise.all([
-    deleteAuthItem(keys.jwtKey),
-    deleteAuthItem(keys.refreshKey),
-    deleteAuthItem(keys.verifierKey),
-    deleteAuthItem(keys.fetchTimeKey),
-  ]);
+  const tursoKey = getTursoTokenKeyForSlot(slotId);
+  await deleteAuthItem(tursoKey);
+  if (convexUrl && convexUrl !== "turso") {
+    const keys = getConvexAuthKeysForSlot(convexUrl, slotId);
+    await Promise.all([
+      deleteAuthItem(keys.jwtKey),
+      deleteAuthItem(keys.refreshKey),
+      deleteAuthItem(keys.verifierKey),
+      deleteAuthItem(keys.fetchTimeKey),
+    ]);
+  }
   if (typeof window !== "undefined") {
-    try {
-      window.dispatchEvent(
-        new StorageEvent("storage", {
-          key: keys.jwtKey,
-          newValue: null,
-          storageArea: window.localStorage,
-        }),
-      );
-    } catch {
-      // Ignore synthetic StorageEvent error in older WebViews.
-    }
     window.dispatchEvent(
       new CustomEvent(SLOT_AUTH_INVALIDATED_EVENT, { detail: slotId }),
     );
@@ -296,7 +322,8 @@ async function clearSlotStoredTokens(slotId: string, convexUrl?: string): Promis
   if (typeof window !== "undefined") {
     window.localStorage.removeItem(getDemoSessionKeyForSlot(slotId));
   }
-  if (!convexUrl) return;
+  await deleteAuthItem(getTursoTokenKeyForSlot(slotId));
+  if (!convexUrl || convexUrl === "turso") return;
   const keys = getConvexAuthKeysForSlot(convexUrl, slotId);
   await Promise.all([
     deleteAuthItem(keys.jwtKey),
@@ -314,7 +341,18 @@ export async function syncNativeActiveSlotTokens(
   slotId: string,
   convexUrl?: string,
 ): Promise<void> {
-  if (!Capacitor.isNativePlatform() || !convexUrl) return;
+  if (!Capacitor.isNativePlatform()) return;
+  const tursoKey = getTursoTokenKeyForSlot(slotId);
+  const tursoJwt = await readAuthItem(tursoKey);
+  if (tursoJwt) {
+    await JaTextNative.setAuthStorageItem({
+      key: tursoKey,
+      value: tursoJwt,
+      convexUrl: convexUrl || "https://jatext.vercel.app",
+    }).catch(() => undefined);
+    return;
+  }
+  if (!convexUrl || convexUrl === "turso") return;
   const { jwtKey, refreshKey } = getConvexAuthKeysForSlot(convexUrl, slotId);
   const [jwt, refresh] = await Promise.all([readAuthItem(jwtKey), readAuthItem(refreshKey)]);
   if (jwt) {
@@ -350,7 +388,15 @@ export async function syncActiveUserToSavedAccounts(
   if (duplicateInOtherSlot) {
     const canonicalSlotId = duplicateInOtherSlot.slotId;
     invalidatedAuthSlots.delete(canonicalSlotId);
-    if (convexUrl) {
+    const tursoToken = await readAuthItem(getTursoTokenKeyForSlot(currentSlotId));
+    if (tursoToken) {
+      await writeAuthItem(
+        getTursoTokenKeyForSlot(canonicalSlotId),
+        tursoToken,
+        convexUrl || "https://jatext.vercel.app",
+      );
+      await clearSlotStoredTokens(currentSlotId, convexUrl);
+    } else if (convexUrl && convexUrl !== "turso") {
       const fromKeys = getConvexAuthKeysForSlot(convexUrl, currentSlotId);
       const toKeys = getConvexAuthKeysForSlot(convexUrl, canonicalSlotId);
       const [freshJwt, freshRefresh] = await Promise.all([
