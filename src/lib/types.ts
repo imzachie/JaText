@@ -2,6 +2,7 @@ import type { BubbleStyleId } from "./chatCustomization";
 import type { DeviceSyncRequest } from "./e2ee/cryptoPrimitives";
 import type { MessageE2EEProof } from "./e2ee/keystore";
 import type { ForwardedMessageContext } from "./forwardedContext";
+import type { SyncedThemePayload } from "./themeEngine";
 
 export interface UserSocialLink {
   platform: string;
@@ -32,6 +33,7 @@ export interface JaUser {
   customStatus?: string;
   socials?: UserSocialLink[];
   website?: UserWebsiteLink;
+  syncedTheme?: SyncedThemePayload;
 }
 
 export type StatusPreference = "online" | "dnd" | "offline";
@@ -229,6 +231,7 @@ export interface ProfileInput {
   bannerFile?: File | null;
   socials?: UserSocialLink[];
   website?: UserWebsiteLink | null;
+  syncedTheme?: SyncedThemePayload | null;
 }
 
 export interface JaTextStore {

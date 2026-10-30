@@ -51,7 +51,7 @@ export function useJaText(): JaTextStore {
 /* uniqueness, 14-day username lock, friends-only chatting, uploads)  */
 /* so the app is fully usable before you connect your own Convex      */
 /* deployment. Set VITE_CONVEX_URL and the real Convex store takes     */
-/* over automatically — see src/lib/convexStore.tsx.                   */
+/* over automatically, see src/lib/convexStore.tsx.                   */
 /* ------------------------------------------------------------------ */
 
 const DB_KEY = "jatext-demo-db-v1";
@@ -222,7 +222,7 @@ const BOT_REPLIES = [
   "omg yes 😭",
   "wait that's actually so good",
   "tell me more 👀",
-  "haha fr. also — try sending me a photo attachment, it works!",
+  "haha fr. also, try sending me a photo attachment, it works!",
   "okay noted 📝",
   "you're my favourite person to text rn not gonna lie",
   "real. anyway what are you up to later?",
@@ -578,6 +578,7 @@ export function DemoStoreProvider({
         u.bannerUrl = bannerUrl;
         if (input.socials !== undefined) u.socials = input.socials;
         if (input.website !== undefined) u.website = input.website ?? undefined;
+        if (input.syncedTheme !== undefined) u.syncedTheme = input.syncedTheme ?? undefined;
         u.onboardingComplete = true;
       });
 
@@ -630,7 +631,7 @@ export function DemoStoreProvider({
       if (between.some((r) => r.status === "pending" && r.fromId === me.id))
         throw new Error(`Friend request to @${username} is already pending.`);
       if (between.some((r) => r.status === "pending" && r.fromId === target.id))
-        throw new Error(`@${username} already sent YOU a request — check your requests!`);
+        throw new Error(`@${username} already sent YOU a request. Check your requests!`);
 
       transact((draft) =>
         draft.requests.push({

@@ -197,7 +197,7 @@ export function clearLocalGroupHistory(userId: string, groupId: string, clearedA
 
 /**
  * Strictly idempotent: clears unreadTimestamps once and advances lastReadAt
- * only to latestMessageAt — never loops!
+ * only to latestMessageAt and never loops!
  */
 export function markLocalGroupRead(userId: string, groupId: string, latestMessageAt?: number) {
   const prev = getUserChatPrefs(userId);
@@ -280,7 +280,7 @@ export function recordIncomingGroupSummariesBatch(
 
 /**
  * Strictly idempotent: clears unreadTimestamps once and advances lastReadAt
- * only to latestMessageAt — never loops!
+ * only to latestMessageAt and never loops!
  */
 export function markLocalDmRead(userId: string, friendId: string, latestMessageAt?: number) {
   if (!userId || !friendId) return;

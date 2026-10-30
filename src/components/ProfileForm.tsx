@@ -23,16 +23,18 @@ type ImageState =
 
 /**
  * Shared by first-time onboarding ("Welcome to JaText!") and Settings.
- * Everything here can be changed at any time in Settings — except the
+ * Everything here can be changed at any time in Settings, except the
  * username, which can only be changed once every 14 days.
  */
 export function ProfileForm({
   initial,
   submitLabel,
+  sectionMode = "full",
   onDone,
 }: {
   initial: JaUser;
   submitLabel: ReactNode;
+  sectionMode?: "full" | "profile" | "socials";
   onDone?: () => void;
 }) {
   const store = useJaText();
@@ -354,234 +356,242 @@ export function ProfileForm({
       </div>
 
       {/* ---------- fields ---------- */}
-      <label>
-        Display name
-        <input
-          value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
-          placeholder="e.g. Riva"
-          maxLength={40}
-          required
-        />
-      </label>
-
-      <label>
-        Username
-        <div className="username-input">
-          <span>@</span>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value.toLowerCase())}
-            placeholder="pick something cool"
-            maxLength={20}
-            required
-          />
-        </div>
-        {nameStatus && (
-          <span className={nameStatus.ok ? "hint-ok" : "hint-bad"}>{nameStatus.text}</span>
-        )}
-        {initial.username && lock.locked ? (
-          <span className="hint-bad">
-            <LockClosedIcon size={13} /> Username locked — next change in {lock.daysLeft} day
-            {lock.daysLeft === 1 ? "" : "s"}
-            {lock.nextChangeAt
-              ? ` (${new Date(lock.nextChangeAt).toLocaleDateString()})`
-              : ""}
-          </span>
-        ) : (
-          <span className="muted small">
-            Choose wisely — usernames can only be changed once every 14 days.
-          </span>
-        )}
-      </label>
-
-      <label>
-        Pronouns
-        <input
-          value={pronouns}
-          onChange={(e) => setPronouns(e.target.value)}
-          placeholder="e.g. she/her, he/him, they/them"
-          maxLength={30}
-        />
-      </label>
-
-      <label>
-        Bio
-        <textarea
-          value={bio}
-          onChange={(e) => setBio(e.target.value)}
-          placeholder="Tell people a little about you…"
-          maxLength={160}
-          rows={3}
-        />
-        <span className="muted small">{bio.length}/160</span>
-      </label>
-
-      <fieldset className="color-fieldset">
-        <legend>Avatar color</legend>
-        <p className="muted small">
-          Your avatar color outlines your <strong>profile card</strong>,{" "}
-          <strong>banner</strong>, and <strong>profile picture</strong> when
-          someone views your profile. Pick blue or yellow and your whole card
-          gets that outline.
-        </p>
-        <div className="color-grid">
-          {AVATAR_COLORS.map((c) => (
-            <button
-              type="button"
-              key={c.id}
-              className={`color-choice ${avatarColor === c.id ? "selected" : ""}`}
-              onClick={() => setAvatarColor(c.id)}
-            >
-              <span className="color-swatch" style={{ background: c.gradient, boxShadow: `0 0 0 3px ${c.hex}` }} />
-              <span className="color-name">{c.name}</span>
-              {c.note && <span className="color-note">{c.note}</span>}
-            </button>
-          ))}
-        </div>
-      </fieldset>
-
-      <fieldset className="color-fieldset socials-fieldset">
-        <legend>Socials</legend>
-        <p className="muted small">
-          Connect your Discord, YouTube, X, and other social accounts. Anyone viewing your profile picture can click your connected socials.
-        </p>
-
-        {socials.length > 0 && (
-          <div className="connected-socials-list">
-            {socials.map((soc, idx) => {
-              const meta = getSocialPlatformMeta(soc.platform);
-              return (
-                <div
-                  key={`${soc.platform}-${idx}`}
-                  className="connected-social-item"
-                  style={{ "--social-accent": meta.accent } as CSSProperties}
-                >
-                  <span className="connected-social-icon" style={{ color: meta.accent }}>
-                    <SocialBrandIcon platform={soc.platform} size={16} />
-                  </span>
-                  <div className="connected-social-info">
-                    <strong>{meta.label}</strong>
-                    <span>{soc.handle}</span>
-                  </div>
-                  <button
-                    type="button"
-                    className="icon-btn connected-social-remove"
-                    aria-label={`Remove ${meta.label}`}
-                    title="Disconnect"
-                    onClick={() => handleRemoveSocial(idx)}
-                  >
-                    <CloseIcon size={14} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        <div className="social-platform-chips" role="group" aria-label="Choose social platform">
-          {SOCIAL_PLATFORMS.map((plat) => {
-            const active = selectedPlatform === plat.id;
-            return (
-              <button
-                type="button"
-                key={plat.id}
-                className={`social-platform-chip ${active ? "active" : ""}`}
-                style={{ "--social-accent": plat.accent } as CSSProperties}
-                onClick={() => setSelectedPlatform(plat.id)}
-              >
-                <span style={{ color: plat.accent, display: "inline-flex" }}>
-                  <SocialBrandIcon platform={plat.id} size={14} />
-                </span>
-                <span>{plat.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {selectedPlatform === "other" && (
-          <input
-            type="text"
-            value={customPlatformName}
-            onChange={(e) => setCustomPlatformName(e.target.value)}
-            placeholder="Platform name (e.g. SoundCloud, Behance,Threads)"
-            maxLength={32}
-          />
-        )}
-
-        <div className="social-connect-row">
-          <input
-            type="text"
-            value={socialInput}
-            onChange={(e) => setSocialInput(e.target.value)}
-            placeholder={
-              SOCIAL_PLATFORMS.find((p) => p.id === selectedPlatform)?.placeholder ??
-              "Username or profile URL"
-            }
-            maxLength={260}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                handleAddSocial();
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="ghost-btn social-connect-btn"
-            disabled={!socialInput.trim()}
-            onClick={handleAddSocial}
-          >
-            <PlusIcon size={15} />
-            <span>Connect</span>
-          </button>
-        </div>
-      </fieldset>
-
-      <fieldset className="color-fieldset website-fieldset">
-        <legend>Website</legend>
-        <p className="muted small">
-          Add a website title and URL — it appears right underneath your socials on your profile card.
-        </p>
-        <div className="website-inputs-grid">
-          <label className="website-field-label">
-            <span>Title</span>
+      {sectionMode !== "socials" && (
+        <>
+          <label>
+            Display name
             <input
-              type="text"
-              value={websiteTitle}
-              onChange={(e) => setWebsiteTitle(e.target.value)}
-              placeholder="e.g. Portfolio, My Channel, Blog"
-              maxLength={60}
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="e.g. Riva"
+              maxLength={40}
+              required
             />
           </label>
-          <label className="website-field-label">
-            <span>URL</span>
-            <div className="website-url-input-wrap">
-              <WebsiteGlobeIcon size={15} />
+
+          <label>
+            Username
+            <div className="username-input">
+              <span>@</span>
               <input
-                type="text"
-                value={websiteUrl}
-                onChange={(e) => setWebsiteUrl(e.target.value)}
-                placeholder="https://example.com"
-                maxLength={300}
+                value={username}
+                onChange={(e) => setUsername(e.target.value.toLowerCase())}
+                placeholder="pick something cool"
+                maxLength={20}
+                required
               />
             </div>
+            {nameStatus && (
+              <span className={nameStatus.ok ? "hint-ok" : "hint-bad"}>{nameStatus.text}</span>
+            )}
+            {initial.username && lock.locked ? (
+              <span className="hint-bad">
+                <LockClosedIcon size={13} /> Username locked · next change in {lock.daysLeft} day
+                {lock.daysLeft === 1 ? "" : "s"}
+                {lock.nextChangeAt
+                  ? ` (${new Date(lock.nextChangeAt).toLocaleDateString()})`
+                  : ""}
+              </span>
+            ) : (
+              <span className="muted small">
+                Choose wisely: usernames can only be changed once every 14 days.
+              </span>
+            )}
           </label>
-        </div>
-        {(websiteTitle || websiteUrl) && (
-          <button
-            type="button"
-            className="mini-btn"
-            style={{ justifySelf: "start" }}
-            onClick={() => {
-              setWebsiteTitle("");
-              setWebsiteUrl("");
-            }}
-          >
-            Clear website
-          </button>
-        )}
-      </fieldset>
+
+          <label>
+            Pronouns
+            <input
+              value={pronouns}
+              onChange={(e) => setPronouns(e.target.value)}
+              placeholder="e.g. she/her, he/him, they/them"
+              maxLength={30}
+            />
+          </label>
+
+          <label>
+            Bio
+            <textarea
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              placeholder="Tell people a little about you…"
+              maxLength={160}
+              rows={3}
+            />
+            <span className="muted small">{bio.length}/160</span>
+          </label>
+
+          <fieldset className="color-fieldset">
+            <legend>Avatar color</legend>
+            <p className="muted small">
+              Your avatar color outlines your <strong>profile card</strong>,{" "}
+              <strong>banner</strong>, and <strong>profile picture</strong> when
+              someone views your profile. Pick blue or yellow and your whole card
+              gets that outline.
+            </p>
+            <div className="color-grid">
+              {AVATAR_COLORS.map((c) => (
+                <button
+                  type="button"
+                  key={c.id}
+                  className={`color-choice ${avatarColor === c.id ? "selected" : ""}`}
+                  onClick={() => setAvatarColor(c.id)}
+                >
+                  <span className="color-swatch" style={{ background: c.gradient, boxShadow: `0 0 0 3px ${c.hex}` }} />
+                  <span className="color-name">{c.name}</span>
+                  {c.note && <span className="color-note">{c.note}</span>}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        </>
+      )}
+
+      {sectionMode !== "profile" && (
+        <>
+          <fieldset className="color-fieldset socials-fieldset">
+            <legend>Socials</legend>
+            <p className="muted small">
+              Connect your Discord, YouTube, X, and other social accounts. Anyone viewing your profile picture can click your connected socials.
+            </p>
+
+            {socials.length > 0 && (
+              <div className="connected-socials-list">
+                {socials.map((soc, idx) => {
+                  const meta = getSocialPlatformMeta(soc.platform);
+                  return (
+                    <div
+                      key={`${soc.platform}-${idx}`}
+                      className="connected-social-item"
+                      style={{ "--social-accent": meta.accent } as CSSProperties}
+                    >
+                      <span className="connected-social-icon" style={{ color: meta.accent }}>
+                        <SocialBrandIcon platform={soc.platform} size={16} />
+                      </span>
+                      <div className="connected-social-info">
+                        <strong>{meta.label}</strong>
+                        <span>{soc.handle}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="icon-btn connected-social-remove"
+                        aria-label={`Remove ${meta.label}`}
+                        title="Disconnect"
+                        onClick={() => handleRemoveSocial(idx)}
+                      >
+                        <CloseIcon size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="social-platform-chips" role="group" aria-label="Choose social platform">
+              {SOCIAL_PLATFORMS.map((plat) => {
+                const active = selectedPlatform === plat.id;
+                return (
+                  <button
+                    type="button"
+                    key={plat.id}
+                    className={`social-platform-chip ${active ? "active" : ""}`}
+                    style={{ "--social-accent": plat.accent } as CSSProperties}
+                    onClick={() => setSelectedPlatform(plat.id)}
+                  >
+                    <span style={{ color: plat.accent, display: "inline-flex" }}>
+                      <SocialBrandIcon platform={plat.id} size={14} />
+                    </span>
+                    <span>{plat.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {selectedPlatform === "other" && (
+              <input
+                type="text"
+                value={customPlatformName}
+                onChange={(e) => setCustomPlatformName(e.target.value)}
+                placeholder="Platform name (e.g. SoundCloud, Behance, Threads)"
+                maxLength={32}
+              />
+            )}
+
+            <div className="social-connect-row">
+              <input
+                type="text"
+                value={socialInput}
+                onChange={(e) => setSocialInput(e.target.value)}
+                placeholder={
+                  SOCIAL_PLATFORMS.find((p) => p.id === selectedPlatform)?.placeholder ??
+                  "Username or profile URL"
+                }
+                maxLength={260}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleAddSocial();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="ghost-btn social-connect-btn"
+                disabled={!socialInput.trim()}
+                onClick={handleAddSocial}
+              >
+                <PlusIcon size={15} />
+                <span>Connect</span>
+              </button>
+            </div>
+          </fieldset>
+
+          <fieldset className="color-fieldset website-fieldset">
+            <legend>Website</legend>
+            <p className="muted small">
+              Add a website title and URL. It appears right underneath your socials on your profile card.
+            </p>
+            <div className="website-inputs-grid">
+              <label className="website-field-label">
+                <span>Title</span>
+                <input
+                  type="text"
+                  value={websiteTitle}
+                  onChange={(e) => setWebsiteTitle(e.target.value)}
+                  placeholder="e.g. Portfolio, My Channel, Blog"
+                  maxLength={60}
+                />
+              </label>
+              <label className="website-field-label">
+                <span>URL</span>
+                <div className="website-url-input-wrap">
+                  <WebsiteGlobeIcon size={15} />
+                  <input
+                    type="text"
+                    value={websiteUrl}
+                    onChange={(e) => setWebsiteUrl(e.target.value)}
+                    placeholder="https://example.com"
+                    maxLength={300}
+                  />
+                </div>
+              </label>
+            </div>
+            {(websiteTitle || websiteUrl) && (
+              <button
+                type="button"
+                className="mini-btn"
+                style={{ justifySelf: "start" }}
+                onClick={() => {
+                  setWebsiteTitle("");
+                  setWebsiteUrl("");
+                }}
+              >
+                Clear website
+              </button>
+            )}
+          </fieldset>
+        </>
+      )}
 
       {error && <div className="error-box">{error}</div>}
 

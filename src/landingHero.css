@@ -1,6 +1,6 @@
 /* ==========================================================================
-   JaText Modern White + Green Sketch Hero Page (`jatext.vercel.app/`)
-   Hand-inked drafting paper aesthetic — strictly white, charcoal ink & green.
+   JaText Modern Dark + Green Sketch Hero Page (`jatext.vercel.app/`)
+   Eye-friendly dark drafting-slate surface with crisp chalk & emerald ink.
    ========================================================================== */
 
 html.jatext-landing-route,
@@ -10,56 +10,58 @@ html.jatext-landing-route #root {
   min-height: 100%;
   overflow-y: auto !important;
   overflow-x: hidden !important;
-  background: #fbfdf9 !important;
-  color: #121a15 !important;
-  color-scheme: light !important;
-  scrollbar-color: #86efac #eef5f0 !important;
+  background: #0a0f0c !important;
+  color: #eaf3ed !important;
+  color-scheme: dark !important;
+  scrollbar-color: #22c55e #111915 !important;
   scroll-behavior: smooth;
 }
 
 html.jatext-landing-route *::-webkit-scrollbar-track {
-  background: #eef5f0;
+  background: #111915;
 }
 
 html.jatext-landing-route *::-webkit-scrollbar-thumb {
-  background: #74c690;
-  border: 2px solid #eef5f0;
+  background: #1e6f40;
+  border: 2px solid #111915;
 }
 
 html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
-  background: #16a34a;
+  background: #22c55e;
 }
 
 .jt-sketch-page {
-  --sk-paper: #fbfdf9;
-  --sk-card: #ffffff;
-  --sk-paper-tint: #f2f9f4;
-  --sk-ink: #121a15;
-  --sk-ink-soft: #2e3b33;
-  --sk-pencil: #55665c;
-  --sk-rule: #d5e2d9;
+  --sk-paper: #0a0f0c;
+  --sk-card: #121a15;
+  --sk-paper-tint: #16211a;
+  --sk-ink: #eaf3ed;
+  --sk-ink-soft: #b9ccc0;
+  --sk-pencil: #7f9688;
+  --sk-stroke: #2a3c31;
+  --sk-stroke-strong: #3d5948;
+  --sk-rule: #213027;
   --sk-green: #16a34a;
-  --sk-green-deep: #15803d;
+  --sk-green-deep: #4ade80;
   --sk-green-bright: #22c55e;
-  --sk-green-wash: #dcfce7;
-  --sk-green-marker: #bbf7d0;
+  --sk-green-wash: rgba(34, 197, 94, 0.14);
+  --sk-green-marker: rgba(34, 197, 94, 0.26);
+  --sk-shadow: #040705;
   position: relative;
   min-height: 100vh;
   background-color: var(--sk-paper);
   background-image:
-    radial-gradient(#c8d8ce 1.15px, transparent 1.15px),
-    linear-gradient(to right, rgba(22, 163, 74, 0.045) 1px, transparent 1px);
-  background-size: 22px 22px, 110px 110px;
+    radial-gradient(rgba(74, 222, 128, 0.13) 1.1px, transparent 1.1px),
+    linear-gradient(to right, rgba(34, 197, 94, 0.04) 1px, transparent 1px);
+  background-size: 24px 24px, 120px 120px;
   background-position: 0 0, 0 0;
   color: var(--sk-ink);
   font-family: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   line-height: 1.55;
-  selection-background-color: #bbf7d0;
 }
 
 .jt-sketch-page ::selection {
-  background: #bbf7d0;
-  color: #0d1510;
+  background: rgba(34, 197, 94, 0.35);
+  color: #ffffff;
 }
 
 .jt-sketch-svg-defs {
@@ -77,16 +79,6 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   }
   to {
     stroke-dashoffset: 0;
-  }
-}
-
-@keyframes jtSketchFloat {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) rotate(-0.6deg);
-  }
-  50% {
-    transform: translate3d(0, -5px, 0) rotate(0.6deg);
   }
 }
 
@@ -137,10 +129,6 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   animation-delay: 360ms;
 }
 
-.jt-draw-delay-3 {
-  animation-delay: 540ms;
-}
-
 .jt-reveal {
   opacity: 0;
   transform: translate3d(0, 22px, 0);
@@ -160,9 +148,9 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   position: sticky;
   top: 0;
   z-index: 40;
-  background: rgba(251, 253, 249, 0.9);
-  backdrop-filter: blur(10px);
-  border-bottom: 2px solid var(--sk-ink);
+  background: rgba(10, 15, 12, 0.88);
+  backdrop-filter: blur(12px);
+  border-bottom: 2px solid var(--sk-stroke);
 }
 
 .jt-nav {
@@ -183,22 +171,18 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   color: var(--sk-ink);
 }
 
-.jt-brand-mark {
+.jt-brand-logo-img {
   width: 40px;
   height: 40px;
-  border-radius: 12px 15px 13px 14px;
-  border: 2px solid var(--sk-ink);
-  background: var(--sk-green-wash);
-  box-shadow: 2.5px 2.5px 0 var(--sk-ink);
-  display: grid;
-  place-items: center;
-  color: var(--sk-green-deep);
-  transition: transform 160ms ease, box-shadow 160ms ease;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.45));
+  transition: transform 160ms ease;
 }
 
-.jt-brand:hover .jt-brand-mark {
-  transform: translate(-1px, -1px) rotate(-2deg);
-  box-shadow: 4px 4px 0 var(--sk-green);
+.jt-brand:hover .jt-brand-logo-img {
+  transform: scale(1.06) rotate(-3deg);
 }
 
 .jt-brand-text {
@@ -224,7 +208,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   letter-spacing: 0.02em;
   color: var(--sk-green-deep);
   background: var(--sk-green-wash);
-  border: 1.5px solid var(--sk-ink);
+  border: 1.5px solid rgba(74, 222, 128, 0.4);
   border-radius: 999px;
   transform: rotate(-1.5deg);
 }
@@ -233,7 +217,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--sk-green);
+  background: var(--sk-green-bright);
   animation: jtSketchPulseDot 2s ease-in-out infinite;
 }
 
@@ -260,7 +244,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   right: 0;
   bottom: 0;
   height: 2.5px;
-  background: var(--sk-green);
+  background: var(--sk-green-bright);
   border-radius: 99px;
   transform: scaleX(0);
   transform-origin: left center;
@@ -294,7 +278,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   font-size: 15px;
   text-decoration: none;
   cursor: pointer;
-  border: 2px solid var(--sk-ink);
+  border: 2px solid var(--sk-stroke-strong);
   border-radius: 14px 17px 15px 16px / 16px 14px 17px 15px;
   padding: 11px 20px;
   transition:
@@ -305,36 +289,38 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 
 .jt-btn-primary {
   background: var(--sk-green);
+  border-color: #4ade80;
   color: #ffffff !important;
-  box-shadow: 4px 4px 0 var(--sk-ink);
+  box-shadow: 4px 4px 0 var(--sk-shadow);
 }
 
 .jt-btn-primary:hover {
   background: #15803d;
   transform: translate(-1.5px, -1.5px);
-  box-shadow: 5.5px 5.5px 0 var(--sk-ink);
+  box-shadow: 5.5px 5.5px 0 rgba(34, 197, 94, 0.35);
 }
 
 .jt-btn-primary:active {
   transform: translate(2.5px, 2.5px);
-  box-shadow: 1.5px 1.5px 0 var(--sk-ink);
+  box-shadow: 1.5px 1.5px 0 var(--sk-shadow);
 }
 
 .jt-btn-secondary {
   background: var(--sk-card);
   color: var(--sk-ink) !important;
-  box-shadow: 4px 4px 0 var(--sk-green-marker);
+  box-shadow: 4px 4px 0 var(--sk-shadow);
 }
 
 .jt-btn-secondary:hover {
-  background: var(--sk-green-wash);
+  background: var(--sk-paper-tint);
+  border-color: #22c55e;
   transform: translate(-1.5px, -1.5px);
-  box-shadow: 5px 5px 0 var(--sk-green);
+  box-shadow: 5px 5px 0 rgba(34, 197, 94, 0.28);
 }
 
 .jt-btn-secondary:active {
   transform: translate(2px, 2px);
-  box-shadow: 1.5px 1.5px 0 var(--sk-green);
+  box-shadow: 1.5px 1.5px 0 var(--sk-shadow);
 }
 
 .jt-btn-lg {
@@ -347,7 +333,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   font-size: 13.5px;
 }
 
-/* ---------- Container & Section Rhythm ---------- */
+/* ---------- Container ---------- */
 
 .jt-container {
   max-width: 1180px;
@@ -375,9 +361,9 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   gap: 8px;
   padding: 6px 13px;
   background: var(--sk-card);
-  border: 2px solid var(--sk-ink);
+  border: 1.8px solid var(--sk-stroke-strong);
   border-radius: 999px;
-  box-shadow: 3px 3px 0 var(--sk-green-marker);
+  box-shadow: 3px 3px 0 var(--sk-shadow);
   font-size: 12.5px;
   font-weight: 800;
   color: var(--sk-ink-soft);
@@ -404,6 +390,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   display: inline-block;
   z-index: 1;
   padding: 0 4px;
+  color: #86efac;
 }
 
 .jt-marker-highlight::before {
@@ -412,8 +399,8 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   left: -3px;
   right: -3px;
   bottom: 4px;
-  height: 44%;
-  background: var(--sk-green-marker);
+  height: 42%;
+  background: rgba(22, 163, 74, 0.28);
   border-radius: 6px 11px 8px 9px;
   z-index: -1;
   transform: rotate(-0.9deg);
@@ -447,7 +434,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-family: "Segoe Print", "Bradley Hand", "Chalkboard SE", "Comic Sans MS", cursive, sans-serif;
+  font-family: "Segoe Print", "Bradley Hand", "Chalkboard SE", cursive, sans-serif;
   font-size: 14px;
   color: var(--sk-green-deep);
   margin-bottom: 24px;
@@ -462,10 +449,10 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 
 .jt-stat-chip {
   background: var(--sk-card);
-  border: 1.8px solid var(--sk-ink);
+  border: 1.8px solid var(--sk-stroke-strong);
   border-radius: 13px 16px 14px 15px;
   padding: 11px 13px;
-  box-shadow: 3px 3px 0 rgba(18, 26, 21, 0.9);
+  box-shadow: 3px 3px 0 var(--sk-shadow);
 }
 
 .jt-stat-chip strong {
@@ -493,24 +480,24 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   top: -13px;
   right: 26px;
   z-index: 3;
-  background: var(--sk-green-marker);
-  border: 2px solid var(--sk-ink);
+  background: #16a34a;
+  border: 2px solid #86efac;
   border-radius: 8px 11px 9px 10px;
   padding: 4px 11px;
   font-size: 11.5px;
   font-weight: 800;
-  color: var(--sk-ink);
+  color: #ffffff;
   transform: rotate(2.5deg);
-  box-shadow: 2.5px 2.5px 0 var(--sk-ink);
+  box-shadow: 3px 3px 0 var(--sk-shadow);
 }
 
 .jt-sketch-window {
   background: var(--sk-card);
-  border: 2.5px solid var(--sk-ink);
+  border: 2px solid var(--sk-stroke-strong);
   border-radius: 22px 26px 23px 25px / 24px 21px 26px 22px;
   box-shadow:
-    8px 8px 0 var(--sk-ink),
-    14px 14px 0 var(--sk-green-marker);
+    8px 8px 0 var(--sk-shadow),
+    13px 13px 0 rgba(34, 197, 94, 0.2);
   overflow: hidden;
   position: relative;
 }
@@ -522,7 +509,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   gap: 10px;
   padding: 12px 16px;
   background: var(--sk-paper-tint);
-  border-bottom: 2px solid var(--sk-ink);
+  border-bottom: 1.8px solid var(--sk-stroke);
 }
 
 .jt-window-dots {
@@ -535,12 +522,13 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   width: 11px;
   height: 11px;
   border-radius: 50%;
-  border: 1.8px solid var(--sk-ink);
-  background: #ffffff;
+  border: 1.8px solid var(--sk-stroke-strong);
+  background: #0d1410;
 }
 
 .jt-window-dot.green {
   background: var(--sk-green-bright);
+  border-color: #86efac;
 }
 
 .jt-window-tabs {
@@ -550,8 +538,8 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 }
 
 .jt-window-tab {
-  border: 1.6px solid var(--sk-ink);
-  background: #ffffff;
+  border: 1.5px solid var(--sk-stroke-strong);
+  background: #0e1511;
   color: var(--sk-ink-soft);
   border-radius: 999px;
   padding: 4px 11px;
@@ -563,8 +551,9 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 
 .jt-window-tab.active {
   background: var(--sk-green);
+  border-color: #86efac;
   color: #ffffff;
-  box-shadow: 2px 2px 0 var(--sk-ink);
+  box-shadow: 2px 2px 0 var(--sk-shadow);
 }
 
 .jt-window-body {
@@ -574,7 +563,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   flex-direction: column;
   justify-content: space-between;
   gap: 14px;
-  background-image: radial-gradient(#dce8e0 1px, transparent 1px);
+  background-image: radial-gradient(rgba(74, 222, 128, 0.1) 1px, transparent 1px);
   background-size: 16px 16px;
 }
 
@@ -583,7 +572,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   align-items: center;
   justify-content: space-between;
   padding-bottom: 10px;
-  border-bottom: 1.5px dashed var(--sk-rule);
+  border-bottom: 1.5px dashed var(--sk-stroke);
 }
 
 .jt-sketch-peer {
@@ -596,7 +585,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  border: 2px solid var(--sk-ink);
+  border: 2px solid #4ade80;
   background: var(--sk-green-wash);
   display: grid;
   place-items: center;
@@ -625,7 +614,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   align-items: center;
   gap: 5px;
   padding: 4px 9px;
-  border: 1.5px solid var(--sk-ink);
+  border: 1.5px solid rgba(74, 222, 128, 0.45);
   border-radius: 999px;
   background: var(--sk-green-wash);
   font-size: 11px;
@@ -642,7 +631,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 .jt-sketch-msg {
   max-width: 85%;
   padding: 10px 13px;
-  border: 2px solid var(--sk-ink);
+  border: 1.8px solid var(--sk-stroke-strong);
   font-size: 13.5px;
   line-height: 1.45;
   position: relative;
@@ -651,16 +640,19 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 
 .jt-sketch-msg.theirs {
   align-self: flex-start;
-  background: #ffffff;
+  background: #17221b;
+  color: var(--sk-ink);
   border-radius: 16px 18px 18px 5px;
-  box-shadow: 3px 3px 0 var(--sk-rule);
+  box-shadow: 3px 3px 0 var(--sk-shadow);
 }
 
 .jt-sketch-msg.mine {
   align-self: flex-end;
-  background: var(--sk-green-wash);
+  background: rgba(22, 163, 74, 0.22);
+  border-color: rgba(74, 222, 128, 0.5);
+  color: var(--sk-ink);
   border-radius: 18px 16px 5px 18px;
-  box-shadow: 3px 3px 0 var(--sk-green-marker);
+  box-shadow: 3px 3px 0 var(--sk-shadow);
 }
 
 .jt-sketch-msg-meta {
@@ -671,7 +663,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   margin-top: 5px;
   font-size: 10.5px;
   font-weight: 700;
-  color: var(--sk-pencil);
+  color: var(--sk-ink-soft);
 }
 
 .jt-sketch-reactions {
@@ -685,9 +677,10 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   align-items: center;
   gap: 4px;
   padding: 2px 7px;
-  border: 1.5px solid var(--sk-ink);
+  border: 1.4px solid var(--sk-stroke-strong);
   border-radius: 999px;
-  background: #ffffff;
+  background: #0e1511;
+  color: var(--sk-ink);
   font-size: 11px;
   font-weight: 800;
 }
@@ -702,7 +695,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  border: 1.8px solid var(--sk-ink);
+  border: 1.8px solid #86efac;
   background: var(--sk-green);
   color: #ffffff;
   display: grid;
@@ -727,8 +720,9 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 .jt-sketch-embed-mini {
   margin-top: 7px;
   padding: 8px 10px;
-  background: #121a15;
-  color: #f3faf5;
+  background: #0c120e;
+  color: #e6f2ea;
+  border: 1px solid var(--sk-stroke);
   border-left: 3.5px solid var(--sk-green-bright);
   border-radius: 8px;
   font-size: 12px;
@@ -748,16 +742,11 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 
 .jt-sketch-screen-tile,
 .jt-sketch-peer-tile {
-  border: 2px solid var(--sk-ink);
+  border: 1.8px solid var(--sk-stroke-strong);
   border-radius: 14px;
   padding: 12px;
-  background: #ffffff;
+  background: #16211a;
   position: relative;
-}
-
-.jt-sketch-screen-tile {
-  background: var(--sk-paper-tint);
-  box-shadow: 3px 3px 0 var(--sk-green-marker);
 }
 
 .jt-sketch-tile-tag {
@@ -767,9 +756,9 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   padding: 2px 8px;
   font-size: 10.5px;
   font-weight: 800;
-  border: 1.5px solid var(--sk-ink);
+  border: 1.4px solid rgba(74, 222, 128, 0.45);
   border-radius: 999px;
-  background: #ffffff;
+  background: #0d1410;
   color: var(--sk-green-deep);
   margin-bottom: 8px;
 }
@@ -783,7 +772,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 
 .jt-sound-chip {
   padding: 3px 9px;
-  border: 1.5px solid var(--sk-ink);
+  border: 1.4px solid var(--sk-stroke-strong);
   border-radius: 8px;
   background: var(--sk-green-wash);
   font-size: 11px;
@@ -792,11 +781,10 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 }
 
 .jt-crypto-proof-box {
-  border: 2px solid var(--sk-ink);
+  border: 1.8px solid var(--sk-stroke-strong);
   border-radius: 14px;
   padding: 13px;
-  background: #ffffff;
-  box-shadow: 3px 3px 0 var(--sk-green-marker);
+  background: #16211a;
 }
 
 .jt-safety-grid {
@@ -809,8 +797,8 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 .jt-safety-cell {
   text-align: center;
   padding: 6px 4px;
-  background: var(--sk-paper-tint);
-  border: 1.5px solid var(--sk-ink);
+  background: #0d1410;
+  border: 1.4px solid var(--sk-stroke-strong);
   border-radius: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
@@ -824,9 +812,9 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   justify-content: space-between;
   gap: 10px;
   padding: 9px 12px;
-  border: 2px solid var(--sk-ink);
+  border: 1.8px solid var(--sk-stroke-strong);
   border-radius: 999px;
-  background: #ffffff;
+  background: #0e1511;
 }
 
 .jt-window-composer span {
@@ -836,13 +824,14 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 }
 
 .jt-composer-go {
-  border: 1.8px solid var(--sk-ink);
+  border: 1.6px solid #86efac;
   background: var(--sk-green);
   color: #ffffff;
   border-radius: 999px;
   padding: 5px 12px;
   font-size: 12px;
   font-weight: 800;
+  text-decoration: none;
   cursor: pointer;
 }
 
@@ -864,7 +853,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   gap: 7px;
   padding: 4px 11px;
   background: var(--sk-green-wash);
-  border: 1.8px solid var(--sk-ink);
+  border: 1.6px solid rgba(74, 222, 128, 0.42);
   border-radius: 999px;
   font-size: 12px;
   font-weight: 800;
@@ -900,20 +889,22 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 .jt-sketch-card {
   position: relative;
   background: var(--sk-card);
-  border: 2px solid var(--sk-ink);
+  border: 2px solid var(--sk-stroke-strong);
   border-radius: 18px 23px 19px 22px / 21px 18px 23px 19px;
   padding: 24px 22px;
-  box-shadow: 5px 5px 0 var(--sk-ink);
+  box-shadow: 5px 5px 0 var(--sk-shadow);
   transition:
     transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease;
 }
 
 .jt-sketch-card:hover {
   transform: translate(-2px, -3px);
+  border-color: #22c55e;
   box-shadow:
-    7px 7px 0 var(--sk-ink),
-    11px 11px 0 var(--sk-green-marker);
+    7px 7px 0 var(--sk-shadow),
+    11px 11px 0 rgba(34, 197, 94, 0.22);
 }
 
 .jt-card-index {
@@ -925,7 +916,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   font-weight: 800;
   color: var(--sk-green-deep);
   background: var(--sk-green-wash);
-  border: 1.5px solid var(--sk-ink);
+  border: 1.4px solid rgba(74, 222, 128, 0.4);
   border-radius: 8px;
   padding: 2px 7px;
 }
@@ -934,9 +925,9 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   width: 48px;
   height: 48px;
   border-radius: 13px 16px 14px 15px;
-  border: 2px solid var(--sk-ink);
+  border: 1.8px solid rgba(74, 222, 128, 0.45);
   background: var(--sk-green-wash);
-  box-shadow: 3px 3px 0 var(--sk-green-marker);
+  box-shadow: 3px 3px 0 var(--sk-shadow);
   display: grid;
   place-items: center;
   color: var(--sk-green-deep);
@@ -970,7 +961,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   padding: 3px 9px;
   border-radius: 999px;
   background: var(--sk-paper-tint);
-  border: 1.4px solid var(--sk-rule);
+  border: 1.4px solid var(--sk-stroke);
   color: var(--sk-ink-soft);
 }
 
@@ -978,10 +969,10 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 
 .jt-arch-box {
   background: var(--sk-card);
-  border: 2.5px solid var(--sk-ink);
+  border: 2px solid var(--sk-stroke-strong);
   border-radius: 22px 26px 21px 24px;
   padding: 30px;
-  box-shadow: 7px 7px 0 var(--sk-green-marker);
+  box-shadow: 7px 7px 0 var(--sk-shadow);
 }
 
 .jt-arch-steps {
@@ -993,7 +984,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 
 .jt-arch-step {
   padding: 18px;
-  border: 2px solid var(--sk-ink);
+  border: 1.8px solid var(--sk-stroke-strong);
   border-radius: 16px;
   background: var(--sk-paper-tint);
   position: relative;
@@ -1006,7 +997,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  border: 2px solid var(--sk-ink);
+  border: 1.8px solid #86efac;
   background: var(--sk-green);
   color: #ffffff;
   font-weight: 900;
@@ -1032,7 +1023,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   flex-wrap: wrap;
   gap: 9px;
   padding-top: 18px;
-  border-top: 1.5px dashed var(--sk-rule);
+  border-top: 1.5px dashed var(--sk-stroke);
 }
 
 .jt-spec-pill {
@@ -1040,19 +1031,19 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   align-items: center;
   gap: 6px;
   padding: 5px 12px;
-  border: 1.6px solid var(--sk-ink);
+  border: 1.5px solid var(--sk-stroke-strong);
   border-radius: 999px;
-  background: #ffffff;
+  background: #0e1511;
   font-size: 12.5px;
   font-weight: 800;
   color: var(--sk-ink);
 }
 
 .jt-spec-pill svg {
-  color: var(--sk-green);
+  color: var(--sk-green-bright);
 }
 
-/* ---------- Dated Update Logs (Field Notebook Timeline) ---------- */
+/* ---------- Dated Update Logs ---------- */
 
 .jt-changelog-list {
   position: relative;
@@ -1071,8 +1062,8 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   width: 3px;
   background: repeating-linear-gradient(
     to bottom,
-    var(--sk-ink) 0,
-    var(--sk-ink) 8px,
+    var(--sk-stroke-strong) 0,
+    var(--sk-stroke-strong) 8px,
     transparent 8px,
     transparent 14px
   );
@@ -1081,17 +1072,18 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 .jt-log-entry {
   position: relative;
   background: var(--sk-card);
-  border: 2px solid var(--sk-ink);
+  border: 2px solid var(--sk-stroke-strong);
   border-radius: 17px 21px 18px 20px;
   padding: 22px 24px;
-  box-shadow: 4px 4px 0 var(--sk-ink);
+  box-shadow: 4px 4px 0 var(--sk-shadow);
 }
 
 .jt-log-entry.latest {
-  background: linear-gradient(180deg, #f3fcf6 0%, #ffffff 62%);
+  background: linear-gradient(180deg, #16241b 0%, #121a15 65%);
+  border-color: rgba(74, 222, 128, 0.52);
   box-shadow:
-    5px 5px 0 var(--sk-ink),
-    10px 10px 0 var(--sk-green-marker);
+    5px 5px 0 var(--sk-shadow),
+    9px 9px 0 rgba(34, 197, 94, 0.2);
 }
 
 .jt-log-node {
@@ -1101,13 +1093,14 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  border: 2.5px solid var(--sk-ink);
-  background: #ffffff;
+  border: 2.5px solid var(--sk-stroke-strong);
+  background: #0d1410;
 }
 
 .jt-log-entry.latest .jt-log-node {
-  background: var(--sk-green);
-  box-shadow: 0 0 0 4px var(--sk-green-marker);
+  background: var(--sk-green-bright);
+  border-color: #86efac;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.22);
 }
 
 .jt-log-header {
@@ -1131,7 +1124,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   font-size: 14px;
   font-weight: 900;
   padding: 3px 10px;
-  border: 1.8px solid var(--sk-ink);
+  border: 1.6px solid rgba(74, 222, 128, 0.45);
   border-radius: 9px;
   background: var(--sk-green-wash);
   color: var(--sk-green-deep);
@@ -1146,7 +1139,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   border-radius: 999px;
   background: var(--sk-green);
   color: #ffffff;
-  border: 1.6px solid var(--sk-ink);
+  border: 1.5px solid #86efac;
 }
 
 .jt-log-headline {
@@ -1160,11 +1153,11 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px;
   font-weight: 700;
-  color: var(--sk-pencil);
+  color: var(--sk-ink-soft);
   background: var(--sk-paper-tint);
   padding: 4px 10px;
   border-radius: 999px;
-  border: 1.4px solid var(--sk-rule);
+  border: 1.4px solid var(--sk-stroke);
 }
 
 .jt-log-bullets {
@@ -1177,7 +1170,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 }
 
 .jt-log-bullets li::marker {
-  color: var(--sk-green);
+  color: var(--sk-green-bright);
 }
 
 /* ---------- Bottom CTA Banner & Footer ---------- */
@@ -1185,10 +1178,10 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 .jt-cta-banner {
   margin: 18px 0 64px;
   padding: 38px 34px;
-  background: var(--sk-green-wash);
-  border: 2.5px solid var(--sk-ink);
+  background: linear-gradient(135deg, #132219 0%, #172d1f 100%);
+  border: 2px solid rgba(74, 222, 128, 0.48);
   border-radius: 24px 28px 23px 27px;
-  box-shadow: 8px 8px 0 var(--sk-ink);
+  box-shadow: 8px 8px 0 var(--sk-shadow);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1218,8 +1211,8 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 }
 
 .jt-footer {
-  border-top: 2px solid var(--sk-ink);
-  background: #ffffff;
+  border-top: 2px solid var(--sk-stroke);
+  background: #080c0a;
   padding: 28px 0 36px;
 }
 
@@ -1233,6 +1226,19 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   color: var(--sk-pencil);
 }
 
+.jt-footer-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--sk-ink);
+}
+
+.jt-footer-brand img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
 .jt-footer-links {
   display: flex;
   flex-wrap: wrap;
@@ -1240,7 +1246,7 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
 }
 
 .jt-footer-links a {
-  color: var(--sk-ink);
+  color: var(--sk-ink-soft);
   font-weight: 700;
   text-decoration: none;
 }

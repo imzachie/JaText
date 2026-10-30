@@ -871,7 +871,7 @@ export async function decryptDmEnvelope(params: {
   const aad = buildDmAad(senderId, receiverId, envelope.sk, envelope.rk, envelope.epk);
   let lastErr: unknown = null;
 
-  // Path A: Multi-device ephemeral ECDH wrap (wra) — zero dependency on cached peer static key!
+  // Path A: Multi-device ephemeral ECDH wrap (wra), zero dependency on cached peer static key!
   if (envelope.wra) {
     for (const myIdentity of candidates) {
       const wraEntry = envelope.wra[myIdentity.keyId];

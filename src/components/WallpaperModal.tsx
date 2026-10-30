@@ -161,7 +161,7 @@ export function WallpaperModal({
             <p className="bubble-style-subtitle">
               {isGroup
                 ? "Shared mobile wallpaper for everyone in this group."
-                : "Shared mobile wallpaper — both of you will see this background."}
+                : "Shared mobile wallpaper: both of you will see this background."}
             </p>
           </div>
           {currentWallpaperUrl || selectedKind !== "none" ? (

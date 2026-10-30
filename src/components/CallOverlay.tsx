@@ -670,11 +670,11 @@ export function CallOverlay() {
             </div>
             <div>
               <span>Latency</span>
-              <strong>{stats.rttMs !== null ? `${stats.rttMs} ms` : "—"}</strong>
+              <strong>{stats.rttMs !== null ? `${stats.rttMs} ms` : "N/A"}</strong>
             </div>
             <div>
               <span>Bitrate</span>
-              <strong>{stats.bitrateKbps !== null ? `${stats.bitrateKbps} kbps` : "—"}</strong>
+              <strong>{stats.bitrateKbps !== null ? `${stats.bitrateKbps} kbps` : "N/A"}</strong>
             </div>
             {stats.resolution && (
               <div>
@@ -815,7 +815,7 @@ export function CallOverlay() {
           <div className="call-captions-box">
             {captions.length === 0 ? (
               <span className="call-caption-placeholder">
-                Live captions on — start speaking…
+                Live captions on, start speaking…
               </span>
             ) : (
               captions.slice(-2).map((line) => (

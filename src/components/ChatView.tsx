@@ -360,7 +360,7 @@ const ChatHistory = memo(function ChatHistory({
             You&apos;re now friends with <strong>{friend.displayName}</strong>{" "}
             <SparklesIcon size={16} style={{ color: "var(--accent)" }} />
           </p>
-          <p className="muted small">Send the first message below — photos &amp; files work too!</p>
+          <p className="muted small">Send the first message below. Photos &amp; files work too!</p>
         </div>
       )}
       {windowedMessages.map((message, index) => {

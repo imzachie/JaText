@@ -119,7 +119,7 @@ export const ForwardedMessageCard = memo(function ForwardedMessageCard({
     <div
       className="forwarded-context-card no-access"
       onClick={(e) => {
-        // Viewer does not have access — intentionally do nothing on click
+        // Viewer does not have access, intentionally do nothing on click
         e.stopPropagation();
       }}
     >

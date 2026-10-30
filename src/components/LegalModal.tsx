@@ -200,13 +200,13 @@ export function LegalModal({
               <h3>4. Service providers</h3>
               <ul>
                 <li>
-                  <strong>Convex</strong> — hosts database, authentication, and file storage.
+                  <strong>Convex</strong>: hosts database, authentication, and file storage.
                 </li>
                 <li>
-                  <strong>Vercel</strong> — hosts the JaText website.
+                  <strong>Vercel</strong>: hosts the JaText website.
                 </li>
                 <li>
-                  <strong>Google</strong> — provides optional sign-in if you choose it.
+                  <strong>Google</strong>: provides optional sign-in if you choose it.
                 </li>
               </ul>
 

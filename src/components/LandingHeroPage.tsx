@@ -40,7 +40,7 @@ const FEATURES: FeatureItem[] = [
     index: "01",
     title: "Real Zero-Knowledge E2EE",
     description:
-      "Every 1:1 message, attachment, and rotating group epoch key is encrypted right on your device with WebCrypto ECDH P-256 and AES-256-GCM before anything touches the wire — complete with peer security-code verification.",
+      "Every 1:1 message, attachment, and rotating group epoch key is encrypted right on your device with WebCrypto ECDH P-256 and AES-256-GCM before anything touches the wire, complete with peer security-code verification.",
     tags: ["ECDH P-256", "AES-256-GCM", "Verify Security Code"],
     icon: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
@@ -66,10 +66,10 @@ const FEATURES: FeatureItem[] = [
   },
   {
     index: "03",
-    title: "Illustrated Custom Bubbles & Wallpapers",
+    title: "Custom Themes, Bubbles & Wallpapers",
     description:
-      "Personalize outgoing bubbles with hand-crafted themes synced between Web and Android across 1:1 DMs, Groups, and JaText Community — plus custom chat wallpapers, polls, GIFs/stickers, and multi-emoji reactions.",
-    tags: ["Synced Themes", "Multi-Reactions", "Polls & Stickers"],
+      "Choose Light, Ash, Dark, Onyx, or custom gradient themes synced across devices, personalize outgoing bubbles across 1:1 DMs, Groups, and Community, and react with multiple emojis on any message.",
+    tags: ["Synced Themes", "Custom Bubbles", "Polls & Stickers"],
     icon: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
         <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.7 8.7 0 0 1-3.8-.9L3 20.5l1.6-4.8A8.4 8.4 0 1 1 21 11.5z" />
@@ -126,13 +126,13 @@ const UPDATE_LOGS: UpdateLogEntry[] = [
   {
     version: "v3.3.3",
     date: "October 30, 2026",
-    headline: "Sketchbook Hero Landing, /chats Web App Route & Group History Controls",
+    headline: "/chats Web Route, Group History Controls & Rich Link Previews",
     latest: true,
     bullets: [
-      "Moved the full JaText web app to jatext.vercel.app/chats and launched this hand-inked white & green Hero page at jatext.vercel.app (native Android APK still opens straight into chats).",
+      "Moved the full JaText web app to jatext.vercel.app/chats while keeping the native Android APK opening directly into your chats.",
       "Restricted permanent 'Delete group' (2-step exact-name confirmation) strictly to the group owner and added 'Remove chat' for owners, moderators, and members to clear group chat history without leaving the group.",
       "Fixed dark unreadable text inside link-embed preview cards when using light-background custom chat bubbles.",
-      "Added full OpenGraph & Twitter preview metadata and sketch banner so sharing jatext.vercel.app renders a rich informative link card.",
+      "Added full OpenGraph and Twitter preview metadata so sharing jatext.vercel.app renders a rich informative link card.",
     ],
   },
   {
@@ -151,7 +151,7 @@ const UPDATE_LOGS: UpdateLogEntry[] = [
     bullets: [
       "Added automatic OpenGraph / oEmbed link preview cards for YouTube, X/Twitter, GitHub, and general websites.",
       "Replaced plain forwarded text prefixes with structured Forwarded Message context cards showing original date/time and jump-to-source navigation when permitted.",
-      "Added Socials & Website fields on user profiles, silent archived chats, JaText Community Mute/Unmute context menu, and smooth 3-dots dropdown animations.",
+      "Added Socials and Website fields on user profiles, silent archived chats, JaText Community Mute/Unmute context menu, and smooth 3-dots dropdown animations.",
     ],
   },
   {
@@ -209,7 +209,6 @@ export function LandingHeroPage() {
 
   return (
     <div className="jt-sketch-page">
-      {/* Subtle SVG Pencil-Ink Filter for authentic hand-sketched rules */}
       <svg className="jt-sketch-svg-defs" aria-hidden="true">
         <defs>
           <filter id="jt-pencil-wobble" x="-5%" y="-5%" width="110%" height="110%">
@@ -223,12 +222,11 @@ export function LandingHeroPage() {
       <header className="jt-nav-wrap">
         <nav className="jt-nav" aria-label="Primary">
           <a href="#top" className="jt-brand">
-            <span className="jt-brand-mark" aria-hidden="true">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.7 8.7 0 0 1-3.8-.9L3 20.5l1.6-4.8A8.4 8.4 0 1 1 21 11.5z" />
-                <path d="m9 11.8 2 2 4.2-4.2" />
-              </svg>
-            </span>
+            <img
+              className="jt-brand-logo-img"
+              src="/jatext-logo-icon.png"
+              alt="JaText logo"
+            />
             <span className="jt-brand-text">
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
@@ -266,7 +264,7 @@ export function LandingHeroPage() {
         <section className="jt-hero">
           <div className="jt-container">
             <div className="jt-hero-grid">
-              {/* Left Column: Editorial Sketch Pitch */}
+              {/* Left Column */}
               <div>
                 <div className="jt-margin-note">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
@@ -285,7 +283,7 @@ export function LandingHeroPage() {
                         className="jt-draw-stroke jt-draw-delay-1"
                         pathLength={1}
                         d="M4 9.5C78 3.2 214 2.8 316 8.6"
-                        stroke="#16a34a"
+                        stroke="#22c55e"
                         strokeWidth="3.4"
                         strokeLinecap="round"
                         filter="url(#jt-pencil-wobble)"
@@ -296,8 +294,8 @@ export function LandingHeroPage() {
                 </h1>
 
                 <p className="jt-hero-lead">
-                  JaText pairs authentic client-side end-to-end encryption with HD 1:1 &amp; mesh
-                  group calls, screen sharing with audio, illustrated chat bubbles, voice-note
+                  JaText pairs authentic client-side end-to-end encryption with HD 1:1 and mesh
+                  group calls, screen sharing with audio, custom chat themes and bubbles, voice-note
                   transcription, and instant multi-account switching.
                 </p>
 
@@ -333,13 +331,13 @@ export function LandingHeroPage() {
                       className="jt-draw-stroke jt-draw-delay-2"
                       pathLength={1}
                       d="M38 19C24 20 13 15 7 5M7 5L4 12M7 5L14 7"
-                      stroke="#15803d"
+                      stroke="#4ade80"
                       strokeWidth="2.1"
                       strokeLinecap="round"
                       strokeLinejoin="round"
                     />
                   </svg>
-                  <span>Opens jatext.vercel.app/chats right in your browser — no install needed.</span>
+                  <span>Opens jatext.vercel.app/chats right in your browser, no install needed.</span>
                 </div>
 
                 <div className="jt-hero-stats">
@@ -358,7 +356,7 @@ export function LandingHeroPage() {
                 </div>
               </div>
 
-              {/* Right Column: Interactive Hand-Inked Sketch Canvas */}
+              {/* Right Column: Interactive Dark Sketch Canvas */}
               <div className="jt-sketch-stage">
                 <div className="jt-sketch-pin">Interactive Sketch · Click tabs</div>
 
@@ -426,10 +424,10 @@ export function LandingHeroPage() {
 
                         <div className="jt-sketch-messages">
                           <div className="jt-sketch-msg theirs">
-                            Check out the new white &amp; green JaText build — custom bubbles +
-                            link embeds look super crisp now:
+                            Check out the latest JaText build: custom themes, bubbles, and link
+                            embeds look super clean now:
                             <div className="jt-sketch-embed-mini">
-                              <strong>JaText — Private E2EE Chat &amp; HD Calls</strong>
+                              <strong>JaText · Private E2EE Chat &amp; HD Calls</strong>
                               Zero-knowledge messaging, screen share with audio &amp; fast multi-account slots.
                             </div>
                             <div className="jt-sketch-reactions">
@@ -490,8 +488,8 @@ export function LandingHeroPage() {
                             <strong style={{ display: "block", fontSize: "13.5px", marginBottom: "5px" }}>
                               Kai&apos;s Workspace (Click to expand full screen)
                             </strong>
-                            <p style={{ margin: 0, fontSize: "12.5px", color: "#46564c" }}>
-                              Works on both desktop &amp; mobile views with dominant first-device
+                            <p style={{ margin: 0, fontSize: "12.5px", color: "#b9ccc0" }}>
+                              Works on both desktop and mobile views with dominant first-device
                               call pickup and automatic &ldquo;GC VC Ended&rdquo; logs.
                             </p>
                             <div className="jt-soundboard-strip">
@@ -549,7 +547,7 @@ export function LandingHeroPage() {
                               </span>
                             ))}
                           </div>
-                          <p style={{ margin: 0, fontSize: "12.3px", color: "#46564c" }}>
+                          <p style={{ margin: 0, fontSize: "12.3px", color: "#b9ccc0" }}>
                             Inspect any message&apos;s AES-256-GCM IV, sender key ID, and ciphertext
                             digest directly from the message context menu.
                           </p>
@@ -580,7 +578,7 @@ export function LandingHeroPage() {
             <div className="jt-section-head jt-reveal">
               <span className="jt-eyebrow">Field Sketchbook · What&apos;s Inside</span>
               <h2 className="jt-section-title">
-                Every tool your group chat wishes it had — minus the bloat.
+                Every tool your group chat wishes it had, without the bloat.
               </h2>
               <p className="jt-section-sub">
                 Designed from scratch for instant responsiveness, genuine cryptographic privacy,
@@ -621,7 +619,7 @@ export function LandingHeroPage() {
                 Your private keys never leave your device. Period.
               </h2>
               <p className="jt-section-sub">
-                JaText doesn&apos;t use decorative lock icons — every DM and group message carries
+                JaText never relies on decorative lock icons: every DM and group message carries
                 verifiable client-side ciphertext sealed before upload.
               </p>
             </div>
@@ -750,8 +748,11 @@ export function LandingHeroPage() {
 
       <footer className="jt-footer">
         <div className="jt-container jt-footer-inner">
-          <div>
-            <strong>JaText v3.3.3</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+          <div className="jt-footer-brand">
+            <img src="/jatext-logo-icon.png" alt="JaText logo" />
+            <span>
+              <strong>JaText v3.3.3</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+            </span>
           </div>
           <div className="jt-footer-links">
             <a href="/chats" onClick={handleStartChattingClick}>

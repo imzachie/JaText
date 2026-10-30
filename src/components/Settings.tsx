@@ -16,13 +16,27 @@ import {
 import { useE2EESnapshot } from "../lib/e2ee/keystore";
 import { JaTextNative, type DeviceSystemSoundItem } from "../lib/nativeBridge";
 import { useJaText } from "../lib/store";
+import {
+  COLOUR_THEME_PRESETS,
+  CUSTOM_TILE_SWATCH,
+  DEFAULT_THEME_OPTIONS,
+  toSyncedThemePayload,
+  updateThemeConfig,
+  useJaTextTheme,
+  type ColourThemeId,
+  type DefaultThemeId,
+} from "../lib/themeEngine";
 import { AnimatedModal } from "./AnimatedModal";
+import { Avatar } from "./Avatar";
 import { Phone } from "./CallIcons";
 import { LockIcon } from "./E2EEModals";
 import { LegalModal, type LegalTab } from "./LegalModal";
 import { ProfileForm } from "./ProfileForm";
+import { WebsiteGlobeIcon } from "./SocialIcons";
 import {
+  ArrowLeftIcon,
   BellIcon,
+  BubblePaletteIcon,
   CheckCircleIcon,
   CheckIcon,
   CopyIcon,
@@ -31,9 +45,19 @@ import {
   PlayIcon,
   PlusIcon,
   SettingsIcon,
+  ShieldCheckIcon,
   SoundWaveIcon,
   SwitchAccountIcon,
+  UserIcon,
 } from "./UiIcons";
+
+export type SettingsCategory =
+  | "profile"
+  | "appearance"
+  | "socials"
+  | "notifications"
+  | "security"
+  | "legal";
 
 function encodeSoundOptionValue(sel: SoundSelection): string {
   if (sel.mode === "default") return "default:";
@@ -43,13 +67,20 @@ function encodeSoundOptionValue(sel: SoundSelection): string {
 export function SettingsModal({
   onClose,
   onOpenAccountSwitcher,
+  onOpenCustomThemeDrawer,
+  initialCategory = "profile",
+  openCategoryDirectlyOnMobile = false,
 }: {
   onClose: () => void;
   onOpenAccountSwitcher?: () => void;
+  onOpenCustomThemeDrawer?: () => void;
+  initialCategory?: SettingsCategory;
+  openCategoryDirectlyOnMobile?: boolean;
 }) {
   const {
     me,
     signOut,
+    saveProfile,
     mode,
     notificationsEnabled,
     pushRegistrationStatus,
@@ -61,13 +92,22 @@ export function SettingsModal({
   } = useJaText();
   const { accounts } = useMultiAccountState();
   const e2ee = useE2EESnapshot();
+  const theme = useJaTextTheme();
+
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>(initialCategory);
+  const [mobileMenuView, setMobileMenuView] = useState<"list" | "detail">(
+    openCategoryDirectlyOnMobile ? "detail" : "list",
+  );
+  const [hoveredThemeLabel, setHoveredThemeLabel] = useState<string | null>(null);
+
   const [copiedFp, setCopiedFp] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [activityStatus, setActivityStatus] = useState(me?.statusPreference ?? "online");
   const [customStatus, setCustomStatus] = useState(me?.customStatus ?? "");
   const [activityError, setActivityError] = useState<string | null>(null);
   const [notificationError, setNotificationError] = useState<string | null>(null);
-  const [legalTab, setLegalTab] = useState<LegalTab | null>(null);
+  const [inlineLegalTab, setInlineLegalTab] = useState<LegalTab>("terms");
+  const [legalModalTab, setLegalModalTab] = useState<LegalTab | null>(null);
 
   const [soundPrefs, setSoundPrefs] = useState(loadNotificationPreferences);
   const [deviceNotifSounds, setDeviceNotifSounds] = useState<DeviceSystemSoundItem[]>([]);
@@ -114,11 +154,53 @@ export function SettingsModal({
   }, []);
 
   if (!me) return null;
+  const currentUser = me;
 
   const handleCloseModal = () => {
     stopSoundPreviewPlayback();
     onClose();
   };
+
+  function selectCategory(cat: SettingsCategory) {
+    setSavedNotice(null);
+    setActiveCategory(cat);
+    setMobileMenuView("detail");
+  }
+
+  function persistSyncedThemeIfEnabled(nextCfg = theme) {
+    if (!nextCfg.syncAcrossDevices) return;
+    void saveProfile({
+      displayName: currentUser.displayName,
+      username: currentUser.username,
+      bio: currentUser.bio,
+      pronouns: currentUser.pronouns,
+      avatarColor: currentUser.avatarColor,
+      syncedTheme: toSyncedThemePayload(nextCfg),
+    }).catch(() => undefined);
+  }
+
+  function handleSelectDefaultTheme(id: DefaultThemeId) {
+    const next = updateThemeConfig({
+      kind: "default",
+      defaultId: id,
+    });
+    persistSyncedThemeIfEnabled(next);
+  }
+
+  function handleSelectPresetTheme(id: ColourThemeId) {
+    const next = updateThemeConfig({
+      kind: "preset",
+      presetId: id,
+    });
+    persistSyncedThemeIfEnabled(next);
+  }
+
+  function handleToggleThemeSync(syncAcrossDevices: boolean) {
+    const next = updateThemeConfig({ syncAcrossDevices });
+    if (syncAcrossDevices) {
+      persistSyncedThemeIfEnabled(next);
+    }
+  }
 
   function applySoundSelection(
     category: "notification" | "ringtone",
@@ -262,406 +344,794 @@ export function SettingsModal({
     }
   }
 
+  const categories: Array<{
+    id: SettingsCategory;
+    label: string;
+    subtitle: string;
+    icon: React.ReactNode;
+  }> = [
+    {
+      id: "profile",
+      label: "Profile",
+      subtitle: "Avatar, banner, username, bio & accounts",
+      icon: <UserIcon size={17} />,
+    },
+    {
+      id: "appearance",
+      label: "Appearance",
+      subtitle: "Light, Ash, Dark, Onyx & custom colour themes",
+      icon: <BubblePaletteIcon size={17} />,
+    },
+    {
+      id: "socials",
+      label: "Socials",
+      subtitle: "Connected social links & personal website",
+      icon: <WebsiteGlobeIcon size={17} />,
+    },
+    {
+      id: "notifications",
+      label: "Alerts & Audio",
+      subtitle: "Activity status, push alerts & custom ringtones",
+      icon: <BellIcon size={17} />,
+    },
+    {
+      id: "security",
+      label: "Encryption",
+      subtitle: "Zero-knowledge E2EE key & security fingerprint",
+      icon: <ShieldCheckIcon size={17} />,
+    },
+    {
+      id: "legal",
+      label: "Legal Policies",
+      subtitle: "Terms of Service & Privacy Policy",
+      icon: <FileTextIcon size={17} />,
+    },
+  ];
+
+  const activeCategoryMeta =
+    categories.find((c) => c.id === activeCategory) ?? categories[0];
+
   return (
     <>
       <AnimatedModal
         onClose={handleCloseModal}
-        cardClassName="modal-card wide"
+        cardClassName="modal-card settings-shell-modal"
         closeLabel="Close settings"
       >
         {(requestClose) => (
-          <>
-            <h2 className="settings-title">
-              <SettingsIcon size={20} style={{ color: "var(--accent)" }} /> Settings
-            </h2>
-            <p className="muted">
-              Signed in as <strong>{me.email ?? `@${me.username}`}</strong>
-              {mode === "demo" ? " · Demo mode (browser storage)" : ""}
-            </p>
-            {onOpenAccountSwitcher && (
-              <div className="settings-accounts-bar">
-                <div className="settings-accounts-info">
-                  <strong>
-                    {accounts.length > 1
-                      ? `${accounts.length} saved accounts on this device`
-                      : "Quick account switching"}
-                  </strong>
-                  <span className="muted small">
-                    {accounts.length > 1
-                      ? "Switch directly between your accounts without signing out."
-                      : "Add a second account to jump between them in 1 tap."}
-                  </span>
+          <div className={`settings-layout mobile-view-${mobileMenuView}`}>
+            {/* ---------- Left Sidebar / Mobile Category List ---------- */}
+            <aside className="settings-sidebar" aria-label="Settings categories">
+              <div className="settings-sidebar-top">
+                <div className="settings-sidebar-brand">
+                  <SettingsIcon size={19} style={{ color: "var(--accent)" }} />
+                  <span>Settings</span>
                 </div>
-                <button
-                  type="button"
-                  className="ghost-btn settings-switch-btn"
-                  onClick={onOpenAccountSwitcher}
-                >
-                  <SwitchAccountIcon size={15} />
-                  <span>{accounts.length > 1 ? "Switch / Manage" : "Add account"}</span>
-                </button>
-              </div>
-            )}
-            <p className="muted small">
-              Profile picture, banner, display name, bio, pronouns and avatar color
-              can be changed any time. Username changes are limited to once every
-              14 days.
-            </p>
 
-            <section className="activity-settings">
-              <h3>Activity &amp; notifications</h3>
-              <label>
-                Activity status
-                <select
-                  value={activityStatus}
-                  onChange={(event) =>
-                    void updateActivity(event.target.value as typeof activityStatus)
-                  }
-                >
-                  <option value="online">Online — away after 5 minutes idle</option>
-                  <option value="dnd">Do Not Disturb</option>
-                  <option value="offline">Offline until I change it</option>
-                </select>
-              </label>
-              <p className="muted small">
-                Do Not Disturb still shows you as available, but silences JaText message alerts.
-                Offline stays enabled across sign-outs.
-              </p>
-              <label>
-                Custom status
-                <input
-                  value={customStatus}
-                  maxLength={60}
-                  placeholder="What are you up to?"
-                  onChange={(event) => setCustomStatus(event.target.value)}
-                />
-              </label>
-              <button
-                className="ghost-btn"
-                type="button"
-                onClick={() => void updateActivity(activityStatus, customStatus)}
-              >
-                Save custom status
-              </button>
-              {activityError && <div className="error-box">{activityError}</div>}
-              <label className="setting-toggle">
-                <input
-                  type="checkbox"
-                  checked={notificationsEnabled}
-                  onChange={(event) => void toggleNotifications(event.target.checked)}
-                />
-                {isNative
-                  ? "Push notifications when JaText is closed"
-                  : "Desktop notifications for incoming messages"}
-              </label>
-              <label className="setting-toggle">
-                <input
-                  type="checkbox"
-                  checked={soundsEnabled}
-                  onChange={(event) => setSoundsEnabled(event.target.checked)}
-                />
-                Message &amp; call sounds
-              </label>
-
-              <div className="sound-settings-grid">
-                <div className="sound-setting-card">
-                  <div className="sound-setting-head">
-                    <span className="sound-setting-title">
-                      <BellIcon size={15} /> Notification sound
+                <div className="settings-user-summary">
+                  <Avatar user={currentUser} size={40} />
+                  <div className="settings-user-summary-text">
+                    <strong>{currentUser.displayName}</strong>
+                    <span className="muted small">
+                      {currentUser.email ?? `@${currentUser.username}`}
                     </span>
-                    <button
-                      type="button"
-                      className="mini-btn sound-preview-btn"
-                      onClick={() => togglePreview("notification")}
-                    >
-                      {previewingCategory === "notification" ? (
-                        <>
-                          <PauseIcon size={12} /> Stop
-                        </>
-                      ) : (
-                        <>
-                          <PlayIcon size={12} /> Test
-                        </>
-                      )}
-                    </button>
                   </div>
-                  <select
-                    value={encodeSoundOptionValue(soundPrefs.notificationSound)}
-                    onChange={(e) => handleDropdownChange("notification", e.target.value)}
-                  >
-                    <option value="default:">{DEFAULT_SOUND_LABEL}</option>
-                    {soundPrefs.notificationSound.mode === "custom" && (
-                      <option value={`custom:${soundPrefs.notificationSound.uri}`}>
-                        Custom · {soundPrefs.notificationSound.label}
-                      </option>
-                    )}
-                    {deviceNotifSounds.length > 0 && (
-                      <optgroup label="Phone notifications">
-                        {deviceNotifSounds.map((snd) => (
-                          <option key={snd.uri} value={`system:${snd.uri}`}>
-                            {snd.title}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
-                  <input
-                    ref={notifFileInputRef}
-                    type="file"
-                    accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
-                    style={{ display: "none" }}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0] ?? null;
-                      e.target.value = "";
-                      void handleCustomSoundFile("notification", file);
-                    }}
-                  />
+                </div>
+
+                {onOpenAccountSwitcher && (
                   <button
                     type="button"
-                    className="ghost-btn sound-upload-btn"
-                    onClick={() => notifFileInputRef.current?.click()}
+                    className="ghost-btn settings-sidebar-switch-btn"
+                    onClick={onOpenAccountSwitcher}
                   >
-                    <PlusIcon size={14} />
-                    <span>Add your custom notification sound.</span>
-                  </button>
-                </div>
-
-                <div className="sound-setting-card">
-                  <div className="sound-setting-head">
-                    <span className="sound-setting-title">
-                      <SoundWaveIcon size={15} /> Call ringtone
+                    <SwitchAccountIcon size={15} />
+                    <span>
+                      {accounts.length > 1
+                        ? `Switch account (${accounts.length})`
+                        : "Add another account"}
                     </span>
-                    <button
-                      type="button"
-                      className="mini-btn sound-preview-btn"
-                      onClick={() => togglePreview("ringtone")}
-                    >
-                      {previewingCategory === "ringtone" ? (
-                        <>
-                          <PauseIcon size={12} /> Stop
-                        </>
-                      ) : (
-                        <>
-                          <PlayIcon size={12} /> Test
-                        </>
-                      )}
-                    </button>
-                  </div>
-                  <select
-                    value={encodeSoundOptionValue(soundPrefs.callRingtone)}
-                    onChange={(e) => handleDropdownChange("ringtone", e.target.value)}
-                  >
-                    <option value="default:">{DEFAULT_SOUND_LABEL}</option>
-                    {soundPrefs.callRingtone.mode === "custom" && (
-                      <option value={`custom:${soundPrefs.callRingtone.uri}`}>
-                        Custom · {soundPrefs.callRingtone.label}
-                      </option>
-                    )}
-                    {deviceRingtoneSounds.length > 0 && (
-                      <optgroup label="Phone ringtones">
-                        {deviceRingtoneSounds.map((snd) => (
-                          <option key={snd.uri} value={`system:${snd.uri}`}>
-                            {snd.title}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
-                  <input
-                    ref={ringtoneFileInputRef}
-                    type="file"
-                    accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
-                    style={{ display: "none" }}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0] ?? null;
-                      e.target.value = "";
-                      void handleCustomSoundFile("ringtone", file);
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="ghost-btn sound-upload-btn"
-                    onClick={() => ringtoneFileInputRef.current?.click()}
-                  >
-                    <PlusIcon size={14} />
-                    <span>Add your custom ringtone sound.</span>
                   </button>
-                </div>
+                )}
               </div>
 
-              {soundError && <div className="error-box">{soundError}</div>}
-
-              {isNative &&
-                callWakePerms &&
-                (!callWakePerms.canFullScreenIntent || !callWakePerms.canDrawOverlays) && (
-                  <div className="sound-wake-perm-box">
-                    <div className="sound-wake-perm-text">
-                      <Phone size={15} />
-                      <span>
-                        Allow JaText to open incoming calls instantly over your lock screen and
-                        other apps.
+              <nav className="settings-nav-list">
+                {categories.map((cat) => {
+                  const isActive = activeCategory === cat.id;
+                  return (
+                    <button
+                      type="button"
+                      key={cat.id}
+                      className={`settings-nav-item ${isActive ? "active" : ""}`}
+                      onClick={() => selectCategory(cat.id)}
+                    >
+                      <span className="settings-nav-icon">{cat.icon}</span>
+                      <span className="settings-nav-copy">
+                        <strong>{cat.label}</strong>
+                        <small>{cat.subtitle}</small>
                       </span>
-                    </div>
-                    <div className="sound-wake-perm-actions">
-                      {!callWakePerms.canFullScreenIntent && (
-                        <button
-                          type="button"
-                          className="mini-btn"
-                          onClick={() =>
-                            void JaTextNative.openCallWakeSettings({ kind: "fullscreen" })
-                          }
+                      <span className="settings-nav-chevron" aria-hidden="true">
+                        <svg
+                          width="15"
+                          height="15"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
                         >
-                          Allow lock-screen calls
-                        </button>
-                      )}
-                      {!callWakePerms.canDrawOverlays && (
-                        <button
-                          type="button"
-                          className="mini-btn"
-                          onClick={() =>
-                            void JaTextNative.openCallWakeSettings({ kind: "overlay" })
-                          }
-                        >
-                          Allow instant pop-open
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              {notificationError && <div className="error-box">{notificationError}</div>}
-              {isNative && mode === "convex" && notificationsEnabled && (
-                <>
-                  <p className="muted small" role="status">
-                    {pushRegistrationStatus === "unavailable"
-                      ? "In-app alerts active · background FCM not configured in this build"
-                      : `Push registration: ${pushRegistrationStatus}`}
-                  </p>
-                  {pushRegistrationStatus !== "unavailable" && (
-                    <button
-                      className="ghost-btn"
-                      type="button"
-                      onClick={() => {
-                        setNotificationError(null);
-                        void refreshPushRegistration().catch((error: unknown) => {
-                          setNotificationError(
-                            error instanceof Error
-                              ? error.message
-                              : "Could not refresh push registration.",
-                          );
-                        });
-                      }}
-                    >
-                      Repair push registration
+                          <polyline points="9 18 15 12 9 6" />
+                        </svg>
+                      </span>
                     </button>
-                  )}
-                </>
+                  );
+                })}
+              </nav>
+
+              <div className="settings-sidebar-foot">
+                <button
+                  type="button"
+                  className="danger-btn settings-signout-btn"
+                  onClick={() => {
+                    requestClose();
+                    void signOut();
+                  }}
+                >
+                  {accounts.length > 1 ? `Sign out of @${currentUser.username}` : "Sign out"}
+                </button>
+              </div>
+            </aside>
+
+            {/* ---------- Right Content Pane ---------- */}
+            <div className="settings-content-pane">
+              <div className="settings-mobile-detail-bar">
+                <button
+                  type="button"
+                  className="ghost-btn settings-mobile-back-btn"
+                  onClick={() => setMobileMenuView("list")}
+                >
+                  <ArrowLeftIcon size={16} />
+                  <span>Categories</span>
+                </button>
+                <strong>{activeCategoryMeta.label}</strong>
+              </div>
+
+              {savedNotice && (
+                <div className="success-box" style={{ marginBottom: 14 }}>
+                  <CheckCircleIcon size={16} /> {savedNotice}
+                </div>
               )}
-            </section>
 
-            {saved && (
-              <div className="success-box">
-                <CheckCircleIcon size={16} /> Profile saved!
-              </div>
-            )}
-
-            <ProfileForm
-              initial={me}
-              submitLabel="Save changes"
-              onDone={() => {
-                setSaved(true);
-                setTimeout(requestClose, 650);
-              }}
-            />
-
-            <hr className="settings-hr" />
-            <section className="e2ee-settings-section">
-              <div className="profile-e2ee-header">
-                <span className="profile-e2ee-title">
-                  <LockIcon size={15} />
-                  <strong>End-to-End Encryption</strong>
-                </span>
-                <span className={`e2ee-pill ${e2ee.ready ? "active" : "pending"}`}>
-                  {e2ee.ready ? "Active · Synced" : "Initializing…"}
-                </span>
-              </div>
-              <p className="muted small">
-                Private chats, group chats, voice notes, and attachments are end-to-end encrypted on
-                your device and sync automatically across your logged-in devices. Open any friend&apos;s
-                profile to verify your security code.
-              </p>
-              {e2ee.myFingerprint && (
-                <>
-                  <div className="profile-e2ee-sub">
-                    Key ID: <code>{e2ee.myKeyId}</code>
+              {/* === 1. PROFILE === */}
+              {activeCategory === "profile" && (
+                <section className="settings-pane-section">
+                  <div className="settings-pane-head">
+                    <h3>Profile</h3>
+                    <p className="muted small">
+                      Update your profile picture, banner, display name, bio, pronouns, and avatar
+                      outline colour. Usernames can be changed once every 14 days.
+                    </p>
                   </div>
-                  <code className="e2ee-fingerprint-code">{e2ee.myFingerprint}</code>
-                </>
-              )}
-              <div className="profile-e2ee-btn-row">
-                {e2ee.myFingerprint && (
-                  <button
-                    type="button"
-                    className="mini-btn"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(
-                        `JaText E2EE Key (@${me.username} · ${e2ee.myKeyId})\nFingerprint: ${e2ee.myFingerprint}\nECDH-P256: ${e2ee.myDhPubB64 ?? ""}`,
-                      );
-                      setCopiedFp(true);
-                      window.setTimeout(() => setCopiedFp(false), 1800);
+
+                  <ProfileForm
+                    initial={currentUser}
+                    sectionMode="profile"
+                    submitLabel="Save profile"
+                    onDone={() => {
+                      setSavedNotice("Profile saved!");
+                      window.setTimeout(() => setSavedNotice(null), 2200);
                     }}
+                  />
+                </section>
+              )}
+
+              {/* === 2. APPEARANCE === */}
+              {activeCategory === "appearance" && (
+                <section className="settings-pane-section">
+                  <div className="settings-pane-head">
+                    <h3>Appearance</h3>
+                    <p className="muted small">
+                      Pick a crisp default mode, choose any gradient colour theme, or build your own
+                      custom theme completely free.
+                    </p>
+                  </div>
+
+                  {/* Default Themes */}
+                  <div className="appearance-block">
+                    <div className="appearance-block-header">
+                      <strong>Default Themes</strong>
+                      {hoveredThemeLabel && (
+                        <span className="appearance-hover-pill">{hoveredThemeLabel}</span>
+                      )}
+                    </div>
+
+                    <div className="default-themes-row" role="radiogroup" aria-label="Default themes">
+                      {DEFAULT_THEME_OPTIONS.map((opt) => {
+                        const selected = theme.kind === "default" && theme.defaultId === opt.id;
+                        return (
+                          <button
+                            type="button"
+                            key={opt.id}
+                            role="radio"
+                            aria-checked={selected}
+                            aria-label={opt.name}
+                            title={opt.name}
+                            className={`theme-tile default-theme-tile ${selected ? "selected" : ""}`}
+                            style={{
+                              background: opt.swatchBg,
+                              borderColor: selected ? "var(--accent)" : opt.swatchBorder,
+                            }}
+                            onMouseEnter={() => setHoveredThemeLabel(opt.name)}
+                            onMouseLeave={() => setHoveredThemeLabel(null)}
+                            onClick={() => handleSelectDefaultTheme(opt.id)}
+                          >
+                            {selected && (
+                              <span className="theme-tile-check">
+                                <CheckIcon size={11} />
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+
+                      {/* Sync with system button */}
+                      {(() => {
+                        const sysSelected =
+                          theme.kind === "default" && theme.defaultId === "system";
+                        return (
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={sysSelected}
+                            aria-label="Sync with system"
+                            title="Sync with system"
+                            className={`theme-tile default-theme-tile system-sync-tile ${
+                              sysSelected ? "selected" : ""
+                            }`}
+                            onMouseEnter={() => setHoveredThemeLabel("Sync with system")}
+                            onMouseLeave={() => setHoveredThemeLabel(null)}
+                            onClick={() => handleSelectDefaultTheme("system")}
+                          >
+                            <svg
+                              width="20"
+                              height="20"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+                              <path d="M21 3v5h-5" />
+                              <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+                              <path d="M3 21v-5h5" />
+                            </svg>
+                            {sysSelected && (
+                              <span className="theme-tile-check">
+                                <CheckIcon size={11} />
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Colour Themes */}
+                  <div className="appearance-colour-card">
+                    <div className="appearance-colour-head">
+                      <div>
+                        <strong>Colour Themes</strong>
+                        <p className="muted small">
+                          Choose any gradient theme or click the palette tile to customise your own.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="ghost-btn appearance-custom-btn"
+                        onClick={() => {
+                          if (onOpenCustomThemeDrawer) {
+                            requestClose();
+                            onOpenCustomThemeDrawer();
+                          }
+                        }}
+                      >
+                        <BubblePaletteIcon size={15} />
+                        <span>Customise Theme</span>
+                      </button>
+                    </div>
+
+                    <div className="colour-themes-grid" role="radiogroup" aria-label="Colour themes">
+                      {/* Tile 1: Custom Theme Palette Tile */}
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={theme.kind === "custom"}
+                        aria-label="Custom Theme"
+                        title="Custom Theme"
+                        className={`theme-tile colour-theme-tile custom-palette-tile ${
+                          theme.kind === "custom" ? "selected" : ""
+                        }`}
+                        style={{ background: CUSTOM_TILE_SWATCH }}
+                        onMouseEnter={() => setHoveredThemeLabel("Custom Theme")}
+                        onMouseLeave={() => setHoveredThemeLabel(null)}
+                        onClick={() => {
+                          if (onOpenCustomThemeDrawer) {
+                            requestClose();
+                            onOpenCustomThemeDrawer();
+                          }
+                        }}
+                      >
+                        <BubblePaletteIcon size={21} />
+                        {theme.kind === "custom" && (
+                          <span className="theme-tile-check">
+                            <CheckIcon size={11} />
+                          </span>
+                        )}
+                      </button>
+
+                      {/* Tiles 2..22: Exact 1:1 Gradient Replicas */}
+                      {COLOUR_THEME_PRESETS.map((preset) => {
+                        const selected =
+                          theme.kind === "preset" && theme.presetId === preset.id;
+                        return (
+                          <button
+                            type="button"
+                            key={preset.id}
+                            role="radio"
+                            aria-checked={selected}
+                            aria-label={preset.name}
+                            title={preset.name}
+                            className={`theme-tile colour-theme-tile ${
+                              selected ? "selected" : ""
+                            }`}
+                            style={{ background: preset.swatchGradient }}
+                            onMouseEnter={() => setHoveredThemeLabel(preset.name)}
+                            onMouseLeave={() => setHoveredThemeLabel(null)}
+                            onClick={() => handleSelectPresetTheme(preset.id)}
+                          >
+                            {selected && (
+                              <span className="theme-tile-check">
+                                <CheckIcon size={11} />
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Sync Theme Toggle */}
+                  <label className="appearance-sync-row">
+                    <span>Sync theme across my devices</span>
+                    <input
+                      type="checkbox"
+                      className="appearance-sync-switch"
+                      checked={theme.syncAcrossDevices}
+                      onChange={(e) => handleToggleThemeSync(e.target.checked)}
+                    />
+                  </label>
+                </section>
+              )}
+
+              {/* === 3. SOCIALS === */}
+              {activeCategory === "socials" && (
+                <section className="settings-pane-section">
+                  <div className="settings-pane-head">
+                    <h3>Socials &amp; Website</h3>
+                    <p className="muted small">
+                      Link your social profiles and personal website so friends can visit them right
+                      from your profile card.
+                    </p>
+                  </div>
+
+                  <ProfileForm
+                    initial={currentUser}
+                    sectionMode="socials"
+                    submitLabel="Save socials & website"
+                    onDone={() => {
+                      setSavedNotice("Socials & website saved!");
+                      window.setTimeout(() => setSavedNotice(null), 2200);
+                    }}
+                  />
+                </section>
+              )}
+
+              {/* === 4. NOTIFICATIONS & AUDIO === */}
+              {activeCategory === "notifications" && (
+                <section className="settings-pane-section activity-settings">
+                  <div className="settings-pane-head">
+                    <h3>Activity, Alerts &amp; Audio</h3>
+                    <p className="muted small">
+                      Control your online presence, push alerts, notification tones, and call
+                      ringtones.
+                    </p>
+                  </div>
+
+                  <label>
+                    Activity status
+                    <select
+                      value={activityStatus}
+                      onChange={(event) =>
+                        void updateActivity(event.target.value as typeof activityStatus)
+                      }
+                    >
+                      <option value="online">Online (away after 5 minutes idle)</option>
+                      <option value="dnd">Do Not Disturb</option>
+                      <option value="offline">Offline until I change it</option>
+                    </select>
+                  </label>
+                  <p className="muted small">
+                    Do Not Disturb still shows you as available, but silences JaText message alerts.
+                    Offline stays enabled across sign-outs.
+                  </p>
+
+                  <label>
+                    Custom status
+                    <input
+                      value={customStatus}
+                      maxLength={60}
+                      placeholder="What are you up to?"
+                      onChange={(event) => setCustomStatus(event.target.value)}
+                    />
+                  </label>
+                  <button
+                    className="ghost-btn"
+                    type="button"
+                    style={{ alignSelf: "flex-start" }}
+                    onClick={() => void updateActivity(activityStatus, customStatus)}
                   >
-                    {copiedFp ? (
-                      <>
-                        <CheckIcon size={13} /> Copied
-                      </>
-                    ) : (
-                      <>
-                        <CopyIcon size={13} /> Copy security key
-                      </>
-                    )}
+                    Save custom status
                   </button>
-                )}
-              </div>
-            </section>
+                  {activityError && <div className="error-box">{activityError}</div>}
 
-            <hr className="settings-hr" />
-            <section className="legal-settings-section">
-              <h3>
-                <FileTextIcon size={16} style={{ color: "var(--accent)" }} /> Legal &amp; Policies
-              </h3>
-              <div className="legal-links-row">
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => setLegalTab("terms")}
-                >
-                  Terms of Service
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => setLegalTab("privacy")}
-                >
-                  Privacy Policy
-                </button>
-              </div>
-            </section>
+                  <label className="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={notificationsEnabled}
+                      onChange={(event) => void toggleNotifications(event.target.checked)}
+                    />
+                    {isNative
+                      ? "Push notifications when JaText is closed"
+                      : "Desktop notifications for incoming messages"}
+                  </label>
+                  <label className="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={soundsEnabled}
+                      onChange={(event) => setSoundsEnabled(event.target.checked)}
+                    />
+                    Message &amp; call sounds
+                  </label>
 
-            <hr className="settings-hr" />
-            <button
-              className="danger-btn"
-              onClick={() => {
-                requestClose();
-                void signOut();
-              }}
-            >
-              {accounts.length > 1 ? `sign out of @${me.username}` : "sign out"}
-            </button>
-          </>
+                  <div className="sound-settings-grid">
+                    <div className="sound-setting-card">
+                      <div className="sound-setting-head">
+                        <span className="sound-setting-title">
+                          <BellIcon size={15} /> Notification sound
+                        </span>
+                        <button
+                          type="button"
+                          className="mini-btn sound-preview-btn"
+                          onClick={() => togglePreview("notification")}
+                        >
+                          {previewingCategory === "notification" ? (
+                            <>
+                              <PauseIcon size={12} /> Stop
+                            </>
+                          ) : (
+                            <>
+                              <PlayIcon size={12} /> Test
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <select
+                        value={encodeSoundOptionValue(soundPrefs.notificationSound)}
+                        onChange={(e) => handleDropdownChange("notification", e.target.value)}
+                      >
+                        <option value="default:">{DEFAULT_SOUND_LABEL}</option>
+                        {soundPrefs.notificationSound.mode === "custom" && (
+                          <option value={`custom:${soundPrefs.notificationSound.uri}`}>
+                            Custom · {soundPrefs.notificationSound.label}
+                          </option>
+                        )}
+                        {deviceNotifSounds.length > 0 && (
+                          <optgroup label="Phone notifications">
+                            {deviceNotifSounds.map((snd) => (
+                              <option key={snd.uri} value={`system:${snd.uri}`}>
+                                {snd.title}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                      <input
+                        ref={notifFileInputRef}
+                        type="file"
+                        accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] ?? null;
+                          e.target.value = "";
+                          void handleCustomSoundFile("notification", file);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="ghost-btn sound-upload-btn"
+                        onClick={() => notifFileInputRef.current?.click()}
+                      >
+                        <PlusIcon size={14} />
+                        <span>Add your custom notification sound.</span>
+                      </button>
+                    </div>
+
+                    <div className="sound-setting-card">
+                      <div className="sound-setting-head">
+                        <span className="sound-setting-title">
+                          <SoundWaveIcon size={15} /> Call ringtone
+                        </span>
+                        <button
+                          type="button"
+                          className="mini-btn sound-preview-btn"
+                          onClick={() => togglePreview("ringtone")}
+                        >
+                          {previewingCategory === "ringtone" ? (
+                            <>
+                              <PauseIcon size={12} /> Stop
+                            </>
+                          ) : (
+                            <>
+                              <PlayIcon size={12} /> Test
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <select
+                        value={encodeSoundOptionValue(soundPrefs.callRingtone)}
+                        onChange={(e) => handleDropdownChange("ringtone", e.target.value)}
+                      >
+                        <option value="default:">{DEFAULT_SOUND_LABEL}</option>
+                        {soundPrefs.callRingtone.mode === "custom" && (
+                          <option value={`custom:${soundPrefs.callRingtone.uri}`}>
+                            Custom · {soundPrefs.callRingtone.label}
+                          </option>
+                        )}
+                        {deviceRingtoneSounds.length > 0 && (
+                          <optgroup label="Phone ringtones">
+                            {deviceRingtoneSounds.map((snd) => (
+                              <option key={snd.uri} value={`system:${snd.uri}`}>
+                                {snd.title}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                      <input
+                        ref={ringtoneFileInputRef}
+                        type="file"
+                        accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] ?? null;
+                          e.target.value = "";
+                          void handleCustomSoundFile("ringtone", file);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="ghost-btn sound-upload-btn"
+                        onClick={() => ringtoneFileInputRef.current?.click()}
+                      >
+                        <PlusIcon size={14} />
+                        <span>Add your custom ringtone sound.</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {soundError && <div className="error-box">{soundError}</div>}
+
+                  {isNative &&
+                    callWakePerms &&
+                    (!callWakePerms.canFullScreenIntent || !callWakePerms.canDrawOverlays) && (
+                      <div className="sound-wake-perm-box">
+                        <div className="sound-wake-perm-text">
+                          <Phone size={15} />
+                          <span>
+                            Allow JaText to open incoming calls instantly over your lock screen and
+                            other apps.
+                          </span>
+                        </div>
+                        <div className="sound-wake-perm-actions">
+                          {!callWakePerms.canFullScreenIntent && (
+                            <button
+                              type="button"
+                              className="mini-btn"
+                              onClick={() =>
+                                void JaTextNative.openCallWakeSettings({ kind: "fullscreen" })
+                              }
+                            >
+                              Allow lock-screen calls
+                            </button>
+                          )}
+                          {!callWakePerms.canDrawOverlays && (
+                            <button
+                              type="button"
+                              className="mini-btn"
+                              onClick={() =>
+                                void JaTextNative.openCallWakeSettings({ kind: "overlay" })
+                              }
+                            >
+                              Allow instant pop-open
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                  {notificationError && <div className="error-box">{notificationError}</div>}
+                  {isNative && mode === "convex" && notificationsEnabled && (
+                    <>
+                      <p className="muted small" role="status">
+                        {pushRegistrationStatus === "unavailable"
+                          ? "In-app alerts active · background FCM not configured in this build"
+                          : `Push registration: ${pushRegistrationStatus}`}
+                      </p>
+                      {pushRegistrationStatus !== "unavailable" && (
+                        <button
+                          className="ghost-btn"
+                          type="button"
+                          onClick={() => {
+                            setNotificationError(null);
+                            void refreshPushRegistration().catch((error: unknown) => {
+                              setNotificationError(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Could not refresh push registration.",
+                              );
+                            });
+                          }}
+                        >
+                          Repair push registration
+                        </button>
+                      )}
+                    </>
+                  )}
+                </section>
+              )}
+
+              {/* === 5. ENCRYPTION & SECURITY === */}
+              {activeCategory === "security" && (
+                <section className="settings-pane-section e2ee-settings-section">
+                  <div className="settings-pane-head">
+                    <h3>End-to-End Encryption</h3>
+                    <p className="muted small">
+                      Private chats, group chats, voice notes, and attachments are encrypted right on
+                      your device before leaving your browser or phone.
+                    </p>
+                  </div>
+
+                  <div className="profile-e2ee-header">
+                    <span className="profile-e2ee-title">
+                      <LockIcon size={15} />
+                      <strong>Device Identity Key</strong>
+                    </span>
+                    <span className={`e2ee-pill ${e2ee.ready ? "active" : "pending"}`}>
+                      {e2ee.ready ? "Active · Synced" : "Initializing…"}
+                    </span>
+                  </div>
+                  <p className="muted small">
+                    Open any friend&apos;s profile card in chat and tap <strong>Verify security code</strong>{" "}
+                    to compare your 12-block safety fingerprint.
+                  </p>
+                  {e2ee.myFingerprint && (
+                    <>
+                      <div className="profile-e2ee-sub">
+                        Key ID: <code>{e2ee.myKeyId}</code>
+                      </div>
+                      <code className="e2ee-fingerprint-code">{e2ee.myFingerprint}</code>
+                    </>
+                  )}
+                  <div className="profile-e2ee-btn-row">
+                    {e2ee.myFingerprint && (
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(
+                            `JaText E2EE Key (@${currentUser.username} · ${e2ee.myKeyId})\nFingerprint: ${e2ee.myFingerprint}\nECDH-P256: ${e2ee.myDhPubB64 ?? ""}`,
+                          );
+                          setCopiedFp(true);
+                          window.setTimeout(() => setCopiedFp(false), 1800);
+                        }}
+                      >
+                        {copiedFp ? (
+                          <>
+                            <CheckIcon size={13} /> Copied
+                          </>
+                        ) : (
+                          <>
+                            <CopyIcon size={13} /> Copy security key
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {/* === 6. LEGAL POLICIES === */}
+              {activeCategory === "legal" && (
+                <section className="settings-pane-section legal-settings-section">
+                  <div className="settings-pane-head">
+                    <h3>Legal Policies</h3>
+                    <p className="muted small">
+                      Read JaText&apos;s Terms of Service and Privacy Policy below.
+                    </p>
+                  </div>
+
+                  <div className="legal-modal-tabs" style={{ marginBottom: 14 }}>
+                    <button
+                      type="button"
+                      className={`legal-tab-btn ${inlineLegalTab === "terms" ? "active" : ""}`}
+                      onClick={() => setInlineLegalTab("terms")}
+                    >
+                      <FileTextIcon size={15} /> Terms of Service
+                    </button>
+                    <button
+                      type="button"
+                      className={`legal-tab-btn ${inlineLegalTab === "privacy" ? "active" : ""}`}
+                      onClick={() => setInlineLegalTab("privacy")}
+                    >
+                      <ShieldCheckIcon size={15} /> Privacy Policy
+                    </button>
+                  </div>
+
+                  {inlineLegalTab === "terms" ? (
+                    <div className="settings-inline-legal-card">
+                      <h4>Terms of Service · Effective 25 October 2026</h4>
+                      <p className="muted small">
+                        By creating an account or using JaText, you agree to keep your credentials
+                        secure, treat others respectfully, avoid spam or unlawful content, and
+                        understand that JaText is an independent service provided as-is.
+                      </p>
+                      <button
+                        type="button"
+                        className="ghost-btn"
+                        onClick={() => setLegalModalTab("terms")}
+                      >
+                        Open full Terms of Service
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="settings-inline-legal-card">
+                      <h4>Privacy Policy · Effective 25 October 2026</h4>
+                      <p className="muted small">
+                        JaText stores only the account, profile, and encrypted message data needed to
+                        deliver your conversations. We never sell personal data or run third-party
+                        ads.
+                      </p>
+                      <button
+                        type="button"
+                        className="ghost-btn"
+                        onClick={() => setLegalModalTab("privacy")}
+                      >
+                        Open full Privacy Policy
+                      </button>
+                    </div>
+                  )}
+                </section>
+              )}
+            </div>
+          </div>
         )}
       </AnimatedModal>
-      {legalTab && <LegalModal initialTab={legalTab} onClose={() => setLegalTab(null)} />}
+
+      {legalModalTab && (
+        <LegalModal initialTab={legalModalTab} onClose={() => setLegalModalTab(null)} />
+      )}
     </>
   );
 }

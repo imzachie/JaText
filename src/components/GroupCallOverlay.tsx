@@ -741,7 +741,7 @@ export function GroupCallOverlay() {
         {(captionsEnabled || captions.length > 0) && (
           <div className="call-captions-box">
             {captions.length === 0 ? (
-              <span className="call-caption-placeholder">Live captions on — start speaking…</span>
+              <span className="call-caption-placeholder">Live captions on, start speaking…</span>
             ) : (
               captions.slice(-2).map((line) => (
                 <div key={line.speakerName} className="call-caption-line">

@@ -119,8 +119,8 @@ async function trySpecialOEmbed(parsedUrl) {
       hasEmbed: true,
       siteName: "JaText · Web & Android",
       title: isChats
-        ? "Open JaText Chats — End-to-End Encrypted Messaging & HD Calls"
-        : "JaText — Private End-to-End Encrypted Chat & HD Calls",
+        ? "Open JaText Chats · End-to-End Encrypted Messaging & HD Calls"
+        : "JaText · Private End-to-End Encrypted Chat & HD Calls",
       description:
         "Zero-knowledge E2EE messaging (ECDH P-256 + AES-256-GCM) with 1:1 & mesh group voice/video calls, screen sharing with audio, custom illustrated chat bubbles, voice-note transcription, and instant multi-account switching.",
       imageUrl: "https://jatext.vercel.app/jatext-og-banner.jpg",

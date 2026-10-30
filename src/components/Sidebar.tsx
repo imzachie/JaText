@@ -168,7 +168,7 @@ export function Sidebar({
     }
   }
 
-  // greeting under the logo — re-check every minute so it flips
+  // greeting under the logo, re-checked every minute so it flips
   // from "Good afternoon" to "Good evening" etc. on its own
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -781,7 +781,7 @@ export function Sidebar({
                       ) : preview?.createdAt ? (
                         `${preview.senderId === me.id ? "You: " : ""}${formatPreviewMessageText(preview.body)}`
                       ) : (
-                        `@${friend.username} — say hi!`
+                        `@${friend.username} · say hi!`
                       )}
                     </span>
                   </div>
@@ -800,7 +800,7 @@ export function Sidebar({
                 <Phone size={18} /> No calls yet
               </p>
               <p className="muted small">
-                Start a voice or video call with a friend or group — your incoming and outgoing call
+                Start a voice or video call with a friend or group. Your incoming and outgoing call
                 history will show right here.
               </p>
             </div>
@@ -1012,7 +1012,7 @@ export function Sidebar({
           {store.mode === "demo" && (
             <div className="hint-box">
               <FlaskIcon size={14} /> <strong>Demo tip:</strong> try adding <code>@maya</code>,{" "}
-              <code>@kai.codes</code> or <code>@Nova</code> — they accept after a couple of seconds
+              <code>@kai.codes</code> or <code>@Nova</code>. They accept after a couple of seconds
               and will text you back.
             </div>
           )}
@@ -1148,7 +1148,7 @@ export function Sidebar({
 
       {store.mode === "demo" && (
         <footer className="sidebar-footer muted small">
-          <FlaskIcon size={13} /> Demo mode — connect Convex to go live
+          <FlaskIcon size={13} /> Demo mode · connect Convex to go live
         </footer>
       )}
       {chatMenu && (
