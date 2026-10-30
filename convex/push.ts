@@ -49,20 +49,26 @@ export const listAllAnnouncementDevices = internalQuery({
   handler: async (ctx, { excludeUserId }) => {
     const allDevices = await ctx.db.query("pushDevices").take(2500);
     const seenTokens = new Set<string>();
-    const dndCache = new Map<string, boolean>();
+    const suppressCache = new Map<string, boolean>();
     const eligible: Array<{ id: typeof allDevices[number]["_id"]; token: string }> = [];
 
     for (const dev of allDevices) {
       if (dev.userId === excludeUserId) continue;
       if (seenTokens.has(dev.token)) continue;
       const uidKey = dev.userId as string;
-      let isDnd = dndCache.get(uidKey);
-      if (isDnd === undefined) {
-        const u = await ctx.db.get(dev.userId);
-        isDnd = !u || u.statusPreference === "dnd";
-        dndCache.set(uidKey, isDnd);
+      let suppressed = suppressCache.get(uidKey);
+      if (suppressed === undefined) {
+        const [u, commSettings] = await Promise.all([
+          ctx.db.get(dev.userId),
+          ctx.db
+            .query("communityUserSettings")
+            .withIndex("by_user", (q) => q.eq("userId", dev.userId))
+            .unique(),
+        ]);
+        suppressed = !u || u.statusPreference === "dnd" || Boolean(commSettings?.isMuted);
+        suppressCache.set(uidKey, suppressed);
       }
-      if (isDnd) continue;
+      if (suppressed) continue;
       seenTokens.add(dev.token);
       eligible.push({ id: dev._id, token: dev.token });
     }

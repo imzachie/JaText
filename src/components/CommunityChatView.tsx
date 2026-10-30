@@ -20,11 +20,20 @@ import { Avatar } from "./Avatar";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { ChatAttachmentImage } from "./ChatAttachmentImage";
+import { ForwardedMessageCard } from "./ForwardedMessageCard";
+import { MessageLinkEmbeds } from "./LinkEmbeds";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { SwipeToReply } from "./SwipeToReply";
 import { StickerPicker } from "./StickerPicker";
 import { ContextMenu } from "./ContextMenu";
+import { isChatActivelyVisibleToUser } from "../lib/nativeBridge";
+import { OFFICIAL_COMMUNITY_ID, type CommunityMessage, type JaUser, type StickerMedia } from "../lib/types";
+import {
+  clearPendingMessageJump,
+  getPendingMessageJump,
+  subscribeMessageJumps,
+} from "../lib/forwardedContext";
 import {
   ArrowLeftIcon,
   BubblePaletteIcon,
@@ -50,7 +59,6 @@ import {
 } from "./UiIcons";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
-import type { CommunityMessage, JaUser, StickerMedia } from "../lib/types";
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
@@ -1067,6 +1075,66 @@ export function CommunityChatView({
     }
   }
 
+  const [highlightedCommunityJumpId, setHighlightedCommunityJumpId] = useState<string | null>(
+    null,
+  );
+
+  // Mark community announcements read when actively viewing Official Community
+  useEffect(() => {
+    if (!store.me || !store.communityMessagesReady || store.communityUnreadCount === 0) {
+      return;
+    }
+    let cancelled = false;
+    const maybeMarkRead = async () => {
+      if (cancelled) return;
+      const activelyViewing = await isChatActivelyVisibleToUser();
+      if (cancelled || !activelyViewing) return;
+      await store.markCommunityRead().catch(() => undefined);
+    };
+    void maybeMarkRead();
+    const onVis = () => void maybeMarkRead();
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+    };
+  }, [
+    store,
+    store.communityMessagesReady,
+    store.communityUnreadCount,
+    store.me,
+  ]);
+
+  // Jump-to-original message inside Official Community
+  useEffect(() => {
+    const attemptJump = () => {
+      const pending = getPendingMessageJump("community", OFFICIAL_COMMUNITY_ID);
+      if (!pending || displayedMessages.length === 0) return;
+      const exists = displayedMessages.some((m) => m.id === pending.messageId);
+      if (!exists) return;
+      clearPendingMessageJump(pending.messageId);
+      wasPinnedRef.current = false;
+      window.requestAnimationFrame(() => {
+        const el = document.getElementById(`community-message-${pending.messageId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          setHighlightedCommunityJumpId(pending.messageId);
+          window.setTimeout(() => {
+            setHighlightedCommunityJumpId((cur) =>
+              cur === pending.messageId ? null : cur,
+            );
+          }, 2400);
+        }
+      });
+    };
+    attemptJump();
+    return subscribeMessageJumps(() => {
+      attemptJump();
+    });
+  }, [displayedMessages]);
+
   return (
     <section className="chat community-chat">
       <header className="chat-header">
@@ -1155,7 +1223,9 @@ export function CommunityChatView({
               }}
             >
               <article
-                className="community-post"
+                className={`community-post ${
+                  highlightedCommunityJumpId === message.id ? "jump-highlight-pulse" : ""
+                }`}
                 id={`community-message-${message.id}`}
                 onContextMenu={(e) => openMessageMenu(e, message)}
                 onTouchStart={(e) => startPostTouchHold(e, message)}
@@ -1228,11 +1298,14 @@ export function CommunityChatView({
                 </form>
               ) : (
                 <>
-                  {message.forwardedFromName && (
-                    <span className="message-meta forwarded-label">
-                      <ForwardIcon size={12} /> Forwarded from {message.forwardedFromName}
-                    </span>
-                  )}
+                  {!message.unsentAt &&
+                    (message.forwardedContext || message.forwardedFromName) && (
+                      <ForwardedMessageCard
+                        context={message.forwardedContext}
+                        legacySenderName={message.forwardedFromName}
+                        fallbackTimestamp={message.createdAt}
+                      />
+                    )}
                   {message.replyTo && (
                     <button
                       type="button"
@@ -1307,13 +1380,17 @@ export function CommunityChatView({
                               mine={message.senderId === store.me?.id}
                               className="community-post-body"
                             />
+                            <MessageLinkEmbeds text={message.body} />
                           </DecoratedMessageBubble>
                         ) : (
-                          <MessageMarkdown
-                            text={message.body}
-                            mine={message.senderId === store.me?.id}
-                            className="community-post-body"
-                          />
+                          <>
+                            <MessageMarkdown
+                              text={message.body}
+                              mine={message.senderId === store.me?.id}
+                              className="community-post-body"
+                            />
+                            <MessageLinkEmbeds text={message.body} />
+                          </>
                         ))}
                     </>
                   )}

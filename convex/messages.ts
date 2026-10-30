@@ -503,15 +503,41 @@ export const previews = query({
             )
             .unique(),
         ]);
+        const isSilentDmSignal = (body: string, attachmentName?: string) =>
+          body.startsWith("__JATEXT_CALL_SIG__:") ||
+          body.startsWith("__JATEXT_REACT__:") ||
+          body.startsWith("__JATEXT_SEEN__:") ||
+          body.startsWith("__JATEXT_E2EE_IK__:") ||
+          body.startsWith("__JATEXT_E2EE_GK__:") ||
+          body.startsWith("__JATEXT_E2EE_VER__:") ||
+          body.includes("(__JATEXT_CALL_CANCEL__") ||
+          body.includes("(__JATEXT_CALL_CLAIM__") ||
+          attachmentName === "__jatext_e2ee_vault__" ||
+          attachmentName === "__jatext_e2ee_autosync__" ||
+          Boolean(attachmentName?.startsWith("__jatext_bubble_pref__:")) ||
+          Boolean(attachmentName?.startsWith("__jatext_e2ee_devsync_"));
+
         const hasBlockedFriend = await hasBlocked(ctx, me._id, friendId);
-        const last = recent.find(
+        const visibleMessages = recent.filter(
           (message) =>
             !message.hiddenFor?.includes(me._id) &&
-            !message.body.startsWith("__JATEXT_CALL_SIG__:") &&
+            !isSilentDmSignal(message.body, message.attachmentName) &&
             !(hasBlockedFriend && message.senderId === friendId) &&
             (settings?.deletedAt === undefined ||
               message._creationTime > settings.deletedAt),
         );
+        const last = visibleMessages[0];
+        const unreadCount = visibleMessages.reduce((count, message) => {
+          if (
+            message.senderId === friendId &&
+            message.receiverId === me._id &&
+            !message.unsentAt &&
+            message.deliveryStatus !== "read"
+          ) {
+            return count + 1;
+          }
+          return count;
+        }, 0);
         return {
           friendId: friendId as string,
           body: last
@@ -523,6 +549,7 @@ export const previews = query({
           senderId: (last?.senderId ?? me._id) as string,
           isArchived: settings?.isArchived ?? false,
           isMuted: settings?.isMuted ?? false,
+          unreadCount,
         };
       }),
     );

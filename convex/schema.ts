@@ -39,6 +39,21 @@ export default defineSchema({
       v.union(v.literal("online"), v.literal("dnd"), v.literal("offline")),
     ),
     customStatus: v.optional(v.string()),
+    socials: v.optional(
+      v.array(
+        v.object({
+          platform: v.string(),
+          handle: v.string(),
+          url: v.string(),
+        }),
+      ),
+    ),
+    website: v.optional(
+      v.object({
+        title: v.string(),
+        url: v.string(),
+      }),
+    ),
   })
     .index("email", ["email"])
     .index("by_username", ["username"]),
@@ -257,4 +272,32 @@ export default defineSchema({
     packetJson: v.string(),
     createdAt: v.number(),
   }).index("by_group_epoch", ["groupId", "epoch"]),
+
+  groupUserSettings: defineTable({
+    userId: v.id("users"),
+    groupId: v.id("groups"),
+    isSilenced: v.boolean(),
+    isArchived: v.boolean(),
+    lastReadAt: v.optional(v.number()),
+  })
+    .index("by_user_group", ["userId", "groupId"])
+    .index("by_user", ["userId"])
+    .index("by_group", ["groupId"]),
+
+  communityUserSettings: defineTable({
+    userId: v.id("users"),
+    isMuted: v.boolean(),
+    lastReadAt: v.optional(v.number()),
+  }).index("by_user", ["userId"]),
+
+  linkPreviews: defineTable({
+    url: v.string(),
+    hasEmbed: v.boolean(),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    imageUrl: v.optional(v.string()),
+    siteName: v.optional(v.string()),
+    themeColor: v.optional(v.string()),
+    fetchedAt: v.number(),
+  }).index("by_url", ["url"]),
 });

@@ -66,7 +66,8 @@ function summarizeReadablePushBody(body: string, fallback: string): string {
     return callInfo.isVideo ? "Incoming video call" : "Incoming voice call";
   }
   const stripped = body
-    .replace(/__JATEXT_BUBBLE__:[^\n]*\n?/, "")
+    .replace(/__JATEXT_BUBBLE__:[^\n]*\n?/g, "")
+    .replace(/__JATEXT_FWD_V1__:[^\n]*\n?/g, "")
     .replace(/__JATEXT_E2EE_V1__:[\s\S]*$/m, "")
     .replace(/[\u200B\u200C\u2063]/g, "")
     .trim()

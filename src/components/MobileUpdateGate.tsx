@@ -8,7 +8,6 @@ import {
   RocketIcon,
   ShieldCheckIcon,
   SparklesIcon,
-  SwitchAccountIcon,
 } from "./UiIcons";
 
 const WELCOMED_VERSION_KEY = "jatext:welcomed-mobile-build:v1";
@@ -326,24 +325,20 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
               <li>
-                <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                100% Readable Decrypted Mobile Notifications &amp; +40% Balanced Default Alert Audio
+                <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Rich Link Embeds, Smooth 3-Dots Dropdowns &amp; Forwarded Message Cards
               </li>
               <li>
                 <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Instant Declined-Call Cleanup &amp; Lock-Screen Ringtone Control
+                Connect Socials (Discord, YouTube, X &amp; more) + Website on Your Profile
+              </li>
+              <li>
+                <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Unread Message Badges, Community Mute, Group Silence/Archive &amp; Quiet Archives
               </li>
               <li>
                 <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Strictly Accurate Read Receipts Only When Actively Viewing a Chat
-              </li>
-              <li>
-                <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Automatic Scroll on New Messages &amp; Mobile Keyboard Chat-End Lock
-              </li>
-              <li>
-                <SwitchAccountIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                60fps Animated Mobile Navigation, @Mentions &amp; Fast Account Switching
+                Zero-Knowledge E2EE, Accurate Read Receipts &amp; Fast Multi-Account Switching
               </li>
             </ul>
             <button

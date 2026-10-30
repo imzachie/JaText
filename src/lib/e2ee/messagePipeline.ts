@@ -3,6 +3,10 @@ import {
   isValidBubbleStyleId,
   stripBubbleStyleFromText,
 } from "../chatCustomization";
+import {
+  extractForwardedContext,
+  stripForwardedMetadataFromText,
+} from "../forwardedContext";
 import type { ChatMessage, ChatPreview, GroupDetails, GroupMessage, GroupSummary, StickerMedia } from "../types";
 import {
   E2EE_AUTOSYNC_STICKER_NAME,
@@ -562,6 +566,7 @@ export function hydrateDecryptedDmMessage(
       : raw;
 
   if (!isEncryptedWireBody(raw.body)) {
+    const { context: fwdContext, strippedBody } = extractForwardedContext(raw.body);
     const plainProof: MessageE2EEProof = {
       encrypted: false,
       decrypted: true,
@@ -570,7 +575,14 @@ export function hydrateDecryptedDmMessage(
       channel: "plain",
       rawWireBody: raw.body,
     };
-    return { ...withReply, e2ee: plainProof };
+    return {
+      ...withReply,
+      body: strippedBody,
+      forwardedContext: fwdContext ?? withReply.forwardedContext,
+      forwardedFrom:
+        withReply.forwardedFrom ?? fwdContext?.originalSenderName,
+      e2ee: plainProof,
+    };
   }
 
   const isSilentWire = raw.body.startsWith("__JATEXT_CALL_SIG__:");
@@ -689,7 +701,8 @@ export function hydrateDecryptedDmMessage(
     }
   }
 
-  const { cleanBody, bubbleStyle: markerStyle } = extractMessageBubbleStyle(resolvedBody, attachmentType);
+  const { cleanBody: bubbleCleanBody, bubbleStyle: markerStyle } = extractMessageBubbleStyle(resolvedBody, attachmentType);
+  const { context: fwdContext, strippedBody: cleanBody } = extractForwardedContext(bubbleCleanBody);
   const explicitStyle =
     payload.bs && isValidBubbleStyleId(payload.bs) ? payload.bs : undefined;
   const resolvedStyle =
@@ -700,12 +713,18 @@ export function hydrateDecryptedDmMessage(
     ...withReply,
     body: cleanBody,
     bubbleStyle: resolvedStyle,
+    forwardedContext: fwdContext ?? withReply.forwardedContext,
+    forwardedFrom:
+      withReply.forwardedFrom ?? fwdContext?.originalSenderName,
     attachmentUrl,
     attachmentName,
     attachmentType: cleanedMime,
     stickerKey,
     replyTo: withReply.replyTo
-      ? { ...withReply.replyTo, body: stripBubbleStyleFromText(withReply.replyTo.body) }
+      ? {
+          ...withReply.replyTo,
+          body: stripForwardedMetadataFromText(stripBubbleStyleFromText(withReply.replyTo.body)),
+        }
       : undefined,
     e2ee: proof,
   };
@@ -765,8 +784,13 @@ export function hydrateDecryptedGroupMessage(
       : raw;
 
   if (!isEncryptedWireBody(raw.body)) {
+    const { context: fwdContext, strippedBody } = extractForwardedContext(raw.body);
     return {
       ...withReply,
+      body: strippedBody,
+      forwardedContext: fwdContext ?? withReply.forwardedContext,
+      forwardedFromName:
+        withReply.forwardedFromName ?? fwdContext?.originalSenderName,
       e2ee: {
         encrypted: false,
         decrypted: true,
@@ -869,7 +893,8 @@ export function hydrateDecryptedGroupMessage(
     }
   }
 
-  const { cleanBody, bubbleStyle: markerStyle } = extractMessageBubbleStyle(resolvedBody, attachmentType);
+  const { cleanBody: bubbleCleanBody, bubbleStyle: markerStyle } = extractMessageBubbleStyle(resolvedBody, attachmentType);
+  const { context: fwdContext, strippedBody: cleanBody } = extractForwardedContext(bubbleCleanBody);
   const explicitStyle =
     payload.bs && isValidBubbleStyleId(payload.bs) ? payload.bs : undefined;
   const resolvedStyle =
@@ -881,6 +906,9 @@ export function hydrateDecryptedGroupMessage(
     ...withReply,
     body: cleanBody,
     bubbleStyle: resolvedStyle,
+    forwardedContext: fwdContext ?? withReply.forwardedContext,
+    forwardedFromName:
+      withReply.forwardedFromName ?? fwdContext?.originalSenderName,
     attachmentUrl,
     attachmentName,
     attachmentType: cleanedMime,
@@ -888,7 +916,10 @@ export function hydrateDecryptedGroupMessage(
     stickerName,
     stickerKey,
     replyTo: withReply.replyTo
-      ? { ...withReply.replyTo, body: stripBubbleStyleFromText(withReply.replyTo.body) }
+      ? {
+          ...withReply.replyTo,
+          body: stripForwardedMetadataFromText(stripBubbleStyleFromText(withReply.replyTo.body)),
+        }
       : undefined,
     mentionsEveryone: raw.mentionsEveryone || mentions.mentionsEveryone,
     mentionedUserIds:
@@ -904,7 +935,12 @@ export function hydrateDecryptedChatPreview(
   myUserId: string,
   triggerRerender?: () => void,
 ): ChatPreview {
-  if (!isEncryptedWireBody(preview.body)) return preview;
+  if (!isEncryptedWireBody(preview.body)) {
+    return {
+      ...preview,
+      body: stripForwardedMetadataFromText(stripBubbleStyleFromText(preview.body)),
+    };
+  }
   const receiverId = preview.senderId === myUserId ? preview.friendId : myUserId;
   const cacheKey = buildMessageDecryptCacheKey(
     `prev:${preview.friendId}:${preview.createdAt}`,
@@ -927,7 +963,7 @@ export function hydrateDecryptedChatPreview(
     return { ...preview, body: "Encrypted message" };
   }
   const p = cached.payload;
-  const cleanPreviewBody = stripBubbleStyleFromText(p.b);
+  const cleanPreviewBody = stripForwardedMetadataFromText(stripBubbleStyleFromText(p.b));
   const summary =
     cleanPreviewBody ||
     (p.att?.t?.startsWith("audio/")
@@ -949,7 +985,7 @@ export async function decryptWirePreviewAsync(params: {
 }): Promise<string | null> {
   if (!params.rawBody) return null;
   if (!isEncryptedWireBody(params.rawBody)) {
-    return stripBubbleStyleFromText(params.rawBody) || null;
+    return stripForwardedMetadataFromText(stripBubbleStyleFromText(params.rawBody)) || null;
   }
   const cacheKey = buildMessageDecryptCacheKey(params.cacheHint, params.rawBody, 0);
   const res = await decryptWireMessageCached({
@@ -961,7 +997,7 @@ export async function decryptWirePreviewAsync(params: {
   });
   if (!res.payload) return null;
   const p = res.payload;
-  const clean = stripBubbleStyleFromText(p.b);
+  const clean = stripForwardedMetadataFromText(stripBubbleStyleFromText(p.b));
   return (
     clean ||
     (p.att?.t?.startsWith("audio/")
@@ -981,7 +1017,12 @@ export function hydrateDecryptedGroupSummary(
   triggerRerender?: () => void,
   allowedEveryoneSenderIds?: ReadonlySet<string>,
 ): GroupSummary {
-  if (!isEncryptedWireBody(group.lastMessage)) return group;
+  if (!isEncryptedWireBody(group.lastMessage)) {
+    return {
+      ...group,
+      lastMessage: stripForwardedMetadataFromText(stripBubbleStyleFromText(group.lastMessage)),
+    };
+  }
   const cacheKey = buildMessageDecryptCacheKey(
     `gprev:${group.id}:${group.lastMessageAt}`,
     group.lastMessage,
@@ -1003,7 +1044,7 @@ export function hydrateDecryptedGroupSummary(
     return { ...group, lastMessage: "Encrypted message" };
   }
   const p = cached.payload;
-  const cleanGroupPreviewBody = stripBubbleStyleFromText(p.b);
+  const cleanGroupPreviewBody = stripForwardedMetadataFromText(stripBubbleStyleFromText(p.b));
   const summary =
     cleanGroupPreviewBody ||
     (p.att?.t?.startsWith("audio/")

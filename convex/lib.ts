@@ -52,6 +52,8 @@ export async function profileOf(ctx: Ctx, user: Doc<"users">) {
     usernameChangedAt: user.usernameChangedAt,
     statusPreference: user.statusPreference ?? "online",
     customStatus: user.customStatus ?? "",
+    socials: user.socials ?? [],
+    website: user.website,
   };
 }
 
@@ -102,6 +104,15 @@ export async function initialDmDeliveryStatus(
   ) {
     return "delivered";
   }
+  const convSettings = await ctx.db
+    .query("conversationSettings")
+    .withIndex("by_user_friend", (q) =>
+      q.eq("userId", receiverId).eq("friendId", senderId),
+    )
+    .unique();
+  if (convSettings?.isArchived || convSettings?.isMuted) {
+    return "delivered";
+  }
   const phoneDevice = await ctx.db
     .query("pushDevices")
     .withIndex("by_user", (q) => q.eq("userId", receiverId))
@@ -124,6 +135,16 @@ export async function scheduleMessagePush(
     receiver.statusPreference === "dnd" ||
     (await hasBlocked(ctx, receiverId, sender._id))
   ) {
+    return;
+  }
+
+  const convSettings = await ctx.db
+    .query("conversationSettings")
+    .withIndex("by_user_friend", (q) =>
+      q.eq("userId", receiverId).eq("friendId", sender._id),
+    )
+    .unique();
+  if (convSettings?.isArchived || convSettings?.isMuted) {
     return;
   }
 
@@ -154,6 +175,16 @@ export async function scheduleGroupMentionPush(
     return;
   }
 
+  const groupSettings = await ctx.db
+    .query("groupUserSettings")
+    .withIndex("by_user_group", (q) =>
+      q.eq("userId", receiverId).eq("groupId", groupId),
+    )
+    .unique();
+  if (groupSettings?.isArchived || groupSettings?.isSilenced) {
+    return;
+  }
+
   const senderName = sender.displayName ?? sender.name ?? "Someone";
   await ctx.scheduler.runAfter(0, internal.pushActions.sendMessageNotification, {
     receiverId,
@@ -181,6 +212,16 @@ export async function scheduleGroupCallPush(
     receiver.statusPreference === "dnd" ||
     (await hasBlocked(ctx, receiverId, sender._id))
   ) {
+    return;
+  }
+
+  const groupSettings = await ctx.db
+    .query("groupUserSettings")
+    .withIndex("by_user_group", (q) =>
+      q.eq("userId", receiverId).eq("groupId", groupId),
+    )
+    .unique();
+  if (groupSettings?.isArchived || groupSettings?.isSilenced) {
     return;
   }
 

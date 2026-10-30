@@ -576,6 +576,8 @@ export function DemoStoreProvider({
         u.avatarColor = input.avatarColor;
         u.avatarUrl = avatarUrl;
         u.bannerUrl = bannerUrl;
+        if (input.socials !== undefined) u.socials = input.socials;
+        if (input.website !== undefined) u.website = input.website ?? undefined;
         u.onboardingComplete = true;
       });
 
@@ -684,18 +686,28 @@ export function DemoStoreProvider({
       const settings = db.conversationSettings.find(
         (entry) => entry.userId === me.id && entry.friendId === friend.id,
       );
-      const latest = db.messages
-        .filter(
-          (message) =>
-            !message.hiddenFor?.includes(me.id) &&
-            (message.senderId === me.id
-              ? message.receiverId === friend.id
-              : message.senderId === friend.id && message.receiverId === me.id) &&
-            !(hasBlockedFriend && message.senderId === friend.id) &&
-            (settings?.deletedAt === undefined ||
-              message.createdAt > settings.deletedAt),
-        )
-        .sort((a, b) => b.createdAt - a.createdAt)[0];
+      const convoMsgs = db.messages.filter(
+        (message) =>
+          !message.hiddenFor?.includes(me.id) &&
+          (message.senderId === me.id
+            ? message.receiverId === friend.id
+            : message.senderId === friend.id && message.receiverId === me.id) &&
+          !(hasBlockedFriend && message.senderId === friend.id) &&
+          (settings?.deletedAt === undefined ||
+            message.createdAt > settings.deletedAt),
+      );
+      const latest = [...convoMsgs].sort((a, b) => b.createdAt - a.createdAt)[0];
+      const unreadCount = convoMsgs.reduce((count, message) => {
+        if (
+          message.senderId === friend.id &&
+          message.receiverId === me.id &&
+          !message.unsentAt &&
+          message.deliveryStatus !== "read"
+        ) {
+          return count + 1;
+        }
+        return count;
+      }, 0);
       return {
         friendId: friend.id,
         body: latest
@@ -707,6 +719,7 @@ export function DemoStoreProvider({
         senderId: latest?.senderId ?? me.id,
         isArchived: settings?.isArchived ?? false,
         isMuted: settings?.isMuted ?? false,
+        unreadCount,
       };
     });
   }, [db, friends, me]);
@@ -1423,6 +1436,10 @@ export function DemoStoreProvider({
     friendActivities,
     communityMessages: [],
     communityMessagesReady: true,
+    communityMuted: false,
+    communityUnreadCount: 0,
+    setCommunityMuted: async () => undefined,
+    markCommunityRead: async () => undefined,
     communityPermissions: { isOwner: false, canModerate: false, moderatorIds: [] },
     communityDirectory: [],
     groups: [],
@@ -1570,6 +1587,9 @@ export function DemoStoreProvider({
     deleteGroup: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
+    setGroupSilenced: async () => undefined,
+    setGroupArchived: async () => undefined,
+    markGroupRead: async () => undefined,
     refreshPushRegistration: async () => {
       throw new Error("Push registration is only available in the Android app with the live backend.");
     },

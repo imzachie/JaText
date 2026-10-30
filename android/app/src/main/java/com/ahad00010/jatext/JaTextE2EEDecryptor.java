@@ -369,7 +369,7 @@ public final class JaTextE2EEDecryptor {
     private static ResolvedPushContent inspectRawForActiveCall(String raw) {
         if (raw == null) return null;
         String s = raw.replace("\u200B", "").replace("\u200C", "").replace("\u2063", "").trim();
-        if (s.startsWith("__JATEXT_BUBBLE__:")) {
+        while (s.startsWith("__JATEXT_BUBBLE__:") || s.startsWith("__JATEXT_FWD_V1__:")) {
             int nl = s.indexOf('\n');
             s = nl >= 0 ? s.substring(nl + 1).trim() : "";
         }
@@ -1057,7 +1057,7 @@ public final class JaTextE2EEDecryptor {
         ) {
             return "";
         }
-        if (s.startsWith("__JATEXT_BUBBLE__:")) {
+        while (s.startsWith("__JATEXT_BUBBLE__:") || s.startsWith("__JATEXT_FWD_V1__:")) {
             int nl = s.indexOf('\n');
             s = nl >= 0 ? s.substring(nl + 1).trim() : "";
         }

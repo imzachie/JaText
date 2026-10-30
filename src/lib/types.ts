@@ -1,6 +1,18 @@
 import type { BubbleStyleId } from "./chatCustomization";
 import type { DeviceSyncRequest } from "./e2ee/cryptoPrimitives";
 import type { MessageE2EEProof } from "./e2ee/keystore";
+import type { ForwardedMessageContext } from "./forwardedContext";
+
+export interface UserSocialLink {
+  platform: string;
+  handle: string;
+  url: string;
+}
+
+export interface UserWebsiteLink {
+  title: string;
+  url: string;
+}
 
 export interface JaUser {
   id: string;
@@ -18,6 +30,8 @@ export interface JaUser {
   usernameChangedAt?: number;
   statusPreference?: StatusPreference;
   customStatus?: string;
+  socials?: UserSocialLink[];
+  website?: UserWebsiteLink;
 }
 
 export type StatusPreference = "online" | "dnd" | "offline";
@@ -55,6 +69,7 @@ export interface ChatMessage {
   createdAt: number;
   replyTo?: { id: string; senderId: string; body: string };
   forwardedFrom?: string;
+  forwardedContext?: ForwardedMessageContext;
   unsentAt?: number;
   reactions?: MessageReaction[];
   e2ee?: MessageE2EEProof;
@@ -90,6 +105,7 @@ export interface ChatPreview {
   senderId: string;
   isArchived?: boolean;
   isMuted?: boolean;
+  unreadCount?: number;
 }
 
 export interface CommunityMessage {
@@ -118,6 +134,7 @@ export interface CommunityMessage {
   stickerKey?: string;
   isStickerFavorite?: boolean;
   forwardedFromName?: string;
+  forwardedContext?: ForwardedMessageContext;
   replyTo?: { id: string; senderId: string; senderName: string; body: string };
   reactions?: MessageReaction[];
   canModerate: boolean;
@@ -145,6 +162,9 @@ export interface GroupSummary {
   lastSenderId?: string;
   lastSenderName?: string;
   lastMentionedMe?: boolean;
+  isSilenced?: boolean;
+  isArchived?: boolean;
+  unreadCount?: number;
 }
 
 export interface GroupMember extends JaUser {
@@ -179,6 +199,7 @@ export interface GroupMessage {
   stickerKey?: string;
   isStickerFavorite?: boolean;
   forwardedFromName?: string;
+  forwardedContext?: ForwardedMessageContext;
   replyTo?: { id: string; senderId: string; senderName: string; body: string };
   createdAt: number;
   editedAt?: number;
@@ -206,6 +227,8 @@ export interface ProfileInput {
   /** File = set new photo, null = remove photo, undefined = keep current */
   avatarFile?: File | null;
   bannerFile?: File | null;
+  socials?: UserSocialLink[];
+  website?: UserWebsiteLink | null;
 }
 
 export interface JaTextStore {
@@ -221,6 +244,10 @@ export interface JaTextStore {
   friendActivities: FriendActivity[];
   communityMessages: CommunityMessage[];
   communityMessagesReady: boolean;
+  communityMuted: boolean;
+  communityUnreadCount: number;
+  setCommunityMuted: (muted: boolean) => Promise<void>;
+  markCommunityRead: () => Promise<void>;
   communityPermissions: { isOwner: boolean; canModerate: boolean; moderatorIds: string[] };
   communityDirectory: CommunityUser[];
   groups: GroupSummary[];
@@ -255,6 +282,7 @@ export interface JaTextStore {
   sendMessage: (receiverId: string, body: string, file?: File, replyToId?: string) => Promise<void>;
   fetchMessagesWithUser: (otherId: string) => Promise<ChatMessage[]>;
   forwardMessage: (messageId: string, receiverId: string) => Promise<void>;
+  forwardDmToTarget?: (messageId: string, target: { userId?: string; groupId?: string }) => Promise<void>;
   toggleMessageReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteMessageForMe: (messageId: string) => Promise<void>;
   unsendMessage: (messageId: string) => Promise<boolean>;
@@ -307,6 +335,9 @@ export interface JaTextStore {
   removeGroupMember: (groupId: string, userId: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
   deleteGroup: (groupId: string) => Promise<void>;
+  setGroupSilenced: (groupId: string, silenced: boolean) => Promise<void>;
+  setGroupArchived: (groupId: string, archived: boolean) => Promise<void>;
+  markGroupRead: (groupId: string) => Promise<void>;
   refreshPushRegistration: () => Promise<void>;
   setNotificationsEnabled: (enabled: boolean) => void;
   setSoundsEnabled: (enabled: boolean) => void;

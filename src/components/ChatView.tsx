@@ -45,11 +45,18 @@ import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { ChatAttachmentImage } from "./ChatAttachmentImage";
 import { CallMessageCard } from "./CallMessageCard";
 import { ContextMenu } from "./ContextMenu";
+import { ForwardedMessageCard } from "./ForwardedMessageCard";
+import { MessageLinkEmbeds } from "./LinkEmbeds";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { SwipeToReply } from "./SwipeToReply";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { StickerPicker } from "./StickerPicker";
+import {
+  clearPendingMessageJump,
+  getPendingMessageJump,
+  subscribeMessageJumps,
+} from "../lib/forwardedContext";
 import {
   ArrowLeftIcon,
   BanIcon,
@@ -80,6 +87,7 @@ import {
   UnlockIcon,
   UserIcon,
   UserMinusIcon,
+  UsersIcon,
 } from "./UiIcons";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
@@ -237,15 +245,66 @@ const ChatHistory = memo(function ChatHistory({
   }
 
   const [visibleCount, setVisibleCount] = useState(50);
+  const [highlightedJumpId, setHighlightedJumpId] = useState<string | null>(null);
+  const [firstUnreadMessageId, setFirstUnreadMessageId] = useState<string | null>(null);
+  const capturedUnreadForFriendRef = useRef<string | null>(null);
   const prependAnchorRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
   const prevFriendIdRef = useRef(friend.id);
   if (prevFriendIdRef.current !== friend.id) {
     prevFriendIdRef.current = friend.id;
     prependAnchorRef.current = null;
+    capturedUnreadForFriendRef.current = null;
     if (visibleCount !== 50) {
       setVisibleCount(50);
     }
+    if (firstUnreadMessageId !== null) {
+      setFirstUnreadMessageId(null);
+    }
   }
+
+  useEffect(() => {
+    if (!messagesReady || capturedUnreadForFriendRef.current === friend.id) return;
+    capturedUnreadForFriendRef.current = friend.id;
+    const firstUnread = messages.find(
+      (m) =>
+        m.senderId === friend.id &&
+        m.receiverId === me.id &&
+        !m.unsentAt &&
+        m.deliveryStatus !== "read" &&
+        !isHiddenCallSignal(m.body),
+    );
+    setFirstUnreadMessageId(firstUnread?.id ?? null);
+  }, [friend.id, me.id, messages, messagesReady]);
+
+  useEffect(() => {
+    const attemptJump = () => {
+      const pending = getPendingMessageJump("dm", friend.id);
+      if (!pending || messages.length === 0) return;
+      const idx = messages.findIndex((m) => m.id === pending.messageId);
+      if (idx === -1) return;
+      const neededCount = messages.length - idx + 8;
+      if (neededCount > visibleCount) {
+        setVisibleCount(Math.min(messages.length, neededCount));
+        return;
+      }
+      clearPendingMessageJump(pending.messageId);
+      initialScrollAllowedRef.current = false;
+      window.requestAnimationFrame(() => {
+        const el = document.getElementById(`message-${pending.messageId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          setHighlightedJumpId(pending.messageId);
+          window.setTimeout(() => {
+            setHighlightedJumpId((cur) => (cur === pending.messageId ? null : cur));
+          }, 2400);
+        }
+      });
+    };
+    attemptJump();
+    return subscribeMessageJumps(() => {
+      attemptJump();
+    });
+  }, [friend.id, initialScrollAllowedRef, messages, visibleCount]);
 
   const windowedMessages = useMemo(
     () =>
@@ -338,19 +397,21 @@ const ChatHistory = memo(function ChatHistory({
         return (
           <div key={message.renderKey ?? message.id}>
             {showDay && <div className="day-divider">{day}</div>}
+            {firstUnreadMessageId === message.id && (
+              <div className="unread-messages-divider" role="separator">
+                <span>Unread messages</span>
+              </div>
+            )}
             <div
-              className={`msg-row ${mine ? "mine" : "theirs"}`}
+              className={`msg-row ${mine ? "mine" : "theirs"} ${
+                highlightedJumpId === message.id ? "jump-highlight-pulse" : ""
+              }`}
               id={`message-${message.id}`}
             >
               {!mine && (
                 <Avatar user={friend} size={30} ringWidth={2} onClick={() => onOpenProfile(friend)} />
               )}
               <div className="msg-col">
-                {message.forwardedFrom && (
-                  <span className="message-meta forwarded-label">
-                    <ForwardIcon size={12} /> Forwarded from {message.forwardedFrom}
-                  </span>
-                )}
                 <SwipeToReply
                   disabled={Boolean(message.unsentAt) || message.id.startsWith("pending-")}
                   onReply={() => onSwipeReply(message)}
@@ -370,6 +431,14 @@ const ChatHistory = memo(function ChatHistory({
                     onTouchEnd={cancelBubbleTouchHold}
                     onTouchCancel={cancelBubbleTouchHold}
                   >
+                  {!message.unsentAt &&
+                    (message.forwardedContext || message.forwardedFrom) && (
+                      <ForwardedMessageCard
+                        context={message.forwardedContext}
+                        legacySenderName={message.forwardedFrom}
+                        fallbackTimestamp={message.createdAt}
+                      />
+                    )}
                   {message.replyTo && (
                     <button
                       type="button"
@@ -477,7 +546,12 @@ const ChatHistory = memo(function ChatHistory({
                             <PaperclipIcon size={14} /> {message.attachmentName ?? "Attachment"}
                           </a>
                         ))}
-                      {message.body && <MessageMarkdown text={message.body} mine={mine} />}
+                      {message.body && (
+                        <>
+                          <MessageMarkdown text={message.body} mine={mine} />
+                          <MessageLinkEmbeds text={message.body} />
+                        </>
+                      )}
                     </>
                   )}
                   </DecoratedMessageBubble>
@@ -752,7 +826,11 @@ export function ChatView({
   } | null>(null);
   const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
   const [wallpaperModalOpen, setWallpaperModalOpen] = useState(false);
-  const [headerMoreMenu, setHeaderMoreMenu] = useState<{ x: number; y: number } | null>(null);
+  const [headerMoreMenu, setHeaderMoreMenu] = useState<{
+    x: number;
+    y: number;
+    closing?: boolean;
+  } | null>(null);
   const [inspectingMessage, setInspectingMessage] = useState<ChatMessage | null>(null);
   const e2ee = useE2EESnapshot();
   const peerE2EE = e2ee.peerKeys[friend.id];
@@ -1435,11 +1513,26 @@ export function ChatView({
   async function forwardToFriend(receiverId: string) {
     if (!forwardMessage) return;
     try {
-      await store.forwardMessage(forwardMessage.id, receiverId);
+      if (store.forwardDmToTarget) {
+        await store.forwardDmToTarget(forwardMessage.id, { userId: receiverId });
+      } else {
+        await store.forwardMessage(forwardMessage.id, receiverId);
+      }
       closeForwardDialog();
       closeMessageMenu();
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't forward the message. Please try again."));
+    }
+  }
+
+  async function forwardToGroup(groupId: string) {
+    if (!forwardMessage || !store.forwardDmToTarget) return;
+    try {
+      await store.forwardDmToTarget(forwardMessage.id, { groupId });
+      closeForwardDialog();
+      closeMessageMenu();
+    } catch (actionError) {
+      setError(friendlyError(actionError, "Couldn't forward the message to that group."));
     }
   }
 
@@ -1511,12 +1604,17 @@ export function ChatView({
           </button>
           <button
             type="button"
-            className="icon-btn chat-more-btn"
+            className={`icon-btn chat-more-btn ${headerMoreMenu ? "menu-open" : ""}`}
             title="More options"
             aria-label="More options"
+            aria-expanded={Boolean(headerMoreMenu)}
             onClick={(event) => {
+              if (headerMoreMenu) {
+                setHeaderMoreMenu((cur) => (cur ? { ...cur, closing: true } : null));
+                return;
+              }
               const rect = event.currentTarget.getBoundingClientRect();
-              setHeaderMoreMenu({ x: rect.right - 8, y: rect.bottom + 6 });
+              setHeaderMoreMenu({ x: rect.right - 220, y: rect.bottom + 8 });
             }}
           >
             <MoreVerticalIcon size={18} />
@@ -1834,7 +1932,7 @@ export function ChatView({
             <header>
               <div>
                 <h3>Forward message</h3>
-                <p>Choose a friend to send this to.</p>
+                <p>Choose a friend or group to send this to.</p>
               </div>
               <button
                 type="button"
@@ -1846,6 +1944,33 @@ export function ChatView({
               </button>
             </header>
             <div className="forward-friends">
+              {store.forwardDmToTarget &&
+                store.groups.map((grp) => (
+                  <button
+                    type="button"
+                    key={`grp-${grp.id}`}
+                    className="forward-friend"
+                    onClick={() => void forwardToGroup(grp.id)}
+                  >
+                    {grp.avatarUrl ? (
+                      <img
+                        src={grp.avatarUrl}
+                        alt=""
+                        className="group-avatar"
+                        style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }}
+                      />
+                    ) : (
+                      <div
+                        className="group-avatar group-avatar-fallback"
+                        style={{ width: 38, height: 38 }}
+                      >
+                        <UsersIcon size={18} />
+                      </div>
+                    )}
+                    <span>{grp.name}</span>
+                    <span className="muted">Group · {grp.memberCount} members</span>
+                  </button>
+                ))}
               {store.friends.map((target) => (
                 <button
                   type="button"
@@ -1858,8 +1983,8 @@ export function ChatView({
                   <span className="muted">@{target.username}</span>
                 </button>
               ))}
-              {store.friends.length === 0 && (
-                <p className="muted center">You do not have any friends to forward to yet.</p>
+              {store.friends.length === 0 && store.groups.length === 0 && (
+                <p className="muted center">You do not have any chats to forward to yet.</p>
               )}
             </div>
           </section>
@@ -1921,104 +2046,104 @@ export function ChatView({
         <ContextMenu
           x={headerMoreMenu.x}
           y={headerMoreMenu.y}
+          variant="dropdown"
+          externalClosing={Boolean(headerMoreMenu.closing)}
           label={`Options for ${friend.displayName}`}
           className="message-context-menu conversation-context-menu"
           onClose={() => setHeaderMoreMenu(null)}
         >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setHeaderMoreMenu(null);
-              onOpenProfile(friend);
-            }}
-          >
-            <span>
-              <UserIcon size={15} />
-            </span>{" "}
-            View profile
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setHeaderMoreMenu(null);
-              setBubbleStyleOpen(true);
-            }}
-          >
-            <span>
-              <BubblePaletteIcon size={15} />
-            </span>{" "}
-            Bubble style
-          </button>
-          {isMobileWallpaper && (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setHeaderMoreMenu(null);
-                setWallpaperModalOpen(true);
-              }}
-            >
-              <span>
-                <ImageIcon size={15} />
-              </span>{" "}
-              Chat wallpaper
-            </button>
-          )}
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              const curMuted =
-                store.previews.find((p) => p.friendId === friend.id)?.isMuted ?? false;
-              setHeaderMoreMenu(null);
-              void store.setConversationMuted(friend.id, !curMuted);
-            }}
-          >
-            <span>
-              {store.previews.find((p) => p.friendId === friend.id)?.isMuted ? (
-                <BellIcon size={15} />
-              ) : (
-                <BellOffIcon size={15} />
+          {({ closeWithAnimation }) => (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => closeWithAnimation(() => onOpenProfile(friend))}
+              >
+                <span>
+                  <UserIcon size={15} />
+                </span>{" "}
+                View profile
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => closeWithAnimation(() => setBubbleStyleOpen(true))}
+              >
+                <span>
+                  <BubblePaletteIcon size={15} />
+                </span>{" "}
+                Bubble style
+              </button>
+              {isMobileWallpaper && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => closeWithAnimation(() => setWallpaperModalOpen(true))}
+                >
+                  <span>
+                    <ImageIcon size={15} />
+                  </span>{" "}
+                  Chat wallpaper
+                </button>
               )}
-            </span>
-            {store.previews.find((p) => p.friendId === friend.id)?.isMuted
-              ? "Unmute chat"
-              : "Mute chat"}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="destructive-menu-item"
-            onClick={() => {
-              setHeaderMoreMenu(null);
-              if (
-                window.confirm(
-                  `Unfriend ${friend.displayName} (@${friend.username})? You will need to send a friend request again to chat.`,
-                )
-              ) {
-                void store.removeFriend(friend.id);
-              }
-            }}
-          >
-            <span>
-              <UserMinusIcon size={15} />
-            </span>{" "}
-            Unfriend
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className={isFriendBlocked ? "" : "destructive-menu-item"}
-            onClick={() => {
-              setHeaderMoreMenu(null);
-              void store.setUserBlocked(friend.id, !isFriendBlocked);
-            }}
-          >
-            <span>{isFriendBlocked ? <UnlockIcon size={15} /> : <BanIcon size={15} />}</span>
-            {isFriendBlocked ? "Unblock" : "Block"}
-          </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const curMuted =
+                    store.previews.find((p) => p.friendId === friend.id)?.isMuted ?? false;
+                  closeWithAnimation(() => {
+                    void store.setConversationMuted(friend.id, !curMuted);
+                  });
+                }}
+              >
+                <span>
+                  {store.previews.find((p) => p.friendId === friend.id)?.isMuted ? (
+                    <BellIcon size={15} />
+                  ) : (
+                    <BellOffIcon size={15} />
+                  )}
+                </span>
+                {store.previews.find((p) => p.friendId === friend.id)?.isMuted
+                  ? "Unmute chat"
+                  : "Mute chat"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="destructive-menu-item"
+                onClick={() =>
+                  closeWithAnimation(() => {
+                    if (
+                      window.confirm(
+                        `Unfriend ${friend.displayName} (@${friend.username})? You will need to send a friend request again to chat.`,
+                      )
+                    ) {
+                      void store.removeFriend(friend.id);
+                    }
+                  })
+                }
+              >
+                <span>
+                  <UserMinusIcon size={15} />
+                </span>{" "}
+                Unfriend
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={isFriendBlocked ? "" : "destructive-menu-item"}
+                onClick={() =>
+                  closeWithAnimation(() => {
+                    void store.setUserBlocked(friend.id, !isFriendBlocked);
+                  })
+                }
+              >
+                <span>{isFriendBlocked ? <UnlockIcon size={15} /> : <BanIcon size={15} />}</span>
+                {isFriendBlocked ? "Unblock" : "Block"}
+              </button>
+            </>
+          )}
         </ContextMenu>
       )}
       {imagePreview && (

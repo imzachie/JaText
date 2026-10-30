@@ -566,3 +566,61 @@ export const endPoll = mutation({
     if (!poll.pollEndedAt) await ctx.db.patch(pollId, { pollEndedAt: Date.now() });
   },
 });
+
+export const mySettings = query({
+  args: {},
+  handler: async (ctx) => {
+    const me = await requireUser(ctx);
+    const existing = await ctx.db
+      .query("communityUserSettings")
+      .withIndex("by_user", (q) => q.eq("userId", me._id))
+      .unique();
+    return {
+      isMuted: existing?.isMuted ?? false,
+      lastReadAt: existing?.lastReadAt ?? me._creationTime,
+    };
+  },
+});
+
+export const setMuted = mutation({
+  args: { muted: v.boolean() },
+  handler: async (ctx, { muted }) => {
+    const me = await requireUser(ctx);
+    const existing = await ctx.db
+      .query("communityUserSettings")
+      .withIndex("by_user", (q) => q.eq("userId", me._id))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, { isMuted: muted });
+    } else {
+      await ctx.db.insert("communityUserSettings", {
+        userId: me._id,
+        isMuted: muted,
+        lastReadAt: Date.now(),
+      });
+    }
+  },
+});
+
+export const markRead = mutation({
+  args: { readAt: v.optional(v.number()) },
+  handler: async (ctx, { readAt }) => {
+    const me = await requireUser(ctx);
+    const targetTs = Math.max(Date.now(), readAt ?? 0);
+    const existing = await ctx.db
+      .query("communityUserSettings")
+      .withIndex("by_user", (q) => q.eq("userId", me._id))
+      .unique();
+    if (existing) {
+      if (!existing.lastReadAt || targetTs > existing.lastReadAt) {
+        await ctx.db.patch(existing._id, { lastReadAt: targetTs });
+      }
+    } else {
+      await ctx.db.insert("communityUserSettings", {
+        userId: me._id,
+        isMuted: false,
+        lastReadAt: targetTs,
+      });
+    }
+  },
+});
