@@ -49,8 +49,8 @@ import {
   markLocalCommunityRead,
   markLocalDmRead,
   markLocalGroupRead,
-  recordIncomingDmPreview,
-  recordIncomingGroupSummary,
+  recordIncomingDmPreviewsBatch,
+  recordIncomingGroupSummariesBatch,
   setLocalCommunityMuted,
   syncSuppressedPushTargetsToNative,
   updateLocalGroupSettings,
@@ -435,15 +435,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!me?.id || previewsQuery === undefined) return;
+    const batch: Array<{ friendId: string; createdAt: number; isFromFriend: boolean }> = [];
     for (const p of rawPreviews) {
       if (
         p.createdAt > 0 &&
         !p.body.startsWith("__JATEXT_CALL_SIG__:") &&
         !p.body.startsWith("__JATEXT_REACT__:")
       ) {
-        recordIncomingDmPreview(me.id, p.friendId, p.createdAt, p.senderId === p.friendId);
+        batch.push({
+          friendId: p.friendId,
+          createdAt: p.createdAt,
+          isFromFriend: p.senderId === p.friendId,
+        });
       }
     }
+    recordIncomingDmPreviewsBatch(me.id, batch);
   }, [me?.id, previewsQuery, rawPreviews]);
 
   const previews = useMemo(() => {
@@ -684,16 +690,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!me?.id || groupsQuery === undefined) return;
+    const batch: Array<{ groupId: string; lastMessageAt: number; isFromOther: boolean }> = [];
     for (const grp of groupsQuery) {
       if (grp.lastMessageAt > 0) {
-        recordIncomingGroupSummary(
-          me.id,
-          grp.id,
-          grp.lastMessageAt,
-          Boolean(grp.lastSenderId && grp.lastSenderId !== me.id),
-        );
+        batch.push({
+          groupId: grp.id,
+          lastMessageAt: grp.lastMessageAt,
+          isFromOther: Boolean(grp.lastSenderId && grp.lastSenderId !== me.id),
+        });
       }
     }
+    recordIncomingGroupSummariesBatch(me.id, batch);
   }, [groupsQuery, me?.id]);
 
   const groups = useMemo(() => {
@@ -2195,6 +2202,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     },
     [deleteGroupMut, slotId],
   );
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+  const previewsRef = useRef(previews);
+  previewsRef.current = previews;
+  const communityMessagesRef = useRef(communityMessages);
+  communityMessagesRef.current = communityMessages;
+
   const setGroupSilenced = useCallback<JaTextStore["setGroupSilenced"]>(
     async (groupId, silenced) => {
       if (me?.id) {
@@ -2214,12 +2228,11 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const markGroupRead = useCallback<JaTextStore["markGroupRead"]>(
     async (groupId) => {
       if (me?.id) {
-        const latestGrpTs =
-          groups.find((g) => g.id === groupId)?.lastMessageAt ?? Date.now();
+        const latestGrpTs = groupsRef.current.find((g) => g.id === groupId)?.lastMessageAt;
         markLocalGroupRead(me.id, groupId, latestGrpTs);
       }
     },
-    [groups, me?.id],
+    [me?.id],
   );
   const setCommunityMuted = useCallback<JaTextStore["setCommunityMuted"]>(
     async (muted) => {
@@ -2232,12 +2245,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const markCommunityRead = useCallback<JaTextStore["markCommunityRead"]>(
     async () => {
       if (me?.id) {
-        const latestCommunityTs =
-          communityMessages[communityMessages.length - 1]?.createdAt ?? Date.now();
+        const list = communityMessagesRef.current;
+        const latestCommunityTs = list[list.length - 1]?.createdAt;
         markLocalCommunityRead(me.id, latestCommunityTs);
       }
     },
-    [communityMessages, me?.id],
+    [me?.id],
   );
 
   const signInEmail = useCallback<JaTextStore["signInEmail"]>(
@@ -2945,13 +2958,14 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const markMessagesRead = useCallback<JaTextStore["markMessagesRead"]>(
     async (friendId) => {
       if (me?.id) {
-        const latestPreviewTs =
-          previews.find((p) => p.friendId === friendId)?.createdAt ?? Date.now();
+        const latestPreviewTs = previewsRef.current.find(
+          (p) => p.friendId === friendId,
+        )?.createdAt;
         markLocalDmRead(me.id, friendId, latestPreviewTs);
       }
       await markReadMut({ otherId: friendId as Id<"users"> });
     },
-    [markReadMut, me?.id, previews],
+    [markReadMut, me?.id],
   );
 
   const setActivity = useCallback<JaTextStore["setActivity"]>(

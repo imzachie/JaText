@@ -1079,9 +1079,16 @@ export function CommunityChatView({
     null,
   );
 
+  const {
+    communityMessagesReady,
+    communityUnreadCount,
+    markCommunityRead,
+    me: communityMe,
+  } = store;
+
   // Mark community announcements read when actively viewing Official Community
   useEffect(() => {
-    if (!store.me || !store.communityMessagesReady || store.communityUnreadCount === 0) {
+    if (!communityMe?.id || !communityMessagesReady || communityUnreadCount === 0) {
       return;
     }
     let cancelled = false;
@@ -1089,7 +1096,7 @@ export function CommunityChatView({
       if (cancelled) return;
       const activelyViewing = await isChatActivelyVisibleToUser();
       if (cancelled || !activelyViewing) return;
-      await store.markCommunityRead().catch(() => undefined);
+      await markCommunityRead().catch(() => undefined);
     };
     void maybeMarkRead();
     const onVis = () => void maybeMarkRead();
@@ -1101,10 +1108,10 @@ export function CommunityChatView({
       window.removeEventListener("focus", onVis);
     };
   }, [
-    store,
-    store.communityMessagesReady,
-    store.communityUnreadCount,
-    store.me,
+    communityMe?.id,
+    communityMessagesReady,
+    communityUnreadCount,
+    markCommunityRead,
   ]);
 
   // Jump-to-original message inside Official Community
