@@ -155,6 +155,58 @@ public final class JaTextE2EEDecryptor {
             lower.startsWith("waiting for this message");
     }
 
+    private static boolean isPushTargetSuppressed(
+        Context ctx,
+        String senderId,
+        String groupId,
+        String chatId,
+        String title,
+        String type
+    ) {
+        try {
+            String raw = getAuthStorageItem(ctx, "jatext:suppressed-push-targets");
+            if (raw == null || raw.isEmpty()) return false;
+            JSONObject obj = new JSONObject(raw);
+
+            if (obj.optBoolean("communityMuted", false)) {
+                if (
+                    "announcement".equals(type) ||
+                    "community".equals(type) ||
+                    "jatext-community".equals(chatId) ||
+                    (title != null && title.toLowerCase().contains("jatext community"))
+                ) {
+                    return true;
+                }
+            }
+
+            if (groupId != null && !groupId.isEmpty()) {
+                JSONArray groupIds = obj.optJSONArray("groupIds");
+                if (groupIds != null) {
+                    for (int i = 0; i < groupIds.length(); i++) {
+                        if (groupId.equals(groupIds.optString(i))) {
+                            return true;
+                        }
+                    }
+                }
+            } else {
+                JSONArray dmIds = obj.optJSONArray("dmIds");
+                if (dmIds != null) {
+                    for (int i = 0; i < dmIds.length(); i++) {
+                        String id = dmIds.optString(i);
+                        if (
+                            (senderId != null && senderId.equals(id)) ||
+                            (chatId != null && chatId.equals(id))
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
     /**
      * Unified background/locked/minimized push handler:
      * - Wakes screen + launches MainActivity + loops ringtone immediately for incoming calls!
@@ -188,6 +240,10 @@ public final class JaTextE2EEDecryptor {
         }
 
         if (MainActivity.isActivelyVisibleUnlocked(ctx)) {
+            return;
+        }
+
+        if (isPushTargetSuppressed(ctx, senderId, groupId, chatId, title, type)) {
             return;
         }
 

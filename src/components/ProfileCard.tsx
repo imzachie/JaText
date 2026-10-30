@@ -12,6 +12,7 @@ import {
   useIsMobileWallpaperSupported,
 } from "../lib/chatCustomization";
 import { colorById } from "../lib/colors";
+import { unpackAvatarColorWithMeta } from "../lib/profileMetaEnvelope";
 import { togglePeerVerified, useE2EESnapshot } from "../lib/e2ee/keystore";
 import { normalizeAvatarSrc } from "../lib/imageUtils";
 import { useJaText } from "../lib/store";
@@ -70,7 +71,15 @@ function LiveUserProfileHydrator({
     api.users.byId,
     canQuery ? { userId: userId as Id<"users"> } : "skip",
   ) as JaUser | null | undefined;
-  return <>{children(fetched ?? fallback)}</>;
+  const raw = fetched ?? fallback;
+  const unpacked = unpackAvatarColorWithMeta(raw.avatarColor, raw.socials, raw.website);
+  const resolved: JaUser = {
+    ...raw,
+    avatarColor: unpacked.avatarColor,
+    socials: unpacked.socials,
+    website: unpacked.website,
+  };
+  return <>{children(resolved)}</>;
 }
 
 /**
@@ -85,11 +94,15 @@ export function ProfileCard({
   user: JaUser;
   status?: ActivityStatus;
 }) {
-  const color = colorById(user.avatarColor);
+  const unpacked = unpackAvatarColorWithMeta(user.avatarColor, user.socials, user.website);
+  const color = colorById(unpacked.avatarColor);
   const bannerSrc = normalizeAvatarSrc(user.bannerUrl);
   const [copiedDiscordIdx, setCopiedDiscordIdx] = useState<number | null>(null);
-  const socials = user.socials ?? [];
-  const website = user.website && isSafeExternalProfileUrl(user.website.url) ? user.website : undefined;
+  const socials = unpacked.socials ?? [];
+  const website =
+    unpacked.website && isSafeExternalProfileUrl(unpacked.website.url)
+      ? unpacked.website
+      : undefined;
 
   return (
     <div
