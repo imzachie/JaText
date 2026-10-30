@@ -4,7 +4,7 @@ export interface AvatarColor {
   id: string;
   name: string;
   note?: string;
-  /** main color — used for the profile outline + background behind the pfp */
+  /** main color used for the profile outline + background behind the pfp */
   hex: string;
   /** softer tint used behind initials / gradients */
   soft: string;

@@ -224,7 +224,7 @@ export function ProfileCard({
         <div className="profile-color-row">
           <span className="color-dot" style={{ background: color.hex }} />
           Avatar color: <strong>{color.name}</strong>
-          {color.note ? <span className="muted"> — {color.note}</span> : null}
+          {color.note ? <span className="muted"> · {color.note}</span> : null}
         </div>
       </div>
     </div>

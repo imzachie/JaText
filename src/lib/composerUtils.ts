@@ -19,7 +19,7 @@ export function syncComposerTextareaHeight(
   const grew = nextValue.length >= prevLength;
 
   if (grew) {
-    // Short single-line text without newline cannot wrap — zero layout reads/writes.
+    // Short single-line text without newline cannot wrap, zero layout reads/writes.
     if (nextValue.length < 26 && !nextValue.includes("\n") && currentHeight <= 46) {
       return;
     }

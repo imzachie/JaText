@@ -20,10 +20,14 @@ import { clearSlotChatCache, preloadSlotChatCache } from "./lib/chatCache";
 import { ConvexStoreProvider } from "./lib/convexStore";
 import { createNativeSyncedAuthStorage } from "./lib/nativeBridge";
 import { DemoStoreProvider } from "./lib/store";
+import { setThemeUserScope } from "./lib/themeEngine";
 import "./index.css";
 
+// Initialize saved device theme before first React paint
+setThemeUserScope(null);
+
 /**
- * If VITE_CONVEX_URL is set (run `npx convex dev` — it writes it to
+ * If VITE_CONVEX_URL is set (run `npx convex dev`, which writes it to
  * .env.local), JaText talks to your real Convex deployment: Convex Auth
  * (Google + email/password), Convex database and Convex file storage.
  *

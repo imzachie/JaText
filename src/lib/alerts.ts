@@ -428,7 +428,7 @@ export function startIncomingCallRingtone() {
     try {
       await audio.play();
     } catch {
-      // Browser blocked autoplay prior to user interaction — run synthesized loop + resume on first gesture
+      // Browser blocked autoplay prior to user interaction, run synthesized loop + resume on first gesture
       if (token !== ringtoneLoopToken || typeof window === "undefined") return;
       playSynthRingtonePulse();
       webRingtoneFallbackInterval = window.setInterval(() => {

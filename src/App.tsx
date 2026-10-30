@@ -12,7 +12,8 @@ import { StartupPermissionsModal } from "./components/StartupPermissionsModal";
 import { Onboarding } from "./components/Onboarding";
 import { NotificationWelcome } from "./components/NotificationWelcome";
 import { ProfileModal } from "./components/ProfileCard";
-import { SettingsModal } from "./components/Settings";
+import { SettingsModal, type SettingsCategory } from "./components/Settings";
+import { CustomThemeDrawer } from "./components/CustomThemeDrawer";
 import { AccountSwitcherModal } from "./components/AccountSwitcherModal";
 import { closeTopmostAnimatedModal } from "./components/AnimatedModal";
 import { LockIcon } from "./components/E2EEModals";
@@ -26,6 +27,10 @@ import {
   useCall,
 } from "./lib/calling";
 import { flushPendingDrafts } from "./lib/drafts";
+import {
+  applyRemoteSyncedThemeIfChanged,
+  setThemeUserScope,
+} from "./lib/themeEngine";
 import {
   getActiveE2EEState,
   getAllMyIdentities,
@@ -115,7 +120,21 @@ function AppContent() {
   } = store;
   const [profileUser, setProfileUser] = useState<JaUser | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialCategory, setSettingsInitialCategory] =
+    useState<SettingsCategory>("profile");
+  const [settingsDirectMobile, setSettingsDirectMobile] = useState(false);
+  const [customThemeDrawerOpen, setCustomThemeDrawerOpen] = useState(false);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
+
+  useLayoutEffect(() => {
+    setThemeUserScope(me?.id);
+  }, [me?.id]);
+
+  useEffect(() => {
+    if (me?.id && me.syncedTheme) {
+      applyRemoteSyncedThemeIfChanged(me.id, me.syncedTheme);
+    }
+  }, [me?.id, me?.syncedTheme]);
   const [isMobileClosing, setIsMobileClosing] = useState(false);
   const mobileCloseTimerRef = useRef<number | null>(null);
   const closingTargetKeyRef = useRef<string>("");
@@ -231,6 +250,7 @@ function AppContent() {
     activeGroupId,
     hasProfile: Boolean(profileUser),
     settingsOpen,
+    customThemeDrawerOpen,
     accountSwitcherOpen,
     callFullScreen: false,
     groupCallFullScreen: false,
@@ -384,7 +404,7 @@ function AppContent() {
 
       const readableText = formatPreviewMessageText(preview.body);
 
-      // Only show system notifications when minimized/hidden — NEVER while in the app!
+      // Only show system notifications when minimized/hidden, NEVER while in the app!
       // On Android with FCM active, native JaTextFirebaseMessagingService handles background pushes directly.
       if (
         notificationsEnabled &&
@@ -661,6 +681,7 @@ function AppContent() {
       activeGroupId,
       hasProfile: Boolean(profileUser),
       settingsOpen,
+      customThemeDrawerOpen,
       accountSwitcherOpen,
       callFullScreen: Boolean(
         callSession &&
@@ -681,6 +702,7 @@ function AppContent() {
     activeGroupId,
     callMinimized,
     callSession,
+    customThemeDrawerOpen,
     groupCallMinimized,
     groupCallSession,
     profileUser,
@@ -695,6 +717,11 @@ function AppContent() {
         setGroupCallMinimized(true);
       } else if (navigation.callFullScreen) {
         setCallMinimized(true);
+      } else if (navigation.customThemeDrawerOpen) {
+        setCustomThemeDrawerOpen(false);
+        setSettingsInitialCategory("appearance");
+        setSettingsDirectMobile(true);
+        setSettingsOpen(true);
       } else if (closeTopmostAnimatedModal()) {
         return;
       } else if (navigation.accountSwitcherOpen) {
@@ -789,8 +816,8 @@ function AppContent() {
           by their username.
         </p>
         <p className="muted small">
-          Tip: click anyone's profile picture to see their profile card —
-          banner, bio, pronouns and avatar color included.
+          Tip: click anyone&apos;s profile picture to see their profile card,
+          banner, bio, pronouns, and avatar color.
         </p>
       </div>
     );
@@ -804,7 +831,11 @@ function AppContent() {
     >
       <Sidebar
         onOpenProfile={setProfileUser}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsInitialCategory("profile");
+          setSettingsDirectMobile(false);
+          setSettingsOpen(true);
+        }}
         onOpenAccountSwitcher={() => setAccountSwitcherOpen(true)}
       />
       <main className="main-pane">{renderMainPaneContent()}</main>
@@ -818,10 +849,27 @@ function AppContent() {
       )}
       {settingsOpen && (
         <SettingsModal
+          initialCategory={settingsInitialCategory}
+          openCategoryDirectlyOnMobile={settingsDirectMobile}
           onClose={() => setSettingsOpen(false)}
           onOpenAccountSwitcher={() => {
             setSettingsOpen(false);
             setAccountSwitcherOpen(true);
+          }}
+          onOpenCustomThemeDrawer={() => {
+            setSettingsOpen(false);
+            setCustomThemeDrawerOpen(true);
+          }}
+        />
+      )}
+      {customThemeDrawerOpen && (
+        <CustomThemeDrawer
+          onClose={() => setCustomThemeDrawerOpen(false)}
+          onBackToSettings={() => {
+            setCustomThemeDrawerOpen(false);
+            setSettingsInitialCategory("appearance");
+            setSettingsDirectMobile(true);
+            setSettingsOpen(true);
           }}
         />
       )}

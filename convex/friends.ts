@@ -37,7 +37,7 @@ export const sendRequest = mutation({
     if (all.some((r) => r.status === "pending" && r.fromId === me._id))
       throw new Error(`Friend request to @${username} is already pending.`);
     if (all.some((r) => r.status === "pending" && r.fromId === target._id))
-      throw new Error(`@${username} already sent YOU a request — check your requests!`);
+      throw new Error(`@${username} already sent YOU a request. Check your requests!`);
 
     await ctx.db.insert("friendRequests", {
       fromId: me._id,

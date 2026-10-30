@@ -114,7 +114,7 @@ export function MobileScreenShareSheet({
               <span className="mobile-share-opt-copy">
                 <strong>Full Live Phone Screen + System Audio (Android APK)</strong>
                 <small>
-                  Mobile browsers block capturing other apps — install the JaText Android app for
+                  Mobile browsers block capturing other apps. Install the JaText Android app for
                   full live screen + media audio sharing
                 </small>
               </span>

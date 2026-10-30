@@ -82,7 +82,7 @@ export function LoginPage() {
         <img
           className="logo-full"
           src="/jatext-logo-full.png"
-          alt="JaText — JAMusic Coding and Research Corp"
+          alt="JaText · JAMusic Coding and Research Corp"
         />
         <p className="hero-tagline">
           Text your people. Add friends by username, make your profile yours,
@@ -96,7 +96,7 @@ export function LoginPage() {
             <PaletteIcon size={16} style={{ color: "var(--accent)" }} /> Profile picture, banner &amp; your own avatar color
           </li>
           <li>
-            <UsersIcon size={16} style={{ color: "var(--accent)" }} /> Friend requests — you only chat with people you accept
+            <UsersIcon size={16} style={{ color: "var(--accent)" }} /> Friend requests: you only chat with people you accept
           </li>
         </ul>
       </section>
@@ -241,7 +241,7 @@ export function LoginPage() {
 
         {store.mode === "demo" ? (
           <p className="muted small center">
-            Running in <strong>demo mode</strong> (no Convex URL set yet) — your data
+            Running in <strong>demo mode</strong> (no Convex URL set yet). Your data
             lives in this browser. Add <code>VITE_CONVEX_URL</code> to go live on Convex.
           </p>
         ) : null}

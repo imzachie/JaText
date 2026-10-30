@@ -232,7 +232,7 @@ async function checkNativeFirebaseConfigured(): Promise<boolean> {
 }
 
 /* ------------------------------------------------------------------ */
-/* Real Convex store — active when VITE_CONVEX_URL is set.             */
+/* Real Convex store, active when VITE_CONVEX_URL is set.              */
 /* All data (users, friend requests, messages, file uploads) goes     */
 /* through the Convex functions in /convex. Auth = Convex Auth with    */
 /* Google OAuth + email/password providers.                            */
@@ -371,6 +371,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       avatarColor: unpacked.avatarColor,
       socials: unpacked.socials,
       website: unpacked.website,
+      syncedTheme: unpacked.syncedTheme,
     };
   }, [rawMe]);
 
@@ -2431,6 +2432,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [convex],
   );
 
+  const meRefForSave = useRef(me);
+  meRefForSave.current = me;
+
   const saveProfile = useCallback<JaTextStore["saveProfile"]>(
     async (input: ProfileInput) => {
       const avatarId =
@@ -2445,10 +2449,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           : input.bannerFile
             ? await upload(await normalizeImageFileForUpload(input.bannerFile, 1280))
             : undefined;
+      const curMe = meRefForSave.current;
       const packedAvatarColor = packAvatarColorWithMeta(
         input.avatarColor,
-        input.socials,
-        input.website,
+        input.socials !== undefined ? input.socials : curMe?.socials,
+        input.website !== undefined ? input.website : curMe?.website,
+        input.syncedTheme !== undefined ? input.syncedTheme : curMe?.syncedTheme,
       );
       await saveProfileMut({
         displayName: input.displayName.trim(),

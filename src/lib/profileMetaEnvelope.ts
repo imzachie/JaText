@@ -1,19 +1,7 @@
+import type { SyncedThemePayload } from "./themeEngine";
 import type { UserSocialLink, UserWebsiteLink } from "./types";
 
 const META_DELIMITER = "|__JT_META__:";
-
-const VALID_PLATFORMS = new Set<string>([
-  "discord",
-  "youtube",
-  "x",
-  "instagram",
-  "tiktok",
-  "twitch",
-  "github",
-  "reddit",
-  "spotify",
-  "linkedin",
-]);
 
 function isSafeHttpUrl(raw: unknown): raw is string {
   if (typeof raw !== "string") return false;
@@ -27,6 +15,34 @@ function isSafeHttpUrl(raw: unknown): raw is string {
   }
 }
 
+function sanitizeSyncedTheme(raw: unknown): SyncedThemePayload | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const obj = raw as Partial<SyncedThemePayload>;
+  if (obj.k === "d" && typeof obj.d === "string") {
+    return { k: "d", d: obj.d };
+  }
+  if (obj.k === "p" && typeof obj.p === "string") {
+    return { k: "p", p: obj.p };
+  }
+  if (obj.k === "c" && obj.c && typeof obj.c === "object") {
+    const cols = Array.isArray(obj.c.cols)
+      ? obj.c.cols.filter((c) => typeof c === "string").slice(0, 5)
+      : [];
+    if (cols.length > 0) {
+      return {
+        k: "c",
+        c: {
+          a: obj.c.a === "l" ? "l" : "d",
+          cols,
+          ang: typeof obj.c.ang === "number" ? Math.round(obj.c.ang) : 45,
+          int: typeof obj.c.int === "number" ? Math.round(obj.c.int) : 60,
+        },
+      };
+    }
+  }
+  return undefined;
+}
+
 export function stripProfileMetaFromColorId(rawColor: string | undefined): string {
   if (!rawColor) return "black";
   const idx = rawColor.indexOf(META_DELIMITER);
@@ -38,25 +54,28 @@ export function packAvatarColorWithMeta(
   avatarColor: string,
   socials?: UserSocialLink[],
   website?: UserWebsiteLink | null,
+  syncedTheme?: SyncedThemePayload | null,
 ): string {
   const baseColor = stripProfileMetaFromColorId(avatarColor);
   const cleanSocials: UserSocialLink[] = [];
   if (Array.isArray(socials)) {
     const seen = new Set<string>();
     for (const item of socials) {
-      if (!item || !VALID_PLATFORMS.has(item.platform)) continue;
-      if (seen.has(item.platform)) continue;
+      const platform = (item?.platform ?? "").trim().slice(0, 32);
+      if (!platform) continue;
+      const lower = platform.toLowerCase();
+      if (seen.has(lower)) continue;
       const handle = (item.handle ?? "").trim().slice(0, 100);
       const url = (item.url ?? "").trim().slice(0, 400);
       if (!handle) continue;
       if (url && !isSafeHttpUrl(url)) continue;
-      seen.add(item.platform);
+      seen.add(lower);
       cleanSocials.push({
-        platform: item.platform,
+        platform,
         handle,
         url,
       });
-      if (cleanSocials.length >= 10) break;
+      if (cleanSocials.length >= 12) break;
     }
   }
 
@@ -67,13 +86,20 @@ export function packAvatarColorWithMeta(
     cleanWebsite = { title, url };
   }
 
-  if (cleanSocials.length === 0 && !cleanWebsite) {
+  const cleanTheme = syncedTheme ? sanitizeSyncedTheme(syncedTheme) : undefined;
+
+  if (cleanSocials.length === 0 && !cleanWebsite && !cleanTheme) {
     return baseColor;
   }
 
-  const payload: { s?: UserSocialLink[]; w?: UserWebsiteLink } = {};
+  const payload: {
+    s?: UserSocialLink[];
+    w?: UserWebsiteLink;
+    t?: SyncedThemePayload;
+  } = {};
   if (cleanSocials.length > 0) payload.s = cleanSocials;
   if (cleanWebsite) payload.w = cleanWebsite;
+  if (cleanTheme) payload.t = cleanTheme;
   return `${baseColor}${META_DELIMITER}${JSON.stringify(payload)}`;
 }
 
@@ -85,10 +111,12 @@ export function unpackAvatarColorWithMeta(
   avatarColor: string;
   socials?: UserSocialLink[];
   website?: UserWebsiteLink;
+  syncedTheme?: SyncedThemePayload;
 } {
   const avatarColor = stripProfileMetaFromColorId(rawColor);
   let socials = explicitSocials && explicitSocials.length > 0 ? explicitSocials : undefined;
   let website = explicitWebsite?.url ? explicitWebsite : undefined;
+  let syncedTheme: SyncedThemePayload | undefined;
 
   if (rawColor) {
     const idx = rawColor.indexOf(META_DELIMITER);
@@ -98,6 +126,7 @@ export function unpackAvatarColorWithMeta(
         const parsed = JSON.parse(jsonPart) as {
           s?: Array<{ platform?: string; handle?: string; url?: string }>;
           w?: { title?: string; url?: string };
+          t?: unknown;
         };
         if (!socials && Array.isArray(parsed.s)) {
           const valid: UserSocialLink[] = [];
@@ -105,14 +134,14 @@ export function unpackAvatarColorWithMeta(
             if (
               entry &&
               typeof entry.platform === "string" &&
-              VALID_PLATFORMS.has(entry.platform) &&
+              entry.platform.trim() &&
               typeof entry.handle === "string" &&
               entry.handle.trim()
             ) {
               const rawUrl = typeof entry.url === "string" ? entry.url.trim() : "";
               if (!rawUrl || isSafeHttpUrl(rawUrl)) {
                 valid.push({
-                  platform: entry.platform,
+                  platform: entry.platform.trim().slice(0, 32),
                   handle: entry.handle.trim(),
                   url: rawUrl,
                 });
@@ -129,11 +158,12 @@ export function unpackAvatarColorWithMeta(
               : url;
           website = { title, url };
         }
+        syncedTheme = sanitizeSyncedTheme(parsed.t);
       } catch {
         // Ignore malformed metadata suffix and keep clean base color.
       }
     }
   }
 
-  return { avatarColor, socials, website };
+  return { avatarColor, socials, website, syncedTheme };
 }

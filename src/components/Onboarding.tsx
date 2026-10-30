@@ -43,8 +43,8 @@ export function Onboarding() {
         </p>
         <p className="muted center">
           Set your profile picture, banner, name and avatar color below.
-          You can change all of this later in Settings (except your username —
-          that one&apos;s every 14 days).
+          You can change all of this later in Settings (except your username,
+          which can be changed once every 14 days).
         </p>
         <ProfileForm
           initial={me}
