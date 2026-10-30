@@ -197,11 +197,13 @@ export function useChatAutoScrollAndKeyboard({
     };
 
     window.addEventListener("jatext:ime-change", onImeEvent as EventListener);
+    window.addEventListener("resize", onVisualViewportResize);
     vv?.addEventListener("resize", onVisualViewportResize);
 
     return () => {
       ro?.disconnect();
       window.removeEventListener("jatext:ime-change", onImeEvent as EventListener);
+      window.removeEventListener("resize", onVisualViewportResize);
       vv?.removeEventListener("resize", onVisualViewportResize);
     };
   }, [composerRef, conversationKey, messagesReady, messagesRef, pinToBottomNow, updatePinned]);

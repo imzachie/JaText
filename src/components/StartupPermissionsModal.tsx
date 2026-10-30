@@ -10,12 +10,21 @@ import {
 } from "./AnimatedModal";
 import { BellIcon, CheckCircleIcon, ShieldCheckIcon } from "./UiIcons";
 
-const SESSION_DISMISSED_KEY = "jatext:startup-perms-dismissed-session:v3.2.1";
+const SESSION_DISMISSED_KEY = "jatext:startup-perms-dismissed-session:v3.2.3";
 
 interface PermStatus {
   notificationsGranted: boolean;
   canDrawOverlays: boolean;
   canUseFullScreenIntent: boolean;
+}
+
+function areAllPermissionsGranted(res: PermStatus | null): boolean {
+  return Boolean(
+    res &&
+      res.canDrawOverlays &&
+      res.canUseFullScreenIntent &&
+      res.notificationsGranted,
+  );
 }
 
 export function StartupPermissionsModal({
@@ -27,6 +36,11 @@ export function StartupPermissionsModal({
 }) {
   const isAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
   const [status, setStatus] = useState<PermStatus | null>(null);
+  const [initialMissing, setInitialMissing] = useState<{
+    overlay: boolean;
+    fullscreen: boolean;
+    notifications: boolean;
+  } | null>(null);
   const [pendingReady, setPendingReady] = useState(false);
   const [open, setOpen] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -85,9 +99,12 @@ export function StartupPermissionsModal({
       void (async () => {
         const res = await checkAllPermissions(true);
         if (cancelled || !res) return;
-        const missingAny =
-          !res.canDrawOverlays || !res.canUseFullScreenIntent || !res.notificationsGranted;
-        if (missingAny && !dismissedThisSession) {
+        if (!areAllPermissionsGranted(res) && !dismissedThisSession) {
+          setInitialMissing({
+            overlay: !res.canDrawOverlays,
+            fullscreen: !res.canUseFullScreenIntent,
+            notifications: !res.notificationsGranted,
+          });
           setPendingReady(true);
         }
       })();
@@ -99,18 +116,32 @@ export function StartupPermissionsModal({
     };
   }, [checkAllPermissions, isAndroid, ready]);
 
-  // Wait cleanly if another modal (like Welcome / Update) is currently visible so modals never stack
+  // Wait cleanly if another modal (like Welcome / Update) is currently visible so modals never stack,
+  // and re-verify permissions before opening so we NEVER pop up when everything is already granted!
   useEffect(() => {
     if (!pendingReady || open) return;
+    let cancelled = false;
     let timer: number | null = null;
 
     const tryPresent = () => {
       if (getActiveAnimatedModalCount() === 0) {
         timer = window.setTimeout(() => {
-          if (getActiveAnimatedModalCount() === 0) {
+          void (async () => {
+            if (cancelled || getActiveAnimatedModalCount() !== 0) return;
+            const fresh = await checkAllPermissions(false);
+            if (cancelled) return;
+            if (!fresh || areAllPermissionsGranted(fresh)) {
+              setPendingReady(false);
+              return;
+            }
+            setInitialMissing({
+              overlay: !fresh.canDrawOverlays,
+              fullscreen: !fresh.canUseFullScreenIntent,
+              notifications: !fresh.notificationsGranted,
+            });
             setOpen(true);
             setPendingReady(false);
-          }
+          })();
         }, 220);
       }
     };
@@ -125,45 +156,71 @@ export function StartupPermissionsModal({
     });
 
     return () => {
+      cancelled = true;
       unsub();
       if (timer !== null) {
         window.clearTimeout(timer);
       }
     };
-  }, [open, pendingReady]);
+  }, [checkAllPermissions, open, pendingReady]);
 
-  // Re-check automatically when returning from Android Settings screen
+  // Re-check automatically when returning from Android Settings screen (including delayed Binder updates on Android 11-16)
   useEffect(() => {
     if (!isAndroid || !open) return;
+    let cancelled = false;
+    const timers: number[] = [];
     let listenerHandle: { remove: () => Promise<void> } | null = null;
+
+    const verifyAndAutoClose = async () => {
+      if (cancelled) return;
+      const res = await checkAllPermissions(false);
+      if (!cancelled && areAllPermissionsGranted(res)) {
+        setOpen(false);
+      }
+    };
+
+    const scheduleChecks = () => {
+      void verifyAndAutoClose();
+      for (const delay of [320, 850]) {
+        timers.push(
+          window.setTimeout(() => {
+            void verifyAndAutoClose();
+          }, delay),
+        );
+      }
+    };
+
     void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
       if (isActive) {
-        void (async () => {
-          const res = await checkAllPermissions(false);
-          if (
-            res &&
-            res.canDrawOverlays &&
-            res.canUseFullScreenIntent &&
-            res.notificationsGranted
-          ) {
-            setOpen(false);
-          }
-        })();
+        scheduleChecks();
       }
     }).then((h) => {
       listenerHandle = h;
     });
+    window.addEventListener("focus", scheduleChecks);
+
     return () => {
+      cancelled = true;
+      window.removeEventListener("focus", scheduleChecks);
+      for (const id of timers) window.clearTimeout(id);
       if (listenerHandle) {
         void listenerHandle.remove();
       }
     };
   }, [checkAllPermissions, isAndroid, open]);
 
-  if (!isAndroid || !open || !status) return null;
+  const allGranted = areAllPermissionsGranted(status);
 
-  const allGranted =
-    status.canDrawOverlays && status.canUseFullScreenIntent && status.notificationsGranted;
+  // Never display the modal if all permissions are already enabled
+  if (!isAndroid || !open || !status || allGranted) return null;
+
+  const showOverlayRow = Boolean(initialMissing?.overlay || !status.canDrawOverlays);
+  const showFullscreenRow = Boolean(
+    initialMissing?.fullscreen || !status.canUseFullScreenIntent,
+  );
+  const showNotificationsRow = Boolean(
+    initialMissing?.notifications || !status.notificationsGranted,
+  );
 
   const dismissForSession = (requestClose: () => void) => {
     try {
@@ -228,30 +285,32 @@ export function StartupPermissionsModal({
           </p>
 
           <div className="startup-perms-list">
-            <div className="startup-perm-item">
-              <div className="startup-perm-info">
-                <strong>Display over other apps</strong>
-                <span className="muted tiny">
-                  Required to open incoming calls automatically while minimized or locked.
-                </span>
+            {showOverlayRow && (
+              <div className="startup-perm-item">
+                <div className="startup-perm-info">
+                  <strong>Display over other apps</strong>
+                  <span className="muted tiny">
+                    Required to open incoming calls automatically while minimized or locked.
+                  </span>
+                </div>
+                {status.canDrawOverlays ? (
+                  <span className="startup-perm-enabled-pill">
+                    <CheckCircleIcon size={14} /> Enabled
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="primary-btn startup-perm-btn"
+                    disabled={busyKey === "overlay"}
+                    onClick={() => void handleEnableOverlay()}
+                  >
+                    Enable
+                  </button>
+                )}
               </div>
-              {status.canDrawOverlays ? (
-                <span className="verified-badge">
-                  <CheckCircleIcon size={14} /> Enabled
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="primary-btn startup-perm-btn"
-                  disabled={busyKey === "overlay"}
-                  onClick={() => void handleEnableOverlay()}
-                >
-                  Enable
-                </button>
-              )}
-            </div>
+            )}
 
-            {!status.canUseFullScreenIntent && (
+            {showFullscreenRow && (
               <div className="startup-perm-item">
                 <div className="startup-perm-info">
                   <strong>Lock-screen full-screen calls</strong>
@@ -259,18 +318,24 @@ export function StartupPermissionsModal({
                     Wakes your screen immediately when a voice or video call rings.
                   </span>
                 </div>
-                <button
-                  type="button"
-                  className="primary-btn startup-perm-btn"
-                  disabled={busyKey === "fullscreen"}
-                  onClick={() => void handleEnableFullScreen()}
-                >
-                  Enable
-                </button>
+                {status.canUseFullScreenIntent ? (
+                  <span className="startup-perm-enabled-pill">
+                    <CheckCircleIcon size={14} /> Enabled
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="primary-btn startup-perm-btn"
+                    disabled={busyKey === "fullscreen"}
+                    onClick={() => void handleEnableFullScreen()}
+                  >
+                    Enable
+                  </button>
+                )}
               </div>
             )}
 
-            {!status.notificationsGranted && (
+            {showNotificationsRow && (
               <div className="startup-perm-item">
                 <div className="startup-perm-info">
                   <strong>Push notifications</strong>
@@ -278,37 +343,32 @@ export function StartupPermissionsModal({
                     Alerts you to DMs, group mentions, and JaText Announcements.
                   </span>
                 </div>
-                <button
-                  type="button"
-                  className="primary-btn startup-perm-btn"
-                  disabled={busyKey === "notifications"}
-                  onClick={() => void handleEnableNotifications()}
-                >
-                  <BellIcon size={14} /> Allow
-                </button>
+                {status.notificationsGranted ? (
+                  <span className="startup-perm-enabled-pill">
+                    <CheckCircleIcon size={14} /> Enabled
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="primary-btn startup-perm-btn"
+                    disabled={busyKey === "notifications"}
+                    onClick={() => void handleEnableNotifications()}
+                  >
+                    <BellIcon size={14} /> Allow
+                  </button>
+                )}
               </div>
             )}
           </div>
 
           <div className="startup-perms-footer">
-            {allGranted ? (
-              <button
-                type="button"
-                className="primary-btn"
-                style={{ width: "100%" }}
-                onClick={requestClose}
-              >
-                Done
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="ghost-btn"
-                onClick={() => dismissForSession(requestClose)}
-              >
-                Later
-              </button>
-            )}
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => dismissForSession(requestClose)}
+            >
+              Later
+            </button>
           </div>
         </div>
       )}

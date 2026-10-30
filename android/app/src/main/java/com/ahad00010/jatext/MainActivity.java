@@ -108,40 +108,46 @@ public class MainActivity extends BridgeActivity {
             }
         }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-        installKeyboardAndSafeAreaInsets();
+        installImeVisibilityNotifier();
         applyStatusBarAppearance();
         dispatchIncomingCallLaunchIfPresent(getIntent());
     }
 
-    private void installKeyboardAndSafeAreaInsets() {
+    /**
+     * Capacitor 8's built-in SystemBars plugin already pads DecorView bottom by imeInsets.bottom
+     * and injects --safe-area-inset-* CSS variables. Do NOT add bottom padding on contentView here
+     * (which would double-pad and create a black gap above the keyboard) — only observe IME
+     * visibility changes and notify JS so the chat scroll container stays pinned to the bottom.
+     */
+    private boolean lastImeVisible = false;
+
+    private void installImeVisibilityNotifier() {
         final View contentView = findViewById(android.R.id.content);
         if (contentView == null) return;
         ViewCompat.setOnApplyWindowInsetsListener(contentView, (v, windowInsets) -> {
-            Insets sysBars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
-            Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
-            int bottomInset = Math.max(sysBars.bottom, ime.bottom);
-            v.setPadding(sysBars.left, 0, sysBars.right, bottomInset);
-
             try {
-                if (getBridge() != null && getBridge().getWebView() != null) {
-                    float density = getResources().getDisplayMetrics().density;
-                    if (density <= 0f) density = 1f;
-                    int topCssPx = Math.round(sysBars.top / density);
-                    boolean kbOpen = ime.bottom > sysBars.bottom + Math.round(48f * density);
-                    String js =
-                        "document.documentElement.style.setProperty('--safe-area-inset-top','" +
-                        topCssPx +
-                        "px');" +
-                        "window.dispatchEvent(new CustomEvent('jatext:ime-change',{detail:{open:" +
-                        (kbOpen ? "true" : "false") +
-                        "}}));";
-                    getBridge().getWebView().evaluateJavascript(js, null);
+                boolean kbOpen = windowInsets.isVisible(WindowInsetsCompat.Type.ime());
+                if (kbOpen != lastImeVisible) {
+                    lastImeVisible = kbOpen;
+                    if (getBridge() != null && getBridge().getWebView() != null) {
+                        String js =
+                            "document.documentElement.classList.toggle('jatext-ime-open'," +
+                            (kbOpen ? "true" : "false") +
+                            ");" +
+                            "window.dispatchEvent(new CustomEvent('jatext:ime-change',{detail:{open:" +
+                            (kbOpen ? "true" : "false") +
+                            "}}));";
+                        getBridge().getWebView().evaluateJavascript(js, null);
+                    }
                 }
             } catch (Throwable ignored) {}
-
-            return WindowInsetsCompat.CONSUMED;
+            // DecorView (Capacitor SystemBars) already padded bottom by imeInsets.bottom, placing
+            // WebView completely above the keyboard. Clear Type.ime() before WebView sees it so
+            // Chromium never subtracts the keyboard height a second time inside WebView.
+            return new WindowInsetsCompat.Builder(windowInsets)
+                .setInsets(WindowInsetsCompat.Type.ime(), Insets.NONE)
+                .build();
         });
-        ViewCompat.requestApplyInsets(contentView);
     }
 
     @Override
