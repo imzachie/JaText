@@ -1777,7 +1777,10 @@ html[data-jt-mode="light"] .logo-full {
     visibility: hidden;
     pointer-events: none;
     z-index: 2;
-    background: var(--bg);
+    background-color: var(--bg);
+    background-image: var(--app-bg-image, none);
+    background-size: cover;
+    background-position: center;
     transform: translate3d(100%, 0, 0);
     opacity: 1;
     backface-visibility: hidden;
@@ -1789,8 +1792,13 @@ html[data-jt-mode="light"] .logo-full {
   }
   .app-shell.chat-open .sidebar {
     transform: translate3d(-22%, 0, 0);
-    opacity: 0.68;
+    opacity: 0;
+    visibility: hidden;
     pointer-events: none;
+    transition:
+      transform 235ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 185ms ease,
+      visibility 0s linear 235ms;
   }
   .app-shell.chat-open .main-pane {
     visibility: visible;
@@ -1805,6 +1813,10 @@ html[data-jt-mode="light"] .logo-full {
     pointer-events: auto;
     transform: translate3d(0, 0, 0);
     opacity: 1;
+    transition:
+      transform 235ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 170ms ease,
+      visibility 0s linear 0s;
   }
   .app-shell.chat-closing .main-pane {
     visibility: visible;
@@ -1813,6 +1825,19 @@ html[data-jt-mode="light"] .logo-full {
     transition:
       transform 235ms cubic-bezier(0.22, 1, 0.36, 1),
       visibility 0s linear 235ms;
+  }
+  .chat-header,
+  .composer {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  html[data-jt-gradient="true"] .chat-header,
+  html[data-jt-gradient="true"] .composer {
+    background: color-mix(in srgb, var(--bg) 82%, #0b0c12);
+  }
+  html[data-jt-gradient="true"][data-jt-mode="light"] .chat-header,
+  html[data-jt-gradient="true"][data-jt-mode="light"] .composer {
+    background: color-mix(in srgb, var(--bg) 86%, #ffffff);
   }
   .back-btn {
     display: inline-flex;
@@ -7872,15 +7897,146 @@ html[data-jt-mode="light"] .google-btn {
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
 }
 
-html[data-jt-gradient="true"] .sidebar,
-html[data-jt-gradient="true"] .chat-header,
-html[data-jt-gradient="true"] .composer {
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+@media (min-width: 821px) {
+  html[data-jt-gradient="true"] .sidebar,
+  html[data-jt-gradient="true"] .chat-header,
+  html[data-jt-gradient="true"] .composer {
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+
+  html[data-jt-gradient="true"] .main-pane {
+    background: transparent;
+  }
 }
 
-html[data-jt-gradient="true"] .main-pane {
-  background: transparent;
+.msg-row {
+  contain: layout style;
+}
+
+.older-messages-bar {
+  display: flex;
+  justify-content: center;
+  padding: 6px 12px 10px;
+}
+
+.older-messages-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    transform 120ms ease;
+}
+
+.older-messages-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.older-messages-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.older-messages-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+/* Lighter message bubbles -> crisp black ink for text & voice notes */
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) {
+  color: #111318;
+}
+
+.styled-bubble-light-bg .voice-note-card,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-note-card,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-note-card,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-note-card {
+  color: #111318;
+}
+
+.styled-bubble-light-bg .voice-note-play-btn,
+.styled-bubble-light-bg .voice-note-card.mine .voice-note-play-btn,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-note-play-btn,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-note-play-btn,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-note-play-btn {
+  background: #111318;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.styled-bubble-light-bg .voice-wave-bar,
+.styled-bubble-light-bg .voice-note-card.theirs .voice-wave-bar,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-wave-bar,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-wave-bar,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-wave-bar {
+  background: rgba(17, 19, 24, 0.26);
+}
+
+.styled-bubble-light-bg .voice-wave-bar.filled,
+.styled-bubble-light-bg .voice-note-card.theirs .voice-wave-bar.filled,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-wave-bar.filled,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-wave-bar.filled,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-wave-bar.filled {
+  background: #111318;
+}
+
+.styled-bubble-light-bg .voice-note-footer,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-note-footer,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-note-footer,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-note-footer {
+  color: #111318;
+  opacity: 0.92;
+}
+
+.styled-bubble-light-bg .voice-rate-pill,
+.styled-bubble-light-bg .voice-vol-btn,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-rate-pill,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-vol-btn,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-rate-pill,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-vol-btn,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-rate-pill,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-vol-btn {
+  color: #111318;
+  background: rgba(17, 19, 24, 0.09);
+  border-color: rgba(17, 19, 24, 0.24);
+}
+
+.styled-bubble-light-bg .voice-vol-slider,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-vol-slider,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-vol-slider,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-vol-slider {
+  accent-color: #111318;
+}
+
+.styled-bubble-light-bg .voice-transcript-box,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-transcript-box,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-transcript-box,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-transcript-box {
+  color: #111318;
+  background: rgba(17, 19, 24, 0.07);
+  border-color: rgba(17, 19, 24, 0.18);
+}
+
+.styled-bubble-light-bg .voice-transcript-progress-bar,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-transcript-progress-bar,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-transcript-progress-bar,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-transcript-progress-bar {
+  background: rgba(17, 19, 24, 0.16);
+}
+
+.styled-bubble-light-bg .voice-transcript-error,
+html[data-jt-light-accent="true"] .bubble.mine:not(.styled-bubble) .voice-transcript-error,
+html[data-jt-mode="light"] .bubble.theirs:not(.styled-bubble-dark-bg) .voice-transcript-error,
+html[data-jt-mode="light"] .community-post:not(.styled-bubble-dark-bg) .voice-transcript-error {
+  color: #b91c1c;
 }
 
 html[data-jt-mode="light"] {

@@ -348,12 +348,27 @@ async function initSchema(db) {
       mime_type TEXT NOT NULL,
       file_name TEXT NOT NULL,
       byte_size INTEGER NOT NULL,
+      chunk_count INTEGER NOT NULL DEFAULT 0,
       data BLOB NOT NULL,
       created_at INTEGER NOT NULL
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS media_chunks (
+      media_id TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL,
+      data BLOB NOT NULL,
+      PRIMARY KEY (media_id, chunk_index)
     )`,
   ];
 
   await db.batch(statements, "write");
+  try {
+    await db.execute(
+      `ALTER TABLE media_blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    // Column already exists on initialized databases
+  }
 }
 
 /* ==================== Auth & Crypto Helpers ==================== */
@@ -581,6 +596,26 @@ async function dispatchPushToUsers(db, targetUserIds, payload) {
   });
   const tokens = res.rows.map((r) => String(r.token)).filter(Boolean);
   if (!tokens.length) return;
+
+  if (payload.type === "sync_poke") {
+    try {
+      await messaging.sendEachForMulticast({
+        tokens,
+        data: {
+          type: "sync_poke",
+          senderId: String(payload.senderId || ""),
+          ...(payload.groupId ? { groupId: String(payload.groupId) } : {}),
+        },
+        android: {
+          priority: "high",
+          ttl: 30_000,
+        },
+      });
+    } catch {
+      // Best-effort foreground wake poke
+    }
+    return;
+  }
 
   const body = String(payload.body || "");
   if (body.startsWith("__JATEXT_SIG__:") || body.startsWith("__JATEXT_REACT__:")) {
@@ -1016,13 +1051,48 @@ async function buildSocialAndPreviews(db, meId) {
   }
 
   const relatedUserIds = new Set();
-  for (const r of frRes.rows) {
-    relatedUserIds.add(String(r.from_id));
-    relatedUserIds.add(String(r.to_id));
-  }
-  const usersMap = await getUsersMap(db, [...relatedUserIds]);
-
   const friendIdsSet = new Set();
+  for (const r of frRes.rows) {
+    const fromId = String(r.from_id);
+    const toId = String(r.to_id);
+    relatedUserIds.add(fromId);
+    relatedUserIds.add(toId);
+    if (String(r.status) === "accepted") {
+      const otherId = fromId === meId ? toId : fromId;
+      if (otherId !== meId) friendIdsSet.add(otherId);
+    }
+  }
+
+  const friendIds = [...friendIdsSet];
+  const pairKeys = friendIds.map((fid) => pairKey(meId, fid));
+  const friendPh = friendIds.map(() => "?").join(",");
+  const pairPh = pairKeys.map(() => "?").join(",");
+
+  const [usersMap, presRes, latestRes] = await Promise.all([
+    getUsersMap(db, [...relatedUserIds]),
+    friendIds.length
+      ? db.execute({
+          sql: `SELECT * FROM presence WHERE user_id IN (${friendPh})`,
+          args: friendIds,
+        })
+      : Promise.resolve({ rows: [] }),
+    pairKeys.length
+      ? db.execute({
+          sql: `SELECT m1.*
+                FROM messages m1
+                INNER JOIN (
+                  SELECT pair_key, MAX(created_at) AS max_created
+                  FROM messages
+                  WHERE pair_key IN (${pairPh})
+                    AND body NOT LIKE '__JATEXT_SIG__:%'
+                    AND body NOT LIKE '__JATEXT_REACT__:%'
+                  GROUP BY pair_key
+                ) m2 ON m1.pair_key = m2.pair_key AND m1.created_at = m2.max_created`,
+          args: pairKeys,
+        })
+      : Promise.resolve({ rows: [] }),
+  ]);
+
   const incoming = [];
   const outgoing = [];
 
@@ -1030,10 +1100,7 @@ async function buildSocialAndPreviews(db, meId) {
     const status = String(r.status);
     const fromId = String(r.from_id);
     const toId = String(r.to_id);
-    if (status === "accepted") {
-      const otherId = fromId === meId ? toId : fromId;
-      if (otherId !== meId) friendIdsSet.add(otherId);
-    } else if (status === "pending") {
+    if (status === "pending") {
       const fromUser = mapUserRow(usersMap.get(fromId));
       const toUser = mapUserRow(usersMap.get(toId));
       if (!fromUser || !toUser) continue;
@@ -1049,7 +1116,6 @@ async function buildSocialAndPreviews(db, meId) {
     }
   }
 
-  const friendIds = [...friendIdsSet];
   const friends = friendIds
     .map((fid) => mapUserRow(usersMap.get(fid)))
     .filter(Boolean)
@@ -1058,11 +1124,6 @@ async function buildSocialAndPreviews(db, meId) {
   // Presence & typing for friends
   let friendActivities = [];
   if (friendIds.length) {
-    const ph = friendIds.map(() => "?").join(",");
-    const presRes = await db.execute({
-      sql: `SELECT * FROM presence WHERE user_id IN (${ph})`,
-      args: friendIds,
-    });
     const presMap = new Map();
     for (const p of presRes.rows) presMap.set(String(p.user_id), p);
     const now = Date.now();
@@ -1082,21 +1143,6 @@ async function buildSocialAndPreviews(db, meId) {
   // Previews per friend
   let previews = [];
   if (friendIds.length) {
-    const pairKeys = friendIds.map((fid) => pairKey(meId, fid));
-    const ph = pairKeys.map(() => "?").join(",");
-    const latestRes = await db.execute({
-      sql: `SELECT m1.*
-            FROM messages m1
-            INNER JOIN (
-              SELECT pair_key, MAX(created_at) AS max_created
-              FROM messages
-              WHERE pair_key IN (${ph})
-                AND body NOT LIKE '__JATEXT_SIG__:%'
-                AND body NOT LIKE '__JATEXT_REACT__:%'
-              GROUP BY pair_key
-            ) m2 ON m1.pair_key = m2.pair_key AND m1.created_at = m2.max_created`,
-      args: pairKeys,
-    });
     const latestByPair = new Map();
     for (const m of latestRes.rows) {
       latestByPair.set(String(m.pair_key), m);
@@ -1357,7 +1403,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           sql: `SELECT * FROM community_user_settings WHERE user_id = ? LIMIT 1`,
           args: [meId],
         }),
-        db.execute(`SELECT * FROM community_messages ORDER BY created_at DESC LIMIT 120`),
+        db.execute(`SELECT * FROM community_messages ORDER BY created_at DESC LIMIT 121`),
         listMyGroupsHydrated(db, meId),
         db.execute({
           sql: `SELECT key_id FROM e2ee_key_backups WHERE user_id = ? LIMIT 1`,
@@ -1370,9 +1416,11 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           : Promise.resolve({ rows: [] }),
       ]);
 
+      const commHasMore = commMsgsRes.rows.length > 120;
+      const commSlice = commHasMore ? commMsgsRes.rows.slice(0, 120) : commMsgsRes.rows;
       const communityMessages = await hydrateCommunityMessages(
         db,
-        [...commMsgsRes.rows].reverse(),
+        [...commSlice].reverse(),
         meRow,
         commRole,
       );
@@ -1392,7 +1440,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           : undefined;
 
       return {
-        serverTime: now,
+        serverTime: Date.now(),
         me: mapUserRow(meRow, true),
         ...social,
         ...stickers,
@@ -1400,6 +1448,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         communityDirectory,
         communityMuted: Boolean(Number(commSettingsRes.rows[0]?.is_muted || 0)),
         communityMessages,
+        communityHasMore: commHasMore,
         groups,
         hasRemoteE2EEVault: vaultRes.rows.length > 0,
         remoteVaultKeyId: vaultRes.rows[0] ? String(vaultRes.rows[0].key_id) : null,
@@ -1410,20 +1459,12 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
     case "sync": {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
-      const sinceTs = Math.max(0, Number(args.sinceTs || 0) - 1200);
+      const syncStartedAt = Date.now();
+      const sinceTs = Math.max(0, Number(args.sinceTs || 0) - 8000);
       const activeFriendId = args.activeFriendId ? String(args.activeFriendId) : null;
       const activeGroupId = args.activeGroupId ? String(args.activeGroupId) : null;
 
-      if (args.touchPresence) {
-        await db.execute({
-          sql: `INSERT INTO presence (user_id, last_seen_at, last_active_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, last_active_at = excluded.last_active_at`,
-          args: [meId, now, now],
-        });
-      }
-
-      // Check deltas in parallel
+      // Run presence touch + all delta checks in a single parallel round-trip
       const activePairKey = activeFriendId ? pairKey(meId, activeFriendId) : null;
       const [
         dmDeltaRes,
@@ -1433,6 +1474,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         grpMsgDeltaRes,
         grpTypingRes,
         commTypingRes,
+        myGroupsCheck,
       ] = await Promise.all([
         db.execute({
           sql: `SELECT id FROM messages WHERE (receiver_id = ? OR sender_id = ?) AND updated_at > ? LIMIT 1`,
@@ -1461,26 +1503,32 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         activeGroupId
           ? db.execute({
               sql: `SELECT user_id FROM chat_typing WHERE channel_id = ? AND typing_at > ? AND user_id != ?`,
-              args: [`group:${activeGroupId}`, now - 6_000, meId],
+              args: [`group:${activeGroupId}`, syncStartedAt - 6_000, meId],
             })
           : Promise.resolve({ rows: [] }),
         args.includeCommunity
           ? db.execute({
               sql: `SELECT user_id FROM chat_typing WHERE channel_id = 'community' AND typing_at > ? AND user_id != ?`,
-              args: [now - 6_000, meId],
+              args: [syncStartedAt - 6_000, meId],
             })
           : Promise.resolve({ rows: [] }),
+        db.execute({
+          sql: `SELECT 1 FROM group_members gm
+                LEFT JOIN groups g ON g.id = gm.group_id
+                LEFT JOIN group_messages m ON m.group_id = gm.group_id AND m.updated_at > ?
+                WHERE gm.user_id = ? AND (gm.updated_at > ? OR g.updated_at > ? OR m.id IS NOT NULL)
+                LIMIT 1`,
+          args: [sinceTs, meId, sinceTs, sinceTs],
+        }),
+        args.touchPresence
+          ? db.execute({
+              sql: `INSERT INTO presence (user_id, last_seen_at, last_active_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, last_active_at = excluded.last_active_at`,
+              args: [meId, syncStartedAt, syncStartedAt],
+            })
+          : Promise.resolve(null),
       ]);
-
-      // Check if any group summary changed
-      const myGroupsCheck = await db.execute({
-        sql: `SELECT 1 FROM group_members gm
-              LEFT JOIN groups g ON g.id = gm.group_id
-              LEFT JOIN group_messages m ON m.group_id = gm.group_id AND m.updated_at > ?
-              WHERE gm.user_id = ? AND (gm.updated_at > ? OR g.updated_at > ? OR m.id IS NOT NULL)
-              LIMIT 1`,
-        args: [sinceTs, meId, sinceTs, sinceTs],
-      });
 
       const needSocialRefresh =
         dmDeltaRes.rows.length > 0 ||
@@ -1558,7 +1606,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       ]);
 
       return {
-        serverTime: now,
+        serverTime: syncStartedAt,
         ...(Number(meRow.updated_at) > sinceTs ? { me: mapUserRow(meRow, true) } : {}),
         ...(social ? { social } : {}),
         ...(changedDmMessages.length ? { changedDmMessages } : {}),
@@ -1849,25 +1897,79 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const meId = String(meRow.id);
       const otherId = String(args.otherId || "");
       const pk = pairKey(meId, otherId);
-      const [settingsRes, msgsRes, favKeys] = await Promise.all([
+      const beforeTs = args.beforeTs != null ? Number(args.beforeTs) : 0;
+      const pageLimit = Math.min(250, Math.max(20, Number(args.limit || 160)));
+
+      const [settingsRes, msgsRes, recentSigsRes, favKeys] = await Promise.all([
         db.execute({
           sql: `SELECT deleted_at FROM conversation_settings WHERE user_id = ? AND friend_id = ? LIMIT 1`,
           args: [meId, otherId],
         }),
-        db.execute({
-          sql: `SELECT * FROM messages WHERE pair_key = ? ORDER BY created_at DESC LIMIT 220`,
-          args: [pk],
-        }),
+        beforeTs > 0
+          ? db.execute({
+              sql: `SELECT * FROM messages
+                    WHERE pair_key = ? AND created_at < ? AND body NOT LIKE '__JATEXT_SIG__:%'
+                    ORDER BY created_at DESC
+                    LIMIT ?`,
+              args: [pk, beforeTs, pageLimit + 1],
+            })
+          : db.execute({
+              sql: `SELECT * FROM messages
+                    WHERE pair_key = ? AND body NOT LIKE '__JATEXT_SIG__:%'
+                    ORDER BY created_at DESC
+                    LIMIT ?`,
+              args: [pk, pageLimit + 1],
+            }),
+        beforeTs > 0
+          ? Promise.resolve({ rows: [] })
+          : db.execute({
+              sql: `SELECT * FROM messages
+                    WHERE pair_key = ? AND body LIKE '__JATEXT_SIG__:%' AND created_at > ?
+                    ORDER BY created_at ASC
+                    LIMIT 40`,
+              args: [pk, Date.now() - 120_000],
+            }),
         getUserFavoriteMediaKeys(db, meId),
       ]);
+
       const deletedAt =
         settingsRes.rows[0]?.deleted_at != null ? Number(settingsRes.rows[0].deleted_at) : 0;
-      const ordered = [...msgsRes.rows]
-        .reverse()
-        .filter((r) => !deletedAt || Number(r.created_at) > deletedAt);
+      const rawHasMore = msgsRes.rows.length > pageLimit;
+      const sliced = rawHasMore ? msgsRes.rows.slice(0, pageLimit) : msgsRes.rows;
+      const oldestInSlice = sliced.length ? Number(sliced[sliced.length - 1].created_at) : 0;
+      const hasMore = rawHasMore && (!deletedAt || oldestInSlice > deletedAt);
+
+      const combinedMap = new Map();
+      for (const r of [...sliced].reverse()) {
+        if (!deletedAt || Number(r.created_at) > deletedAt) {
+          combinedMap.set(String(r.id), r);
+        }
+      }
+      for (const s of recentSigsRes.rows) {
+        if (!deletedAt || Number(s.created_at) > deletedAt) {
+          combinedMap.set(String(s.id), s);
+        }
+      }
+      const ordered = [...combinedMap.values()].sort(
+        (a, b) => Number(a.created_at) - Number(b.created_at),
+      );
+
       const replyMap = new Map();
       for (const r of ordered) replyMap.set(String(r.id), r);
-      return { messages: hydrateDmMessages(ordered, meId, replyMap, favKeys) };
+      const missingReplyIds = ordered
+        .map((r) => (r.reply_to_id ? String(r.reply_to_id) : null))
+        .filter((rid) => rid && !replyMap.has(rid));
+      if (missingReplyIds.length) {
+        const uniqueMissing = [...new Set(missingReplyIds)];
+        const ph = uniqueMissing.map(() => "?").join(",");
+        const repRes = await db.execute({
+          sql: `SELECT * FROM messages WHERE id IN (${ph})`,
+          args: uniqueMissing,
+        });
+        for (const r of repRes.rows) replyMap.set(String(r.id), r);
+      }
+
+      return { messages: hydrateDmMessages(ordered, meId, replyMap, favKeys), hasMore };
     }
 
     case "sendMessage": {
@@ -1879,15 +1981,10 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       if (!body.trim() && !args.attachmentUrl) {
         throw new TursoAppError("Cannot send an empty message.");
       }
-      if (await isBlockedEitherWay(db, meId, receiverId)) {
-        throw new TursoAppError("Cannot message this user.");
-      }
-      if (!(await areFriendsInDb(db, meId, receiverId))) {
-        throw new TursoAppError("You can only message accepted friends.");
-      }
 
-      // Check recipient online presence for initial delivered vs sent
-      const [recvPresRes, recvUserRes, recvSettingsRes] = await Promise.all([
+      const [blocked, friendsOk, recvPresRes, recvUserRes, recvSettingsRes] = await Promise.all([
+        isBlockedEitherWay(db, meId, receiverId),
+        areFriendsInDb(db, meId, receiverId),
         db.execute({ sql: `SELECT * FROM presence WHERE user_id = ? LIMIT 1`, args: [receiverId] }),
         db.execute({ sql: `SELECT * FROM users WHERE id = ? LIMIT 1`, args: [receiverId] }),
         db.execute({
@@ -1895,8 +1992,16 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           args: [receiverId, meId],
         }),
       ]);
+      if (blocked) {
+        throw new TursoAppError("Cannot message this user.");
+      }
+      if (!friendsOk) {
+        throw new TursoAppError("You can only message accepted friends.");
+      }
+
+      const writeAt = Date.now();
       const recvOnline =
-        recvPresRes.rows[0] && now - Number(recvPresRes.rows[0].last_seen_at || 0) < 90_000;
+        recvPresRes.rows[0] && writeAt - Number(recvPresRes.rows[0].last_seen_at || 0) < 90_000;
       const deliveryStatus = recvOnline ? "delivered" : "sent";
 
       const msgId = newId();
@@ -1920,8 +2025,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           deliveryStatus,
           args.replyToId ? String(args.replyToId) : null,
           args.forwardedFromId ? String(args.forwardedFromId) : null,
-          now,
-          now,
+          writeAt,
+          writeAt,
         ],
       });
 
@@ -1934,26 +2039,30 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         !Number(recvSettings?.is_muted || 0) &&
         !Number(recvSettings?.is_archived || 0);
 
-      if (shouldPush) {
-        void dispatchPushToUsers(db, [receiverId], {
-          senderId: meId,
-          senderName: String(meRow.display_name || meRow.username || "JaText"),
-          body,
-        });
-      }
+      const pushPromise = shouldPush
+        ? dispatchPushToUsers(db, [receiverId], {
+            senderId: meId,
+            senderName: String(meRow.display_name || meRow.username || "JaText"),
+            body,
+          })
+        : dispatchPushToUsers(db, [receiverId], {
+            type: "sync_poke",
+            senderId: meId,
+          });
 
-      const [rowRes, favKeys] = await Promise.all([
+      const [rowRes, favKeys, repRes] = await Promise.all([
         db.execute({ sql: `SELECT * FROM messages WHERE id = ?`, args: [msgId] }),
         getUserFavoriteMediaKeys(db, meId),
+        args.replyToId
+          ? db.execute({
+              sql: `SELECT * FROM messages WHERE id = ?`,
+              args: [String(args.replyToId)],
+            })
+          : Promise.resolve({ rows: [] }),
+        pushPromise,
       ]);
       const replyMap = new Map();
-      if (args.replyToId) {
-        const rep = await db.execute({
-          sql: `SELECT * FROM messages WHERE id = ?`,
-          args: [String(args.replyToId)],
-        });
-        if (rep.rows[0]) replyMap.set(String(rep.rows[0].id), rep.rows[0]);
-      }
+      if (repRes.rows[0]) replyMap.set(String(repRes.rows[0].id), repRes.rows[0]);
       return {
         message: hydrateDmMessages(rowRes.rows, meId, replyMap, favKeys)[0],
       };
@@ -1964,11 +2073,12 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const meId = String(meRow.id);
       const friendId = String(args.friendId || "");
       const pk = pairKey(meId, friendId);
+      const writeAt = Date.now();
       await db.execute({
         sql: `UPDATE messages
               SET delivery_status = 'read', updated_at = ?
               WHERE pair_key = ? AND receiver_id = ? AND delivery_status != 'read'`,
-        args: [now, pk, meId],
+        args: [writeAt, pk, meId],
       });
       return { ok: true };
     }
@@ -1989,9 +2099,10 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const idx = list.findIndex((x) => x.userId === meId && x.emoji === emoji);
       if (idx >= 0) list.splice(idx, 1);
       else list.push({ userId: meId, emoji });
+      const writeAt = Date.now();
       await db.execute({
         sql: `UPDATE messages SET reactions_json = ?, updated_at = ? WHERE id = ?`,
-        args: [JSON.stringify(list), now, messageId],
+        args: [JSON.stringify(list), writeAt, messageId],
       });
       return { reactions: list };
     }
@@ -2006,9 +2117,10 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const m = res.rows[0];
       if (String(m.sender_id) !== meId) throw new TursoAppError("You can only edit your own messages.", 403);
       if (m.unsent_at) throw new TursoAppError("Cannot edit an unsent message.");
+      const writeAt = Date.now();
       await db.execute({
         sql: `UPDATE messages SET body = ?, edited_at = ?, updated_at = ? WHERE id = ?`,
-        args: [body, now, now, messageId],
+        args: [body, writeAt, writeAt, messageId],
       });
       return { ok: true };
     }
@@ -2021,7 +2133,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       if (!res.rows.length) throw new TursoAppError("Message not found.");
       const m = res.rows[0];
       if (String(m.sender_id) !== meId) throw new TursoAppError("You can only unsend your own messages.", 403);
-      if (now - Number(m.created_at) > UNSEND_WINDOW_MS) {
+      const writeAt = Date.now();
+      if (writeAt - Number(m.created_at) > UNSEND_WINDOW_MS) {
         throw new TursoAppError("Messages can only be unsent within 1 hour of sending.");
       }
       const firstWarning = !meRow.unsend_warning_shown_at;
@@ -2029,7 +2142,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         [
           {
             sql: `UPDATE messages SET body = '', attachment_url = NULL, attachment_name = NULL, attachment_type = NULL, reactions_json = '[]', unsent_at = ?, updated_at = ? WHERE id = ?`,
-            args: [now, now, messageId],
+            args: [writeAt, writeAt, messageId],
           },
           ...(firstWarning
             ? [
@@ -2201,6 +2314,27 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       return { moderatorIds: ids };
     }
 
+    case "listCommunityMessages": {
+      const meRow = await requireMeRow(db, auth);
+      const role = await getCommunityRole(db, meRow);
+      const beforeTs = args.beforeTs != null ? Number(args.beforeTs) : 0;
+      const pageLimit = Math.min(200, Math.max(20, Number(args.limit || 120)));
+      const msgsRes =
+        beforeTs > 0
+          ? await db.execute({
+              sql: `SELECT * FROM community_messages WHERE created_at < ? ORDER BY created_at DESC LIMIT ?`,
+              args: [beforeTs, pageLimit + 1],
+            })
+          : await db.execute({
+              sql: `SELECT * FROM community_messages ORDER BY created_at DESC LIMIT ?`,
+              args: [pageLimit + 1],
+            });
+      const hasMore = msgsRes.rows.length > pageLimit;
+      const slice = hasMore ? msgsRes.rows.slice(0, pageLimit) : msgsRes.rows;
+      const messages = await hydrateCommunityMessages(db, [...slice].reverse(), meRow, role);
+      return { messages, hasMore };
+    }
+
     case "sendCommunityMessage": {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
@@ -2212,6 +2346,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const type = ["text", "poll", "sticker"].includes(args.type) ? args.type : "text";
       const body = String(args.body || "");
       const pollOptions = Array.isArray(args.pollOptions) ? args.pollOptions.map(String) : [];
+      const writeAt = Date.now();
 
       await db.execute({
         sql: `INSERT INTO community_messages (
@@ -2234,33 +2369,35 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           args.replyToId ? String(args.replyToId) : null,
           args.forwardedFromName ? String(args.forwardedFromName) : null,
           args.forwardedFromId ? String(args.forwardedFromId) : null,
-          now,
-          now,
+          writeAt,
+          writeAt,
         ],
       });
 
-      // Notify all non-muted users in background
-      const recipientsRes = await db.execute({
-        sql: `SELECT u.id FROM users u
-              LEFT JOIN community_user_settings cs ON cs.user_id = u.id
-              WHERE u.id != ? AND u.status_preference != 'dnd' AND COALESCE(cs.is_muted, 0) = 0`,
-        args: [meId],
-      });
+      const [recipientsRes, rowRes] = await Promise.all([
+        db.execute({
+          sql: `SELECT u.id FROM users u
+                LEFT JOIN community_user_settings cs ON cs.user_id = u.id
+                WHERE u.id != ? AND u.status_preference != 'dnd' AND COALESCE(cs.is_muted, 0) = 0`,
+          args: [meId],
+        }),
+        db.execute({
+          sql: `SELECT * FROM community_messages WHERE id = ?`,
+          args: [msgId],
+        }),
+      ]);
       const recipientIds = recipientsRes.rows.map((r) => String(r.id));
-      if (recipientIds.length) {
-        void dispatchPushToUsers(db, recipientIds, {
-          senderId: meId,
-          senderName: "JaText Announcements",
-          title: "JaText Announcements",
-          body: type === "poll" ? `Poll: ${body}` : body || "New announcement",
-        });
-      }
-
-      const rowRes = await db.execute({
-        sql: `SELECT * FROM community_messages WHERE id = ?`,
-        args: [msgId],
-      });
-      const hydrated = await hydrateCommunityMessages(db, rowRes.rows, meRow, role);
+      const [hydrated] = await Promise.all([
+        hydrateCommunityMessages(db, rowRes.rows, meRow, role),
+        recipientIds.length
+          ? dispatchPushToUsers(db, recipientIds, {
+              senderId: meId,
+              senderName: "JaText Announcements",
+              title: "JaText Announcements",
+              body: type === "poll" ? `Poll: ${body}` : body || "New announcement",
+            })
+          : Promise.resolve(),
+      ]);
       return { message: hydrated[0] };
     }
 
@@ -2479,7 +2616,10 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
       const groupId = String(args.groupId || "");
-      const [memRes, gusRes, msgsRes] = await Promise.all([
+      const beforeTs = args.beforeTs != null ? Number(args.beforeTs) : 0;
+      const pageLimit = Math.min(250, Math.max(20, Number(args.limit || 160)));
+
+      const [memRes, gusRes, msgsRes, recentSigsRes] = await Promise.all([
         db.execute({
           sql: `SELECT role FROM group_members WHERE group_id = ? AND user_id = ? LIMIT 1`,
           args: [groupId, meId],
@@ -2488,20 +2628,50 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           sql: `SELECT cleared_at FROM group_user_settings WHERE user_id = ? AND group_id = ? LIMIT 1`,
           args: [meId, groupId],
         }),
-        db.execute({
-          sql: `SELECT * FROM group_messages WHERE group_id = ? ORDER BY created_at DESC LIMIT 220`,
-          args: [groupId],
-        }),
+        beforeTs > 0
+          ? db.execute({
+              sql: `SELECT * FROM group_messages
+                    WHERE group_id = ? AND created_at < ? AND body NOT LIKE '__JATEXT_SIG__:%'
+                    ORDER BY created_at DESC
+                    LIMIT ?`,
+              args: [groupId, beforeTs, pageLimit + 1],
+            })
+          : db.execute({
+              sql: `SELECT * FROM group_messages
+                    WHERE group_id = ? AND body NOT LIKE '__JATEXT_SIG__:%'
+                    ORDER BY created_at DESC
+                    LIMIT ?`,
+              args: [groupId, pageLimit + 1],
+            }),
+        beforeTs > 0
+          ? Promise.resolve({ rows: [] })
+          : db.execute({
+              sql: `SELECT * FROM group_messages
+                    WHERE group_id = ? AND body LIKE '__JATEXT_SIG__:%' AND created_at > ?
+                    ORDER BY created_at ASC
+                    LIMIT 40`,
+              args: [groupId, Date.now() - 120_000],
+            }),
       ]);
-      if (!memRes.rows.length) return { messages: [] };
+      if (!memRes.rows.length) return { messages: [], hasMore: false };
       const clearedAt = gusRes.rows[0]?.cleared_at != null ? Number(gusRes.rows[0].cleared_at) : 0;
-      const messages = await hydrateGroupMessages(
-        db,
-        [...msgsRes.rows].reverse(),
-        meId,
-        clearedAt,
+      const rawHasMore = msgsRes.rows.length > pageLimit;
+      const sliced = rawHasMore ? msgsRes.rows.slice(0, pageLimit) : msgsRes.rows;
+      const oldestInSlice = sliced.length ? Number(sliced[sliced.length - 1].created_at) : 0;
+      const hasMore = rawHasMore && (!clearedAt || oldestInSlice > clearedAt);
+
+      const combinedMap = new Map();
+      for (const r of [...sliced].reverse()) {
+        combinedMap.set(String(r.id), r);
+      }
+      for (const s of recentSigsRes.rows) {
+        combinedMap.set(String(s.id), s);
+      }
+      const ordered = [...combinedMap.values()].sort(
+        (a, b) => Number(a.created_at) - Number(b.created_at),
       );
-      return { messages };
+      const messages = await hydrateGroupMessages(db, ordered, meId, clearedAt);
+      return { messages, hasMore };
     }
 
     case "sendGroupMessage": {
@@ -2539,6 +2709,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       }
 
       const msgId = newId();
+      const writeAt = Date.now();
       await db.batch(
         [
           {
@@ -2564,25 +2735,28 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
               args.attachmentType ? String(args.attachmentType) : null,
               mentionsEveryone ? 1 : 0,
               JSON.stringify(mentionedUserIds),
-              now,
-              now,
+              writeAt,
+              writeAt,
             ],
           },
           {
             sql: `UPDATE groups SET updated_at = ? WHERE id = ?`,
-            args: [now, groupId],
+            args: [writeAt, groupId],
           },
         ],
         "write",
       );
 
-      // Push notifications for group calls / mentions / @everyone
+      // Push notifications for group calls / mentions / @everyone + silent sync_poke for active members
       const callInfo = detectCallInfo(body);
+      const allOtherMemberIds = memRes.rows
+        .map((m) => String(m.user_id))
+        .filter((uid) => uid !== meId);
       const candidateTargets =
-        mentionsEveryone || callInfo.isCall
-          ? memRes.rows.map((m) => String(m.user_id)).filter((uid) => uid !== meId)
-          : mentionedUserIds;
+        mentionsEveryone || callInfo.isCall ? allOtherMemberIds : mentionedUserIds;
 
+      const pushTasks = [];
+      let notifiedSet = new Set();
       if (candidateTargets.length) {
         const ph = candidateTargets.map(() => "?").join(",");
         const gusRes = await db.execute({
@@ -2599,22 +2773,39 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           return true;
         });
         if (finalPushTargets.length) {
+          notifiedSet = new Set(finalPushTargets);
           const groupName = String(grpRes.rows[0].name);
           const senderName = String(meRow.display_name || meRow.username || "Member");
-          void dispatchPushToUsers(db, finalPushTargets, {
-            senderId: meId,
-            senderName,
-            title: callInfo.isCall ? groupName : `${senderName} in ${groupName}`,
-            body,
-            groupId,
-          });
+          pushTasks.push(
+            dispatchPushToUsers(db, finalPushTargets, {
+              senderId: meId,
+              senderName,
+              title: callInfo.isCall ? groupName : `${senderName} in ${groupName}`,
+              body,
+              groupId,
+            }),
+          );
         }
       }
 
-      const rowRes = await db.execute({
-        sql: `SELECT * FROM group_messages WHERE id = ?`,
-        args: [msgId],
-      });
+      const pokeTargets = allOtherMemberIds.filter((uid) => !notifiedSet.has(uid));
+      if (pokeTargets.length && !body.startsWith("__JATEXT_SIG__:")) {
+        pushTasks.push(
+          dispatchPushToUsers(db, pokeTargets, {
+            type: "sync_poke",
+            senderId: meId,
+            groupId,
+          }),
+        );
+      }
+
+      const [rowRes] = await Promise.all([
+        db.execute({
+          sql: `SELECT * FROM group_messages WHERE id = ?`,
+          args: [msgId],
+        }),
+        ...pushTasks,
+      ]);
       const hydrated = await hydrateGroupMessages(db, rowRes.rows, meId, 0);
       return { message: hydrated[0] };
     }

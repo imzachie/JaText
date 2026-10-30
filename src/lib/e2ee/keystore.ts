@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { fetchMediaBytesSmart } from "../tursoClient";
 import {
   E2EE_SIGNAL_PREFIX,
   computeKeyFingerprint,
@@ -1239,9 +1240,7 @@ export async function decryptRemoteAttachmentToObjectUrl(
   if (inflight) return inflight;
 
   const task = (async () => {
-    const res = await fetch(cipherUrl);
-    if (!res.ok) throw new Error("Failed to download encrypted media.");
-    const cipherBuf = new Uint8Array(await res.arrayBuffer());
+    const cipherBuf = await fetchMediaBytesSmart(cipherUrl);
     const plainBytes = await decryptAttachmentBytes(cipherBuf, descriptor);
     const cleanMime = (descriptor.t || "application/octet-stream").replace(/;jbs=[a-z0-9-]+/gi, "");
     const blob = new Blob([plainBytes], { type: cleanMime });

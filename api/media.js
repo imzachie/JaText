@@ -6,26 +6,49 @@ export const config = {
   },
 };
 
-const MAX_BYTES = 4_300_000; // ~4.3 MB within Vercel Hobby 4.5 MB payload cap
+export const MEDIA_CHUNK_BYTES = 768 * 1024; // 768 KB per DB chunk
+const MAX_SINGLE_SHOT_BYTES = 768 * 1024; // > 768 KB splits into media_chunks
+const MAX_SERVE_BYTES = 3 * 1024 * 1024; // 3 MB max per HTTP response (< Vercel 4.5 MB cap)
+const MAX_TOTAL_UPLOAD_BYTES = 64 * 1024 * 1024; // 64 MB max video/audio attachment
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-JaText-Filename, X-JaText-Mime",
+    "Content-Type, Authorization, Range, X-JaText-Filename, X-JaText-Name, X-JaText-Mime, X-JaText-Chunk-Index",
+  );
+  res.setHeader(
+    "Access-Control-Expose-Headers",
+    "Accept-Ranges, Content-Range, Content-Length, X-JaText-Total-Size",
   );
 }
 
-function readRawBuffer(req) {
+function readRawBuffer(req, maxBytes = 4_300_000) {
   return new Promise((resolve, reject) => {
+    if (Buffer.isBuffer(req.body)) {
+      if (req.body.length > maxBytes) {
+        reject(new TursoAppError("Payload exceeds chunk size limit.", 413));
+        return;
+      }
+      resolve(req.body);
+      return;
+    }
+    if (req.body && typeof req.body === "object") {
+      resolve(Buffer.from(JSON.stringify(req.body), "utf8"));
+      return;
+    }
+    if (typeof req.body === "string") {
+      resolve(Buffer.from(req.body, "utf8"));
+      return;
+    }
     const chunks = [];
     let total = 0;
     req.on("data", (chunk) => {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += buf.length;
-      if (total > MAX_BYTES) {
-        reject(new TursoAppError("File exceeds 4.2 MB upload limit.", 413));
+      if (total > maxBytes) {
+        reject(new TursoAppError("Payload exceeds chunk size limit.", 413));
         req.destroy();
         return;
       }
@@ -34,6 +57,16 @@ function readRawBuffer(req) {
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
+}
+
+function toBuffer(rawData) {
+  if (!rawData) return Buffer.alloc(0);
+  if (Buffer.isBuffer(rawData)) return rawData;
+  if (rawData instanceof ArrayBuffer) return Buffer.from(rawData);
+  if (ArrayBuffer.isView(rawData)) {
+    return Buffer.from(rawData.buffer, rawData.byteOffset, rawData.byteLength);
+  }
+  return Buffer.from(String(rawData || ""), "base64");
 }
 
 function resolvePublicOrigin(req) {
@@ -46,6 +79,73 @@ function resolvePublicOrigin(req) {
   return `${proto}://${host}`;
 }
 
+function parseHttpRange(rangeHeader, totalSize) {
+  if (!rangeHeader || typeof rangeHeader !== "string" || totalSize <= 0) return null;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+  if (!match) return null;
+  const [, startStr, endStr] = match;
+  let start = 0;
+  let end = totalSize - 1;
+  if (startStr === "" && endStr !== "") {
+    const suffixLen = Number(endStr);
+    if (!Number.isFinite(suffixLen) || suffixLen <= 0) return null;
+    start = Math.max(0, totalSize - suffixLen);
+    end = totalSize - 1;
+  } else if (startStr !== "") {
+    start = Number(startStr);
+    if (!Number.isFinite(start) || start < 0 || start >= totalSize) {
+      return { unsatisfiable: true };
+    }
+    if (endStr !== "") {
+      const parsedEnd = Number(endStr);
+      if (!Number.isFinite(parsedEnd) || parsedEnd < start) return null;
+      end = Math.min(totalSize - 1, parsedEnd);
+    }
+  } else {
+    return null;
+  }
+  if (end - start + 1 > MAX_SERVE_BYTES) {
+    end = start + MAX_SERVE_BYTES - 1;
+  }
+  return { start, end };
+}
+
+async function readChunkedSlice(db, mediaId, start, end, chunkSize = MEDIA_CHUNK_BYTES) {
+  const firstChunk = Math.floor(start / chunkSize);
+  const lastChunk = Math.floor(end / chunkSize);
+  const res = await db.execute({
+    sql: `SELECT chunk_index, data
+          FROM media_chunks
+          WHERE media_id = ? AND chunk_index >= ? AND chunk_index <= ?
+          ORDER BY chunk_index ASC`,
+    args: [mediaId, firstChunk, lastChunk],
+  });
+  if (!res.rows || res.rows.length === 0) {
+    return null;
+  }
+  const buffers = new Map();
+  for (const r of res.rows) {
+    buffers.set(Number(r.chunk_index), toBuffer(r.data));
+  }
+  const outLen = end - start + 1;
+  const out = Buffer.allocUnsafe(outLen);
+  let written = 0;
+  for (let idx = firstChunk; idx <= lastChunk; idx++) {
+    const cBuf = buffers.get(idx);
+    if (!cBuf) {
+      throw new TursoAppError(`Incomplete media upload (missing chunk ${idx}).`, 404);
+    }
+    const chunkByteStart = idx * chunkSize;
+    const sliceStart = Math.max(0, start - chunkByteStart);
+    const sliceEnd = Math.min(cBuf.length, end - chunkByteStart + 1);
+    if (sliceEnd > sliceStart) {
+      cBuf.copy(out, written, sliceStart, sliceEnd);
+      written += sliceEnd - sliceStart;
+    }
+  }
+  return written === outLen ? out : out.subarray(0, written);
+}
+
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === "OPTIONS") {
@@ -54,35 +154,84 @@ export default async function handler(req, res) {
 
   try {
     const db = await getDb();
+    const urlObj = new URL(req.url || "/api/media", "http://localhost");
 
-    if (req.method === "GET") {
-      const id = String(req.query?.id || "").trim();
+    if (req.method === "GET" || req.method === "HEAD") {
+      const id = String(req.query?.id || urlObj.searchParams.get("id") || "").trim();
       if (!id) {
         return res.status(400).json({ ok: false, error: "Missing media id." });
       }
       const rowRes = await db.execute({
-        sql: `SELECT mime_type, file_name, byte_size, data FROM media_blobs WHERE id = ? LIMIT 1`,
+        sql: `SELECT mime_type, file_name, byte_size, chunk_count,
+                     CASE WHEN COALESCE(chunk_count, 0) = 0 THEN data ELSE NULL END AS inline_data
+              FROM media_blobs
+              WHERE id = ?
+              LIMIT 1`,
         args: [id],
       });
       if (!rowRes.rows.length) {
         return res.status(404).json({ ok: false, error: "Media not found." });
       }
       const row = rowRes.rows[0];
-      const rawData = row.data;
-      const buf = Buffer.isBuffer(rawData)
-        ? rawData
-        : rawData instanceof ArrayBuffer
-          ? Buffer.from(rawData)
-          : ArrayBuffer.isView(rawData)
-            ? Buffer.from(rawData.buffer, rawData.byteOffset, rawData.byteLength)
-            : Buffer.from(String(rawData || ""), "base64");
-
       const mime = String(row.mime_type || "application/octet-stream");
       const safeName = String(row.file_name || "file").replace(/[^\w.\- ()]/g, "_");
+      const totalSize = Number(row.byte_size || 0);
+      const chunkCount = Number(row.chunk_count || 0);
+
       res.setHeader("Content-Type", mime);
-      res.setHeader("Content-Length", String(buf.length));
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("X-JaText-Total-Size", String(totalSize));
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
       res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+
+      if (req.method === "HEAD") {
+        res.setHeader("Content-Length", String(totalSize));
+        return res.status(200).end();
+      }
+
+      const rangeHeader = req.headers.range || req.headers.Range;
+      const parsedRange = parseHttpRange(rangeHeader, totalSize);
+      if (parsedRange?.unsatisfiable) {
+        res.setHeader("Content-Range", `bytes */${totalSize}`);
+        return res.status(416).end();
+      }
+
+      if (parsedRange || totalSize > MAX_SERVE_BYTES) {
+        const start = parsedRange ? parsedRange.start : 0;
+        const end = parsedRange
+          ? parsedRange.end
+          : Math.min(totalSize - 1, MAX_SERVE_BYTES - 1);
+
+        let sliceBuf;
+        if (chunkCount > 0) {
+          sliceBuf = await readChunkedSlice(db, id, start, end, MEDIA_CHUNK_BYTES);
+          if (!sliceBuf) {
+            return res.status(404).json({ ok: false, error: "Media chunks not found." });
+          }
+        } else {
+          const fullBuf = toBuffer(row.inline_data);
+          sliceBuf = fullBuf.subarray(start, Math.min(fullBuf.length, end + 1));
+        }
+
+        res.setHeader("Content-Range", `bytes ${start}-${start + sliceBuf.length - 1}/${totalSize}`);
+        res.setHeader("Content-Length", String(sliceBuf.length));
+        return res.status(206).send(sliceBuf);
+      }
+
+      let buf;
+      if (chunkCount > 0) {
+        buf =
+          totalSize > 0
+            ? await readChunkedSlice(db, id, 0, totalSize - 1, MEDIA_CHUNK_BYTES)
+            : Buffer.alloc(0);
+        if (!buf) {
+          return res.status(404).json({ ok: false, error: "Media chunks not found." });
+        }
+      } else {
+        buf = toBuffer(row.inline_data);
+      }
+
+      res.setHeader("Content-Length", String(buf.length));
       return res.status(200).send(buf);
     }
 
@@ -94,18 +243,122 @@ export default async function handler(req, res) {
         return res.status(401).json({ ok: false, error: "Please sign in before uploading files." });
       }
 
-      const buf = await readRawBuffer(req);
-      if (!buf.length) {
-        return res.status(400).json({ ok: false, error: "Uploaded file is empty." });
+      const action = String(req.query?.action || urlObj.searchParams.get("action") || "").trim();
+      const origin = resolvePublicOrigin(req);
+
+      // 1. Initialize multi-chunk upload for video / audio / large files (up to 64 MB)
+      if (action === "init") {
+        const raw = await readRawBuffer(req, 64 * 1024);
+        const parsed = JSON.parse(raw.toString("utf8") || "{}");
+        const byteSize = Number(parsed.byteSize || 0);
+        if (!Number.isFinite(byteSize) || byteSize <= 0 || byteSize > MAX_TOTAL_UPLOAD_BYTES) {
+          return res.status(413).json({
+            ok: false,
+            error: "Attachment exceeds the 64 MB maximum upload size.",
+          });
+        }
+        const mimeType = String(parsed.mimeType || "application/octet-stream")
+          .split(";")[0]
+          .trim()
+          .slice(0, 120);
+        const fileName = String(parsed.fileName || "attachment").slice(0, 160);
+        const expectedChunks = Math.max(1, Math.ceil(byteSize / MEDIA_CHUNK_BYTES));
+        const chunkCount = Number(parsed.chunkCount || expectedChunks);
+        if (chunkCount < 1 || chunkCount > Math.ceil(MAX_TOTAL_UPLOAD_BYTES / MEDIA_CHUNK_BYTES) + 2) {
+          return res.status(400).json({ ok: false, error: "Invalid chunk count." });
+        }
+
+        const id = newId();
+        await db.execute({
+          sql: `INSERT INTO media_blobs (
+                  id, owner_id, mime_type, file_name, byte_size, chunk_count, data, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            id,
+            auth.userId,
+            mimeType,
+            fileName,
+            byteSize,
+            chunkCount,
+            new Uint8Array(0),
+            Date.now(),
+          ],
+        });
+
+        return res.status(200).json({
+          ok: true,
+          id,
+          storageId: id,
+          url: `${origin}/api/media?id=${id}&sz=${byteSize}`,
+          size: byteSize,
+          chunkSize: MEDIA_CHUNK_BYTES,
+          chunkCount,
+        });
       }
 
-      const mimeType = String(
-        req.headers["x-jatext-mime"] || req.headers["content-type"] || "application/octet-stream",
+      // 2. Upload an individual 768 KB binary chunk
+      if (action === "chunk") {
+        const mediaId = String(req.query?.id || urlObj.searchParams.get("id") || "").trim();
+        const chunkIndex = Number(
+          req.query?.index ??
+            urlObj.searchParams.get("index") ??
+            req.headers["x-jatext-chunk-index"] ??
+            -1,
+        );
+        if (!mediaId || !Number.isInteger(chunkIndex) || chunkIndex < 0) {
+          return res.status(400).json({ ok: false, error: "Invalid chunk parameters." });
+        }
+
+        const ownerRes = await db.execute({
+          sql: `SELECT owner_id, chunk_count FROM media_blobs WHERE id = ? LIMIT 1`,
+          args: [mediaId],
+        });
+        const meta = ownerRes.rows[0];
+        if (!meta) {
+          return res.status(404).json({ ok: false, error: "Upload session not found." });
+        }
+        if (String(meta.owner_id) !== String(auth.userId)) {
+          return res.status(403).json({ ok: false, error: "Forbidden." });
+        }
+        if (chunkIndex >= Number(meta.chunk_count || 0)) {
+          return res.status(400).json({ ok: false, error: "Chunk index out of bounds." });
+        }
+
+        const buf = await readRawBuffer(req, MEDIA_CHUNK_BYTES + 64 * 1024);
+        if (!buf.length) {
+          return res.status(400).json({ ok: false, error: "Uploaded chunk is empty." });
+        }
+
+        await db.execute({
+          sql: `INSERT OR REPLACE INTO media_chunks (media_id, chunk_index, data)
+                VALUES (?, ?, ?)`,
+          args: [
+            mediaId,
+            chunkIndex,
+            new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
+          ],
+        });
+
+        return res.status(200).json({
+          ok: true,
+          id: mediaId,
+          index: chunkIndex,
+          bytes: buf.length,
+        });
+      }
+
+      // 3. Single-shot upload for compact attachments (<= 4.2 MB)
+      const contentType = String(req.headers["content-type"] || "application/octet-stream");
+      let buf = await readRawBuffer(req, 4_300_000);
+      let mimeType = String(
+        req.headers["x-jatext-mime"] || contentType || "application/octet-stream",
       )
         .split(";")[0]
         .trim()
         .slice(0, 120);
-      const rawFilename = String(req.headers["x-jatext-filename"] || "attachment");
+      const rawFilename = String(
+        req.headers["x-jatext-filename"] || req.headers["x-jatext-name"] || "attachment",
+      );
       let fileName = "attachment";
       try {
         fileName = decodeURIComponent(rawFilename).slice(0, 160);
@@ -113,18 +366,75 @@ export default async function handler(req, res) {
         fileName = rawFilename.slice(0, 160);
       }
 
-      const id = newId();
-      await db.execute({
-        sql: `INSERT INTO media_blobs (id, owner_id, mime_type, file_name, byte_size, data, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        args: [id, auth.userId, mimeType, fileName, buf.length, buf, Date.now()],
-      });
+      if (contentType.includes("application/json")) {
+        const parsed = JSON.parse(buf.toString("utf8"));
+        if (!parsed?.base64) {
+          return res.status(400).json({ ok: false, error: "Missing base64 media data." });
+        }
+        buf = Buffer.from(String(parsed.base64), "base64");
+        mimeType = String(parsed.mimeType || mimeType || "application/octet-stream")
+          .split(";")[0]
+          .trim()
+          .slice(0, 120);
+        fileName = String(parsed.fileName || fileName || "attachment").slice(0, 160);
+      }
 
-      const origin = resolvePublicOrigin(req);
+      if (!buf.length) {
+        return res.status(400).json({ ok: false, error: "Uploaded file is empty." });
+      }
+
+      const id = newId();
+      const now = Date.now();
+      if (buf.length > MAX_SINGLE_SHOT_BYTES) {
+        const chunkCount = Math.ceil(buf.length / MEDIA_CHUNK_BYTES);
+        const stmts = [
+          {
+            sql: `INSERT INTO media_blobs (
+                    id, owner_id, mime_type, file_name, byte_size, chunk_count, data, created_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            args: [
+              id,
+              auth.userId,
+              mimeType,
+              fileName,
+              buf.length,
+              chunkCount,
+              new Uint8Array(0),
+              now,
+            ],
+          },
+        ];
+        for (let idx = 0; idx < chunkCount; idx++) {
+          const slice = buf.subarray(idx * MEDIA_CHUNK_BYTES, (idx + 1) * MEDIA_CHUNK_BYTES);
+          stmts.push({
+            sql: `INSERT INTO media_chunks (media_id, chunk_index, data) VALUES (?, ?, ?)`,
+            args: [id, idx, new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength)],
+          });
+        }
+        await db.batch(stmts, "write");
+      } else {
+        await db.execute({
+          sql: `INSERT INTO media_blobs (
+                  id, owner_id, mime_type, file_name, byte_size, chunk_count, data, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            id,
+            auth.userId,
+            mimeType,
+            fileName,
+            buf.length,
+            0,
+            new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
+            now,
+          ],
+        });
+      }
+
       return res.status(200).json({
         ok: true,
         id,
-        url: `${origin}/api/media?id=${id}`,
+        storageId: id,
+        url: `${origin}/api/media?id=${id}&sz=${buf.length}`,
       });
     }
 

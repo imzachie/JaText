@@ -425,6 +425,8 @@ export function CommunityChatView({
   const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const communityPrependAnchorRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
+  const fetchingOlderCommunityRef = useRef(false);
 
   function cancelPostTouchHold() {
     if (longPressTimerRef.current !== null) {
@@ -434,28 +436,26 @@ export function CommunityChatView({
     longPressOriginRef.current = null;
   }
 
-  function startPostTouchHold(
-    event: React.TouchEvent<HTMLElement>,
+  function startPostPointerHold(
+    event: React.PointerEvent<HTMLElement>,
     message: CommunityMessage,
   ) {
-    if (message.id.startsWith("pending-") || event.touches.length !== 1) return;
-    const touch = event.touches[0];
-    longPressOriginRef.current = { x: touch.clientX, y: touch.clientY };
+    if (event.pointerType !== "touch" || message.id.startsWith("pending-")) return;
+    longPressOriginRef.current = { x: event.clientX, y: event.clientY };
     if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
-    const { clientX, clientY } = touch;
+    const { clientX, clientY } = event;
     longPressTimerRef.current = window.setTimeout(() => {
       longPressTimerRef.current = null;
       openMessageMenuAt(clientX, clientY, message);
     }, 450);
   }
 
-  function movePostTouchHold(event: React.TouchEvent<HTMLElement>) {
-    if (!longPressOriginRef.current || event.touches.length !== 1) return;
-    const touch = event.touches[0];
+  function movePostPointerHold(event: React.PointerEvent<HTMLElement>) {
+    if (event.pointerType !== "touch" || !longPressOriginRef.current) return;
     if (
       Math.hypot(
-        touch.clientX - longPressOriginRef.current.x,
-        touch.clientY - longPressOriginRef.current.y,
+        event.clientX - longPressOriginRef.current.x,
+        event.clientY - longPressOriginRef.current.y,
       ) > 12
     ) {
       cancelPostTouchHold();
@@ -504,6 +504,51 @@ export function CommunityChatView({
   const pendingMerged = getCommunityPendingMessages(pendingMessages, store.communityMessages);
   const displayedMessages = pendingMerged.messages;
   const matchedPendingIds = pendingMerged.matchedIds;
+
+  useLayoutEffect(() => {
+    const anchor = communityPrependAnchorRef.current;
+    const el = messagesElement.current;
+    if (anchor && el) {
+      communityPrependAnchorRef.current = null;
+      const delta = el.scrollHeight - anchor.prevHeight;
+      if (delta > 0) {
+        el.scrollTop = anchor.prevTop + delta;
+      }
+    }
+  }, [displayedMessages.length, messagesElement]);
+
+  const triggerFetchOlderCommunity = useCallback(() => {
+    const el = messagesElement.current;
+    if (
+      !el ||
+      !store.hasMoreOlderCommunityMessages ||
+      !store.loadOlderCommunityMessages ||
+      store.loadingOlderCommunityMessages ||
+      fetchingOlderCommunityRef.current
+    ) {
+      return;
+    }
+    fetchingOlderCommunityRef.current = true;
+    communityPrependAnchorRef.current = {
+      prevHeight: el.scrollHeight,
+      prevTop: el.scrollTop,
+    };
+    void store
+      .loadOlderCommunityMessages()
+      .then((added) => {
+        if (!added) {
+          communityPrependAnchorRef.current = null;
+        }
+      })
+      .finally(() => {
+        fetchingOlderCommunityRef.current = false;
+      });
+  }, [
+    messagesElement,
+    store.hasMoreOlderCommunityMessages,
+    store.loadOlderCommunityMessages,
+    store.loadingOlderCommunityMessages,
+  ]);
 
   useEffect(() => {
     setCommunityTypingRef.current = setCommunityTyping;
@@ -1202,8 +1247,25 @@ export function CommunityChatView({
         onScroll={(event) => {
           const element = event.currentTarget;
           wasPinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+          if (element.scrollTop < 260 && store.hasMoreOlderCommunityMessages) {
+            triggerFetchOlderCommunity();
+          }
         }}
       >
+        {Boolean(store.hasMoreOlderCommunityMessages) && displayedMessages.length > 0 && (
+          <div className="older-messages-bar">
+            <button
+              type="button"
+              className="older-messages-btn"
+              disabled={Boolean(store.loadingOlderCommunityMessages)}
+              onClick={triggerFetchOlderCommunity}
+            >
+              {store.loadingOlderCommunityMessages
+                ? "Loading older announcements…"
+                : "Load older announcements"}
+            </button>
+          </div>
+        )}
         {displayedMessages.length === 0 && (
           <div className="empty-box center">
             <strong>Welcome to the JaText Community</strong>
@@ -1250,10 +1312,10 @@ export function CommunityChatView({
                 }`}
                 id={`community-message-${message.id}`}
                 onContextMenu={(e) => openMessageMenu(e, message)}
-                onTouchStart={(e) => startPostTouchHold(e, message)}
-                onTouchMove={movePostTouchHold}
-                onTouchEnd={cancelPostTouchHold}
-                onTouchCancel={cancelPostTouchHold}
+                onPointerDown={(e) => startPostPointerHold(e, message)}
+                onPointerMove={movePostPointerHold}
+                onPointerUp={cancelPostTouchHold}
+                onPointerCancel={cancelPostTouchHold}
               >
               <div className="community-post-header">
                 <Avatar

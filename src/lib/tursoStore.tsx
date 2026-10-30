@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { App } from "@capacitor/app";
-import { PUBLIC_TURSO_API_ORIGIN } from "./tursoClient";
+import { PUBLIC_TURSO_API_ORIGIN, triggerImmediateTursoSync } from "./tursoClient";
 import { useTursoReactiveSession } from "./tursoReactive";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
@@ -276,8 +276,17 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     communityTypingUsers,
     groupsQuery,
     activeMessagesQuery,
+    hasMoreOlderMessages,
+    loadingOlderMessages,
+    loadOlderMessages,
     groupDetailsQuery,
     groupMessagesQuery,
+    hasMoreOlderGroupMessages,
+    loadingOlderGroupMessages,
+    loadOlderGroupMessages,
+    hasMoreOlderCommunityMessages,
+    loadingOlderCommunityMessages,
+    loadOlderCommunityMessages,
     groupTypingUsers,
     serverHasRemoteVault,
     serverRemoteVaultKeyId,
@@ -1189,7 +1198,13 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
         }),
       );
       listeners.push(
+        await PushNotifications.addListener("pushNotificationReceived", () => {
+          triggerImmediateTursoSync(true);
+        }),
+      );
+      listeners.push(
         await PushNotifications.addListener("pushNotificationActionPerformed", ({ notification }) => {
+          triggerImmediateTursoSync(true);
           const groupId = notification.data?.groupId;
           const senderId = notification.data?.senderId;
           if (typeof groupId === "string" && groupId) setActiveGroupId(groupId);
@@ -4004,11 +4019,17 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       activeChatId === OFFICIAL_COMMUNITY_ID ||
       activeMessagesQuery !== undefined ||
       Boolean(cachedDm && cachedDm.messages.length > 0),
+    hasMoreOlderMessages,
+    loadingOlderMessages,
+    loadOlderMessages,
     communityMessages,
     communityMessagesReady:
       !canUseCachedSession ||
       communityMessagesQuery !== undefined ||
       Boolean(bootstrapCache?.communityMessages?.length),
+    hasMoreOlderCommunityMessages,
+    loadingOlderCommunityMessages,
+    loadOlderCommunityMessages,
     communityMuted,
     communityUnreadCount,
     setCommunityMuted,
@@ -4025,6 +4046,9 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       !activeGroupId ||
       groupMessagesQuery !== undefined ||
       Boolean(cachedGroup && cachedGroup.messages.length > 0),
+    hasMoreOlderGroupMessages,
+    loadingOlderGroupMessages,
+    loadOlderGroupMessages,
     groupTypingUsers,
     communityTypingUsers,
     blockedUserIds,

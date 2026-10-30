@@ -52,10 +52,18 @@ public class JaTextFirebaseMessagingService extends MessagingService {
         }
 
         final String type = extras.getString("type");
-        if ("call_cancel".equals(type)) {
-            JaTextSoundManager.cancelIncomingCallWakeup(appCtx, true);
+        if ("sync_poke".equals(type)) {
+            MainActivity.notifyRealtimeSyncWake();
             return;
         }
+        if ("call_cancel".equals(type)) {
+            JaTextSoundManager.cancelIncomingCallWakeup(appCtx, true);
+            MainActivity.notifyRealtimeSyncWake();
+            return;
+        }
+
+        // Wake the Capacitor WebView Turso sync immediately (< 15ms) whenever any FCM message arrives
+        MainActivity.notifyRealtimeSyncWake();
 
         boolean hasNotificationPayload =
             extras.containsKey("gcm.notification.title") ||

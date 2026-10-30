@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type TouchEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { Volume2, VolumeX } from "./CallIcons";
 import { FileTextIcon, MicVoiceIcon, PauseIcon, PlayIcon } from "./UiIcons";
 import {
@@ -255,16 +255,15 @@ export function VoiceNotePlayer({
     }
   }
 
-  function handleTouchStart(event: TouchEvent<HTMLDivElement>) {
-    if (!onOpenContextAt || event.touches.length !== 1) return;
-    const touch = event.touches[0];
-    touchOriginRef.current = { x: touch.clientX, y: touch.clientY };
+  function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (!onOpenContextAt || event.pointerType !== "touch") return;
+    touchOriginRef.current = { x: event.clientX, y: event.clientY };
     longPressTriggeredRef.current = false;
     if (longPressTimerRef.current !== null) {
       window.clearTimeout(longPressTimerRef.current);
     }
-    const clientX = touch.clientX;
-    const clientY = touch.clientY;
+    const clientX = event.clientX;
+    const clientY = event.clientY;
     longPressTimerRef.current = window.setTimeout(() => {
       longPressTimerRef.current = null;
       longPressTriggeredRef.current = true;
@@ -272,13 +271,13 @@ export function VoiceNotePlayer({
     }, 450);
   }
 
-  function handleTouchMove(event: TouchEvent<HTMLDivElement>) {
-    if (!touchOriginRef.current || longPressTimerRef.current === null) return;
-    const touch = event.touches[0];
-    if (!touch) return;
+  function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (event.pointerType !== "touch" || !touchOriginRef.current || longPressTimerRef.current === null) {
+      return;
+    }
     const dist = Math.hypot(
-      touch.clientX - touchOriginRef.current.x,
-      touch.clientY - touchOriginRef.current.y,
+      event.clientX - touchOriginRef.current.x,
+      event.clientY - touchOriginRef.current.y,
     );
     if (dist > 10) {
       window.clearTimeout(longPressTimerRef.current);
@@ -300,10 +299,10 @@ export function VoiceNotePlayer({
   return (
     <div
       className={`voice-note-card ${mine ? "mine" : "theirs"}`}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={clearLongPressTimer}
-      onTouchCancel={clearLongPressTimer}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={clearLongPressTimer}
+      onPointerCancel={clearLongPressTimer}
       onMouseLeave={() => setShowVolumeSlider(false)}
     >
       <audio

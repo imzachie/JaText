@@ -50,17 +50,138 @@ export function sniffImageMime(bytes: Uint8Array): string | null {
   return null;
 }
 
+export function sniffMediaMime(bytes: Uint8Array): string | null {
+  const img = sniffImageMime(bytes);
+  if (img) return img;
+
+  // RIFF containers (WAV / AVI)
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46
+  ) {
+    if (bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45) {
+      return "audio/wav";
+    }
+    if (bytes[8] === 0x41 && bytes[9] === 0x56 && bytes[10] === 0x49 && bytes[11] === 0x20) {
+      return "video/x-msvideo";
+    }
+  }
+  // ISO BMFF (MP4 / MOV / M4A / 3GP): .... 'ftyp'
+  if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 &&
+    bytes[5] === 0x74 &&
+    bytes[6] === 0x79 &&
+    bytes[7] === 0x70
+  ) {
+    const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+    if (brand === "M4A " || brand === "M4B " || brand === "F4A ") return "audio/mp4";
+    if (brand === "qt  ") return "video/quicktime";
+    return "video/mp4";
+  }
+  // WebM / Matroska EBML: 1A 45 DF A3
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x1a &&
+    bytes[1] === 0x45 &&
+    bytes[2] === 0xdf &&
+    bytes[3] === 0xa3
+  ) {
+    return "video/webm";
+  }
+  // OGG / Opus: 'OggS'
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x4f &&
+    bytes[1] === 0x67 &&
+    bytes[2] === 0x67 &&
+    bytes[3] === 0x53
+  ) {
+    return "audio/ogg";
+  }
+  // FLAC: 'fLaC'
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x66 &&
+    bytes[1] === 0x4c &&
+    bytes[2] === 0x61 &&
+    bytes[3] === 0x43
+  ) {
+    return "audio/flac";
+  }
+  // MP3 / AAC ADTS: 'ID3' or MPEG frame sync
+  if (
+    (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) ||
+    (bytes.length >= 2 &&
+      bytes[0] === 0xff &&
+      (bytes[1] & 0xe0) === 0xe0 &&
+      (bytes[1] & 0x06) !== 0)
+  ) {
+    return "audio/mpeg";
+  }
+  return null;
+}
+
+function guessMimeFromFilename(name?: string): string | null {
+  if (!name) return null;
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return null;
+  const ext = name.slice(dot + 1).toLowerCase();
+  const map: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+    mp4: "video/mp4",
+    m4v: "video/mp4",
+    mov: "video/quicktime",
+    webm: "video/webm",
+    mkv: "video/webm",
+    "3gp": "video/3gpp",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    aac: "audio/aac",
+    wav: "audio/wav",
+    ogg: "audio/ogg",
+    oga: "audio/ogg",
+    opus: "audio/ogg",
+    flac: "audio/flac",
+  };
+  return map[ext] ?? null;
+}
+
 export async function ensureValidFileMime(file: File): Promise<File> {
   if (file.type && file.type !== "application/octet-stream") {
     return file;
   }
   try {
+    const byExt = guessMimeFromFilename(file.name);
     const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
-    const detected = sniffImageMime(head);
+    const detected = byExt ?? sniffMediaMime(head);
     if (detected) {
-      return new File([file], file.name || "image", {
+      const defaultExt: Record<string, string> = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "video/mp4": ".mp4",
+        "video/quicktime": ".mov",
+        "video/webm": ".webm",
+        "audio/mpeg": ".mp3",
+        "audio/mp4": ".m4a",
+        "audio/wav": ".wav",
+        "audio/ogg": ".ogg",
+        "audio/flac": ".flac",
+      };
+      const baseName = file.name || "attachment";
+      const safeName = baseName.includes(".") ? baseName : `${baseName}${defaultExt[detected] ?? ""}`;
+      return new File([file], safeName, {
         type: detected,
-        lastModified: file.lastModified,
+        lastModified: file.lastModified || Date.now(),
       });
     }
   } catch {

@@ -277,6 +277,15 @@ export interface JaTextStore {
   setActiveChatId: (id: string | null) => void;
   activeMessages: ChatMessage[];
   activeMessagesReady: boolean;
+  hasMoreOlderMessages?: boolean;
+  loadingOlderMessages?: boolean;
+  loadOlderMessages?: () => Promise<number>;
+  hasMoreOlderGroupMessages?: boolean;
+  loadingOlderGroupMessages?: boolean;
+  loadOlderGroupMessages?: () => Promise<number>;
+  hasMoreOlderCommunityMessages?: boolean;
+  loadingOlderCommunityMessages?: boolean;
+  loadOlderCommunityMessages?: () => Promise<number>;
   blockedUserIds: string[];
 
   signInEmail: (email: string, password: string) => Promise<void>;
