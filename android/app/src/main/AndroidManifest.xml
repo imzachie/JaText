@@ -55,8 +55,8 @@
         <service
             android:name=".JaTextFirebaseMessagingService"
             android:exported="false">
-            <intent-filter>
-                <action android:name="com.google.firebase.messaging.MESSAGING_EVENT" />
+            <intent-filter android:priority="1000">
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
 
@@ -72,7 +72,7 @@
 
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="jatext_messages_default_v3" />
+            android:value="jatext_messages_default_v4" />
     </application>
 
     <!-- Permissions -->

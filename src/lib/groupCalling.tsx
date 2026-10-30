@@ -135,6 +135,7 @@ export interface GroupCallContextValue {
   captions: CallCaptionLine[];
   callError: string | null;
   canScreenShare: boolean;
+  declinedGroupCallIds: ReadonlySet<string>;
   mobileSharePickerOpen: boolean;
   sharedMediaVideoElement: HTMLVideoElement | null;
   startGroupCall: (group: GroupSummary, mode: CallMode) => Promise<void>;
@@ -392,6 +393,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
   const [reactions, setReactions] = useState<FloatingCallReaction[]>([]);
   const [captions, setCaptions] = useState<CallCaptionLine[]>([]);
   const [callError, setCallError] = useState<string | null>(null);
+  const [declinedGroupCallIds, setDeclinedGroupCallIds] = useState<Set<string>>(() => new Set());
   const [mobileSharePickerOpen, setMobileSharePickerOpen] = useState(false);
   const [sharedMediaVideoElement, setSharedMediaVideoElement] = useState<HTMLVideoElement | null>(
     null,
@@ -1240,7 +1242,62 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         const env = await readGroupSignalEnvelope(msg);
         if (!env || env.callId !== groupSession.callId) continue;
         if (env.toId !== "*" && env.toId !== me.id) continue;
-        if (env.type === "claim-ring" || env.type === "decline-ring") continue;
+        if (env.type === "claim-ring") continue;
+        if (env.type === "decline-ring") {
+          processedSignalIdsRef.current.add(sigKey);
+          // In a 2-person group, if the only other member declined while nobody else joined, end the call cleanly!
+          if (
+            groupSession.hostId === me.id &&
+            (groupSession.group.memberCount ?? 2) <= 2 &&
+            peersRef.current.size === 0
+          ) {
+            handledInviteCallIdsRef.current.add(groupSession.callId);
+            myJoinSignalIdRef.current = null;
+            updateCallHistoryStatus(groupSession.callId, { state: "declined" });
+            if (soundsEnabled) playCallRingChime("ended");
+            const inviteMsgId =
+              groupSession.inviteMessageId ??
+              [...rows]
+                .reverse()
+                .find((r) => parseGroupCallInvite(r.body)?.callId === groupSession.callId)?.id;
+            cleanupAllGroupCallResources();
+            sessionRef.current = null;
+            setGroupSession(null);
+            if (inviteMsgId) {
+              void store
+                .editGroupMessage(
+                  inviteMsgId,
+                  serializeGroupCallInvite({
+                    v: 1,
+                    callId: groupSession.callId,
+                    groupId: groupSession.group.id,
+                    groupName: groupSession.group.name,
+                    mode: groupSession.mode,
+                    hostId: groupSession.hostId,
+                    hostName: groupSession.hostName,
+                    state: "ended",
+                    ts: Date.now(),
+                  }),
+                )
+                .catch(() => undefined);
+            }
+            void sendGroupSignal(groupSession.group.id, {
+              callId: groupSession.callId,
+              groupId: groupSession.group.id,
+              fromId: me.id,
+              fromName: me.displayName,
+              fromUsername: me.username,
+              fromAvatarUrl: me.avatarUrl,
+              fromAvatarColor: me.avatarColor,
+              toId: "*",
+              type: "ended",
+              joinSeq: Date.now(),
+              ts: Date.now(),
+            }).catch(() => undefined);
+            return;
+          }
+          continue;
+        }
 
         processedSignalIdsRef.current.add(sigKey);
 
@@ -1759,13 +1816,22 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
 
   const declineIncomingGroupCall = useCallback(() => {
     const cur = sessionRef.current;
-    if (!cur) return;
+    if (!cur) {
+      cleanupAllGroupCallResources();
+      return;
+    }
     handledInviteCallIdsRef.current.add(cur.callId);
+    setDeclinedGroupCallIds((prev) => {
+      const next = new Set(prev);
+      next.add(cur.callId);
+      return next;
+    });
     updateCallHistoryStatus(cur.callId, { state: "declined" });
     cleanupAllGroupCallResources();
+    sessionRef.current = null;
     setGroupSession(null);
     if (me) {
-      // Broadcast decline-ring targeted to our own userId so any other device logged into our account cancels ringing!
+      // Broadcast decline-ring to "*" so both our sibling devices AND the host know we declined!
       void sendGroupSignal(cur.group.id, {
         callId: cur.callId,
         groupId: cur.group.id,
@@ -1774,7 +1840,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         fromUsername: me.username,
         fromAvatarUrl: me.avatarUrl,
         fromAvatarColor: me.avatarColor,
-        toId: me.id,
+        toId: "*",
         type: "decline-ring",
         deviceSessionId: CALL_DEVICE_SESSION_ID,
         joinSeq: Date.now(),
@@ -2415,6 +2481,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       captions,
       callError,
       canScreenShare,
+      declinedGroupCallIds,
       mobileSharePickerOpen,
       sharedMediaVideoElement,
       startGroupCall,
@@ -2450,6 +2517,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       closeDismissedGroupCall,
       closeMobileSharePicker,
       declineIncomingGroupCall,
+      declinedGroupCallIds,
       facingMode,
       flipCamera,
       groupSession,

@@ -4,6 +4,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { api } from "../../convex/_generated/api";
 import { useJaText } from "../lib/store";
 import { playMessageSound } from "../lib/alerts";
+import { useChatAutoScrollAndKeyboard } from "../lib/useChatAutoScrollAndKeyboard";
 import {
   copyImageUrlToClipboard,
   extractClipboardFile,
@@ -225,6 +226,7 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
   onSelectSticker,
   onStartVoiceNote,
   onTogglePoll,
+  onMobileActivate,
   onTypingSignal,
   onSubmitDraft,
 }: {
@@ -238,6 +240,7 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
   onSelectSticker: (sticker: StickerMedia) => Promise<void>;
   onStartVoiceNote: () => void;
   onTogglePoll: () => void;
+  onMobileActivate: () => void;
   onTypingSignal: (hasText: boolean) => void;
   onSubmitDraft: (body: string) => void;
 }) {
@@ -328,6 +331,8 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
         value={draft}
         maxLength={4000}
         onChange={(event) => handleChange(event.target.value)}
+        onFocus={onMobileActivate}
+        onClick={onMobileActivate}
         rows={1}
         placeholder={isEditing ? "Edit message…" : "Message…"}
         aria-label="Community message"
@@ -447,7 +452,6 @@ export function CommunityChatView({
   const typingTimer = useRef<number | null>(null);
   const typingRef = useRef(false);
   const wasPinnedRef = useRef(true);
-  const lastMessageId = store.communityMessages.at(-1)?.id;
   const voterPoll = store.communityMessages.find((message) => message.id === voterPollId);
   const pendingAttachmentUrlsRef = useRef(new Map<string, string>());
   const lastPendingAtRef = useRef(0);
@@ -482,23 +486,22 @@ export function CommunityChatView({
     setCommunityTypingRef.current = setCommunityTyping;
   }, [setCommunityTyping]);
 
-  const hasScrolledOnOpenRef = useRef(false);
-  useLayoutEffect(() => {
-    if (!store.communityMessagesReady) return;
-    const element = messagesElement.current;
-    if (!element) return;
-    if (!hasScrolledOnOpenRef.current) {
-      hasScrolledOnOpenRef.current = true;
-      element.scrollTop = element.scrollHeight;
-      window.requestAnimationFrame(() => {
-        if (messagesElement.current) {
-          messagesElement.current.scrollTop = messagesElement.current.scrollHeight;
-        }
-      });
-      return;
-    }
-    if (wasPinnedRef.current) element.scrollTop = element.scrollHeight;
-  }, [store.communityMessagesReady, lastMessageId, displayedMessages.length]);
+  const tailCommunityMsg = displayedMessages.at(-1);
+  const { handleMobileComposerActivate } = useChatAutoScrollAndKeyboard({
+    conversationKey: "community:official",
+    messagesReady: store.communityMessagesReady,
+    messageCount: displayedMessages.length,
+    tailMessageKey: tailCommunityMsg
+      ? `${tailCommunityMsg.id}:${tailCommunityMsg.createdAt}`
+      : "",
+    tailSenderId: tailCommunityMsg?.senderId,
+    myUserId: store.me?.id,
+    messagesRef: messagesElement,
+    composerRef,
+    onPinnedChange: (pinned) => {
+      wasPinnedRef.current = pinned;
+    },
+  });
 
   useEffect(() => {
     for (const id of matchedPendingIds) {
@@ -1484,6 +1487,7 @@ export function CommunityChatView({
               onSelectSticker={sendSticker}
               onStartVoiceNote={() => setRecordingVoiceNote(true)}
               onTogglePoll={() => setShowPoll((open) => !open)}
+              onMobileActivate={handleMobileComposerActivate}
               onTypingSignal={handleCommunityTypingSignal}
               onSubmitDraft={(body) => void handleSubmitCommunityDraft(body)}
             />

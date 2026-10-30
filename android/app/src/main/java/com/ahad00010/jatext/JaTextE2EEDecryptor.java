@@ -142,6 +142,7 @@ public final class JaTextE2EEDecryptor {
         String t = text.trim();
         if (t.isEmpty()) return true;
         if (t.contains(E2EE_MARKER)) return true;
+        if (t.contains("__JATEXT_") || t.contains("JATEXT_E2EE") || t.contains("JATEXT___")) return true;
         String lower = t.toLowerCase();
         return lower.equals("encrypted message") ||
             lower.equals("🔒 encrypted message") ||
@@ -174,8 +175,15 @@ public final class JaTextE2EEDecryptor {
     ) {
         if (ctx == null) return;
 
-        if ("call_cancel".equals(type)) {
-            JaTextSoundManager.cancelIncomingCallWakeup(ctx);
+        if (
+            "call_cancel".equals(type) ||
+            (rawBody != null && (
+                rawBody.contains("(__JATEXT_CALL_CANCEL__") ||
+                rawBody.contains("(__JATEXT_CALL_CLAIM__") ||
+                rawBody.contains("(__JATEXT_CALL_DM_ENDED__")
+            ))
+        ) {
+            JaTextSoundManager.cancelIncomingCallWakeup(ctx, true);
             return;
         }
 
@@ -664,8 +672,8 @@ public final class JaTextE2EEDecryptor {
             URL url = new URL(endpoint);
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
-            conn.setConnectTimeout(3500);
-            conn.setReadTimeout(3500);
+            conn.setConnectTimeout(7500);
+            conn.setReadTimeout(7500);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Convex-Client", "npm-1.35.1");
@@ -1029,6 +1037,11 @@ public final class JaTextE2EEDecryptor {
         return "New message";
     }
 
+    private static final Object DEDUPE_LOCK = new Object();
+    private static String lastPostedTag = null;
+    private static String lastPostedBody = null;
+    private static long lastPostedAtMs = 0L;
+
     public static String cleanPlainPreview(String raw) {
         if (raw == null) return "";
         String s = raw
@@ -1036,7 +1049,12 @@ public final class JaTextE2EEDecryptor {
             .replace("\u200C", "")
             .replace("\u2063", "")
             .trim();
-        if (s.startsWith(SIGNAL_PREFIX) || s.startsWith("__JATEXT_REACT__:")) {
+        if (
+            s.startsWith(SIGNAL_PREFIX) ||
+            s.startsWith("__JATEXT_REACT__:") ||
+            s.contains("(__JATEXT_CALL_CANCEL__") ||
+            s.contains("(__JATEXT_CALL_CLAIM__")
+        ) {
             return "";
         }
         if (s.startsWith("__JATEXT_BUBBLE__:")) {
@@ -1044,11 +1062,16 @@ public final class JaTextE2EEDecryptor {
             s = nl >= 0 ? s.substring(nl + 1).trim() : "";
         }
         if (s.startsWith("__JATEXT_CALL_GRP__:")) {
+            if (s.contains("\"state\":\"ended\"")) return "";
             return s.contains("\"mode\":\"video\"")
                 ? "Incoming group video call"
                 : "Incoming group voice call";
         }
         if (s.startsWith("__JATEXT_CALL__:")) {
+            if (s.contains("\"state\":\"ended\"") || s.contains("\"state\":\"declined\"")) return "";
+            if (s.contains("\"state\":\"missed\"")) {
+                return s.contains("\"mode\":\"video\"") ? "Missed video call" : "Missed voice call";
+            }
             return s.contains("\"mode\":\"video\"")
                 ? "Incoming video call"
                 : "Incoming voice call";
@@ -1056,11 +1079,14 @@ public final class JaTextE2EEDecryptor {
         if (s.startsWith("__JATEXT_WALLPAPER__:") || s.startsWith("__JATEXT_WP__:")) {
             return "Updated the chat wallpaper";
         }
+        if (s.contains(E2EE_MARKER) || s.startsWith("__JATEXT_") || s.contains("JATEXT_E2EE")) {
+            return "";
+        }
         s = s
             .replaceAll("\\|\\|[\\s\\S]+?\\|\\|", "▒▒▒")
             .replaceAll("\\*\\*\\*(.+?)\\*\\*\\*", "$1")
             .replaceAll("\\*\\*(.+?)\\*\\*", "$1")
-            .replaceAll("__(.+?)__", "$1")
+            .replaceAll("(?<![A-Za-z0-9_])__([^_\\n]+?)__(?![A-Za-z0-9_])", "$1")
             .replaceAll("~~(.+?)~~", "$1")
             .replaceAll("`([^`]+)`", "$1")
             .trim();
@@ -1075,7 +1101,33 @@ public final class JaTextE2EEDecryptor {
         Bundle extras
     ) {
         if (ctx == null || body == null || body.isEmpty()) return;
-        if (MainActivity.isAppInForeground()) return;
+        if (body.contains(E2EE_MARKER) || body.startsWith("__JATEXT_") || body.contains("JATEXT_E2EE")) {
+            return;
+        }
+        if (MainActivity.isActivelyVisibleUnlocked(ctx)) return;
+
+        String resolvedTag = (tag != null && !tag.isEmpty())
+            ? tag
+            : String.valueOf(System.currentTimeMillis());
+
+        long now = System.currentTimeMillis();
+        boolean silentInPlaceUpdate = false;
+        synchronized (DEDUPE_LOCK) {
+            if (
+                resolvedTag.equals(lastPostedTag) &&
+                body.equals(lastPostedBody) &&
+                now - lastPostedAtMs < 15_000L
+            ) {
+                // Exact same decrypted message was already posted seconds ago — skip duplicate chime!
+                return;
+            }
+            if (resolvedTag.equals(lastPostedTag) && now - lastPostedAtMs < 4_500L) {
+                silentInPlaceUpdate = true;
+            }
+            lastPostedTag = resolvedTag;
+            lastPostedBody = body;
+            lastPostedAtMs = now;
+        }
 
         NotificationManager nm =
             (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -1089,7 +1141,7 @@ public final class JaTextE2EEDecryptor {
             launchIntent.putExtras(extras);
         }
 
-        int reqCode = (int) ((tag != null ? tag.hashCode() : System.currentTimeMillis()) & 0x7FFFFFFF);
+        int reqCode = (int) ((resolvedTag.hashCode()) & 0x7FFFFFFF);
         PendingIntent pi = PendingIntent.getActivity(
             ctx,
             reqCode,
@@ -1112,14 +1164,14 @@ public final class JaTextE2EEDecryptor {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(silentInPlaceUpdate)
             .setAutoCancel(true)
             .setContentIntent(pi);
 
-        String resolvedTag = (tag != null && !tag.isEmpty())
-            ? tag
-            : String.valueOf(System.currentTimeMillis());
         nm.notify(resolvedTag, 1001, builder.build());
-        JaTextSoundManager.playCustomNotificationSoundIfNeeded(ctx);
+        if (!silentInPlaceUpdate) {
+            JaTextSoundManager.playCustomNotificationSoundIfNeeded(ctx);
+        }
     }
 
     /* ------------------------------------------------------------------ */

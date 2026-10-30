@@ -326,24 +326,24 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
               <li>
+                <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                100% Readable Decrypted Mobile Notifications &amp; +40% Balanced Default Alert Audio
+              </li>
+              <li>
                 <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Instant Lock-Screen &amp; Minimized Call Wakeup + Looping Call Ringtone
+                Instant Declined-Call Cleanup &amp; Lock-Screen Ringtone Control
               </li>
               <li>
                 <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                One-Tap Startup Call Overlay &amp; Notification Permission Setup
-              </li>
-              <li>
-                <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                100% Readable Decrypted Mobile Notifications &amp; +70% Boosted Default Alert Audio
+                Strictly Accurate Read Receipts Only When Actively Viewing a Chat
               </li>
               <li>
                 <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                60fps Animated Mobile Back Navigation Across Chats, Groups &amp; Modals
+                Automatic Scroll on New Messages &amp; Mobile Keyboard Chat-End Lock
               </li>
               <li>
                 <SwitchAccountIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Group @Mentions, Admin @everyone, JaText Announcements &amp; Custom Sounds
+                60fps Animated Mobile Navigation, @Mentions &amp; Fast Account Switching
               </li>
             </ul>
             <button

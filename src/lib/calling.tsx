@@ -220,6 +220,7 @@ export interface CallContextValue {
   stats: CallConnectionStats;
   callError: string | null;
   canScreenShare: boolean;
+  declinedCallIds: ReadonlySet<string>;
   mobileSharePickerOpen: boolean;
   sharedMediaVideoElement: HTMLVideoElement | null;
   startCall: (peer: JaUser, mode: CallMode) => Promise<void>;
@@ -609,6 +610,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [reactions, setReactions] = useState<FloatingCallReaction[]>([]);
   const [captions, setCaptions] = useState<CallCaptionLine[]>([]);
   const [callError, setCallError] = useState<string | null>(null);
+  const [declinedCallIds, setDeclinedCallIds] = useState<Set<string>>(() => new Set());
   const [mobileSharePickerOpen, setMobileSharePickerOpen] = useState(false);
   const [sharedMediaVideoElement, setSharedMediaVideoElement] = useState<HTMLVideoElement | null>(
     null,
@@ -1046,6 +1048,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (state === "connected") {
           stopRingingTimers();
           if (soundsEnabled) playCallRingChime("connected");
+          const curNow = sessionRef.current;
+          const spk =
+            (curNow?.mode === "video" || !stateRef.current.isCameraOff) ||
+            !Capacitor.isNativePlatform();
+          void configureNativeCallAudio(true, spk, {
+            video: !stateRef.current.isCameraOff,
+            title: peer.displayName,
+          });
           setSession((cur) =>
             cur
               ? {
@@ -1296,10 +1306,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setFacingMode("user");
       const defaultSpeaker = actualMode === "video" || !Capacitor.isNativePlatform();
       setIsSpeakerphone(defaultSpeaker);
-      void configureNativeCallAudio(true, defaultSpeaker, {
-        video: Boolean(camTrack),
-        title: peer.displayName,
-      });
+      // Do NOT start CallKeepAliveService ("Voice call in progress") while still ringing!
+      // It is activated only once the peer answers / WebRTC connects so declined calls never
+      // leave an ongoing "Voice call in progress" notification behind.
       refreshLocalPreviewStream();
 
       const newSession: ActiveCallSession = {
@@ -1614,26 +1623,66 @@ export function CallProvider({ children }: { children: ReactNode }) {
             state: finalState,
             durationSec: finalState === "ended" ? durationSec : undefined,
           });
-          if (session.isCaller && session.inviteMessageId) {
-            void store
-              .editMessage(
-                session.inviteMessageId,
-                serializeCallInvite({
-                  v: 1,
-                  callId: session.callId,
-                  mode: session.mode,
-                  state: finalState,
-                  durationSec: finalState === "ended" ? durationSec : undefined,
-                  ts: Date.now(),
-                }),
-              )
-              .catch(() => undefined);
+          if (finalState === "declined") {
+            setDeclinedCallIds((prev) => {
+              const next = new Set(prev);
+              next.add(session.callId);
+              return next;
+            });
+          }
+          if (session.isCaller) {
+            const targetMsgId =
+              session.inviteMessageId ??
+              [...messages].reverse().find((m) => parseCallInvite(m.body)?.callId === session.callId)?.id;
+            if (targetMsgId) {
+              void store
+                .editMessage(
+                  targetMsgId,
+                  serializeCallInvite({
+                    v: 1,
+                    callId: session.callId,
+                    mode: session.mode,
+                    state: finalState,
+                    durationSec: finalState === "ended" ? durationSec : undefined,
+                    ts: Date.now(),
+                  }),
+                )
+                .catch(() => undefined);
+            } else {
+              void store
+                .fetchMessagesWithUser(session.peer.id)
+                .then((rows) => {
+                  const found = [...rows]
+                    .reverse()
+                    .find((m) => parseCallInvite(m.body)?.callId === session.callId);
+                  if (found) {
+                    void store
+                      .editMessage(
+                        found.id,
+                        serializeCallInvite({
+                          v: 1,
+                          callId: session.callId,
+                          mode: session.mode,
+                          state: finalState,
+                          durationSec: finalState === "ended" ? durationSec : undefined,
+                          ts: Date.now(),
+                        }),
+                      )
+                      .catch(() => undefined);
+                  }
+                })
+                .catch(() => undefined);
+            }
           }
           if (soundsEnabled) playCallRingChime("ended");
           cleanupCallResources();
           if (!wasConnected) {
-            setMinimized(false);
-            setSession((cur) => (cur ? { ...cur, phase: "dismissed" } : null));
+            if (env.type === "decline") {
+              setSession(null);
+            } else {
+              setMinimized(false);
+              setSession((cur) => (cur ? { ...cur, phase: "dismissed" } : null));
+            }
           } else {
             setSession(null);
           }
@@ -1905,12 +1954,21 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   const declineIncomingCall = useCallback(async () => {
     const cur = sessionRef.current;
-    if (!cur) return;
+    if (!cur) {
+      cleanupCallResources();
+      return;
+    }
     const declineTs = Date.now();
     myInteractionTsRef.current = declineTs;
     handledCallIdsRef.current.add(cur.callId);
+    setDeclinedCallIds((prev) => {
+      const next = new Set(prev);
+      next.add(cur.callId);
+      return next;
+    });
     updateCallHistoryStatus(cur.callId, { state: "declined" });
     cleanupCallResources();
+    sessionRef.current = null;
     setSession(null);
     try {
       await sendSignalPacket(cur.peer.id, {
@@ -1938,7 +1996,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   const endCall = useCallback(async () => {
     const cur = sessionRef.current;
-    if (!cur) return;
+    if (!cur) {
+      cleanupCallResources();
+      return;
+    }
     handledCallIdsRef.current.add(cur.callId);
     sendDataChannelPacket({ type: "hangup" });
     if (soundsEnabled) playCallRingChime("ended");
@@ -1954,22 +2015,32 @@ export function CallProvider({ children }: { children: ReactNode }) {
     });
 
     cleanupCallResources();
+    sessionRef.current = null;
     setSession(null);
 
-    if (wasCaller && inviteMsgId) {
-      await store
-        .editMessage(
-          inviteMsgId,
-          serializeCallInvite({
-            v: 1,
-            callId: cur.callId,
-            mode: cur.mode,
-            state: wasConnected ? "ended" : "missed",
-            durationSec: wasConnected ? durationSec : undefined,
-            ts: Date.now(),
-          }),
-        )
-        .catch(() => undefined);
+    if (wasCaller) {
+      let resolvedInviteId = inviteMsgId;
+      if (!resolvedInviteId) {
+        const rows = await store.fetchMessagesWithUser(peerId).catch(() => []);
+        resolvedInviteId = [...rows]
+          .reverse()
+          .find((m) => parseCallInvite(m.body)?.callId === cur.callId)?.id;
+      }
+      if (resolvedInviteId) {
+        await store
+          .editMessage(
+            resolvedInviteId,
+            serializeCallInvite({
+              v: 1,
+              callId: cur.callId,
+              mode: cur.mode,
+              state: wasConnected ? "ended" : "missed",
+              durationSec: wasConnected ? durationSec : undefined,
+              ts: Date.now(),
+            }),
+          )
+          .catch(() => undefined);
+      }
     }
 
     await sendSignalPacket(peerId, {
@@ -2659,6 +2730,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       stats,
       callError,
       canScreenShare,
+      declinedCallIds,
       mobileSharePickerOpen,
       sharedMediaVideoElement,
       startCall,
@@ -2694,6 +2766,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       closeDismissedCall,
       closeMobileSharePicker,
       declineIncomingCall,
+      declinedCallIds,
       endCall,
       facingMode,
       flipCamera,
