@@ -31,6 +31,7 @@ import { Avatar } from "./Avatar";
 import { Phone } from "./CallIcons";
 import { LockIcon } from "./E2EEModals";
 import { LegalModal, type LegalTab } from "./LegalModal";
+import { triggerManualMobileUpdateCheck } from "./MobileUpdateGate";
 import { ProfileForm } from "./ProfileForm";
 import { WebsiteGlobeIcon } from "./SocialIcons";
 import {
@@ -98,7 +99,6 @@ export function SettingsModal({
   const [mobileMenuView, setMobileMenuView] = useState<"list" | "detail">(
     openCategoryDirectlyOnMobile ? "detail" : "list",
   );
-  const [hoveredThemeLabel, setHoveredThemeLabel] = useState<string | null>(null);
 
   const [copiedFp, setCopiedFp] = useState(false);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
@@ -532,7 +532,7 @@ export function SettingsModal({
                     <h3>Appearance</h3>
                     <p className="muted small">
                       Pick a crisp default mode, choose any gradient colour theme, or build your own
-                      custom theme completely free.
+                      custom theme.
                     </p>
                   </div>
 
@@ -540,9 +540,6 @@ export function SettingsModal({
                   <div className="appearance-block">
                     <div className="appearance-block-header">
                       <strong>Default Themes</strong>
-                      {hoveredThemeLabel && (
-                        <span className="appearance-hover-pill">{hoveredThemeLabel}</span>
-                      )}
                     </div>
 
                     <div className="default-themes-row" role="radiogroup" aria-label="Default themes">
@@ -555,14 +552,12 @@ export function SettingsModal({
                             role="radio"
                             aria-checked={selected}
                             aria-label={opt.name}
-                            title={opt.name}
+                            data-tooltip={opt.name}
                             className={`theme-tile default-theme-tile ${selected ? "selected" : ""}`}
                             style={{
                               background: opt.swatchBg,
                               borderColor: selected ? "var(--accent)" : opt.swatchBorder,
                             }}
-                            onMouseEnter={() => setHoveredThemeLabel(opt.name)}
-                            onMouseLeave={() => setHoveredThemeLabel(null)}
                             onClick={() => handleSelectDefaultTheme(opt.id)}
                           >
                             {selected && (
@@ -584,12 +579,10 @@ export function SettingsModal({
                             role="radio"
                             aria-checked={sysSelected}
                             aria-label="Sync with system"
-                            title="Sync with system"
+                            data-tooltip="Sync with system"
                             className={`theme-tile default-theme-tile system-sync-tile ${
                               sysSelected ? "selected" : ""
                             }`}
-                            onMouseEnter={() => setHoveredThemeLabel("Sync with system")}
-                            onMouseLeave={() => setHoveredThemeLabel(null)}
                             onClick={() => handleSelectDefaultTheme("system")}
                           >
                             <svg
@@ -649,13 +642,11 @@ export function SettingsModal({
                         role="radio"
                         aria-checked={theme.kind === "custom"}
                         aria-label="Custom Theme"
-                        title="Custom Theme"
+                        data-tooltip="Custom Theme"
                         className={`theme-tile colour-theme-tile custom-palette-tile ${
                           theme.kind === "custom" ? "selected" : ""
                         }`}
                         style={{ background: CUSTOM_TILE_SWATCH }}
-                        onMouseEnter={() => setHoveredThemeLabel("Custom Theme")}
-                        onMouseLeave={() => setHoveredThemeLabel(null)}
                         onClick={() => {
                           if (onOpenCustomThemeDrawer) {
                             requestClose();
@@ -671,7 +662,7 @@ export function SettingsModal({
                         )}
                       </button>
 
-                      {/* Tiles 2..22: Exact 1:1 Gradient Replicas */}
+                      {/* Tiles 2..23: Exact 1:1 Gradient Replicas */}
                       {COLOUR_THEME_PRESETS.map((preset) => {
                         const selected =
                           theme.kind === "preset" && theme.presetId === preset.id;
@@ -682,13 +673,11 @@ export function SettingsModal({
                             role="radio"
                             aria-checked={selected}
                             aria-label={preset.name}
-                            title={preset.name}
+                            data-tooltip={preset.name}
                             className={`theme-tile colour-theme-tile ${
                               selected ? "selected" : ""
                             }`}
                             style={{ background: preset.swatchGradient }}
-                            onMouseEnter={() => setHoveredThemeLabel(preset.name)}
-                            onMouseLeave={() => setHoveredThemeLabel(null)}
                             onClick={() => handleSelectPresetTheme(preset.id)}
                           >
                             {selected && (
@@ -1059,6 +1048,26 @@ export function SettingsModal({
                       </button>
                     )}
                   </div>
+
+                  {isNative && (
+                    <div className="settings-inline-legal-card" style={{ marginTop: 4 }}>
+                      <h4>App Version &amp; Updates</h4>
+                      <p className="muted small">
+                        Installed release: <strong>JaText v3.3.4 (Build 33)</strong>. JaText checks
+                        for updates automatically on launch, or you can check manually below.
+                      </p>
+                      <button
+                        type="button"
+                        className="ghost-btn"
+                        onClick={() => {
+                          requestClose();
+                          triggerManualMobileUpdateCheck();
+                        }}
+                      >
+                        Check for App Updates
+                      </button>
+                    </div>
+                  )}
                 </section>
               )}
 

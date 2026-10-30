@@ -11,11 +11,18 @@ import {
 } from "./UiIcons";
 
 const WELCOMED_VERSION_KEY = "jatext:welcomed-mobile-build:v1";
+const MANUAL_UPDATE_CHECK_EVENT = "jatext:manual-update-check";
 const PUBLIC_UPDATE_MANIFEST_URL = "https://jatext.vercel.app/apk-version.json";
 const PUBLIC_APK_DOWNLOAD_URL = "https://jatext.vercel.app/downloads/JaText-release.apk";
 const GITHUB_RELEASE_API = "https://api.github.com/repos/Ahad00010/JaText/releases/tags/apk-latest";
 const FALLBACK_GITHUB_APK_URL =
   "https://github.com/Ahad00010/JaText/releases/download/apk-latest/JaText-release.apk";
+
+export function triggerManualMobileUpdateCheck(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(MANUAL_UPDATE_CHECK_EVENT));
+  }
+}
 
 interface RemoteReleaseInfo {
   versionName: string;
@@ -162,6 +169,14 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
 
     void runUpdateCheck();
 
+    const onManualCheck = () => {
+      if (!cancelled) {
+        setDismissedUpdate(false);
+        void runUpdateCheck();
+      }
+    };
+    window.addEventListener(MANUAL_UPDATE_CHECK_EVENT, onManualCheck);
+
     void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
       if (isActive && !cancelled) {
         void runUpdateCheck();
@@ -172,6 +187,7 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
 
     return () => {
       cancelled = true;
+      window.removeEventListener(MANUAL_UPDATE_CHECK_EVENT, onManualCheck);
       if (progressHandle) {
         void progressHandle.remove();
       }
@@ -326,19 +342,19 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <ul className="mobile-welcome-highlights">
               <li>
                 <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Crisp Link Embeds on All Custom Bubbles + Rich JaText Preview Cards
+                Categorised Settings on Desktop &amp; Mobile (Profile, Appearance, Socials &amp; Legal)
               </li>
               <li>
                 <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Owner-Only Delete Group &amp; Non-Leaving &ldquo;Remove chat&rdquo; History Clear
+                Light, Ash, Dark &amp; Onyx Modes + 22 Gradient Themes &amp; Custom Theme Builder
               </li>
               <li>
                 <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                60 FPS Unread Sync, Community Mute, Group Silence/Archive &amp; Profile Socials
+                Cross-Device Theme Sync &amp; Locked 60 FPS Mobile GPU / Touch Optimisations
               </li>
               <li>
                 <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Zero-Knowledge E2EE, Accurate Read Receipts &amp; Fast Multi-Account Switching
+                Dark Eye-Friendly Hero Page with Official JaText Logo &amp; Cleaner Copy
               </li>
             </ul>
             <button

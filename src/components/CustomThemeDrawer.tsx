@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  flushThemePersistence,
+  getThemeConfig,
   hexToHsv,
   hsvToHex,
   normalizeHexColor,
@@ -35,6 +37,7 @@ export function CustomThemeDrawer({
   const [appliedToast, setAppliedToast] = useState(false);
 
   const svBoxRef = useRef<HTMLDivElement | null>(null);
+  const svRectRef = useRef<DOMRect | null>(null);
   const fallbackColorInputRef = useRef<HTMLInputElement | null>(null);
   const syncTimerRef = useRef<number | null>(null);
 
@@ -61,7 +64,8 @@ export function CustomThemeDrawer({
     }
     syncTimerRef.current = window.setTimeout(() => {
       syncTimerRef.current = null;
-      const latest = updateThemeConfig((c) => c);
+      flushThemePersistence();
+      const latest = getThemeConfig();
       if (!latest.syncAcrossDevices || !me) return;
       void saveProfile({
         displayName: me.displayName,
@@ -76,55 +80,63 @@ export function CustomThemeDrawer({
 
   useEffect(() => {
     return () => {
+      flushThemePersistence();
       if (syncTimerRef.current !== null) {
         window.clearTimeout(syncTimerRef.current);
       }
     };
   }, []);
 
-  function updateActiveStopHex(nextHexRaw: string) {
+  function updateActiveStopHex(nextHexRaw: string, continuous = false) {
     const clean = normalizeHexColor(nextHexRaw, activeHex);
-    updateThemeConfig((prev) => {
-      const nextCols = [...prev.custom.colors];
-      const idx = Math.min(safeIdx, Math.max(0, nextCols.length - 1));
-      nextCols[idx] = clean;
-      return {
-        ...prev,
-        kind: "custom",
-        custom: {
-          ...prev.custom,
-          colors: nextCols,
-        },
-      };
-    });
+    updateThemeConfig(
+      (prev) => {
+        const nextCols = [...prev.custom.colors];
+        const idx = Math.min(safeIdx, Math.max(0, nextCols.length - 1));
+        nextCols[idx] = clean;
+        return {
+          ...prev,
+          kind: "custom",
+          custom: {
+            ...prev.custom,
+            colors: nextCols,
+          },
+        };
+      },
+      { continuous },
+    );
     scheduleRemoteThemeSync();
   }
 
-  function handleSvPointer(clientX: number, clientY: number) {
-    const el = svBoxRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
+  function handleSvPointer(clientX: number, clientY: number, continuous: boolean) {
+    const rect = svRectRef.current ?? svBoxRef.current?.getBoundingClientRect() ?? null;
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
     const s = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const v = Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
     const nextHex = hsvToHex(hsv.h, s, v);
-    updateActiveStopHex(nextHex);
+    updateActiveStopHex(nextHex, continuous);
   }
 
   function onSvPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     e.preventDefault();
+    svRectRef.current = e.currentTarget.getBoundingClientRect();
     e.currentTarget.setPointerCapture(e.pointerId);
-    handleSvPointer(e.clientX, e.clientY);
+    handleSvPointer(e.clientX, e.clientY, true);
   }
 
   function onSvPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-    handleSvPointer(e.clientX, e.clientY);
+    handleSvPointer(e.clientX, e.clientY, true);
+  }
+
+  function onSvPointerUp() {
+    svRectRef.current = null;
+    flushThemePersistence();
   }
 
   function handleHueChange(nextHue: number) {
     const nextHex = hsvToHex(nextHue, Math.max(0.04, hsv.s), Math.max(0.08, hsv.v));
-    updateActiveStopHex(nextHex);
+    updateActiveStopHex(nextHex, true);
   }
 
   function handleAddColour() {
@@ -305,6 +317,8 @@ export function CustomThemeDrawer({
             style={{ backgroundColor: pureHueHex }}
             onPointerDown={onSvPointerDown}
             onPointerMove={onSvPointerMove}
+            onPointerUp={onSvPointerUp}
+            onPointerCancel={onSvPointerUp}
           >
             <div className="custom-theme-sv-white" />
             <div className="custom-theme-sv-black" />
@@ -420,11 +434,14 @@ export function CustomThemeDrawer({
               value={theme.custom.angle}
               onChange={(e) => {
                 const angle = Number(e.target.value);
-                updateThemeConfig((prev) => ({
-                  ...prev,
-                  kind: "custom",
-                  custom: { ...prev.custom, angle },
-                }));
+                updateThemeConfig(
+                  (prev) => ({
+                    ...prev,
+                    kind: "custom",
+                    custom: { ...prev.custom, angle },
+                  }),
+                  { continuous: true },
+                );
                 scheduleRemoteThemeSync();
               }}
             />
@@ -444,11 +461,14 @@ export function CustomThemeDrawer({
               value={theme.custom.intensity}
               onChange={(e) => {
                 const intensity = Number(e.target.value);
-                updateThemeConfig((prev) => ({
-                  ...prev,
-                  kind: "custom",
-                  custom: { ...prev.custom, intensity },
-                }));
+                updateThemeConfig(
+                  (prev) => ({
+                    ...prev,
+                    kind: "custom",
+                    custom: { ...prev.custom, intensity },
+                  }),
+                  { continuous: true },
+                );
                 scheduleRemoteThemeSync();
               }}
             />
