@@ -7,8 +7,8 @@ const ANDROID_AUTH_CALLBACK = "com.ahad00010.jatext://auth";
 
 /**
  * JaText sign-in options:
- * 1. Google OAuth  — needs AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET
- *    (set them in the Convex dashboard → Settings → Environment Variables)
+ * 1. Google OAuth — needs AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET
+ *    (set them in the Convex dashboard -> Settings -> Environment Variables)
  * 2. Normal email + password sign up / sign in
  *
  * First-time setup: `npx @convex-dev/auth` (sets JWT keys + SITE_URL).
