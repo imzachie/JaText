@@ -47,13 +47,49 @@ export function LoginPage() {
   const [gEmail, setGEmail] = useState("Alex@example.com");
   const [legalTab, setLegalTab] = useState<LegalTab | null>(null);
 
-  async function run(fn: () => Promise<void>) {
+  function formatAuthError(
+    err: unknown,
+    context: "signin" | "signup" | "google",
+  ): string {
+    const raw = err instanceof Error ? err.message : String(err ?? "");
+    if (/failed to fetch|networkerror|load failed|network request failed|fetch failed|offline/i.test(raw)) {
+      return "Network error while reaching JaText. Check your internet connection and try again.";
+    }
+    if (/too\s*many|ratelimit/i.test(raw)) {
+      return "Too many sign-in attempts. Please wait a minute and try again.";
+    }
+    if (/at least 8 characters|invalid password/i.test(raw)) {
+      return "Password must be at least 8 characters long.";
+    }
+    if (/already exists/i.test(raw)) {
+      return "An account with this email already exists. Switch to 'Sign in' or click 'Continue with Google' above.";
+    }
+    if (
+      /\[CONVEX |server error|called by client|invalidaccountid|invalidsecret|invalid credentials/i.test(
+        raw,
+      )
+    ) {
+      if (context === "google") {
+        return "Google sign-in could not start. Please refresh and try again.";
+      }
+      if (context === "signup") {
+        return "Could not create account. This email may already be registered (try 'Sign in' or 'Continue with Google'), or use an 8+ character password.";
+      }
+      return "Incorrect email or password. If your account uses Google, click 'Continue with Google' above.";
+    }
+    return raw.trim() || "Something went wrong. Please try again.";
+  }
+
+  async function run(
+    context: "signin" | "signup" | "google",
+    fn: () => Promise<void>,
+  ) {
     setBusy(true);
     setError(null);
     try {
       await fn();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong. Try again.");
+      setError(formatAuthError(e, context));
     } finally {
       setBusy(false);
     }
@@ -61,7 +97,7 @@ export function LoginPage() {
 
   function onEmailSubmit(e: FormEvent) {
     e.preventDefault();
-    void run(() =>
+    void run(tab, () =>
       tab === "signin"
         ? store.signInEmail(email, password)
         : store.signUpEmail(email, password),
@@ -73,7 +109,7 @@ export function LoginPage() {
       setShowDemoGoogle(true);
       return;
     }
-    void run(() => store.signInGoogle());
+    void run("google", () => store.signInGoogle());
   }
 
   return (
@@ -192,7 +228,9 @@ export function LoginPage() {
             <button
               className="primary-btn"
               disabled={busy}
-              onClick={() => void run(() => store.signInGoogle({ name: gName, email: gEmail }))}
+              onClick={() =>
+                void run("google", () => store.signInGoogle({ name: gName, email: gEmail }))
+              }
             >
               Continue as {gName || "Guest"}
             </button>
@@ -202,10 +240,22 @@ export function LoginPage() {
         <div className="divider"><span>or</span></div>
 
         <div className="tabs">
-          <button className={tab === "signin" ? "active" : ""} onClick={() => setTab("signin")}>
+          <button
+            className={tab === "signin" ? "active" : ""}
+            onClick={() => {
+              setError(null);
+              setTab("signin");
+            }}
+          >
             Sign in
           </button>
-          <button className={tab === "signup" ? "active" : ""} onClick={() => setTab("signup")}>
+          <button
+            className={tab === "signup" ? "active" : ""}
+            onClick={() => {
+              setError(null);
+              setTab("signup");
+            }}
+          >
             Sign up
           </button>
         </div>
