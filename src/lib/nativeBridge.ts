@@ -111,6 +111,7 @@ export interface JaTextNativePlugin {
     isVideo?: boolean;
   }): Promise<void>;
   cancelIncomingCallWake(): Promise<void>;
+  getVisibilityState(): Promise<{ activelyVisibleUnlocked: boolean }>;
   startNativeRingtone(): Promise<void>;
   stopNativeRingtone(): Promise<void>;
   listDeviceSounds(options: {
@@ -174,6 +175,21 @@ export interface JaTextNativePlugin {
 }
 
 export const JaTextNative = registerPlugin<JaTextNativePlugin>("JaTextNative");
+
+export async function isChatActivelyVisibleToUser(): Promise<boolean> {
+  if (typeof document === "undefined" || document.visibilityState !== "visible") {
+    return false;
+  }
+  if (!Capacitor.isNativePlatform()) {
+    return typeof document.hasFocus === "function" ? document.hasFocus() : true;
+  }
+  try {
+    const res = await JaTextNative.getVisibilityState();
+    return res.activelyVisibleUnlocked === true;
+  } catch {
+    return true;
+  }
+}
 
 export async function ensureNativeMediaPermissions(video: boolean): Promise<boolean> {
   if (!Capacitor.isNativePlatform()) return true;

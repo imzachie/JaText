@@ -16,7 +16,10 @@ import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
 import java.lang.ref.WeakReference;
@@ -105,8 +108,40 @@ public class MainActivity extends BridgeActivity {
             }
         }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        installKeyboardAndSafeAreaInsets();
         applyStatusBarAppearance();
         dispatchIncomingCallLaunchIfPresent(getIntent());
+    }
+
+    private void installKeyboardAndSafeAreaInsets() {
+        final View contentView = findViewById(android.R.id.content);
+        if (contentView == null) return;
+        ViewCompat.setOnApplyWindowInsetsListener(contentView, (v, windowInsets) -> {
+            Insets sysBars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
+            int bottomInset = Math.max(sysBars.bottom, ime.bottom);
+            v.setPadding(sysBars.left, 0, sysBars.right, bottomInset);
+
+            try {
+                if (getBridge() != null && getBridge().getWebView() != null) {
+                    float density = getResources().getDisplayMetrics().density;
+                    if (density <= 0f) density = 1f;
+                    int topCssPx = Math.round(sysBars.top / density);
+                    boolean kbOpen = ime.bottom > sysBars.bottom + Math.round(48f * density);
+                    String js =
+                        "document.documentElement.style.setProperty('--safe-area-inset-top','" +
+                        topCssPx +
+                        "px');" +
+                        "window.dispatchEvent(new CustomEvent('jatext:ime-change',{detail:{open:" +
+                        (kbOpen ? "true" : "false") +
+                        "}}));";
+                    getBridge().getWebView().evaluateJavascript(js, null);
+                }
+            } catch (Throwable ignored) {}
+
+            return WindowInsetsCompat.CONSUMED;
+        });
+        ViewCompat.requestApplyInsets(contentView);
     }
 
     @Override

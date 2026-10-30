@@ -13,7 +13,11 @@ import {
   type RefObject,
   type UIEvent,
 } from "react";
+import { Capacitor } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
 import { playMessageSound } from "../lib/alerts";
+import { isChatActivelyVisibleToUser } from "../lib/nativeBridge";
+import { useChatAutoScrollAndKeyboard } from "../lib/useChatAutoScrollAndKeyboard";
 import { upsertCallHistoryEntry } from "../lib/callHistory";
 import { formatCallDuration, formatPreviewMessageText, isHiddenCallSignal } from "../lib/calling";
 import {
@@ -778,6 +782,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
   onCancelVoiceNote,
   onSendVoiceNote,
   onVoiceError,
+  onMobileActivate,
   onTypingSignal,
   onSubmitDraft,
 }: {
@@ -801,6 +806,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
   onCancelVoiceNote: () => void;
   onSendVoiceNote: (file: File) => void;
   onVoiceError: (message: string) => void;
+  onMobileActivate: () => void;
   onTypingSignal: (hasText: boolean) => void;
   onSubmitDraft: (body: string) => void;
 }) {
@@ -1061,7 +1067,9 @@ const GroupChatComposer = memo(function GroupChatComposer({
             onChange={(event) =>
               handleDraftChange(event.target.value, event.currentTarget.selectionStart)
             }
+            onFocus={onMobileActivate}
             onClick={(event) => {
+              onMobileActivate();
               if (draft.includes("@")) {
                 setCursorPos(event.currentTarget.selectionStart ?? 0);
               }
@@ -1284,13 +1292,18 @@ export function GroupChatView({
   const seenSyncInFlightRef = useRef(false);
   const lastPublishedSeenTsRef = useRef<Record<string, number>>({});
 
-  // Publish / update our single in-place seen cursor row when viewing new group messages
+  // Publish / update our single in-place seen cursor row ONLY when actively viewing the group chat
   useEffect(() => {
-    if (!groupId || !store.me || conversationMessages.length === 0) return;
+    if (!groupId || !store.me || store.activeGroupId !== groupId || conversationMessages.length === 0) {
+      return;
+    }
+    let cancelled = false;
 
-    const maybePublishSeen = () => {
-      if (document.visibilityState === "hidden") return;
+    const maybePublishSeen = async () => {
+      if (cancelled || store.activeGroupId !== groupId) return;
       if (seenSyncInFlightRef.current) return;
+      const activelyViewing = await isChatActivelyVisibleToUser();
+      if (cancelled || !activelyViewing || seenSyncInFlightRef.current) return;
 
       let latestVisible: GroupMessage | null = null;
       for (let i = conversationMessages.length - 1; i >= 0; i -= 1) {
@@ -1327,9 +1340,27 @@ export function GroupChatView({
         });
     };
 
-    maybePublishSeen();
-    document.addEventListener("visibilitychange", maybePublishSeen);
-    return () => document.removeEventListener("visibilitychange", maybePublishSeen);
+    void maybePublishSeen();
+    const onVisOrFocus = () => {
+      void maybePublishSeen();
+    };
+    document.addEventListener("visibilitychange", onVisOrFocus);
+    window.addEventListener("focus", onVisOrFocus);
+    const nativeSub = Capacitor.isNativePlatform()
+      ? CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+          if (isActive) {
+            window.setTimeout(() => void maybePublishSeen(), 150);
+          }
+        })
+      : null;
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisOrFocus);
+      window.removeEventListener("focus", onVisOrFocus);
+      if (nativeSub) {
+        void nativeSub.then((h) => h.remove());
+      }
+    };
   }, [
     conversationMessages,
     groupId,
@@ -1382,18 +1413,27 @@ export function GroupChatView({
   ]);
 
   const activeGroupCallMessage = useMemo(() => {
+    const memberCount = group?.members.length ?? summary?.memberCount ?? 2;
     for (let i = conversationMessages.length - 1; i >= 0; i -= 1) {
       const msg = conversationMessages[i];
       if (msg.unsentAt) continue;
       const invite = parseGroupCallInvite(msg.body);
       if (!invite) continue;
       const resolved = groupCallStatesById[invite.callId];
-      if (!resolved?.isEnded && invite.state !== "ended") {
+      const declinedHere =
+        groupCall.declinedGroupCallIds.has(invite.callId) && memberCount <= 2;
+      if (!resolved?.isEnded && invite.state !== "ended" && !declinedHere) {
         return { invite, messageId: msg.id };
       }
     }
     return null;
-  }, [conversationMessages, groupCallStatesById]);
+  }, [
+    conversationMessages,
+    group?.members.length,
+    groupCall.declinedGroupCallIds,
+    groupCallStatesById,
+    summary?.memberCount,
+  ]);
   const conversationReady = Boolean(groupId) && store.groupMessagesReady;
   const isMuted = group?.members.find((member) => member.id === store.me?.id)?.muted ?? false;
 
@@ -1427,17 +1467,31 @@ export function GroupChatView({
     setRecordingVoiceNote(false);
   }, []);
 
+  const {
+    pinToBottomBurst,
+    handleMobileComposerActivate,
+  } = useChatAutoScrollAndKeyboard({
+    conversationKey: `group:${groupId ?? ""}`,
+    messagesReady: conversationReady,
+    messageCount: displayedMessages.length,
+    tailMessageKey: lastDisplayedKey,
+    tailSenderId: lastDisplayedSenderId,
+    myUserId: store.me?.id,
+    messagesRef,
+    composerRef,
+    onPinnedChange: (pinned) => {
+      wasPinnedRef.current = pinned;
+    },
+  });
+
   const scrollToBottom = useCallback(() => {
-    const container = messagesRef.current;
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
-  }, []);
+    pinToBottomBurst();
+  }, [pinToBottomBurst]);
 
   const handleMessagesScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
     wasPinnedRef.current =
-      element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+      element.scrollHeight - element.scrollTop - element.clientHeight < 280;
   }, []);
 
   const openImagePreview = useCallback((url: string) => {
@@ -2534,6 +2588,7 @@ export function GroupChatView({
           onCancelVoiceNote={handleCancelVoiceNote}
           onSendVoiceNote={(voiceFile) => void sendGroupVoiceNote(voiceFile)}
           onVoiceError={setError}
+          onMobileActivate={handleMobileComposerActivate}
           onTypingSignal={handleTypingSignal}
           onSubmitDraft={(body) => void handleSubmitDraft(body)}
         />

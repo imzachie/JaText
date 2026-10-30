@@ -17,10 +17,12 @@ export function StickerPicker({
   friendId,
   disabled = false,
   onSelect,
+  onSent,
 }: {
   friendId: string;
   disabled?: boolean;
   onSelect?: (sticker: StickerMedia) => Promise<void>;
+  onSent?: () => void;
 }) {
   const store = useJaText();
   const searchKlipy = store.searchKlipy;
@@ -109,6 +111,7 @@ export function StickerPicker({
     try {
       if (onSelect) await onSelect(sticker);
       else await store.sendSticker(friendId, sticker);
+      onSent?.();
       closePicker();
     } catch (cause) {
       setError(friendlyError(cause, "Couldn't send this sticker. Please try again."));
@@ -166,6 +169,7 @@ export function StickerPicker({
       if (sendNow) {
         if (onSelect) await onSelect(saved);
         else await store.sendSticker(friendId, saved);
+        onSent?.();
         closePicker();
       }
     } catch (cause) {

@@ -10,8 +10,12 @@ import {
   type MouseEvent,
   type RefObject,
 } from "react";
+import { Capacitor } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
 import { Phone, Video } from "./CallIcons";
 import { playMessageSound } from "../lib/alerts";
+import { isChatActivelyVisibleToUser } from "../lib/nativeBridge";
+import { useChatAutoScrollAndKeyboard } from "../lib/useChatAutoScrollAndKeyboard";
 import {
   formatPreviewMessageText,
   isHiddenCallSignal,
@@ -550,6 +554,8 @@ const DirectChatComposer = memo(function DirectChatComposer({
   fileInputRef,
   onSelectFile,
   onStartVoiceNote,
+  onMobileActivate,
+  onStickerSent,
   onTypingSignal,
   onSubmitDraft,
 }: {
@@ -563,6 +569,8 @@ const DirectChatComposer = memo(function DirectChatComposer({
   fileInputRef: RefObject<HTMLInputElement | null>;
   onSelectFile: (file: File | null) => void;
   onStartVoiceNote: () => void;
+  onMobileActivate: () => void;
+  onStickerSent: () => void;
   onTypingSignal: (hasText: boolean) => void;
   onSubmitDraft: (body: string) => void;
 }) {
@@ -641,7 +649,11 @@ const DirectChatComposer = memo(function DirectChatComposer({
       >
         <PaperclipIcon size={18} />
       </button>
-      <StickerPicker friendId={friendId} disabled={isFriendBlocked || isEditing} />
+      <StickerPicker
+        friendId={friendId}
+        disabled={isFriendBlocked || isEditing}
+        onSent={onStickerSent}
+      />
       <button
         type="button"
         className="icon-btn voice-note-btn"
@@ -656,6 +668,8 @@ const DirectChatComposer = memo(function DirectChatComposer({
         ref={composerRef}
         value={draft}
         onChange={(e) => handleChange(e.target.value)}
+        onFocus={onMobileActivate}
+        onClick={onMobileActivate}
         placeholder={
           isFriendBlocked
             ? "Unblock to message"
@@ -815,12 +829,23 @@ export function ChatView({
   }, [displayedMessages, friend.id]);
 
   const showMobileWallpaper = isMobileWallpaper && Boolean(activeWallpaperUrl);
+  const lastDisplayedMsg = displayedMessages.at(-1);
+  const {
+    pinToBottomBurst,
+    handleMobileComposerActivate,
+  } = useChatAutoScrollAndKeyboard({
+    conversationKey: `dm:${friend.id}`,
+    messagesReady: activeMessagesReady && store.activeChatId === friend.id,
+    messageCount: displayedMessages.length,
+    tailMessageKey: lastDisplayedMsg ? `${lastDisplayedMsg.id}:${lastDisplayedMsg.createdAt}` : "",
+    tailSenderId: lastDisplayedMsg?.senderId,
+    myUserId: me?.id,
+    messagesRef,
+    composerRef,
+  });
   const scrollToBottom = useCallback(() => {
-    const container = messagesRef.current;
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
-  }, []);
+    pinToBottomBurst();
+  }, [pinToBottomBurst]);
   const friendStatusLabel =
     friendActivity?.status === "dnd"
       ? "Do Not Disturb"
@@ -1045,11 +1070,43 @@ export function ChatView({
   );
 
   useEffect(() => {
-    if (!unreadIncomingSignature || !store.activeMessagesReady) return;
-    void markMessagesRead(friend.id).catch((cause: unknown) => {
-      setError(friendlyError(cause, "Couldn't update read status."));
-    });
-  }, [friend.id, markMessagesRead, store.activeMessagesReady, unreadIncomingSignature]);
+    if (!unreadIncomingSignature || !store.activeMessagesReady || chatClosing || store.activeChatId !== friend.id) {
+      return;
+    }
+    let cancelled = false;
+    const maybeMarkRead = async () => {
+      if (cancelled || chatClosing || store.activeChatId !== friend.id) return;
+      const activelyViewing = await isChatActivelyVisibleToUser();
+      if (!cancelled && activelyViewing) {
+        void markMessagesRead(friend.id).catch((cause: unknown) => {
+          setError(friendlyError(cause, "Couldn't update read status."));
+        });
+      }
+    };
+    void maybeMarkRead();
+
+    const onVisibilityOrFocus = () => {
+      void maybeMarkRead();
+    };
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
+    window.addEventListener("focus", onVisibilityOrFocus);
+    const nativeSub = Capacitor.isNativePlatform()
+      ? CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+          if (isActive) {
+            window.setTimeout(() => void maybeMarkRead(), 150);
+          }
+        })
+      : null;
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      if (nativeSub) {
+        void nativeSub.then((h) => h.remove());
+      }
+    };
+  }, [chatClosing, friend.id, markMessagesRead, store.activeChatId, store.activeMessagesReady, unreadIncomingSignature]);
 
   useEffect(
     () => () => {
@@ -1574,6 +1631,8 @@ export function ChatView({
           fileInputRef={fileInput}
           onSelectFile={setFile}
           onStartVoiceNote={handleStartVoiceNote}
+          onMobileActivate={handleMobileComposerActivate}
+          onStickerSent={scrollToBottom}
           onTypingSignal={handleTypingSignal}
           onSubmitDraft={(body) => void handleSubmitDraft(body)}
         />

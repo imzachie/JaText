@@ -39,10 +39,10 @@ import java.util.Set;
  */
 public final class JaTextSoundManager {
 
-    // v3 channel ensures existing installs pick up the +70% louder bundled jatext_notification.mp3!
-    public static final String DEFAULT_MESSAGES_CHANNEL_ID = "jatext_messages_default_v3";
-    public static final String CUSTOM_MESSAGES_CHANNEL_ID = "jatext_messages_custom_v3";
-    public static final String INCOMING_CALL_CHANNEL_ID = "jatext_incoming_calls_v3";
+    // v4 channel ensures existing installs pick up the calibrated +40% bundled jatext_notification.mp3!
+    public static final String DEFAULT_MESSAGES_CHANNEL_ID = "jatext_messages_default_v4";
+    public static final String CUSTOM_MESSAGES_CHANNEL_ID = "jatext_messages_custom_v4";
+    public static final String INCOMING_CALL_CHANNEL_ID = "jatext_incoming_calls_v4";
     public static final int INCOMING_CALL_NOTIFICATION_ID = 9413;
 
     private static final String SYS_CHANNEL_PREFIX = "jatext_msg_sys_";
@@ -54,6 +54,7 @@ public final class JaTextSoundManager {
     private static MediaPlayer activeNotifPlayer = null;
     private static Vibrator activeVibrator = null;
     private static volatile boolean ringtoneActive = false;
+    private static volatile long suppressCallWakeUntilMs = 0L;
     private static PowerManager.WakeLock incomingWakeLock = null;
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
     private static Runnable incomingTimeoutRunnable = null;
@@ -104,11 +105,13 @@ public final class JaTextSoundManager {
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return DEFAULT_MESSAGES_CHANNEL_ID;
 
-        // Clean up legacy v1/v2 channels so Android loads the louder v3 notification sound
+        // Clean up legacy v1/v2/v3 channels so Android loads the calibrated +40% v4 notification sound
         try {
             nm.deleteNotificationChannel("messages");
             nm.deleteNotificationChannel("jatext_messages_default_v2");
             nm.deleteNotificationChannel("jatext_messages_custom_v2");
+            nm.deleteNotificationChannel("jatext_messages_default_v3");
+            nm.deleteNotificationChannel("jatext_messages_custom_v3");
         } catch (Throwable ignored) {}
 
         AudioAttributes notifAttrs = new AudioAttributes.Builder()
@@ -451,6 +454,8 @@ public final class JaTextSoundManager {
         boolean isVideo
     ) {
         if (ctx == null) return;
+        // Prevent late-arriving duplicate FCM packets from restarting ringtone right after user declined!
+        if (System.currentTimeMillis() < suppressCallWakeUntilMs) return;
         SharedPreferences sp = JaTextE2EEDecryptor.prefs(ctx);
         if (sp.getBoolean("is_dnd", false)) return;
 
@@ -513,6 +518,7 @@ public final class JaTextSoundManager {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     try {
                         nm.deleteNotificationChannel("jatext_incoming_calls_v2");
+                        nm.deleteNotificationChannel("jatext_incoming_calls_v3");
                     } catch (Throwable ignored) {}
                     NotificationChannel ch = new NotificationChannel(
                         INCOMING_CALL_CHANNEL_ID,
@@ -567,11 +573,18 @@ public final class JaTextSoundManager {
             mainHandler.removeCallbacks(incomingTimeoutRunnable);
         }
         final Context appCtx = ctx.getApplicationContext();
-        incomingTimeoutRunnable = () -> cancelIncomingCallWakeup(appCtx);
+        incomingTimeoutRunnable = () -> cancelIncomingCallWakeup(appCtx, false);
         mainHandler.postDelayed(incomingTimeoutRunnable, INCOMING_CALL_RING_TIMEOUT_MS);
     }
 
     public static void cancelIncomingCallWakeup(Context ctx) {
+        cancelIncomingCallWakeup(ctx, false);
+    }
+
+    public static void cancelIncomingCallWakeup(Context ctx, boolean suppressRecentRetrigger) {
+        if (suppressRecentRetrigger) {
+            suppressCallWakeUntilMs = System.currentTimeMillis() + 8_000L;
+        }
         if (incomingTimeoutRunnable != null) {
             mainHandler.removeCallbacks(incomingTimeoutRunnable);
             incomingTimeoutRunnable = null;

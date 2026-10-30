@@ -145,13 +145,11 @@ function AppContent() {
       "notificationOpen",
       ({ senderId, groupId, chatId, incomingCallWake }) => {
         if (incomingCallWake) {
+          // Do NOT switch activeChatId / activeGroupId on automatic incomingCallWake!
+          // CallOverlay / GroupCallOverlay render globally; opening the chat behind a locked
+          // screen would falsely mark unread messages as Read before the user opens the chat.
           setCallMinimized(false);
           setGroupCallMinimized(false);
-          if (groupId) {
-            setActiveGroupId(groupId);
-          } else if (senderId) {
-            setActiveChatId(senderId);
-          }
           return;
         }
         if (chatId === OFFICIAL_COMMUNITY_ID) {

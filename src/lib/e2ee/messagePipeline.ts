@@ -262,10 +262,32 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
       finalDmWire = `${encryptedWire}\n(__JATEXT_CALL_DM_ENDED__)`;
     }
   } else if (wireBody.startsWith("__JATEXT_CALL_SIG__:")) {
-    if (wireBody.includes('"type":"hangup"') || wireBody.includes('"type":"decline"')) {
-      finalDmWire = `${encryptedWire}\n(__JATEXT_CALL_CANCEL__)`;
-    } else if (wireBody.includes('"type":"claim"') || wireBody.includes('"type":"answer"')) {
-      finalDmWire = `${encryptedWire}\n(__JATEXT_CALL_CLAIM__)`;
+    let ctrlSuffix = "";
+    try {
+      const sigObj = JSON.parse(wireBody.slice("__JATEXT_CALL_SIG__:".length)) as {
+        callId?: string;
+        type?: string;
+        deviceSessionId?: string;
+        ts?: number;
+      };
+      const cid = String(sigObj.callId ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+      const stype = String(sigObj.type ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+      const devId = String(sigObj.deviceSessionId ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+      const ts = Number.isFinite(sigObj.ts) ? Number(sigObj.ts) : Date.now();
+      if (cid && (stype === "hangup" || stype === "decline")) {
+        ctrlSuffix = `\n(__JATEXT_CALL_CANCEL__:${cid}:${stype}:${devId}:${ts})`;
+      } else if (cid && (stype === "claim" || stype === "answer")) {
+        ctrlSuffix = `\n(__JATEXT_CALL_CLAIM__:${cid}:${stype}:${devId}:${ts})`;
+      }
+    } catch {
+      if (wireBody.includes('"type":"hangup"') || wireBody.includes('"type":"decline"')) {
+        ctrlSuffix = `\n(__JATEXT_CALL_CANCEL__)`;
+      } else if (wireBody.includes('"type":"claim"') || wireBody.includes('"type":"answer"')) {
+        ctrlSuffix = `\n(__JATEXT_CALL_CLAIM__)`;
+      }
+    }
+    if (ctrlSuffix) {
+      finalDmWire = `${encryptedWire}${ctrlSuffix}`;
     }
   }
 
@@ -512,6 +534,20 @@ function resolveReplyBody(
   return "Decrypting…";
 }
 
+function extractFallbackCallControlSignal(rawBody: string): string | null {
+  const m = rawBody.match(
+    /\(__JATEXT_CALL_(?:CANCEL|CLAIM)__:([A-Za-z0-9_-]+):(hangup|decline|claim):([A-Za-z0-9_-]*):(\d+)\)/,
+  );
+  if (!m) return null;
+  const [, callId, type, deviceSessionId, tsStr] = m;
+  return `__JATEXT_CALL_SIG__:${JSON.stringify({
+    callId,
+    type,
+    ...(deviceSessionId ? { deviceSessionId } : {}),
+    ts: Number(tsStr) || Date.now(),
+  })}`;
+}
+
 export function hydrateDecryptedDmMessage(
   raw: ChatMessage,
   peerUserId: string,
@@ -538,6 +574,7 @@ export function hydrateDecryptedDmMessage(
   }
 
   const isSilentWire = raw.body.startsWith("__JATEXT_CALL_SIG__:");
+  const fallbackControlBody = isSilentWire ? extractFallbackCallControlSignal(raw.body) : null;
   const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
   const cached = getCachedDecryptedMessage(cacheKey);
   if (!cached) {
@@ -547,6 +584,23 @@ export function hydrateDecryptedDmMessage(
       senderId: raw.senderId,
       receiverId: raw.receiverId,
     }).then(() => triggerRerender());
+    if (fallbackControlBody) {
+      return {
+        ...withReply,
+        body: fallbackControlBody,
+        attachmentUrl: undefined,
+        attachmentName: undefined,
+        attachmentType: undefined,
+        e2ee: {
+          encrypted: true,
+          decrypted: true,
+          signatureVerified: false,
+          algorithm: "ECDH P-256 + HKDF-SHA-256 + AES-256-GCM + ECDSA P-256",
+          channel: "dm",
+          rawWireBody: raw.body,
+        },
+      };
+    }
     return {
       ...withReply,
       body: isSilentWire ? "__JATEXT_CALL_SIG__:decrypting" : "Decrypting message…",
@@ -565,6 +619,16 @@ export function hydrateDecryptedDmMessage(
   }
 
   if (!cached.payload) {
+    if (fallbackControlBody) {
+      return {
+        ...withReply,
+        body: fallbackControlBody,
+        attachmentUrl: undefined,
+        attachmentName: undefined,
+        attachmentType: undefined,
+        e2ee: { ...cached.proof, decrypted: true },
+      };
+    }
     return {
       ...withReply,
       body: isSilentWire

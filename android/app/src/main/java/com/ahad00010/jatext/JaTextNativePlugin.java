@@ -977,8 +977,19 @@ public class JaTextNativePlugin extends Plugin {
     @PluginMethod
     public void cancelIncomingCallWake(PluginCall call) {
         Context ctx = getContext();
-        JaTextSoundManager.cancelIncomingCallWakeup(ctx != null ? ctx.getApplicationContext() : null);
+        JaTextSoundManager.cancelIncomingCallWakeup(
+            ctx != null ? ctx.getApplicationContext() : null,
+            true
+        );
         call.resolve();
+    }
+
+    @PluginMethod
+    public void getVisibilityState(PluginCall call) {
+        Context ctx = getContext();
+        JSObject res = new JSObject();
+        res.put("activelyVisibleUnlocked", MainActivity.isActivelyVisibleUnlocked(ctx));
+        call.resolve(res);
     }
 
     @PluginMethod
