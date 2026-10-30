@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { switchToAccountSlot, useMultiAccountState } from "../lib/accountManager";
+import { PUBLIC_TURSO_API_ORIGIN } from "../lib/tursoClient";
 import { useJaText } from "../lib/store";
 import { LegalModal, type LegalTab } from "./LegalModal";
 import { ProfileForm } from "./ProfileForm";
 import { ArrowRightIcon, SparklesIcon, SwitchAccountIcon } from "./UiIcons";
 
-const CONVEX_URL = import.meta.env.VITE_CONVEX_URL as string | undefined;
+const CONVEX_URL = PUBLIC_TURSO_API_ORIGIN;
 
 export function Onboarding() {
   const { me, signOut } = useJaText();

@@ -60,19 +60,8 @@ jobs:
           fi
 
       - name: Install dependencies and sync Capacitor Android
-        env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
         run: |
-          npm install
-          if [ -n "${CONVEX_DEPLOY_KEY}" ]; then
-            if npx convex deploy --yes; then
-              echo "CONVEX_SYNCED=yes" >> "$GITHUB_ENV"
-            else
-              echo "CONVEX_SYNCED=failed" >> "$GITHUB_ENV"
-            fi
-          else
-            echo "CONVEX_SYNCED=no-secret" >> "$GITHUB_ENV"
-          fi
+          npm install --legacy-peer-deps
           npm run android:sync
 
       - name: Assemble Signed Release APK
@@ -101,7 +90,7 @@ jobs:
           gh release delete apk-latest --cleanup-tag --yes || true
           gh release create apk-latest /tmp/JaText-release.apk \
             --title "JaText v${VERSION_NAME} (build ${VERSION_CODE})" \
-            --notes "Signed Release APK built from commit ${GITHUB_SHA}. VersionName: ${VERSION_NAME}. VersionCode: ${VERSION_CODE}. Convex: ${CONVEX_SYNCED}. Blob: ${BLOB_SHA}"
+            --notes "Signed Release APK built from commit ${GITHUB_SHA}. VersionName: ${VERSION_NAME}. VersionCode: ${VERSION_CODE}. Backend: Turso. Blob: ${BLOB_SHA}"
 
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
             AUTHOR_NAME=$(git log -1 --format='%an')

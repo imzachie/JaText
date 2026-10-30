@@ -1,7 +1,4 @@
-import { useMemo, useState, type CSSProperties } from "react";
-import { useQuery } from "convex/react";
-import { api } from "../../convex/_generated/api";
-import type { Id } from "../../convex/_generated/dataModel";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Phone, Video } from "./CallIcons";
 import { useCall } from "../lib/calling";
 import {
@@ -66,11 +63,21 @@ function LiveUserProfileHydrator({
   fallback: JaUser;
   children: (resolved: JaUser) => React.ReactNode;
 }) {
-  const canQuery = Boolean(userId && !userId.startsWith("pending-") && userId.length >= 16);
-  const fetched = useQuery(
-    api.users.byId,
-    canQuery ? { userId: userId as Id<"users"> } : "skip",
-  ) as JaUser | null | undefined;
+  const { getUserById } = useJaText();
+  const [fetched, setFetched] = useState<JaUser | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const canQuery = Boolean(userId && !userId.startsWith("pending-") && userId.length >= 8);
+    if (!canQuery || !getUserById) return;
+    void getUserById(userId)
+      .then((u) => {
+        if (!cancelled && u) setFetched(u);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [getUserById, userId]);
   const raw = fetched ?? fallback;
   const unpacked = unpackAvatarColorWithMeta(raw.avatarColor, raw.socials, raw.website);
   const resolved: JaUser = {
@@ -372,7 +379,7 @@ export function ProfileModal({
           <CloseIcon size={17} />
         </button>
         <div className="profile-modal-scroll">
-          {store.mode === "convex" ? (
+          {store.mode !== "demo" ? (
             <LiveUserProfileHydrator
               userId={user.id}
               fallback={

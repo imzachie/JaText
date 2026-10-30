@@ -234,9 +234,18 @@ export interface ProfileInput {
   syncedTheme?: SyncedThemePayload | null;
 }
 
+export interface PollVoter {
+  userId: string;
+  optionIndex: number;
+  displayName: string;
+  username: string;
+  avatarColor: string;
+  avatarUrl?: string;
+}
+
 export interface JaTextStore {
-  /** "convex" when VITE_CONVEX_URL is set, otherwise a local demo that mirrors the Convex API 1:1 */
-  mode: "demo" | "convex";
+  /** "turso" on live Turso backend, or "demo" in local fallback mode */
+  mode: "demo" | "convex" | "turso";
   loading: boolean;
   me: JaUser | null;
   friends: JaUser[];
@@ -277,6 +286,8 @@ export interface JaTextStore {
 
   checkUsername: (username: string) => Promise<{ available: boolean; message?: string }>;
   saveProfile: (input: ProfileInput) => Promise<void>;
+  getUserById?: (userId: string) => Promise<JaUser | null>;
+  getCommunityPollVoters?: (pollId: string) => Promise<PollVoter[]>;
 
   sendFriendRequest: (username: string) => Promise<void>;
   respondRequest: (requestId: string, accept: boolean) => Promise<void>;

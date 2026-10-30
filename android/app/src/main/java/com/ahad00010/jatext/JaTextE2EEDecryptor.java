@@ -67,7 +67,7 @@ public final class JaTextE2EEDecryptor {
         if (ctx == null || key == null) return;
         SharedPreferences.Editor ed = prefs(ctx).edit();
         ed.putString("auth_item:" + key, value);
-        if (key.contains("__convexAuthJWT")) {
+        if (key.contains("__convexAuthJWT") || key.startsWith("jatext:turso-jwt:")) {
             ed.putString("auth_jwt", value);
             ed.putString("auth_jwt_key", key);
         } else if (key.contains("__convexAuthRefreshToken")) {
@@ -89,7 +89,7 @@ public final class JaTextE2EEDecryptor {
         if (ctx == null || key == null) return;
         SharedPreferences.Editor ed = prefs(ctx).edit();
         ed.remove("auth_item:" + key);
-        if (key.contains("__convexAuthJWT")) {
+        if (key.contains("__convexAuthJWT") || key.startsWith("jatext:turso-jwt:")) {
             ed.remove("auth_jwt");
         } else if (key.contains("__convexAuthRefreshToken")) {
             ed.remove("auth_refresh");
@@ -609,6 +609,29 @@ public final class JaTextE2EEDecryptor {
     private static List<String> fetchPeerDhKeysFromConvex(String convexUrl, String jwt, String peerUserId) {
         List<String> keys = new ArrayList<>();
         try {
+            String base = convexUrl.endsWith("/")
+                ? convexUrl.substring(0, convexUrl.length() - 1)
+                : convexUrl;
+            if (!base.contains(".convex.cloud")) {
+                JSONObject argsObj = new JSONObject();
+                argsObj.put("userId", peerUserId);
+                JSONObject rpcReq = new JSONObject();
+                rpcReq.put("op", "getPublicPeerKeys");
+                rpcReq.put("args", argsObj);
+                JSONObject res = postJson(base + "/api/turso", rpcReq.toString(), jwt);
+                if (res == null || !res.optBoolean("ok", false)) return keys;
+                JSONObject data = res.optJSONObject("data");
+                JSONArray arr = data != null ? data.optJSONArray("bundles") : null;
+                if (arr == null) return keys;
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject item = arr.optJSONObject(i);
+                    if (item != null) {
+                        String dh = item.optString("dhPubB64", "");
+                        if (!dh.isEmpty() && !keys.contains(dh)) keys.add(dh);
+                    }
+                }
+                return keys;
+            }
             JSONArray userIds = new JSONArray();
             userIds.put(peerUserId);
             JSONObject argsObj = new JSONObject();
@@ -619,9 +642,6 @@ public final class JaTextE2EEDecryptor {
             reqBody.put("path", "e2ee:getUserIdentities");
             reqBody.put("format", "convex_encoded_json");
             reqBody.put("args", argsArr);
-            String base = convexUrl.endsWith("/")
-                ? convexUrl.substring(0, convexUrl.length() - 1)
-                : convexUrl;
             JSONObject res = postJson(base + "/api/query", reqBody.toString(), jwt);
             if (res == null || !"success".equals(res.optString("status"))) return keys;
             JSONArray arr = res.optJSONArray("value");
@@ -646,6 +666,33 @@ public final class JaTextE2EEDecryptor {
         String groupId
     ) {
         try {
+            String base = convexUrl.endsWith("/")
+                ? convexUrl.substring(0, convexUrl.length() - 1)
+                : convexUrl;
+            if (!base.contains(".convex.cloud")) {
+                JSONObject argsObj = new JSONObject();
+                String op;
+                if (groupId != null && !groupId.isEmpty()) {
+                    op = "listGroupMessages";
+                    argsObj.put("groupId", groupId);
+                } else if (senderId != null && !senderId.isEmpty()) {
+                    op = "listMessages";
+                    argsObj.put("otherId", senderId);
+                } else {
+                    return null;
+                }
+                JSONObject rpcReq = new JSONObject();
+                rpcReq.put("op", op);
+                rpcReq.put("args", argsObj);
+                JSONObject res = postJson(base + "/api/turso", rpcReq.toString(), jwt);
+                if (res == null || !res.optBoolean("ok", false)) return null;
+                JSONObject data = res.optJSONObject("data");
+                JSONArray msgs = data != null ? data.optJSONArray("messages") : null;
+                JSONObject wrapped = new JSONObject();
+                wrapped.put("status", "success");
+                wrapped.put("value", msgs != null ? msgs : new JSONArray());
+                return wrapped;
+            }
             JSONObject argsObj = new JSONObject();
             String path;
             if (groupId != null && !groupId.isEmpty()) {
@@ -666,9 +713,6 @@ public final class JaTextE2EEDecryptor {
             reqBody.put("format", "convex_encoded_json");
             reqBody.put("args", argsArr);
 
-            String base = convexUrl.endsWith("/")
-                ? convexUrl.substring(0, convexUrl.length() - 1)
-                : convexUrl;
             return postJson(base + "/api/query", reqBody.toString(), jwt);
         } catch (Throwable ignored) {
             return null;

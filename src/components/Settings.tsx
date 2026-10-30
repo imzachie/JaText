@@ -286,9 +286,9 @@ export function SettingsModal({
       return;
     }
     if (Capacitor.isNativePlatform()) {
-      if (mode !== "convex") {
+      if (mode === "demo") {
         setNotificationError(
-          "Push notifications need the live Convex backend. Configure VITE_CONVEX_URL and rebuild the APK.",
+          "Push notifications require the live Turso backend.",
         );
         return;
       }
@@ -948,7 +948,7 @@ export function SettingsModal({
                     )}
 
                   {notificationError && <div className="error-box">{notificationError}</div>}
-                  {isNative && mode === "convex" && notificationsEnabled && (
+                  {isNative && mode !== "demo" && notificationsEnabled && (
                     <>
                       <p className="muted small" role="status">
                         {pushRegistrationStatus === "unavailable"
@@ -1040,7 +1040,7 @@ export function SettingsModal({
                     <div className="settings-inline-legal-card" style={{ marginTop: 4 }}>
                       <h4>App Version &amp; Updates</h4>
                       <p className="muted small">
-                        Installed release: <strong>JaText v3.3.7 (Build 36)</strong>. JaText checks
+                        Installed release: <strong>JaText v3.4.0 (Build 37)</strong>. JaText checks
                         for updates automatically on launch, or you can check manually below.
                       </p>
                       <button

@@ -1183,7 +1183,7 @@ export function Sidebar({
 
       {store.mode === "demo" && (
         <footer className="sidebar-footer muted small">
-          <FlaskIcon size={13} /> Demo mode · connect Convex to go live
+          <FlaskIcon size={13} /> Demo mode
         </footer>
       )}
       {chatMenu && (
