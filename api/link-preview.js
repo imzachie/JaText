@@ -111,6 +111,23 @@ async function trySpecialOEmbed(parsedUrl) {
   const host = parsedUrl.hostname.toLowerCase().replace(/^www\./, "");
   const fullUrl = parsedUrl.toString();
 
+  // Official JaText Web & Chat routes
+  if (host === "jatext.vercel.app") {
+    const isChats = parsedUrl.pathname.startsWith("/chats");
+    return {
+      url: fullUrl,
+      hasEmbed: true,
+      siteName: "JaText · Web & Android",
+      title: isChats
+        ? "Open JaText Chats — End-to-End Encrypted Messaging & HD Calls"
+        : "JaText — Private End-to-End Encrypted Chat & HD Calls",
+      description:
+        "Zero-knowledge E2EE messaging (ECDH P-256 + AES-256-GCM) with 1:1 & mesh group voice/video calls, screen sharing with audio, custom illustrated chat bubbles, voice-note transcription, and instant multi-account switching.",
+      imageUrl: "https://jatext.vercel.app/jatext-og-banner.jpg",
+      themeColor: "#16A34A",
+    };
+  }
+
   // X / Twitter via fxtwitter JSON API
   if (host === "x.com" || host === "twitter.com") {
     const m = /^\/([^/]+)\/status\/(\d+)/.exec(parsedUrl.pathname);

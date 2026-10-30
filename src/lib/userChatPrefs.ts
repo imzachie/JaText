@@ -7,6 +7,7 @@ export interface GroupLocalPrefs {
   isArchived: boolean;
   lastReadAt: number;
   unreadTimestamps: number[];
+  clearedAt?: number;
 }
 
 export interface DmLocalPrefs {
@@ -164,6 +165,31 @@ export function updateLocalGroupSettings(
         ...existing,
         isSilenced: nextSilenced,
         isArchived: nextArchived,
+      },
+    },
+  });
+}
+
+export function clearLocalGroupHistory(userId: string, groupId: string, clearedAt: number) {
+  if (!userId || !groupId) return;
+  const prev = getUserChatPrefs(userId);
+  const existing = prev.groups[groupId] ?? {
+    isSilenced: false,
+    isArchived: false,
+    lastReadAt: clearedAt,
+    unreadTimestamps: [],
+  };
+  const nextClearedAt = Math.max(clearedAt, existing.clearedAt ?? 0);
+  const nextReadAt = Math.max(clearedAt, existing.lastReadAt ?? 0);
+  saveUserChatPrefs(userId, {
+    ...prev,
+    groups: {
+      ...prev.groups,
+      [groupId]: {
+        ...existing,
+        lastReadAt: nextReadAt,
+        unreadTimestamps: [],
+        clearedAt: nextClearedAt,
       },
     },
   });

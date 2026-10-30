@@ -19,7 +19,6 @@ export function DeleteGroupConfirmModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const isOwner = group.role === "owner";
   const exactMatch = typedName === group.name;
 
   function requestClose() {
@@ -59,7 +58,7 @@ export function DeleteGroupConfirmModal({
             <div>
               <h2>Delete group</h2>
               <p className="muted small">
-                Step {step} of 2 · Confirmation required
+                Step {step} of 2 · Owner permanent deletion
               </p>
             </div>
           </div>
@@ -76,19 +75,9 @@ export function DeleteGroupConfirmModal({
         {step === 1 ? (
           <div className="delete-group-step">
             <p className="delete-group-warning-text">
-              {isOwner ? (
-                <>
-                  Are you sure you want to permanently delete{" "}
-                  <strong>{group.name}</strong>? All messages, attachments, and
-                  member access will be permanently erased for everyone.
-                </>
-              ) : (
-                <>
-                  Are you sure you want to remove and leave{" "}
-                  <strong>{group.name}</strong>? It will be removed from your
-                  chats immediately.
-                </>
-              )}
+              Are you sure you want to permanently delete{" "}
+              <strong>{group.name}</strong>? All messages, attachments, and
+              member access will be permanently erased for everyone immediately.
             </p>
             <div className="delete-group-actions">
               <button
@@ -144,6 +133,100 @@ export function DeleteGroupConfirmModal({
             </div>
           </form>
         )}
+      </div>
+    </div>
+  );
+}
+
+interface RemoveGroupChatModalProps {
+  group: Pick<GroupSummary, "id" | "name">;
+  onCancel: () => void;
+  onConfirmRemoveChat: () => Promise<void>;
+}
+
+export function RemoveGroupChatModal({
+  group,
+  onCancel,
+  onConfirmRemoveChat,
+}: RemoveGroupChatModalProps) {
+  const [closing, setClosing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  function requestClose() {
+    if (busy || closing) return;
+    setClosing(true);
+    window.setTimeout(onCancel, 170);
+  }
+
+  async function handleConfirm() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onConfirmRemoveChat();
+      onCancel();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't clear group chat history.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className={`modal-backdrop ${closing ? "closing" : ""}`}
+      onClick={requestClose}
+    >
+      <div
+        className={`modal-card delete-group-modal ${closing ? "closing" : ""}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-head">
+          <div className="delete-group-title-wrap">
+            <span className="delete-group-danger-icon" aria-hidden="true">
+              <TrashIcon size={17} />
+            </span>
+            <div>
+              <h2>Remove chat</h2>
+              <p className="muted small">Clears history for you · Stays in group</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Close"
+            onClick={requestClose}
+          >
+            <CloseIcon size={18} />
+          </button>
+        </div>
+
+        <div className="delete-group-step">
+          <p className="delete-group-warning-text">
+            Clear your chat history in <strong>{group.name}</strong>? You will{" "}
+            <strong>stay in the group</strong> and still receive new messages,
+            while other members keep their copy of the chat.
+          </p>
+          {error ? <div className="form-error">{error}</div> : null}
+          <div className="delete-group-actions">
+            <button
+              type="button"
+              className="ghost-btn"
+              disabled={busy}
+              onClick={requestClose}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="danger-solid-btn"
+              disabled={busy}
+              onClick={() => void handleConfirm()}
+            >
+              {busy ? "Clearing…" : "Remove chat"}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

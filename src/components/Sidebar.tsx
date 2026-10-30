@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent }
 import { AnimatedModal } from "./AnimatedModal";
 import { Phone, Video } from "./CallIcons";
 import { ContextMenu } from "./ContextMenu";
-import { DeleteGroupConfirmModal } from "./DeleteGroupConfirmModal";
+import {
+  DeleteGroupConfirmModal,
+  RemoveGroupChatModal,
+} from "./DeleteGroupConfirmModal";
 import {
   switchToAccountSlot,
   useMultiAccountState,
@@ -124,6 +127,7 @@ export function Sidebar({
     y: number;
   } | null>(null);
   const [groupToDelete, setGroupToDelete] = useState<GroupSummary | null>(null);
+  const [groupToClearChat, setGroupToClearChat] = useState<GroupSummary | null>(null);
   const [chatActionError, setChatActionError] = useState<string | null>(null);
   const rowHoldTimerRef = useRef<number | null>(null);
   const rowHoldOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -1316,29 +1320,47 @@ export function Sidebar({
                   type="button"
                   role="menuitem"
                   className="destructive-menu-item"
-                  onClick={() => closeWithAnimation(() => setGroupToDelete(liveGroup))}
+                  onClick={() => closeWithAnimation(() => setGroupToClearChat(liveGroup))}
                 >
                   <span>
                     <TrashIcon size={15} />
                   </span>{" "}
-                  Delete group
+                  Remove chat
                 </button>
+                {liveGroup.role === "owner" && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="destructive-menu-item"
+                    onClick={() => closeWithAnimation(() => setGroupToDelete(liveGroup))}
+                  >
+                    <span>
+                      <TrashIcon size={15} />
+                    </span>{" "}
+                    Delete group
+                  </button>
+                )}
               </>
             );
           }}
         </ContextMenu>
       )}
-      {groupToDelete && (
+      {groupToClearChat && (
+        <RemoveGroupChatModal
+          group={groupToClearChat}
+          onCancel={() => setGroupToClearChat(null)}
+          onConfirmRemoveChat={async () => {
+            await store.clearGroupChatForMe(groupToClearChat.id);
+          }}
+        />
+      )}
+      {groupToDelete && groupToDelete.role === "owner" && (
         <DeleteGroupConfirmModal
           group={groupToDelete}
           onCancel={() => setGroupToDelete(null)}
           onConfirmDelete={async () => {
             const targetId = groupToDelete.id;
-            if (groupToDelete.role === "owner") {
-              await store.deleteGroup(targetId);
-            } else {
-              await store.leaveGroup(targetId);
-            }
+            await store.deleteGroup(targetId);
             if (store.activeGroupId === targetId) {
               store.setActiveGroupId(null);
             }

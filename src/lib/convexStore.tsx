@@ -46,6 +46,7 @@ import {
   unpackAvatarColorWithMeta,
 } from "./profileMetaEnvelope";
 import {
+  clearLocalGroupHistory,
   markLocalCommunityRead,
   markLocalDmRead,
   markLocalGroupRead,
@@ -741,13 +742,20 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       }
 
       const localGrp = userChatPrefs.groups[nextGroup.id];
+      const clearedAt = localGrp?.clearedAt ?? 0;
       const isSilenced = nextGroup.isSilenced ?? localGrp?.isSilenced ?? false;
       const isArchived = nextGroup.isArchived ?? localGrp?.isArchived ?? false;
-      let unreadCount = nextGroup.unreadCount;
+      const historyCleared = Boolean(
+        clearedAt > 0 && (!nextGroup.lastMessageAt || nextGroup.lastMessageAt <= clearedAt),
+      );
+      let unreadCount = historyCleared ? 0 : nextGroup.unreadCount;
       if (unreadCount === undefined) {
         const cachedGrpConv = getCachedGroupConversation(slotId, nextGroup.id);
         if (cachedGrpConv && cachedGrpConv.messages.length > 0 && me?.id) {
-          const cutoff = localGrp?.lastReadAt ?? userChatPrefs.initializedAt ?? 0;
+          const cutoff = Math.max(
+            clearedAt,
+            localGrp?.lastReadAt ?? userChatPrefs.initializedAt ?? 0,
+          );
           const exactCount = cachedGrpConv.messages.filter(
             (m) =>
               m.senderId !== me.id &&
@@ -765,6 +773,14 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
       return {
         ...nextGroup,
+        ...(historyCleared
+          ? {
+              lastMessage: "",
+              lastSenderId: undefined,
+              lastSenderName: undefined,
+              lastMentionedMe: false,
+            }
+          : {}),
         isSilenced,
         isArchived,
         unreadCount,
@@ -859,9 +875,16 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       void scanGroupRowsForE2EESignalsAsync(cachedGroup.rawRows);
     }
   }, [cachedGroup?.rawRows, e2eeSnapshot.myKeyId, e2eeSnapshot.ready, groupMessagesQuery]);
+  const activeGroupClearedAt = activeGroupId
+    ? (userChatPrefs.groups[activeGroupId]?.clearedAt ?? 0)
+    : 0;
   const groupFold = useMemo(() => {
     void e2eeSnapshot.version;
     const gid = activeGroupId ?? "";
+    const filterCleared = (items: GroupMessage[]) =>
+      activeGroupClearedAt > 0
+        ? items.filter((m) => m.createdAt > activeGroupClearedAt)
+        : items;
     const sourceRows =
       groupMessagesQuery !== undefined
         ? (groupMessagesQuery as GroupMessage[])
@@ -873,7 +896,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     if (groupMessagesQuery !== undefined) {
       return {
         ...folded,
-        messages: mergeLiveWithCachedMessages(folded.messages, cachedGroup?.messages),
+        messages: filterCleared(
+          mergeLiveWithCachedMessages(folded.messages, cachedGroup?.messages),
+        ),
       };
     }
     if (!cachedGroup) {
@@ -882,14 +907,17 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     if (cachedGroup.rawRows?.length && e2eeSnapshot.ready && folded.messages.length > 0) {
       return {
         ...folded,
-        messages: mergeLiveWithCachedMessages(folded.messages, cachedGroup.messages),
+        messages: filterCleared(
+          mergeLiveWithCachedMessages(folded.messages, cachedGroup.messages),
+        ),
       };
     }
     return {
       ...folded,
-      messages: cachedGroup.messages,
+      messages: filterCleared(cachedGroup.messages),
     };
   }, [
+    activeGroupClearedAt,
     activeGroupId,
     cachedGroup,
     e2eeSnapshot.ready,
@@ -2209,6 +2237,49 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const communityMessagesRef = useRef(communityMessages);
   communityMessagesRef.current = communityMessages;
 
+  const clearGroupChatForMe = useCallback<JaTextStore["clearGroupChatForMe"]>(
+    async (groupId) => {
+      const latestGrpTs = groupsRef.current.find((g) => g.id === groupId)?.lastMessageAt ?? 0;
+      const cutoff = Math.max(Date.now(), latestGrpTs);
+      if (me?.id) {
+        clearLocalGroupHistory(me.id, groupId, cutoff);
+      }
+      setCachedGroupConversation(slotId, groupId, {
+        messages: [],
+      });
+
+      // Also persist per-message hide flags on Convex in the background
+      // (while preserving E2EE key signals so future messages still decrypt!)
+      void (async () => {
+        try {
+          const rows = (await convex.query(api.groups.listMessages, {
+            groupId: groupId as Id<"groups">,
+          })) as GroupMessage[];
+          const deletableIds = rows
+            .filter(
+              (r) =>
+                r.createdAt <= cutoff &&
+                !String(r.id).startsWith("opt-") &&
+                !r.body.startsWith("__JATEXT_IK_V1__:") &&
+                !r.body.startsWith("__JATEXT_GK_V1__:"),
+            )
+            .map((r) => r.id);
+          for (let i = 0; i < deletableIds.length; i += 10) {
+            const batch = deletableIds.slice(i, i + 10);
+            await Promise.allSettled(
+              batch.map((id) =>
+                deleteGroupForMeMut({ messageId: id as Id<"groupMessages"> }),
+              ),
+            );
+          }
+        } catch {
+          // Local clearedAt cutoff already guarantees immediate & persistent hide
+        }
+      })();
+    },
+    [convex, deleteGroupForMeMut, me?.id, slotId],
+  );
+
   const setGroupSilenced = useCallback<JaTextStore["setGroupSilenced"]>(
     async (groupId, silenced) => {
       if (me?.id) {
@@ -2270,7 +2341,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const signInGoogle = useCallback<JaTextStore["signInGoogle"]>(
     async () => {
       if (!Capacitor.isNativePlatform()) {
-        await signIn("google");
+        await signIn("google", {
+          redirectTo: `${window.location.origin}/chats`,
+        });
         return;
       }
 
@@ -3991,6 +4064,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     removeGroupMember,
     leaveGroup,
     deleteGroup,
+    clearGroupChatForMe,
     setGroupSilenced,
     setGroupArchived,
     markGroupRead,

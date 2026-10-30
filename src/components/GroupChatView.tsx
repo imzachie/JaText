@@ -86,7 +86,10 @@ import {
 } from "./UiIcons";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { ContextMenu } from "./ContextMenu";
-import { DeleteGroupConfirmModal } from "./DeleteGroupConfirmModal";
+import {
+  DeleteGroupConfirmModal,
+  RemoveGroupChatModal,
+} from "./DeleteGroupConfirmModal";
 import { ForwardedMessageCard } from "./ForwardedMessageCard";
 import { MessageLinkEmbeds } from "./LinkEmbeds";
 import { MessageMarkdown } from "./MessageMarkdown";
@@ -1223,6 +1226,7 @@ export function GroupChatView({
     closing?: boolean;
   } | null>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [confirmRemoveChatOpen, setConfirmRemoveChatOpen] = useState(false);
   const [firstUnreadGroupMsgId, setFirstUnreadGroupMsgId] = useState<string | null>(null);
   const capturedUnreadForGroupRef = useRef<string | null>(null);
   const isMobileWallpaper = useIsMobileWallpaperSupported();
@@ -3573,32 +3577,52 @@ export function GroupChatView({
                 type="button"
                 role="menuitem"
                 className="destructive-menu-item"
-                onClick={() => closeWithAnimation(() => setConfirmDeleteOpen(true))}
+                onClick={() => closeWithAnimation(() => setConfirmRemoveChatOpen(true))}
               >
                 <span>
                   <TrashIcon size={15} />
                 </span>{" "}
-                Delete group
+                Remove chat
               </button>
+              {(group?.role ?? summary?.role) === "owner" && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="destructive-menu-item"
+                  onClick={() => closeWithAnimation(() => setConfirmDeleteOpen(true))}
+                >
+                  <span>
+                    <TrashIcon size={15} />
+                  </span>{" "}
+                  Delete group
+                </button>
+              )}
             </>
           )}
         </ContextMenu>
       )}
-      {confirmDeleteOpen && groupId && (
+      {confirmRemoveChatOpen && groupId && (
+        <RemoveGroupChatModal
+          group={{
+            id: groupId,
+            name: group?.name ?? summary?.name ?? "Group chat",
+          }}
+          onCancel={() => setConfirmRemoveChatOpen(false)}
+          onConfirmRemoveChat={async () => {
+            await store.clearGroupChatForMe(groupId);
+          }}
+        />
+      )}
+      {confirmDeleteOpen && groupId && (group?.role ?? summary?.role) === "owner" && (
         <DeleteGroupConfirmModal
           group={{
             id: groupId,
             name: group?.name ?? summary?.name ?? "Group chat",
-            role: group?.role ?? summary?.role ?? "member",
+            role: "owner",
           }}
           onCancel={() => setConfirmDeleteOpen(false)}
           onConfirmDelete={async () => {
-            const role = group?.role ?? summary?.role ?? "member";
-            if (role === "owner") {
-              await store.deleteGroup(groupId);
-            } else {
-              await store.leaveGroup(groupId);
-            }
+            await store.deleteGroup(groupId);
             closeManageModal();
             store.setActiveGroupId(null);
           }}
