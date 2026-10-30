@@ -26,6 +26,8 @@ import {
   getCachedGroupConversation,
   getSlotBootstrapCache,
   isPlaceholderEncryptedText,
+  markCachedBootstrapGroupRead,
+  markCachedDmMessagesRead,
   mergeLiveWithCachedMessages,
   preloadSlotChatCache,
   saveSlotBootstrapCache,
@@ -33,6 +35,12 @@ import {
   setCachedGroupConversation,
   useChatCacheVersion,
 } from "./chatCache";
+import {
+  applyRemoteSyncedThemeIfChanged,
+  registerThemeRemoteSyncHandler,
+  setThemeUserScope,
+  type SyncedThemePayload,
+} from "./themeEngine";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
 import {
   encodeForwardedBody,
@@ -163,9 +171,32 @@ import type {
 
 const PUSH_TOKEN_STORAGE_KEY = "jatext-push-token-v1";
 const ANDROID_AUTH_CALLBACK = "com.ahad00010.jatext://auth";
+export const CONVERSATION_MARKED_READ_EVENT = "jatext:conversation-marked-read";
 
 function isControlPayload(text: string): boolean {
   return text.startsWith("__JATEXT_CALL") || text.startsWith(WALLPAPER_PREFIX);
+}
+
+function isSilentWireOrControlBody(text?: string | null): boolean {
+  if (!text) return false;
+  return (
+    text.startsWith("__JATEXT_CALL_SIG__:") ||
+    text.startsWith("__JATEXT_GC_SIG__:") ||
+    text.startsWith("__JATEXT_REACT__:") ||
+    text.startsWith("__JATEXT_SEEN__:") ||
+    text.startsWith("__JATEXT_GROUP_SEEN_V1__:") ||
+    text.startsWith("__JATEXT_IK_V1__:") ||
+    text.startsWith("__JATEXT_GK_V1__:") ||
+    text.startsWith("__JATEXT_E2EE_IK__:") ||
+    text.startsWith("__JATEXT_E2EE_GK__:") ||
+    text.startsWith("__JATEXT_E2EE_VER__:") ||
+    text.startsWith(WALLPAPER_PREFIX) ||
+    text.startsWith(E2EE_BUBBLE_PREF_PREFIX) ||
+    text.startsWith(E2EE_DEVSYNC_REQ_PREFIX) ||
+    text.startsWith(E2EE_DEVSYNC_RES_PREFIX) ||
+    text.includes("(__JATEXT_CALL_CANCEL__") ||
+    text.includes("(__JATEXT_CALL_CLAIM__")
+  );
 }
 
 function cleanAttachmentMime(mime?: string): string | undefined {
@@ -365,6 +396,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       rawMe.avatarColor,
       rawMe.socials,
       rawMe.website,
+      rawMe.syncedTheme,
     );
     return {
       ...rawMe,
@@ -374,6 +406,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       syncedTheme: unpacked.syncedTheme,
     };
   }, [rawMe]);
+
+  useEffect(() => {
+    setThemeUserScope(me?.id);
+    if (me?.id) {
+      applyRemoteSyncedThemeIfChanged(me.id, me.syncedTheme, meQuery !== undefined);
+    }
+  }, [me?.id, me?.syncedTheme, meQuery]);
 
   const userChatPrefs = useUserChatPrefs(me?.id);
 
@@ -435,25 +474,6 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     saveSlotBootstrapCache(slotId, { friends });
   }, [friends, isAuthenticated, rawFriendsQuery, slotId]);
 
-  useEffect(() => {
-    if (!me?.id || previewsQuery === undefined) return;
-    const batch: Array<{ friendId: string; createdAt: number; isFromFriend: boolean }> = [];
-    for (const p of rawPreviews) {
-      if (
-        p.createdAt > 0 &&
-        !p.body.startsWith("__JATEXT_CALL_SIG__:") &&
-        !p.body.startsWith("__JATEXT_REACT__:")
-      ) {
-        batch.push({
-          friendId: p.friendId,
-          createdAt: p.createdAt,
-          isFromFriend: p.senderId === p.friendId,
-        });
-      }
-    }
-    recordIncomingDmPreviewsBatch(me.id, batch);
-  }, [me?.id, previewsQuery, rawPreviews]);
-
   const previews = useMemo(() => {
     // Reference e2eeSnapshot.version so previews re-decrypt immediately when keys arrive
     void e2eeSnapshot.version;
@@ -468,46 +488,95 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     return rawPreviews.map((raw) => {
       const hydrated = hydrateDecryptedChatPreview(raw, me.id, triggerE2EERerender);
       let resolvedBody = hydrated.body;
+      let effectiveSenderId = hydrated.senderId;
+      let effectiveCreatedAt = hydrated.createdAt;
+
       if (isPlaceholderEncryptedText(resolvedBody)) {
         const cached = cachedByFriend.get(hydrated.friendId);
         if (
           cached &&
           cached.createdAt === hydrated.createdAt &&
           cached.body &&
-          !isPlaceholderEncryptedText(cached.body)
+          !isPlaceholderEncryptedText(cached.body) &&
+          !isSilentWireOrControlBody(cached.body)
         ) {
           resolvedBody = cached.body;
         }
       }
 
+      const cachedConv = getCachedDmConversation(slotId, hydrated.friendId);
+      const isControlHead =
+        isSilentWireOrControlBody(raw.body) || isSilentWireOrControlBody(resolvedBody);
+
+      if (isControlHead) {
+        const lastVisibleCached = cachedConv?.messages
+          ? [...cachedConv.messages]
+              .reverse()
+              .find((m) => !m.unsentAt && !isSilentWireOrControlBody(m.body))
+          : undefined;
+        const cachedPreview = cachedByFriend.get(hydrated.friendId);
+        if (lastVisibleCached) {
+          resolvedBody = lastVisibleCached.body || (lastVisibleCached.attachmentName ?? "");
+          effectiveSenderId = lastVisibleCached.senderId;
+          effectiveCreatedAt = lastVisibleCached.createdAt;
+        } else if (cachedPreview && !isSilentWireOrControlBody(cachedPreview.body)) {
+          resolvedBody = cachedPreview.body;
+          effectiveSenderId = cachedPreview.senderId;
+          effectiveCreatedAt = cachedPreview.createdAt;
+        } else {
+          resolvedBody = "";
+        }
+      }
+
+      const isActivelyOpenDm =
+        activeChatId === hydrated.friendId &&
+        typeof document !== "undefined" &&
+        document.visibilityState === "visible";
+
       let unreadCount = raw.unreadCount;
-      if (unreadCount === undefined) {
+      if (isActivelyOpenDm || effectiveSenderId === me.id) {
+        unreadCount = 0;
+      } else if (unreadCount === undefined) {
         const dmPrefs = userChatPrefs.dms[hydrated.friendId];
-        const cachedConv = getCachedDmConversation(slotId, hydrated.friendId);
         if (cachedConv && cachedConv.messages.length > 0) {
-          const cutoff = dmPrefs?.lastReadAt ?? 0;
+          let myLatestSentTs = 0;
+          for (const m of cachedConv.messages) {
+            if (m.senderId === me.id && m.createdAt > myLatestSentTs) {
+              myLatestSentTs = m.createdAt;
+            }
+          }
+          const cutoff = Math.max(dmPrefs?.lastReadAt ?? 0, myLatestSentTs);
           const unreadInCached = cachedConv.messages.filter(
             (m) =>
               m.senderId === hydrated.friendId &&
               !m.unsentAt &&
               m.deliveryStatus !== "read" &&
               m.createdAt > cutoff &&
-              !m.body.startsWith("__JATEXT_CALL_SIG__:") &&
-              !m.body.startsWith("__JATEXT_REACT__:"),
+              !isSilentWireOrControlBody(m.body),
           ).length;
-          unreadCount = Math.max(unreadInCached, dmPrefs?.unreadTimestamps?.length ?? 0);
+          const maxCachedTs = cachedConv.messages.at(-1)?.createdAt ?? 0;
+          const extraUnfetched = (dmPrefs?.unreadTimestamps ?? []).filter(
+            (t) => t > cutoff && t > maxCachedTs,
+          ).length;
+          unreadCount = unreadInCached + extraUnfetched;
         } else {
-          unreadCount = dmPrefs?.unreadTimestamps?.length ?? 0;
+          const cutoff = dmPrefs?.lastReadAt ?? 0;
+          unreadCount = isControlHead
+            ? 0
+            : (dmPrefs?.unreadTimestamps ?? []).filter((t) => t > cutoff).length;
         }
       }
 
       return {
         ...hydrated,
+        senderId: effectiveSenderId,
+        createdAt: effectiveCreatedAt,
         body: resolvedBody,
         unreadCount,
       };
     });
   }, [
+    activeChatId,
     bootstrapCache?.previews,
     cacheVersion,
     canUseCachedSession,
@@ -519,6 +588,29 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     triggerE2EERerender,
     userChatPrefs.dms,
   ]);
+
+  useEffect(() => {
+    if (!me?.id || previewsQuery === undefined) return;
+    const rawByFriend = new Map(rawPreviews.map((r) => [r.friendId, r]));
+    const batch: Array<{ friendId: string; createdAt: number; isFromFriend: boolean }> = [];
+    for (const p of previews) {
+      const raw = rawByFriend.get(p.friendId);
+      if (
+        p.createdAt > 0 &&
+        p.body &&
+        !isPlaceholderEncryptedText(p.body) &&
+        !isSilentWireOrControlBody(p.body) &&
+        (!raw || !isSilentWireOrControlBody(raw.body))
+      ) {
+        batch.push({
+          friendId: p.friendId,
+          createdAt: p.createdAt,
+          isFromFriend: p.senderId === p.friendId,
+        });
+      }
+    }
+    recordIncomingDmPreviewsBatch(me.id, batch);
+  }, [me?.id, previews, previewsQuery, rawPreviews]);
 
   useEffect(() => {
     if (!isAuthenticated || previewsQuery === undefined) return;
@@ -690,21 +782,6 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     isAuthenticated ? {} : "skip",
   ) as GroupSummary[] | undefined;
 
-  useEffect(() => {
-    if (!me?.id || groupsQuery === undefined) return;
-    const batch: Array<{ groupId: string; lastMessageAt: number; isFromOther: boolean }> = [];
-    for (const grp of groupsQuery) {
-      if (grp.lastMessageAt > 0) {
-        batch.push({
-          groupId: grp.id,
-          lastMessageAt: grp.lastMessageAt,
-          isFromOther: Boolean(grp.lastSenderId && grp.lastSenderId !== me.id),
-        });
-      }
-    }
-    recordIncomingGroupSummariesBatch(me.id, batch);
-  }, [groupsQuery, me?.id]);
-
   const groups = useMemo(() => {
     void e2eeSnapshot.version;
     void cacheVersion;
@@ -736,9 +813,60 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           cached &&
           cached.lastMessageAt === nextGroup.lastMessageAt &&
           cached.lastMessage &&
-          !isPlaceholderEncryptedText(cached.lastMessage)
+          !isPlaceholderEncryptedText(cached.lastMessage) &&
+          !isSilentWireOrControlBody(cached.lastMessage)
         ) {
           nextGroup = { ...nextGroup, lastMessage: cached.lastMessage };
+        }
+      }
+
+      const cachedGrpConv = getCachedGroupConversation(slotId, nextGroup.id);
+      const isControlHead =
+        isSilentWireOrControlBody(rawGroup.lastMessage) ||
+        isSilentWireOrControlBody(group.lastMessage) ||
+        (formatted.isSignal && !formatted.text);
+
+      if (isControlHead && !(formatted.isSignal && formatted.text)) {
+        const lastVisibleCached = cachedGrpConv?.messages
+          ? [...cachedGrpConv.messages]
+              .reverse()
+              .find((m) => !m.unsentAt && !isSilentWireOrControlBody(m.body))
+          : undefined;
+        const cachedSummary = cachedByGroup.get(nextGroup.id);
+        if (lastVisibleCached) {
+          nextGroup = {
+            ...nextGroup,
+            lastMessage:
+              lastVisibleCached.body ||
+              (lastVisibleCached.attachmentName ??
+                (lastVisibleCached.stickerName ? "Sticker" : "")),
+            lastSenderId: lastVisibleCached.senderId,
+            lastSenderName: lastVisibleCached.senderName,
+            lastMessageAt: lastVisibleCached.createdAt,
+            lastMentionedMe: false,
+          };
+        } else if (
+          cachedSummary &&
+          cachedSummary.lastMessage &&
+          !isSilentWireOrControlBody(cachedSummary.lastMessage) &&
+          !isPlaceholderEncryptedText(cachedSummary.lastMessage)
+        ) {
+          nextGroup = {
+            ...nextGroup,
+            lastMessage: cachedSummary.lastMessage,
+            lastSenderId: cachedSummary.lastSenderId,
+            lastSenderName: cachedSummary.lastSenderName,
+            lastMessageAt: cachedSummary.lastMessageAt,
+            lastMentionedMe: false,
+          };
+        } else {
+          nextGroup = {
+            ...nextGroup,
+            lastMessage: "",
+            lastSenderId: undefined,
+            lastSenderName: undefined,
+            lastMentionedMe: false,
+          };
         }
       }
 
@@ -749,29 +877,52 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       const historyCleared = Boolean(
         clearedAt > 0 && (!nextGroup.lastMessageAt || nextGroup.lastMessageAt <= clearedAt),
       );
+      const isActivelyOpenGroup =
+        activeGroupId === nextGroup.id &&
+        typeof document !== "undefined" &&
+        document.visibilityState === "visible";
+
       let unreadCount = historyCleared ? 0 : nextGroup.unreadCount;
-      if (unreadCount === undefined) {
-        const cachedGrpConv = getCachedGroupConversation(slotId, nextGroup.id);
+      if (isActivelyOpenGroup || (me?.id && nextGroup.lastSenderId === me.id)) {
+        unreadCount = 0;
+      } else if (unreadCount === undefined) {
         if (cachedGrpConv && cachedGrpConv.messages.length > 0 && me?.id) {
+          let myLatestSentTs = 0;
+          for (const m of cachedGrpConv.messages) {
+            if (m.senderId === me.id && m.createdAt > myLatestSentTs) {
+              myLatestSentTs = m.createdAt;
+            }
+          }
           const cutoff = Math.max(
             clearedAt,
             localGrp?.lastReadAt ?? userChatPrefs.initializedAt ?? 0,
+            myLatestSentTs,
           );
           const exactCount = cachedGrpConv.messages.filter(
             (m) =>
               m.senderId !== me.id &&
               !m.unsentAt &&
               m.createdAt > cutoff &&
-              !m.body.startsWith("__JATEXT_CALL_SIG__:") &&
-              !m.body.startsWith("__JATEXT_REACT__:") &&
-              !m.body.startsWith("__JATEXT_GROUP_SEEN_V1__:"),
+              !isSilentWireOrControlBody(m.body),
           ).length;
-          unreadCount = Math.max(exactCount, localGrp?.unreadTimestamps?.length ?? 0);
+          const maxCachedTs = cachedGrpConv.messages.at(-1)?.createdAt ?? 0;
+          const extraUnfetched = (localGrp?.unreadTimestamps ?? []).filter(
+            (t) => t > cutoff && t > maxCachedTs,
+          ).length;
+          unreadCount = exactCount + extraUnfetched;
         } else {
-          unreadCount = localGrp?.unreadTimestamps?.length ?? 0;
+          const cutoff = Math.max(
+            clearedAt,
+            localGrp?.lastReadAt ?? userChatPrefs.initializedAt ?? 0,
+          );
+          unreadCount =
+            isControlHead || formatted.isSignal
+              ? 0
+              : (localGrp?.unreadTimestamps ?? []).filter((t) => t > cutoff).length;
         }
       }
 
+      const finalUnread = unreadCount ?? 0;
       return {
         ...nextGroup,
         ...(historyCleared
@@ -781,13 +932,16 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
               lastSenderName: undefined,
               lastMentionedMe: false,
             }
-          : {}),
+          : finalUnread === 0
+            ? { lastMentionedMe: false }
+            : {}),
         isSilenced,
         isArchived,
-        unreadCount,
+        unreadCount: finalUnread,
       };
     });
   }, [
+    activeGroupId,
     bootstrapCache?.groups,
     cacheVersion,
     canUseCachedSession,
@@ -800,6 +954,35 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     userChatPrefs.groups,
     userChatPrefs.initializedAt,
   ]);
+
+  useEffect(() => {
+    if (!me?.id || groupsQuery === undefined) return;
+    const rawByGroup = new Map(groupsQuery.map((g) => [g.id, g]));
+    const batch: Array<{ groupId: string; lastMessageAt: number; isFromOther: boolean }> = [];
+    for (const grp of groups) {
+      const raw = rawByGroup.get(grp.id);
+      const rawDecryptedReaction = raw
+        ? formatGroupReactionPreview(
+            hydrateDecryptedGroupSummary(raw, me.id, me.username).lastMessage,
+          ).isSignal
+        : false;
+      if (
+        grp.lastMessageAt > 0 &&
+        grp.lastMessage &&
+        !isPlaceholderEncryptedText(grp.lastMessage) &&
+        !isSilentWireOrControlBody(grp.lastMessage) &&
+        !rawDecryptedReaction &&
+        (!raw || !isSilentWireOrControlBody(raw.lastMessage))
+      ) {
+        batch.push({
+          groupId: grp.id,
+          lastMessageAt: grp.lastMessageAt,
+          isFromOther: Boolean(grp.lastSenderId && grp.lastSenderId !== me.id),
+        });
+      }
+    }
+    recordIncomingGroupSummariesBatch(me.id, batch);
+  }, [groups, groupsQuery, me?.id, me?.username]);
 
   useEffect(() => {
     if (!me?.id) return;
@@ -2233,8 +2416,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   );
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
+  const groupsQueryRef = useRef(groupsQuery);
+  groupsQueryRef.current = groupsQuery;
   const previewsRef = useRef(previews);
   previewsRef.current = previews;
+  const rawPreviewsRef = useRef(rawPreviews);
+  rawPreviewsRef.current = rawPreviews;
   const communityMessagesRef = useRef(communityMessages);
   communityMessagesRef.current = communityMessages;
 
@@ -2300,11 +2487,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const markGroupRead = useCallback<JaTextStore["markGroupRead"]>(
     async (groupId) => {
       if (me?.id) {
-        const latestGrpTs = groupsRef.current.find((g) => g.id === groupId)?.lastMessageAt;
-        markLocalGroupRead(me.id, groupId, latestGrpTs);
+        const hydratedTs = groupsRef.current.find((g) => g.id === groupId)?.lastMessageAt ?? 0;
+        const rawTs = groupsQueryRef.current?.find((g) => g.id === groupId)?.lastMessageAt ?? 0;
+        const cachedTs =
+          getCachedGroupConversation(slotId, groupId)?.messages.at(-1)?.createdAt ?? 0;
+        const maxTs = Math.max(hydratedTs, rawTs, cachedTs);
+        markLocalGroupRead(me.id, groupId, maxTs > 0 ? maxTs : undefined);
+      }
+      markCachedBootstrapGroupRead(slotId, groupId);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent(CONVERSATION_MARKED_READ_EVENT, { detail: { groupId } }),
+        );
       }
     },
-    [me?.id],
+    [me?.id, slotId],
   );
   const setCommunityMuted = useCallback<JaTextStore["setCommunityMuted"]>(
     async (muted) => {
@@ -2468,6 +2665,46 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     },
     [saveProfileMut, upload],
   );
+
+  const pendingThemeSyncPayloadRef = useRef<SyncedThemePayload | null>(null);
+  const isAuthenticatedRef = useRef(isAuthenticated);
+  isAuthenticatedRef.current = isAuthenticated;
+
+  useEffect(() => {
+    registerThemeRemoteSyncHandler(async (payload) => {
+      const cur = meRefForSave.current;
+      if (!isAuthenticatedRef.current || !cur?.id || !cur.username) {
+        pendingThemeSyncPayloadRef.current = payload;
+        return;
+      }
+      pendingThemeSyncPayloadRef.current = null;
+      await saveProfile({
+        displayName: cur.displayName,
+        username: cur.username,
+        bio: cur.bio,
+        pronouns: cur.pronouns,
+        avatarColor: cur.avatarColor,
+        syncedTheme: payload,
+      });
+    });
+    return () => registerThemeRemoteSyncHandler(null);
+  }, [saveProfile]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !meQuery?.id || !pendingThemeSyncPayloadRef.current) return;
+    const queued = pendingThemeSyncPayloadRef.current;
+    pendingThemeSyncPayloadRef.current = null;
+    const cur = meRefForSave.current;
+    if (!cur?.username) return;
+    void saveProfile({
+      displayName: cur.displayName,
+      username: cur.username,
+      bio: cur.bio,
+      pronouns: cur.pronouns,
+      avatarColor: cur.avatarColor,
+      syncedTheme: queued,
+    }).catch(() => undefined);
+  }, [isAuthenticated, meQuery?.id, saveProfile]);
 
   const sendFriendRequest = useCallback<JaTextStore["sendFriendRequest"]>(
     async (username) => {
@@ -3037,14 +3274,24 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const markMessagesRead = useCallback<JaTextStore["markMessagesRead"]>(
     async (friendId) => {
       if (me?.id) {
-        const latestPreviewTs = previewsRef.current.find(
-          (p) => p.friendId === friendId,
-        )?.createdAt;
-        markLocalDmRead(me.id, friendId, latestPreviewTs);
+        const hydratedTs =
+          previewsRef.current.find((p) => p.friendId === friendId)?.createdAt ?? 0;
+        const rawTs =
+          rawPreviewsRef.current.find((p) => p.friendId === friendId)?.createdAt ?? 0;
+        const cachedTs =
+          getCachedDmConversation(slotId, friendId)?.messages.at(-1)?.createdAt ?? 0;
+        const maxTs = Math.max(hydratedTs, rawTs, cachedTs);
+        markLocalDmRead(me.id, friendId, maxTs > 0 ? maxTs : undefined);
+      }
+      markCachedDmMessagesRead(slotId, friendId);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent(CONVERSATION_MARKED_READ_EVENT, { detail: { friendId } }),
+        );
       }
       await markReadMut({ otherId: friendId as Id<"users"> });
     },
-    [markReadMut, me?.id],
+    [markReadMut, me?.id, slotId],
   );
 
   const setActivity = useCallback<JaTextStore["setActivity"]>(

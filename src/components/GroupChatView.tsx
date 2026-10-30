@@ -16,6 +16,8 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { playMessageSound } from "../lib/alerts";
+import { CONVERSATION_MARKED_READ_EVENT } from "../lib/convexStore";
+import { getUserChatPrefs } from "../lib/userChatPrefs";
 import { isChatActivelyVisibleToUser } from "../lib/nativeBridge";
 import { useChatAutoScrollAndKeyboard } from "../lib/useChatAutoScrollAndKeyboard";
 import { upsertCallHistoryEntry } from "../lib/callHistory";
@@ -1363,24 +1365,108 @@ export function GroupChatView({
 
   const seenSyncInFlightRef = useRef(false);
   const lastPublishedSeenTsRef = useRef<Record<string, number>>({});
+  const initialUnreadCutoffRef = useRef<{ groupId: string | null; cutoff: number }>({
+    groupId: null,
+    cutoff: Number.POSITIVE_INFINITY,
+  });
 
-  // Capture initial first-unread boundary when opening group chat
+  // Snapshot the pre-open unread cutoff synchronously when switching into a group
+  if (initialUnreadCutoffRef.current.groupId !== groupId) {
+    let cutoff = Number.POSITIVE_INFINITY;
+    if (groupId && store.me?.id) {
+      const prefs = getUserChatPrefs(store.me.id).groups[groupId];
+      if (prefs && prefs.unreadTimestamps.length > 0) {
+        cutoff = Math.max(prefs.lastReadAt, prefs.clearedAt ?? 0);
+      }
+    }
+    initialUnreadCutoffRef.current = { groupId, cutoff };
+  }
+
+  // Reset divider state when switching groups
+  useEffect(() => {
+    setFirstUnreadGroupMsgId(null);
+  }, [groupId]);
+
+  const myLatestSentGroupTs = useMemo(() => {
+    if (!store.me?.id) return 0;
+    let maxTs = 0;
+    for (const m of conversationMessages) {
+      if (m.senderId === store.me.id && m.createdAt > maxTs) {
+        maxTs = m.createdAt;
+      }
+    }
+    return maxTs;
+  }, [conversationMessages, store.me?.id]);
+
+  // Capture initial first-unread boundary when opening group chat (strictly after my own latest reply)
   useEffect(() => {
     if (!groupId || !store.groupMessagesReady || capturedUnreadForGroupRef.current === groupId) {
       return;
     }
     capturedUnreadForGroupRef.current = groupId;
-    const unreadCnt = summary?.unreadCount ?? 0;
-    if (unreadCnt > 0 && conversationMessages.length > 0) {
-      const fromOthers = conversationMessages.filter(
-        (m) => m.senderId !== store.me?.id && !m.unsentAt && !isHiddenCallSignal(m.body),
-      );
-      const target = fromOthers[Math.max(0, fromOthers.length - unreadCnt)];
-      setFirstUnreadGroupMsgId(target?.id ?? null);
-    } else {
+    const baseCutoff = initialUnreadCutoffRef.current.cutoff;
+    if (!Number.isFinite(baseCutoff) || conversationMessages.length === 0) {
+      setFirstUnreadGroupMsgId(null);
+      return;
+    }
+    const effectiveCutoff = Math.max(baseCutoff, myLatestSentGroupTs);
+    const firstUnread = conversationMessages.find(
+      (m) =>
+        m.senderId !== store.me?.id &&
+        !m.unsentAt &&
+        !isHiddenCallSignal(m.body) &&
+        m.createdAt > effectiveCutoff,
+    );
+    setFirstUnreadGroupMsgId(firstUnread?.id ?? null);
+  }, [
+    conversationMessages,
+    groupId,
+    myLatestSentGroupTs,
+    store.groupMessagesReady,
+    store.me?.id,
+  ]);
+
+  // Clear UNREAD MESSAGES divider immediately on sending a message, "Mark as done", or after active reading
+  const prevMySentGroupTsRef = useRef(0);
+  useEffect(() => {
+    if (pendingMessages.length > 0) {
       setFirstUnreadGroupMsgId(null);
     }
-  }, [conversationMessages, groupId, store.groupMessagesReady, store.me?.id, summary?.unreadCount]);
+  }, [pendingMessages.length]);
+
+  useEffect(() => {
+    if (
+      prevMySentGroupTsRef.current > 0 &&
+      myLatestSentGroupTs > prevMySentGroupTsRef.current
+    ) {
+      setFirstUnreadGroupMsgId(null);
+    }
+    prevMySentGroupTsRef.current = myLatestSentGroupTs;
+  }, [myLatestSentGroupTs]);
+
+  useEffect(() => {
+    if (!firstUnreadGroupMsgId || !groupId) return;
+    let timer: number | null = null;
+    let cancelled = false;
+    void isChatActivelyVisibleToUser().then((visible) => {
+      if (cancelled || !visible) return;
+      timer = window.setTimeout(() => {
+        setFirstUnreadGroupMsgId(null);
+      }, 4500);
+    });
+    const onMarkedDone = (e: Event) => {
+      const detail = (e as CustomEvent<{ groupId?: string }>).detail;
+      if (detail?.groupId === groupId) {
+        setFirstUnreadGroupMsgId(null);
+      }
+    };
+    window.addEventListener(CONVERSATION_MARKED_READ_EVENT, onMarkedDone);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener(CONVERSATION_MARKED_READ_EVENT, onMarkedDone);
+    };
+  }, [firstUnreadGroupMsgId, groupId]);
 
   const {
     activeGroupId,
@@ -1390,20 +1476,21 @@ export function GroupChatView({
     sendGroupMessage,
   } = store;
 
-  // Publish / update our single in-place seen cursor row ONLY when actively viewing the group chat
+  // Publish / update our single in-place seen cursor row & mark local unread cleared when actively viewing
   useEffect(() => {
-    if (!groupId || !currentGroupMe?.id || activeGroupId !== groupId || conversationMessages.length === 0) {
+    if (!groupId || !currentGroupMe?.id || activeGroupId !== groupId) {
       return;
     }
     let cancelled = false;
 
     const maybePublishSeen = async () => {
       if (cancelled || activeGroupId !== groupId) return;
-      if (seenSyncInFlightRef.current) return;
       const activelyViewing = await isChatActivelyVisibleToUser();
-      if (cancelled || !activelyViewing || seenSyncInFlightRef.current) return;
+      if (cancelled || !activelyViewing) return;
 
       void markGroupRead(groupId).catch(() => undefined);
+
+      if (seenSyncInFlightRef.current || conversationMessages.length === 0) return;
 
       let latestVisible: GroupMessage | null = null;
       for (let i = conversationMessages.length - 1; i >= 0; i -= 1) {

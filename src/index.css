@@ -8328,6 +8328,17 @@ html[data-jt-mode="light"] select {
   }
 }
 
+.custom-theme-live-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 94;
+  pointer-events: none;
+  opacity: 0;
+  contain: strict;
+  will-change: background, opacity;
+  transition: opacity 90ms linear;
+}
+
 .custom-theme-drawer {
   position: fixed;
   top: 0;
@@ -8340,8 +8351,8 @@ html[data-jt-mode="light"] select {
   box-shadow: -16px 0 48px rgba(0, 0, 0, 0.42);
   display: flex;
   flex-direction: column;
-  backdrop-filter: blur(22px);
-  -webkit-backdrop-filter: blur(22px);
+  contain: layout style paint;
+  will-change: transform;
   animation: themeDrawerIn 210ms var(--ease-spring) both;
 }
 
@@ -8368,6 +8379,8 @@ html[data-jt-mode="light"] select {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -8484,12 +8497,15 @@ html[data-jt-mode="light"] select {
 
 .custom-theme-sv-thumb {
   position: absolute;
+  left: 0;
+  top: 0;
   width: 20px;
   height: 20px;
   border-radius: 50%;
   border: 3px solid #ffffff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
-  transform: translate(-50%, -50%);
+  transform: translate3d(0, 0, 0) translate(-50%, -50%);
+  will-change: transform;
   pointer-events: none;
 }
 
@@ -8497,10 +8513,11 @@ html[data-jt-mode="light"] select {
   appearance: none;
   -webkit-appearance: none;
   width: 100%;
-  height: 14px;
+  height: 16px;
   padding: 0 !important;
   border-radius: 999px !important;
   border: none !important;
+  touch-action: pan-x;
   background: linear-gradient(
     to right,
     #ff0000 0%,
@@ -8516,8 +8533,8 @@ html[data-jt-mode="light"] select {
 
 .custom-theme-hue-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: transparent;
   border: 3px solid #ffffff;
@@ -8610,7 +8627,8 @@ html[data-jt-mode="light"] select {
 
 .custom-theme-control-range {
   padding: 0 !important;
-  height: 6px;
+  height: 24px;
+  touch-action: pan-x;
   accent-color: var(--accent);
   cursor: pointer;
 }

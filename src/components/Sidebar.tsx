@@ -334,11 +334,25 @@ export function Sidebar({
   }
 
   async function updateChat(
-    action: "archive" | "unarchive" | "mute" | "unmute" | "delete" | "block" | "unblock" | "unfriend",
+    action:
+      | "markDone"
+      | "archive"
+      | "unarchive"
+      | "mute"
+      | "unmute"
+      | "delete"
+      | "block"
+      | "unblock"
+      | "unfriend",
   ) {
     if (!chatMenu) return;
     const { friend } = chatMenu;
     try {
+      if (action === "markDone") {
+        setChatMenu(null);
+        await store.markMessagesRead(friend.id);
+        return;
+      }
       if (action === "unfriend") {
         if (
           !window.confirm(
@@ -672,15 +686,28 @@ export function Sidebar({
                       </span>
                     </div>
                     <span className="muted small friend-preview">
-                      {groupDraft ? (
-                        <>
-                          <span className="draft-pill">Draft:</span> {groupDraft}
-                        </>
-                      ) : group.lastMessage ? (
-                        `${group.lastSenderId === me.id ? "You: " : group.lastSenderName ? `${group.lastSenderName}: ` : ""}${formatPreviewMessageText(group.lastMessage)}`
-                      ) : (
-                        `${group.memberCount} members`
-                      )}
+                      {(() => {
+                        if (groupDraft) {
+                          return (
+                            <>
+                              <span className="draft-pill">Draft:</span> {groupDraft}
+                            </>
+                          );
+                        }
+                        const groupPreviewText = group.lastMessage
+                          ? formatPreviewMessageText(group.lastMessage)
+                          : "";
+                        if (groupPreviewText) {
+                          const prefix =
+                            group.lastSenderId === me.id
+                              ? "You: "
+                              : group.lastSenderName
+                                ? `${group.lastSenderName}: `
+                                : "";
+                          return `${prefix}${groupPreviewText}`;
+                        }
+                        return `${group.memberCount} members`;
+                      })()}
                     </span>
                   </div>
                 </div>
@@ -774,15 +801,23 @@ export function Sidebar({
                       </span>
                     </div>
                     <span className="muted small friend-preview">
-                      {dmDraft ? (
-                        <>
-                          <span className="draft-pill">Draft:</span> {dmDraft}
-                        </>
-                      ) : preview?.createdAt ? (
-                        `${preview.senderId === me.id ? "You: " : ""}${formatPreviewMessageText(preview.body)}`
-                      ) : (
-                        `@${friend.username} · say hi!`
-                      )}
+                      {(() => {
+                        if (dmDraft) {
+                          return (
+                            <>
+                              <span className="draft-pill">Draft:</span> {dmDraft}
+                            </>
+                          );
+                        }
+                        const dmPreviewText =
+                          preview?.createdAt && preview.body
+                            ? formatPreviewMessageText(preview.body)
+                            : "";
+                        if (dmPreviewText) {
+                          return `${preview?.senderId === me.id ? "You: " : ""}${dmPreviewText}`;
+                        }
+                        return `@${friend.username} · say hi!`;
+                      })()}
                     </span>
                   </div>
                 </div>
@@ -1162,6 +1197,16 @@ export function Sidebar({
           <button
             type="button"
             role="menuitem"
+            onClick={() => void updateChat("markDone")}
+          >
+            <span>
+              <CheckIcon size={15} />
+            </span>
+            Mark as done
+          </button>
+          <button
+            type="button"
+            role="menuitem"
             onClick={() =>
               void updateChat(
                 previewByFriend.get(chatMenu.friend.id)?.isArchived ? "unarchive" : "archive",
@@ -1278,6 +1323,24 @@ export function Sidebar({
               store.groups.find((g) => g.id === groupMenu.group.id) ?? groupMenu.group;
             return (
               <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    closeWithAnimation(() => {
+                      void store.markGroupRead(liveGroup.id).catch((err) => {
+                        setChatActionError(
+                          friendlyError(err, "Couldn't mark group as read."),
+                        );
+                      });
+                    });
+                  }}
+                >
+                  <span>
+                    <CheckIcon size={15} />
+                  </span>
+                  Mark as done
+                </button>
                 <button
                   type="button"
                   role="menuitem"

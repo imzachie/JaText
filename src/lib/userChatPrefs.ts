@@ -197,13 +197,14 @@ export function clearLocalGroupHistory(userId: string, groupId: string, clearedA
 
 /**
  * Strictly idempotent: clears unreadTimestamps once and advances lastReadAt
- * only to latestMessageAt and never loops!
+ * past both latestMessageAt and any recorded unreadTimestamps without looping.
  */
 export function markLocalGroupRead(userId: string, groupId: string, latestMessageAt?: number) {
+  if (!userId || !groupId) return;
   const prev = getUserChatPrefs(userId);
   const existing = prev.groups[groupId];
   if (!existing) {
-    if (!latestMessageAt) return;
+    const initialReadAt = latestMessageAt && latestMessageAt > 0 ? latestMessageAt : 1;
     saveUserChatPrefs(userId, {
       ...prev,
       groups: {
@@ -211,15 +212,21 @@ export function markLocalGroupRead(userId: string, groupId: string, latestMessag
         [groupId]: {
           isSilenced: false,
           isArchived: false,
-          lastReadAt: latestMessageAt,
+          lastReadAt: initialReadAt,
           unreadTimestamps: [],
         },
       },
     });
     return;
   }
-  const candidate = latestMessageAt ?? existing.lastReadAt;
-  const nextReadAt = Math.max(candidate, existing.lastReadAt);
+  const maxRecordedUnread =
+    existing.unreadTimestamps.length > 0 ? Math.max(...existing.unreadTimestamps) : 0;
+  const nextReadAt = Math.max(
+    latestMessageAt ?? 0,
+    existing.lastReadAt,
+    maxRecordedUnread,
+    1,
+  );
   if (nextReadAt <= existing.lastReadAt && existing.unreadTimestamps.length === 0) {
     return;
   }
@@ -258,7 +265,34 @@ export function recordIncomingGroupSummariesBatch(
       };
       continue;
     }
-    if (!isFromOther || lastMessageAt <= existing.lastReadAt) continue;
+    if (!isFromOther) {
+      // User sent the latest message in this group: advance read cursor to at least lastMessageAt.
+      const nextReadAt = Math.max(existing.lastReadAt, lastMessageAt);
+      const remaining = existing.unreadTimestamps.filter((t) => t > nextReadAt);
+      if (
+        nextReadAt !== existing.lastReadAt ||
+        remaining.length !== existing.unreadTimestamps.length
+      ) {
+        if (!mutatedGroups) mutatedGroups = { ...prev.groups };
+        mutatedGroups[groupId] = {
+          ...existing,
+          lastReadAt: nextReadAt,
+          unreadTimestamps: remaining,
+        };
+      }
+      continue;
+    }
+    if (lastMessageAt <= existing.lastReadAt) {
+      const cleaned = existing.unreadTimestamps.filter((t) => t > existing.lastReadAt);
+      if (cleaned.length !== existing.unreadTimestamps.length) {
+        if (!mutatedGroups) mutatedGroups = { ...prev.groups };
+        mutatedGroups[groupId] = {
+          ...existing,
+          unreadTimestamps: cleaned,
+        };
+      }
+      continue;
+    }
     if (existing.unreadTimestamps.includes(lastMessageAt)) continue;
     const nextTimestamps = [...existing.unreadTimestamps, lastMessageAt]
       .filter((t) => t > existing.lastReadAt)
@@ -280,28 +314,34 @@ export function recordIncomingGroupSummariesBatch(
 
 /**
  * Strictly idempotent: clears unreadTimestamps once and advances lastReadAt
- * only to latestMessageAt and never loops!
+ * past both latestMessageAt and any recorded unreadTimestamps without looping.
  */
 export function markLocalDmRead(userId: string, friendId: string, latestMessageAt?: number) {
   if (!userId || !friendId) return;
   const prev = getUserChatPrefs(userId);
   const existing = prev.dms[friendId];
   if (!existing) {
-    if (!latestMessageAt) return;
+    const initialReadAt = latestMessageAt && latestMessageAt > 0 ? latestMessageAt : 1;
     saveUserChatPrefs(userId, {
       ...prev,
       dms: {
         ...prev.dms,
         [friendId]: {
-          lastReadAt: latestMessageAt,
+          lastReadAt: initialReadAt,
           unreadTimestamps: [],
         },
       },
     });
     return;
   }
-  const candidate = latestMessageAt ?? existing.lastReadAt;
-  const nextReadAt = Math.max(candidate, existing.lastReadAt);
+  const maxRecordedUnread =
+    existing.unreadTimestamps.length > 0 ? Math.max(...existing.unreadTimestamps) : 0;
+  const nextReadAt = Math.max(
+    latestMessageAt ?? 0,
+    existing.lastReadAt,
+    maxRecordedUnread,
+    1,
+  );
   if (nextReadAt <= existing.lastReadAt && existing.unreadTimestamps.length === 0) {
     return;
   }
@@ -337,7 +377,34 @@ export function recordIncomingDmPreviewsBatch(
       };
       continue;
     }
-    if (!isFromFriend || createdAt <= existing.lastReadAt) continue;
+    if (!isFromFriend) {
+      // User sent the latest message in this DM: advance read cursor to at least createdAt.
+      const nextReadAt = Math.max(existing.lastReadAt, createdAt);
+      const remaining = existing.unreadTimestamps.filter((t) => t > nextReadAt);
+      if (
+        nextReadAt !== existing.lastReadAt ||
+        remaining.length !== existing.unreadTimestamps.length
+      ) {
+        if (!mutatedDms) mutatedDms = { ...prev.dms };
+        mutatedDms[friendId] = {
+          ...existing,
+          lastReadAt: nextReadAt,
+          unreadTimestamps: remaining,
+        };
+      }
+      continue;
+    }
+    if (createdAt <= existing.lastReadAt) {
+      const cleaned = existing.unreadTimestamps.filter((t) => t > existing.lastReadAt);
+      if (cleaned.length !== existing.unreadTimestamps.length) {
+        if (!mutatedDms) mutatedDms = { ...prev.dms };
+        mutatedDms[friendId] = {
+          ...existing,
+          unreadTimestamps: cleaned,
+        };
+      }
+      continue;
+    }
     if (existing.unreadTimestamps.includes(createdAt)) continue;
     const nextTimestamps = [...existing.unreadTimestamps, createdAt]
       .filter((t) => t > existing.lastReadAt)

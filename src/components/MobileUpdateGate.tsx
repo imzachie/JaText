@@ -341,20 +341,20 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <p className="mobile-update-subtitle">Explore what&apos;s new.</p>
             <ul className="mobile-welcome-highlights">
               <li>
-                <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Categorised Settings on Desktop &amp; Mobile (Profile, Appearance, Socials &amp; Legal)
+                <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Zero-Lag 120 FPS Custom Theme Sliders, Picker &amp; Mobile Sheet Scrolling
               </li>
               <li>
-                <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Light, Ash, Dark &amp; Onyx Modes + 22 Gradient Themes &amp; Custom Theme Builder
+                <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
+                Instant Cross-Device Theme Sync Between Mobile &amp; Web/PC Accounts
               </li>
               <li>
                 <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Cross-Device Theme Sync &amp; Locked 60 FPS Mobile GPU / Touch Optimisations
+                Accurate Unread Badges &amp; Auto-Clearing Unread Message Indicators
               </li>
               <li>
                 <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Dark Eye-Friendly Hero Page with Official JaText Logo &amp; Cleaner Copy
+                Hold or Right-Click Any Group or Chat for Quick &quot;Mark as done&quot;
               </li>
             </ul>
             <button
