@@ -17,7 +17,7 @@ export interface NotificationPreferences {
 }
 
 export const DEFAULT_SOUND_LABEL = "JaText (Default)";
-export const DEFAULT_NOTIFICATION_SOUND_URL = "/sounds/jatext-notification.mp3";
+export const DEFAULT_NOTIFICATION_SOUND_URL = "/sounds/jatext-notification.mp3?v=6";
 export const DEFAULT_CALL_RINGTONE_URL = "/sounds/jatext-ringtone.wav";
 export const SOUND_PREFS_CHANGED_EVENT = "jatext:sound-prefs-changed";
 
