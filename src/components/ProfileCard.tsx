@@ -1,4 +1,7 @@
 import { useMemo, useState, type CSSProperties } from "react";
+import { useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { Phone, Video } from "./CallIcons";
 import { useCall } from "../lib/calling";
 import {
@@ -16,6 +19,13 @@ import type { ActivityStatus, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 import { LockIcon } from "./E2EEModals";
 import {
+  ExternalArrowIcon,
+  SocialBrandIcon,
+  WebsiteGlobeIcon,
+  getSocialPlatformMeta,
+  isHandleOnlyDiscord,
+} from "./SocialIcons";
+import {
   BanIcon,
   CheckIcon,
   CloseIcon,
@@ -27,6 +37,41 @@ import {
   UserMinusIcon,
 } from "./UiIcons";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
+
+function isSafeExternalProfileUrl(raw?: string): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function formatShortHostname(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return rawUrl;
+  }
+}
+
+function LiveUserProfileHydrator({
+  userId,
+  fallback,
+  children,
+}: {
+  userId: string;
+  fallback: JaUser;
+  children: (resolved: JaUser) => React.ReactNode;
+}) {
+  const canQuery = Boolean(userId && !userId.startsWith("pending-") && userId.length >= 16);
+  const fetched = useQuery(
+    api.users.byId,
+    canQuery ? { userId: userId as Id<"users"> } : "skip",
+  ) as JaUser | null | undefined;
+  return <>{children(fetched ?? fallback)}</>;
+}
 
 /**
  * The card shown when you click someone's pfp or the 3-dots header menu.
@@ -42,6 +87,10 @@ export function ProfileCard({
 }) {
   const color = colorById(user.avatarColor);
   const bannerSrc = normalizeAvatarSrc(user.bannerUrl);
+  const [copiedDiscordIdx, setCopiedDiscordIdx] = useState<number | null>(null);
+  const socials = user.socials ?? [];
+  const website = user.website && isSafeExternalProfileUrl(user.website.url) ? user.website : undefined;
+
   return (
     <div
       className="profile-card"
@@ -67,6 +116,98 @@ export function ProfileCard({
           </div>
         </div>
         {user.bio ? <p className="profile-bio">{user.bio}</p> : null}
+
+        {(socials.length > 0 || website) && (
+          <div className="profile-links-section">
+            {socials.length > 0 && (
+              <div className="profile-socials-block">
+                <span className="profile-links-label">Socials</span>
+                <div className="profile-socials-grid">
+                  {socials.map((soc, idx) => {
+                    const meta = getSocialPlatformMeta(soc.platform);
+                    const handleOnlyDiscord = isHandleOnlyDiscord(soc);
+                    const validUrl = !handleOnlyDiscord && isSafeExternalProfileUrl(soc.url);
+
+                    if (validUrl) {
+                      return (
+                        <a
+                          key={`${soc.platform}-${idx}`}
+                          href={soc.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="profile-social-pill"
+                          style={{ "--social-accent": meta.accent } as CSSProperties}
+                          title={`Open ${meta.label}: ${soc.handle}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <span className="profile-social-pill-icon" style={{ color: meta.accent }}>
+                            <SocialBrandIcon platform={soc.platform} size={14} />
+                          </span>
+                          <span className="profile-social-pill-text">
+                            <strong>{meta.label}</strong>
+                            <span>{soc.handle}</span>
+                          </span>
+                          <ExternalArrowIcon size={12} />
+                        </a>
+                      );
+                    }
+
+                    return (
+                      <button
+                        key={`${soc.platform}-${idx}`}
+                        type="button"
+                        className="profile-social-pill"
+                        style={{ "--social-accent": meta.accent } as CSSProperties}
+                        title={`Copy ${meta.label} username: ${soc.handle}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void navigator.clipboard?.writeText(soc.handle).then(() => {
+                            setCopiedDiscordIdx(idx);
+                            window.setTimeout(() => setCopiedDiscordIdx(null), 1800);
+                          });
+                        }}
+                      >
+                        <span className="profile-social-pill-icon" style={{ color: meta.accent }}>
+                          <SocialBrandIcon platform={soc.platform} size={14} />
+                        </span>
+                        <span className="profile-social-pill-text">
+                          <strong>{meta.label}</strong>
+                          <span>
+                            {copiedDiscordIdx === idx ? "Copied username!" : soc.handle}
+                          </span>
+                        </span>
+                        <CopyIcon size={12} />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {website && (
+              <div className="profile-website-block">
+                <span className="profile-links-label">Website</span>
+                <a
+                  href={website.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="profile-website-card"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span className="profile-website-icon">
+                    <WebsiteGlobeIcon size={16} />
+                  </span>
+                  <span className="profile-website-info">
+                    <strong>{website.title}</strong>
+                    <span>{formatShortHostname(website.url)}</span>
+                  </span>
+                  <ExternalArrowIcon size={13} />
+                </a>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="profile-color-row">
           <span className="color-dot" style={{ background: color.hex }} />
           Avatar color: <strong>{color.name}</strong>
@@ -218,7 +359,27 @@ export function ProfileModal({
           <CloseIcon size={17} />
         </button>
         <div className="profile-modal-scroll">
-          <ProfileCard user={user} status={status} />
+          {store.mode === "convex" ? (
+            <LiveUserProfileHydrator
+              userId={user.id}
+              fallback={
+                me?.id === user.id
+                  ? me
+                  : friends.find((f) => f.id === user.id) ?? user
+              }
+            >
+              {(resolvedUser) => <ProfileCard user={resolvedUser} status={status} />}
+            </LiveUserProfileHydrator>
+          ) : (
+            <ProfileCard
+              user={
+                me?.id === user.id
+                  ? me
+                  : friends.find((f) => f.id === user.id) ?? user
+              }
+              status={status}
+            />
+          )}
 
           <section className="profile-e2ee-section" aria-label="End-to-End Encryption">
             <div className="profile-e2ee-header">

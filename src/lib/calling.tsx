@@ -1481,7 +1481,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         timestamp: invite.ts || Date.now(),
       });
 
-      if (!preview.isMuted && me.statusPreference !== "dnd") {
+      if (!preview.isMuted && !preview.isArchived && me.statusPreference !== "dnd") {
         if (Capacitor.isNativePlatform()) {
           void JaTextNative.triggerIncomingCallWake({
             senderId: caller.id,

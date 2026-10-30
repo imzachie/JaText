@@ -917,7 +917,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         timestamp: invite.ts || now,
       });
 
-      if (me.statusPreference !== "dnd") {
+      if (!grp.isSilenced && !grp.isArchived && me.statusPreference !== "dnd") {
         if (Capacitor.isNativePlatform()) {
           void JaTextNative.triggerIncomingCallWake({
             groupId: grp.id,

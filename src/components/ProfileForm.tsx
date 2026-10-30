@@ -1,9 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { AVATAR_COLORS, colorById } from "../lib/colors";
 import { useJaText } from "../lib/store";
-import { USERNAME_REGEX, usernameLockInfo, type JaUser } from "../lib/types";
+import {
+  USERNAME_REGEX,
+  usernameLockInfo,
+  type JaUser,
+  type UserSocialLink,
+} from "../lib/types";
 import { Avatar } from "./Avatar";
-import { EditIcon, ImageIcon, LockClosedIcon } from "./UiIcons";
+import {
+  SOCIAL_PLATFORMS,
+  SocialBrandIcon,
+  WebsiteGlobeIcon,
+  getSocialPlatformMeta,
+} from "./SocialIcons";
+import { CloseIcon, EditIcon, ImageIcon, LockClosedIcon, PlusIcon } from "./UiIcons";
 
 type ImageState =
   | { kind: "keep" }
@@ -30,6 +41,12 @@ export function ProfileForm({
   const [bio, setBio] = useState(initial.bio);
   const [pronouns, setPronouns] = useState(initial.pronouns);
   const [avatarColor, setAvatarColor] = useState(initial.avatarColor || "yellow");
+  const [socials, setSocials] = useState<UserSocialLink[]>(initial.socials ?? []);
+  const [selectedPlatform, setSelectedPlatform] = useState<string>("discord");
+  const [customPlatformName, setCustomPlatformName] = useState<string>("");
+  const [socialInput, setSocialInput] = useState<string>("");
+  const [websiteTitle, setWebsiteTitle] = useState<string>(initial.website?.title ?? "");
+  const [websiteUrl, setWebsiteUrl] = useState<string>(initial.website?.url ?? "");
   const [avatar, setAvatar] = useState<ImageState>({ kind: "keep" });
   const [banner, setBanner] = useState<ImageState>({ kind: "keep" });
   const [nameStatus, setNameStatus] = useState<{ ok: boolean; text: string } | null>(null);
@@ -47,6 +64,21 @@ export function ProfileForm({
   const bannerPreview =
     banner.kind === "new" ? banner.preview : banner.kind === "removed" ? undefined : initial.bannerUrl;
 
+  const previewWebsite = useMemo(() => {
+    const cleanUrl = websiteUrl.trim();
+    const cleanTitle = websiteTitle.trim();
+    if (!cleanUrl && !cleanTitle) return undefined;
+    const normalizedUrl = cleanUrl
+      ? /^[a-z][a-z0-9+.-]*:/i.test(cleanUrl)
+        ? cleanUrl
+        : `https://${cleanUrl}`
+      : "";
+    return {
+      title: cleanTitle || cleanUrl || "Website",
+      url: normalizedUrl,
+    };
+  }, [websiteTitle, websiteUrl]);
+
   const previewUser: JaUser = useMemo(
     () => ({
       ...initial,
@@ -57,9 +89,21 @@ export function ProfileForm({
       avatarColor,
       avatarUrl: avatarPreview,
       bannerUrl: bannerPreview,
+      socials,
+      website: previewWebsite,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [displayName, username, bio, pronouns, avatarColor, avatarPreview, bannerPreview],
+    [
+      displayName,
+      username,
+      bio,
+      pronouns,
+      avatarColor,
+      avatarPreview,
+      bannerPreview,
+      socials,
+      previewWebsite,
+    ],
   );
 
   // live username availability check
@@ -94,6 +138,48 @@ export function ProfileForm({
     set({ kind: "new", file, preview: URL.createObjectURL(file) });
   }
 
+  function handleAddSocial() {
+    setError(null);
+    const raw = socialInput.trim();
+    if (!raw) return;
+    const spec =
+      SOCIAL_PLATFORMS.find((p) => p.id === selectedPlatform) ?? SOCIAL_PLATFORMS[0];
+    const platformKey =
+      spec.id === "other"
+        ? (customPlatformName.trim() || "Social").slice(0, 32)
+        : spec.id;
+    const built = spec.buildUrl(raw);
+    try {
+      const parsed = new URL(built.url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        setError("Social URL must start with http:// or https://");
+        return;
+      }
+    } catch {
+      setError("Please enter a valid handle or profile URL.");
+      return;
+    }
+    setSocials((prev) => {
+      const filtered = prev.filter(
+        (item) => item.platform.toLowerCase() !== platformKey.toLowerCase(),
+      );
+      return [
+        ...filtered,
+        {
+          platform: platformKey,
+          handle: built.handle.slice(0, 100),
+          url: built.url.slice(0, 300),
+        },
+      ].slice(0, 16);
+    });
+    setSocialInput("");
+    if (spec.id === "other") setCustomPlatformName("");
+  }
+
+  function handleRemoveSocial(index: number) {
+    setSocials((prev) => prev.filter((_, i) => i !== index));
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -103,6 +189,63 @@ export function ProfileForm({
       );
       return;
     }
+
+    // If user typed a social in the input box and hit Save directly without clicking Connect, include it!
+    let finalSocials = socials;
+    if (socialInput.trim()) {
+      const spec =
+        SOCIAL_PLATFORMS.find((p) => p.id === selectedPlatform) ?? SOCIAL_PLATFORMS[0];
+      const platformKey =
+        spec.id === "other"
+          ? (customPlatformName.trim() || "Social").slice(0, 32)
+          : spec.id;
+      const built = spec.buildUrl(socialInput.trim());
+      try {
+        const parsed = new URL(built.url);
+        if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+          finalSocials = [
+            ...socials.filter(
+              (item) => item.platform.toLowerCase() !== platformKey.toLowerCase(),
+            ),
+            {
+              platform: platformKey,
+              handle: built.handle.slice(0, 100),
+              url: built.url.slice(0, 300),
+            },
+          ].slice(0, 16);
+        }
+      } catch {
+        setError("Enter a valid social account handle or URL.");
+        return;
+      }
+    }
+
+    let finalWebsite: { title: string; url: string } | null = null;
+    if (websiteUrl.trim() || websiteTitle.trim()) {
+      if (!websiteUrl.trim()) {
+        setError("Enter a URL for your website (for example, https://example.com).");
+        return;
+      }
+      const candidateUrl = /^[a-z][a-z0-9+.-]*:/i.test(websiteUrl.trim())
+        ? websiteUrl.trim()
+        : `https://${websiteUrl.trim()}`;
+      try {
+        const parsed = new URL(candidateUrl);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          setError("Website URL must start with http:// or https://");
+          return;
+        }
+        const hostFallback = parsed.hostname.replace(/^www\./, "") || "Website";
+        finalWebsite = {
+          title: (websiteTitle.trim() || hostFallback).slice(0, 60),
+          url: parsed.toString().slice(0, 300),
+        };
+      } catch {
+        setError("Enter a valid website URL (for example, https://example.com).");
+        return;
+      }
+    }
+
     setBusy(true);
     try {
       await store.saveProfile({
@@ -113,7 +256,10 @@ export function ProfileForm({
         avatarColor,
         avatarFile: avatar.kind === "new" ? avatar.file : avatar.kind === "removed" ? null : undefined,
         bannerFile: banner.kind === "new" ? banner.file : banner.kind === "removed" ? null : undefined,
+        socials: finalSocials,
+        website: finalWebsite,
       });
+      setSocialInput("");
       onDone?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save your profile.");
@@ -293,6 +439,148 @@ export function ProfileForm({
             </button>
           ))}
         </div>
+      </fieldset>
+
+      <fieldset className="color-fieldset socials-fieldset">
+        <legend>Socials</legend>
+        <p className="muted small">
+          Connect your Discord, YouTube, X, and other social accounts. Anyone viewing your profile picture can click your connected socials.
+        </p>
+
+        {socials.length > 0 && (
+          <div className="connected-socials-list">
+            {socials.map((soc, idx) => {
+              const meta = getSocialPlatformMeta(soc.platform);
+              return (
+                <div
+                  key={`${soc.platform}-${idx}`}
+                  className="connected-social-item"
+                  style={{ "--social-accent": meta.accent } as CSSProperties}
+                >
+                  <span className="connected-social-icon" style={{ color: meta.accent }}>
+                    <SocialBrandIcon platform={soc.platform} size={16} />
+                  </span>
+                  <div className="connected-social-info">
+                    <strong>{meta.label}</strong>
+                    <span>{soc.handle}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-btn connected-social-remove"
+                    aria-label={`Remove ${meta.label}`}
+                    title="Disconnect"
+                    onClick={() => handleRemoveSocial(idx)}
+                  >
+                    <CloseIcon size={14} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="social-platform-chips" role="group" aria-label="Choose social platform">
+          {SOCIAL_PLATFORMS.map((plat) => {
+            const active = selectedPlatform === plat.id;
+            return (
+              <button
+                type="button"
+                key={plat.id}
+                className={`social-platform-chip ${active ? "active" : ""}`}
+                style={{ "--social-accent": plat.accent } as CSSProperties}
+                onClick={() => setSelectedPlatform(plat.id)}
+              >
+                <span style={{ color: plat.accent, display: "inline-flex" }}>
+                  <SocialBrandIcon platform={plat.id} size={14} />
+                </span>
+                <span>{plat.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedPlatform === "other" && (
+          <input
+            type="text"
+            value={customPlatformName}
+            onChange={(e) => setCustomPlatformName(e.target.value)}
+            placeholder="Platform name (e.g. SoundCloud, Behance,Threads)"
+            maxLength={32}
+          />
+        )}
+
+        <div className="social-connect-row">
+          <input
+            type="text"
+            value={socialInput}
+            onChange={(e) => setSocialInput(e.target.value)}
+            placeholder={
+              SOCIAL_PLATFORMS.find((p) => p.id === selectedPlatform)?.placeholder ??
+              "Username or profile URL"
+            }
+            maxLength={260}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleAddSocial();
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="ghost-btn social-connect-btn"
+            disabled={!socialInput.trim()}
+            onClick={handleAddSocial}
+          >
+            <PlusIcon size={15} />
+            <span>Connect</span>
+          </button>
+        </div>
+      </fieldset>
+
+      <fieldset className="color-fieldset website-fieldset">
+        <legend>Website</legend>
+        <p className="muted small">
+          Add a website title and URL — it appears right underneath your socials on your profile card.
+        </p>
+        <div className="website-inputs-grid">
+          <label className="website-field-label">
+            <span>Title</span>
+            <input
+              type="text"
+              value={websiteTitle}
+              onChange={(e) => setWebsiteTitle(e.target.value)}
+              placeholder="e.g. Portfolio, My Channel, Blog"
+              maxLength={60}
+            />
+          </label>
+          <label className="website-field-label">
+            <span>URL</span>
+            <div className="website-url-input-wrap">
+              <WebsiteGlobeIcon size={15} />
+              <input
+                type="text"
+                value={websiteUrl}
+                onChange={(e) => setWebsiteUrl(e.target.value)}
+                placeholder="https://example.com"
+                maxLength={300}
+              />
+            </div>
+          </label>
+        </div>
+        {(websiteTitle || websiteUrl) && (
+          <button
+            type="button"
+            className="mini-btn"
+            style={{ justifySelf: "start" }}
+            onClick={() => {
+              setWebsiteTitle("");
+              setWebsiteUrl("");
+            }}
+          >
+            Clear website
+          </button>
+        )}
       </fieldset>
 
       {error && <div className="error-box">{error}</div>}

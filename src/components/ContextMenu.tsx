@@ -6,6 +6,8 @@ export function ContextMenu({
   y,
   label,
   className,
+  variant = "context",
+  externalClosing = false,
   onClose,
   children,
 }: {
@@ -13,8 +15,12 @@ export function ContextMenu({
   y: number;
   label: string;
   className: string;
+  variant?: "context" | "dropdown";
+  externalClosing?: boolean;
   onClose: () => void;
-  children: ReactNode;
+  children:
+    | ReactNode
+    | ((helpers: { closeWithAnimation: (afterClose?: () => void) => void }) => ReactNode);
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
   const openedAtRef = useRef<number>(Date.now());
@@ -23,13 +29,27 @@ export function ContextMenu({
   const [position, setPosition] = useState({ left: x, top: y });
   const [closing, setClosing] = useState(false);
 
+  const closeWithAnimation = useCallback(
+    (afterClose?: () => void) => {
+      if (closing) return;
+      setClosing(true);
+      window.setTimeout(() => {
+        onClose();
+        afterClose?.();
+      }, 165);
+    },
+    [closing, onClose],
+  );
+
   const requestClose = useCallback(() => {
-    if (closing) return;
-    setClosing(true);
-    window.setTimeout(() => {
-      onClose();
-    }, 165);
-  }, [closing, onClose]);
+    closeWithAnimation();
+  }, [closeWithAnimation]);
+
+  useEffect(() => {
+    if (externalClosing && !closing) {
+      closeWithAnimation();
+    }
+  }, [closeWithAnimation, closing, externalClosing]);
 
   useEffect(() => {
     openedAtRef.current = Date.now();
@@ -94,7 +114,9 @@ export function ContextMenu({
     >
       <div
         ref={menuRef}
-        className={`${className} ${closing ? "is-closing closing" : ""}`}
+        className={`${className} ${variant === "dropdown" ? "header-dropdown-menu" : ""} ${
+          closing || externalClosing ? "is-closing closing" : ""
+        }`}
         role="menu"
         aria-label={label}
         style={{ left: position.left, top: position.top }}
@@ -124,7 +146,7 @@ export function ContextMenu({
           event.stopPropagation();
         }}
       >
-        {children}
+        {typeof children === "function" ? children({ closeWithAnimation }) : children}
       </div>
     </div>,
     document.body,

@@ -86,6 +86,23 @@ export const byId = query({
  *
  * avatarId / bannerId: undefined = keep, null = remove, id = new upload.
  */
+function normalizeSafeHttpUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Only http:// or https:// links are allowed.");
+    }
+    return parsed.toString().slice(0, 300);
+  } catch {
+    throw new Error("Enter a valid URL (for example, https://example.com).");
+  }
+}
+
 export const saveProfile = mutation({
   args: {
     displayName: v.string(),
@@ -95,6 +112,24 @@ export const saveProfile = mutation({
     avatarColor: v.string(),
     avatarId: v.optional(v.union(v.id("_storage"), v.null())),
     bannerId: v.optional(v.union(v.id("_storage"), v.null())),
+    socials: v.optional(
+      v.array(
+        v.object({
+          platform: v.string(),
+          handle: v.string(),
+          url: v.string(),
+        }),
+      ),
+    ),
+    website: v.optional(
+      v.union(
+        v.object({
+          title: v.string(),
+          url: v.string(),
+        }),
+        v.null(),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const me = await requireUser(ctx);
@@ -129,6 +164,41 @@ export const saveProfile = mutation({
       );
     }
 
+    const sanitizedSocials =
+      args.socials !== undefined
+        ? args.socials
+            .map((item) => {
+              const platform = item.platform.trim().slice(0, 32);
+              const handle = item.handle.trim().slice(0, 100);
+              const url = item.url.trim() ? normalizeSafeHttpUrl(item.url) : "";
+              if (!platform || (!handle && !url)) return null;
+              return { platform, handle: handle || url, url };
+            })
+            .filter(
+              (item): item is { platform: string; handle: string; url: string } =>
+                item !== null,
+            )
+            .slice(0, 16)
+        : undefined;
+
+    let sanitizedWebsite: { title: string; url: string } | undefined | null = undefined;
+    if (args.website !== undefined) {
+      if (args.website === null || (!args.website.title.trim() && !args.website.url.trim())) {
+        sanitizedWebsite = null;
+      } else {
+        const cleanUrl = normalizeSafeHttpUrl(args.website.url);
+        const fallbackTitle = (() => {
+          try {
+            return new URL(cleanUrl).hostname.replace(/^www\./, "");
+          } catch {
+            return "Website";
+          }
+        })();
+        const cleanTitle = (args.website.title.trim() || fallbackTitle).slice(0, 60);
+        sanitizedWebsite = { title: cleanTitle, url: cleanUrl };
+      }
+    }
+
     await ctx.db.patch(me._id, {
       displayName,
       username,
@@ -144,6 +214,10 @@ export const saveProfile = mutation({
         : {}),
       ...(args.bannerId !== undefined
         ? { bannerId: args.bannerId ?? undefined }
+        : {}),
+      ...(sanitizedSocials !== undefined ? { socials: sanitizedSocials } : {}),
+      ...(sanitizedWebsite !== undefined
+        ? { website: sanitizedWebsite ?? undefined }
         : {}),
     });
   },

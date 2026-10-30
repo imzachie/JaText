@@ -53,7 +53,9 @@ import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { ChatAttachmentImage } from "./ChatAttachmentImage";
 import {
+  ArchiveIcon,
   ArrowLeftIcon,
+  BellIcon,
   BellOffIcon,
   BubblePaletteIcon,
   CameraIcon,
@@ -73,6 +75,7 @@ import {
   PlusIcon,
   ReplyIcon,
   SendIcon,
+  SettingsIcon,
   ShieldCheckIcon,
   SmilePlusIcon,
   SparklesIcon,
@@ -83,11 +86,19 @@ import {
 } from "./UiIcons";
 import { WallpaperModal, type WallpaperChoice } from "./WallpaperModal";
 import { ContextMenu } from "./ContextMenu";
+import { DeleteGroupConfirmModal } from "./DeleteGroupConfirmModal";
+import { ForwardedMessageCard } from "./ForwardedMessageCard";
+import { MessageLinkEmbeds } from "./LinkEmbeds";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { SwipeToReply } from "./SwipeToReply";
 import { Avatar } from "./Avatar";
 import { StickerPicker } from "./StickerPicker";
+import {
+  clearPendingMessageJump,
+  getPendingMessageJump,
+  subscribeMessageJumps,
+} from "../lib/forwardedContext";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { useJaText } from "../lib/store";
@@ -226,6 +237,8 @@ const GroupChatHistory = memo(function GroupChatHistory({
   activeCallId,
   groupCallStatesById,
   seenByMessageId,
+  groupId,
+  firstUnreadMessageId,
 }: {
   messages: GroupMessage[];
   messagesReady: boolean;
@@ -248,6 +261,8 @@ const GroupChatHistory = memo(function GroupChatHistory({
   activeCallId: string | null;
   groupCallStatesById: Record<string, { isEnded: boolean; durationSec?: number }>;
   seenByMessageId: Map<string, GroupSeenReader[]>;
+  groupId: string;
+  firstUnreadMessageId: string | null;
 }) {
   const memberById = useMemo(
     () => new Map(members.map((member) => [member.id, member])),
@@ -310,6 +325,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   };
 
   const [visibleCount, setVisibleCount] = useState(50);
+  const [highlightedJumpId, setHighlightedJumpId] = useState<string | null>(null);
   const prependAnchorRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
   const firstMsgKey = messages[0]?.id ?? "";
   const windowedMessages = useMemo(
@@ -320,6 +336,37 @@ const GroupChatHistory = memo(function GroupChatHistory({
     [messages, visibleCount],
   );
   void firstMsgKey;
+
+  useEffect(() => {
+    if (!groupId) return;
+    const attemptJump = () => {
+      const pending = getPendingMessageJump("group", groupId);
+      if (!pending || messages.length === 0) return;
+      const idx = messages.findIndex((m) => m.id === pending.messageId);
+      if (idx === -1) return;
+      const neededCount = messages.length - idx + 8;
+      if (neededCount > visibleCount) {
+        setVisibleCount(Math.min(messages.length, neededCount));
+        return;
+      }
+      clearPendingMessageJump(pending.messageId);
+      initialScrollAllowedRef.current = false;
+      window.requestAnimationFrame(() => {
+        const el = document.getElementById(`group-message-${pending.messageId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          setHighlightedJumpId(pending.messageId);
+          window.setTimeout(() => {
+            setHighlightedJumpId((cur) => (cur === pending.messageId ? null : cur));
+          }, 2400);
+        }
+      });
+    };
+    attemptJump();
+    return subscribeMessageJumps(() => {
+      attemptJump();
+    });
+  }, [groupId, initialScrollAllowedRef, messages, visibleCount]);
 
   useLayoutEffect(() => {
     const anchor = prependAnchorRef.current;
@@ -434,8 +481,15 @@ const GroupChatHistory = memo(function GroupChatHistory({
         return (
           <Fragment key={message.renderKey ?? message.id}>
             {showDay && <div className="day-divider">{day}</div>}
+            {firstUnreadMessageId === message.id && (
+              <div className="unread-messages-divider" role="separator">
+                <span>Unread messages</span>
+              </div>
+            )}
             <div
-              className={`msg-row group-msg-row ${mine ? "mine" : "theirs"}`}
+              className={`msg-row group-msg-row ${mine ? "mine" : "theirs"} ${
+                highlightedJumpId === message.id ? "jump-highlight-pulse" : ""
+              }`}
               id={`group-message-${message.id}`}
             >
               <div className={`msg-col group-msg-col ${mine ? "mine" : "theirs"}`}>
@@ -452,11 +506,6 @@ const GroupChatHistory = memo(function GroupChatHistory({
                       )}
                     </button>
                   </div>
-                )}
-                {message.forwardedFromName && (
-                  <span className={`message-meta forwarded-label ${!mine ? "group-indented" : ""}`}>
-                    <ForwardIcon size={12} /> Forwarded from {message.forwardedFromName}
-                  </span>
                 )}
                 <div className={`group-bubble-line ${mine ? "mine" : "theirs"}`}>
                   {!mine && (
@@ -486,6 +535,14 @@ const GroupChatHistory = memo(function GroupChatHistory({
                       onTouchEnd={cancelBubbleTouchHold}
                       onTouchCancel={cancelBubbleTouchHold}
                     >
+                      {!message.unsentAt &&
+                        (message.forwardedContext || message.forwardedFromName) && (
+                          <ForwardedMessageCard
+                            context={message.forwardedContext}
+                            legacySenderName={message.forwardedFromName}
+                            fallbackTimestamp={message.createdAt}
+                          />
+                        )}
                       {message.replyTo && (
                         <button
                           type="button"
@@ -659,11 +716,14 @@ const GroupChatHistory = memo(function GroupChatHistory({
                           </button>
                         )}
                         {message.body && (
-                          <MessageMarkdown
-                            text={message.body}
-                            mine={mine}
-                            mentionContext={mentionContext}
-                          />
+                          <>
+                            <MessageMarkdown
+                              text={message.body}
+                              mine={mine}
+                              mentionContext={mentionContext}
+                            />
+                            <MessageLinkEmbeds text={message.body} />
+                          </>
                         )}
                       </>
                     )}
@@ -1157,6 +1217,14 @@ export function GroupChatView({
   const [composerSeed, setComposerSeed] = useState({ nonce: 0, text: "" });
   const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
   const [wallpaperOpen, setWallpaperOpen] = useState(false);
+  const [headerMoreMenu, setHeaderMoreMenu] = useState<{
+    x: number;
+    y: number;
+    closing?: boolean;
+  } | null>(null);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [firstUnreadGroupMsgId, setFirstUnreadGroupMsgId] = useState<string | null>(null);
+  const capturedUnreadForGroupRef = useRef<string | null>(null);
   const isMobileWallpaper = useIsMobileWallpaperSupported();
   const [file, setFile] = useState<File | null>(null);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
@@ -1292,6 +1360,24 @@ export function GroupChatView({
   const seenSyncInFlightRef = useRef(false);
   const lastPublishedSeenTsRef = useRef<Record<string, number>>({});
 
+  // Capture initial first-unread boundary when opening group chat
+  useEffect(() => {
+    if (!groupId || !store.groupMessagesReady || capturedUnreadForGroupRef.current === groupId) {
+      return;
+    }
+    capturedUnreadForGroupRef.current = groupId;
+    const unreadCnt = summary?.unreadCount ?? 0;
+    if (unreadCnt > 0 && conversationMessages.length > 0) {
+      const fromOthers = conversationMessages.filter(
+        (m) => m.senderId !== store.me?.id && !m.unsentAt && !isHiddenCallSignal(m.body),
+      );
+      const target = fromOthers[Math.max(0, fromOthers.length - unreadCnt)];
+      setFirstUnreadGroupMsgId(target?.id ?? null);
+    } else {
+      setFirstUnreadGroupMsgId(null);
+    }
+  }, [conversationMessages, groupId, store.groupMessagesReady, store.me?.id, summary?.unreadCount]);
+
   // Publish / update our single in-place seen cursor row ONLY when actively viewing the group chat
   useEffect(() => {
     if (!groupId || !store.me || store.activeGroupId !== groupId || conversationMessages.length === 0) {
@@ -1304,6 +1390,8 @@ export function GroupChatView({
       if (seenSyncInFlightRef.current) return;
       const activelyViewing = await isChatActivelyVisibleToUser();
       if (cancelled || !activelyViewing || seenSyncInFlightRef.current) return;
+
+      void store.markGroupRead(groupId).catch(() => undefined);
 
       let latestVisible: GroupMessage | null = null;
       for (let i = conversationMessages.length - 1; i >= 0; i -= 1) {
@@ -2401,10 +2489,18 @@ export function GroupChatView({
           </button>
           <button
             type="button"
-            className="icon-btn chat-more-btn"
+            className={`icon-btn chat-more-btn ${headerMoreMenu ? "menu-open" : ""}`}
             title="Group options"
             aria-label="Group options"
-            onClick={openManageModal}
+            aria-expanded={Boolean(headerMoreMenu)}
+            onClick={(event) => {
+              if (headerMoreMenu) {
+                setHeaderMoreMenu((cur) => (cur ? { ...cur, closing: true } : null));
+                return;
+              }
+              const rect = event.currentTarget.getBoundingClientRect();
+              setHeaderMoreMenu({ x: rect.right - 220, y: rect.bottom + 8 });
+            }}
           >
             <MoreVerticalIcon size={18} />
           </button>
@@ -2489,6 +2585,8 @@ export function GroupChatView({
         activeCallId={activeGroupCallId}
         groupCallStatesById={groupCallStatesById}
         seenByMessageId={groupSeenData.seenByMessageId}
+        groupId={groupId ?? ""}
+        firstUnreadMessageId={firstUnreadGroupMsgId}
       />
 
       {error && (
@@ -3356,17 +3454,7 @@ export function GroupChatView({
                   type="button"
                   className="danger-btn"
                   disabled={busy}
-                  onClick={() => {
-                    if (window.confirm("Delete this group and its messages for everyone?")) {
-                      void runManageAction(
-                        () => store.deleteGroup(group.id),
-                        () => {
-                          closeManageModal();
-                          store.setActiveGroupId(null);
-                        },
-                      );
-                    }
-                  }}
+                  onClick={() => setConfirmDeleteOpen(true)}
                 >
                   Delete group
                 </button>
@@ -3394,6 +3482,115 @@ export function GroupChatView({
             </div>
           </section>
         </div>
+      )}
+      {headerMoreMenu && groupId && (
+        <ContextMenu
+          x={headerMoreMenu.x}
+          y={headerMoreMenu.y}
+          variant="dropdown"
+          externalClosing={Boolean(headerMoreMenu.closing)}
+          label={`Options for ${group?.name ?? summary?.name ?? "Group"}`}
+          className="message-context-menu conversation-context-menu"
+          onClose={() => setHeaderMoreMenu(null)}
+        >
+          {({ closeWithAnimation }) => (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => closeWithAnimation(() => openManageModal())}
+              >
+                <span>
+                  <SettingsIcon size={15} />
+                </span>{" "}
+                Group settings
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => closeWithAnimation(() => setBubbleStyleOpen(true))}
+              >
+                <span>
+                  <BubblePaletteIcon size={15} />
+                </span>{" "}
+                Bubble style
+              </button>
+              {isMobileWallpaper && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => closeWithAnimation(() => setWallpaperOpen(true))}
+                >
+                  <span>
+                    <ImageIcon size={15} />
+                  </span>{" "}
+                  Group wallpaper
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const curSilenced = Boolean(summary?.isSilenced);
+                  closeWithAnimation(() => {
+                    void store.setGroupSilenced(groupId, !curSilenced);
+                  });
+                }}
+              >
+                <span>
+                  {summary?.isSilenced ? <BellIcon size={15} /> : <BellOffIcon size={15} />}
+                </span>{" "}
+                {summary?.isSilenced ? "Unsilence group" : "Silence group"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const curArchived = Boolean(summary?.isArchived);
+                  closeWithAnimation(() => {
+                    void store.setGroupArchived(groupId, !curArchived);
+                  });
+                }}
+              >
+                <span>
+                  <ArchiveIcon size={15} />
+                </span>{" "}
+                {summary?.isArchived ? "Unarchive group" : "Archive group"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="destructive-menu-item"
+                onClick={() => closeWithAnimation(() => setConfirmDeleteOpen(true))}
+              >
+                <span>
+                  <TrashIcon size={15} />
+                </span>{" "}
+                Delete group
+              </button>
+            </>
+          )}
+        </ContextMenu>
+      )}
+      {confirmDeleteOpen && groupId && (
+        <DeleteGroupConfirmModal
+          group={{
+            id: groupId,
+            name: group?.name ?? summary?.name ?? "Group chat",
+            role: group?.role ?? summary?.role ?? "member",
+          }}
+          onCancel={() => setConfirmDeleteOpen(false)}
+          onConfirmDelete={async () => {
+            const role = group?.role ?? summary?.role ?? "member";
+            if (role === "owner") {
+              await store.deleteGroup(groupId);
+            } else {
+              await store.leaveGroup(groupId);
+            }
+            closeManageModal();
+            store.setActiveGroupId(null);
+          }}
+        />
       )}
       {inspectingMessage && (
         <MessageEncryptionModal

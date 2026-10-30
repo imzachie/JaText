@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { AnimatedModal } from "./AnimatedModal";
 import { Phone, Video } from "./CallIcons";
 import { ContextMenu } from "./ContextMenu";
+import { DeleteGroupConfirmModal } from "./DeleteGroupConfirmModal";
 import {
   switchToAccountSlot,
   useMultiAccountState,
@@ -18,7 +19,7 @@ import { useDraftsMap } from "../lib/drafts";
 import { useGroupCall } from "../lib/groupCalling";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
-import { OFFICIAL_COMMUNITY_ID, type JaUser } from "../lib/types";
+import { OFFICIAL_COMMUNITY_ID, type GroupSummary, type JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 import {
   ArchiveIcon,
@@ -113,7 +114,55 @@ export function Sidebar({
     y: number;
     friend: JaUser;
   } | null>(null);
+  const [groupMenu, setGroupMenu] = useState<{
+    x: number;
+    y: number;
+    group: GroupSummary;
+  } | null>(null);
+  const [communityMenu, setCommunityMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [groupToDelete, setGroupToDelete] = useState<GroupSummary | null>(null);
   const [chatActionError, setChatActionError] = useState<string | null>(null);
+  const rowHoldTimerRef = useRef<number | null>(null);
+  const rowHoldOriginRef = useRef<{ x: number; y: number } | null>(null);
+
+  function cancelRowHold() {
+    if (rowHoldTimerRef.current !== null) {
+      window.clearTimeout(rowHoldTimerRef.current);
+      rowHoldTimerRef.current = null;
+    }
+    rowHoldOriginRef.current = null;
+  }
+
+  function startRowHold(
+    event: React.TouchEvent<HTMLElement>,
+    onTrigger: (x: number, y: number) => void,
+  ) {
+    if (event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const { clientX, clientY } = touch;
+    rowHoldOriginRef.current = { x: clientX, y: clientY };
+    if (rowHoldTimerRef.current !== null) window.clearTimeout(rowHoldTimerRef.current);
+    rowHoldTimerRef.current = window.setTimeout(() => {
+      rowHoldTimerRef.current = null;
+      onTrigger(clientX, clientY);
+    }, 450);
+  }
+
+  function moveRowHold(event: React.TouchEvent<HTMLElement>) {
+    if (!rowHoldOriginRef.current || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    if (
+      Math.hypot(
+        touch.clientX - rowHoldOriginRef.current.x,
+        touch.clientY - rowHoldOriginRef.current.y,
+      ) > 12
+    ) {
+      cancelRowHold();
+    }
+  }
 
   // greeting under the logo — re-check every minute so it flips
   // from "Good afternoon" to "Good evening" etc. on its own
@@ -190,9 +239,47 @@ export function Sidebar({
           (previewByFriend.get(a.id)?.createdAt ?? 0),
       );
   }, [friends, previewByFriend, search, showArchived]);
-  const archivedCount = friends.filter(
-    (friend) => previewByFriend.get(friend.id)?.isArchived,
-  ).length;
+
+  const visibleGroups = useMemo(
+    () =>
+      store.groups.filter(
+        (group) =>
+          Boolean(group.isArchived) === showArchived &&
+          (!search.trim() || group.name.toLowerCase().includes(search.toLowerCase())),
+      ),
+    [search, showArchived, store.groups],
+  );
+
+  const archivedCount =
+    friends.filter((friend) => previewByFriend.get(friend.id)?.isArchived).length +
+    store.groups.filter((group) => group.isArchived).length;
+
+  const totalUnreadCount = useMemo(() => {
+    let total = 0;
+    if (!store.communityMuted && activeChatId !== OFFICIAL_COMMUNITY_ID) {
+      total += store.communityUnreadCount;
+    }
+    for (const grp of store.groups) {
+      if (!grp.isArchived && !grp.isSilenced && store.activeGroupId !== grp.id) {
+        total += grp.unreadCount ?? 0;
+      }
+    }
+    for (const friend of friends) {
+      const prev = previewByFriend.get(friend.id);
+      if (prev && !prev.isArchived && !prev.isMuted && activeChatId !== friend.id) {
+        total += prev.unreadCount ?? 0;
+      }
+    }
+    return total;
+  }, [
+    activeChatId,
+    friends,
+    previewByFriend,
+    store.activeGroupId,
+    store.communityMuted,
+    store.communityUnreadCount,
+    store.groups,
+  ]);
 
   if (!me) return null;
 
@@ -223,7 +310,23 @@ export function Sidebar({
     event.preventDefault();
     event.stopPropagation();
     setChatActionError(null);
+    setGroupMenu(null);
+    setCommunityMenu(null);
     setChatMenu({ x: event.clientX, y: event.clientY, friend });
+  }
+
+  function openGroupMenuAt(x: number, y: number, group: GroupSummary) {
+    setChatActionError(null);
+    setChatMenu(null);
+    setCommunityMenu(null);
+    setGroupMenu({ x, y, group });
+  }
+
+  function openCommunityMenuAt(x: number, y: number) {
+    setChatActionError(null);
+    setChatMenu(null);
+    setGroupMenu(null);
+    setCommunityMenu({ x, y });
   }
 
   async function updateChat(
@@ -381,6 +484,11 @@ export function Sidebar({
         <button className={tab === "chats" ? "active" : ""} onClick={() => setTab("chats")}>
           <MessageCircleIcon size={15} />
           <span>Chats</span>
+          {totalUnreadCount > 0 && (
+            <span className="badge unread-tab-badge">
+              {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
+            </span>
+          )}
         </button>
         <button className={tab === "calls" ? "active" : ""} onClick={() => setTab("calls")}>
           <Phone size={15} />
@@ -424,14 +532,49 @@ export function Sidebar({
           <div className="friend-list">
             {!showArchived && (
               <div
-                className={`friend-row official-community-row ${activeChatId === OFFICIAL_COMMUNITY_ID ? "active" : ""}`}
+                className={`friend-row official-community-row ${
+                  activeChatId === OFFICIAL_COMMUNITY_ID ? "active" : ""
+                } ${
+                  store.communityUnreadCount > 0 && activeChatId !== OFFICIAL_COMMUNITY_ID
+                    ? "has-unread"
+                    : ""
+                }`}
                 onClick={() => setActiveChatId(OFFICIAL_COMMUNITY_ID)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openCommunityMenuAt(event.clientX, event.clientY);
+                }}
+                onTouchStart={(event) =>
+                  startRowHold(event, (x, y) => openCommunityMenuAt(x, y))
+                }
+                onTouchMove={moveRowHold}
+                onTouchEnd={cancelRowHold}
+                onTouchCancel={cancelRowHold}
               >
                 <img className="community-mark" src="/jatext-logo-icon.png" alt="" />
                 <div className="friend-row-text">
                   <div className="friend-row-top">
                     <strong>JaText Community</strong>
                     <span className="friend-row-badges">
+                      {store.communityMuted && (
+                        <span title="Muted" className="muted-row-icon">
+                          <BellOffIcon size={13} />
+                        </span>
+                      )}
+                      {store.communityUnreadCount > 0 &&
+                        activeChatId !== OFFICIAL_COMMUNITY_ID && (
+                          <span
+                            className={`unread-indicator-badge ${
+                              store.communityMuted ? "muted-unread" : ""
+                            }`}
+                            title={`${store.communityUnreadCount} unread`}
+                          >
+                            {store.communityUnreadCount > 99
+                              ? "99+"
+                              : store.communityUnreadCount}
+                          </span>
+                        )}
                       <span className="verified-badge" title="Verified">
                         <CheckIcon size={11} strokeWidth={3} />
                       </span>
@@ -450,72 +593,103 @@ export function Sidebar({
                 </div>
               </div>
             )}
-            {!showArchived &&
-              store.groups
-                .filter(
-                  (group) =>
-                    !search.trim() || group.name.toLowerCase().includes(search.toLowerCase()),
-                )
-                .map((group) => {
-                  const groupDraft = draftsMap[`group:${group.id}`];
-                  return (
+            {visibleGroups.map((group) => {
+              const groupDraft = draftsMap[`group:${group.id}`];
+              const groupUnread =
+                store.activeGroupId === group.id ? 0 : (group.unreadCount ?? 0);
+              return (
+                <div
+                  className={`friend-row group-list-row ${
+                    store.activeGroupId === group.id ? "active" : ""
+                  } ${groupUnread > 0 ? "has-unread" : ""}`}
+                  key={group.id}
+                  onClick={() => store.setActiveGroupId(group.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openGroupMenuAt(event.clientX, event.clientY, group);
+                  }}
+                  onTouchStart={(event) =>
+                    startRowHold(event, (x, y) => openGroupMenuAt(x, y, group))
+                  }
+                  onTouchMove={moveRowHold}
+                  onTouchEnd={cancelRowHold}
+                  onTouchCancel={cancelRowHold}
+                >
+                  {group.avatarUrl ? (
+                    <img
+                      className="group-avatar sidebar-group-avatar"
+                      src={group.avatarUrl}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      decoding="async"
+                      loading="lazy"
+                    />
+                  ) : (
                     <div
-                      className={`friend-row group-list-row ${store.activeGroupId === group.id ? "active" : ""}`}
-                      key={group.id}
-                      onClick={() => store.setActiveGroupId(group.id)}
+                      className="group-avatar sidebar-group-avatar group-avatar-fallback"
+                      aria-hidden="true"
                     >
-                      {group.avatarUrl ? (
-                        <img
-                          className="group-avatar sidebar-group-avatar"
-                          src={group.avatarUrl}
-                          alt=""
-                          referrerPolicy="no-referrer"
-                          decoding="async"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div
-                          className="group-avatar sidebar-group-avatar group-avatar-fallback"
-                          aria-hidden="true"
-                        >
-                          <UsersIcon size={20} />
-                        </div>
-                      )}
-                      <div className="friend-row-text">
-                        <div className="friend-row-top">
-                          <strong>{group.name}</strong>
-                          <span className="friend-row-badges">
-                            {group.lastMentionedMe && store.activeGroupId !== group.id && (
-                              <span className="badge mention-badge" title="You were mentioned">
-                                @
-                              </span>
-                            )}
-                            {group.lastMessageAt ? (
-                              <span className="muted small">{fmtTime(group.lastMessageAt)}</span>
-                            ) : null}
-                          </span>
-                        </div>
-                        <span className="muted small friend-preview">
-                          {groupDraft ? (
-                            <>
-                              <span className="draft-pill">Draft:</span> {groupDraft}
-                            </>
-                          ) : group.lastMessage ? (
-                            `${group.lastSenderId === me.id ? "You: " : group.lastSenderName ? `${group.lastSenderName}: ` : ""}${formatPreviewMessageText(group.lastMessage)}`
-                          ) : (
-                            `${group.memberCount} members`
-                          )}
-                        </span>
-                      </div>
+                      <UsersIcon size={20} />
                     </div>
-                  );
-                })}
-            {sortedFriends.length === 0 && friends.length > 0 && (
-              <div className="empty-box">
-                <p>{showArchived ? "No archived chats." : "No chats match your search."}</p>
-              </div>
-            )}
-            {friends.length === 0 && (
+                  )}
+                  <div className="friend-row-text">
+                    <div className="friend-row-top">
+                      <strong>{group.name}</strong>
+                      <span className="friend-row-badges">
+                        {group.isArchived && (
+                          <span title="Archived">
+                            <ArchiveIcon size={13} />
+                          </span>
+                        )}
+                        {group.isSilenced && (
+                          <span title="Silenced">
+                            <BellOffIcon size={13} />
+                          </span>
+                        )}
+                        {group.lastMentionedMe && store.activeGroupId !== group.id && (
+                          <span className="badge mention-badge" title="You were mentioned">
+                            @
+                          </span>
+                        )}
+                        {groupUnread > 0 && (
+                          <span
+                            className={`unread-indicator-badge ${
+                              group.isSilenced || group.isArchived ? "muted-unread" : ""
+                            }`}
+                            title={`${groupUnread} unread`}
+                          >
+                            {groupUnread > 99 ? "99+" : groupUnread}
+                          </span>
+                        )}
+                        {group.lastMessageAt ? (
+                          <span className="muted small">{fmtTime(group.lastMessageAt)}</span>
+                        ) : null}
+                      </span>
+                    </div>
+                    <span className="muted small friend-preview">
+                      {groupDraft ? (
+                        <>
+                          <span className="draft-pill">Draft:</span> {groupDraft}
+                        </>
+                      ) : group.lastMessage ? (
+                        `${group.lastSenderId === me.id ? "You: " : group.lastSenderName ? `${group.lastSenderName}: ` : ""}${formatPreviewMessageText(group.lastMessage)}`
+                      ) : (
+                        `${group.memberCount} members`
+                      )}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+            {sortedFriends.length === 0 &&
+              visibleGroups.length === 0 &&
+              (friends.length > 0 || store.groups.length > 0) && (
+                <div className="empty-box">
+                  <p>{showArchived ? "No archived chats." : "No chats match your search."}</p>
+                </div>
+              )}
+            {friends.length === 0 && store.groups.length === 0 && (
               <div className="empty-box">
                 <p>
                   <UserPlusIcon size={18} style={{ color: "var(--accent)" }} /> No friends yet
@@ -532,12 +706,27 @@ export function Sidebar({
             {sortedFriends.map((friend) => {
               const preview = previewByFriend.get(friend.id);
               const dmDraft = draftsMap[`dm:${friend.id}`];
+              const dmUnread =
+                activeChatId === friend.id ? 0 : (preview?.unreadCount ?? 0);
               return (
                 <div
                   key={friend.id}
-                  className={`friend-row ${activeChatId === friend.id ? "active" : ""}`}
+                  className={`friend-row ${activeChatId === friend.id ? "active" : ""} ${
+                    dmUnread > 0 ? "has-unread" : ""
+                  }`}
                   onClick={() => setActiveChatId(friend.id)}
                   onContextMenu={(event) => openChatMenu(event, friend)}
+                  onTouchStart={(event) =>
+                    startRowHold(event, (x, y) => {
+                      setChatActionError(null);
+                      setGroupMenu(null);
+                      setCommunityMenu(null);
+                      setChatMenu({ x, y, friend });
+                    })
+                  }
+                  onTouchMove={moveRowHold}
+                  onTouchEnd={cancelRowHold}
+                  onTouchCancel={cancelRowHold}
                 >
                   <Avatar
                     user={friend}
@@ -563,6 +752,16 @@ export function Sidebar({
                         {preview?.isMuted && (
                           <span title="Muted">
                             <BellOffIcon size={13} />
+                          </span>
+                        )}
+                        {dmUnread > 0 && (
+                          <span
+                            className={`unread-indicator-badge ${
+                              preview?.isMuted || preview?.isArchived ? "muted-unread" : ""
+                            }`}
+                            title={`${dmUnread} unread`}
+                          >
+                            {dmUnread > 99 ? "99+" : dmUnread}
                           </span>
                         )}
                         {preview?.createdAt ? (
@@ -1030,6 +1229,121 @@ export function Sidebar({
             Delete chat
           </button>
         </ContextMenu>
+      )}
+      {communityMenu && (
+        <ContextMenu
+          x={communityMenu.x}
+          y={communityMenu.y}
+          label="Actions for JaText Community"
+          className="message-context-menu conversation-context-menu"
+          onClose={() => setCommunityMenu(null)}
+        >
+          {({ closeWithAnimation }) => (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const nextMuted = !store.communityMuted;
+                closeWithAnimation(() => {
+                  void store.setCommunityMuted(nextMuted).catch((err) => {
+                    setChatActionError(
+                      friendlyError(err, "Couldn't update community mute setting."),
+                    );
+                  });
+                });
+              }}
+            >
+              <span>
+                {store.communityMuted ? <BellIcon size={15} /> : <BellOffIcon size={15} />}
+              </span>
+              {store.communityMuted ? "Unmute" : "Mute"}
+            </button>
+          )}
+        </ContextMenu>
+      )}
+      {groupMenu && (
+        <ContextMenu
+          x={groupMenu.x}
+          y={groupMenu.y}
+          label={`Actions for ${groupMenu.group.name}`}
+          className="message-context-menu conversation-context-menu"
+          onClose={() => setGroupMenu(null)}
+        >
+          {({ closeWithAnimation }) => {
+            const liveGroup =
+              store.groups.find((g) => g.id === groupMenu.group.id) ?? groupMenu.group;
+            return (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const nextSilenced = !liveGroup.isSilenced;
+                    closeWithAnimation(() => {
+                      void store.setGroupSilenced(liveGroup.id, nextSilenced).catch((err) => {
+                        setChatActionError(
+                          friendlyError(err, "Couldn't update group silence setting."),
+                        );
+                      });
+                    });
+                  }}
+                >
+                  <span>
+                    {liveGroup.isSilenced ? <BellIcon size={15} /> : <BellOffIcon size={15} />}
+                  </span>
+                  {liveGroup.isSilenced ? "Unsilence" : "Silence"}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const nextArchived = !liveGroup.isArchived;
+                    closeWithAnimation(() => {
+                      void store.setGroupArchived(liveGroup.id, nextArchived).catch((err) => {
+                        setChatActionError(
+                          friendlyError(err, "Couldn't update group archive setting."),
+                        );
+                      });
+                    });
+                  }}
+                >
+                  <span>
+                    <ArchiveIcon size={15} />
+                  </span>
+                  {liveGroup.isArchived ? "Unarchive" : "Archive"}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="destructive-menu-item"
+                  onClick={() => closeWithAnimation(() => setGroupToDelete(liveGroup))}
+                >
+                  <span>
+                    <TrashIcon size={15} />
+                  </span>{" "}
+                  Delete group
+                </button>
+              </>
+            );
+          }}
+        </ContextMenu>
+      )}
+      {groupToDelete && (
+        <DeleteGroupConfirmModal
+          group={groupToDelete}
+          onCancel={() => setGroupToDelete(null)}
+          onConfirmDelete={async () => {
+            const targetId = groupToDelete.id;
+            if (groupToDelete.role === "owner") {
+              await store.deleteGroup(targetId);
+            } else {
+              await store.leaveGroup(targetId);
+            }
+            if (store.activeGroupId === targetId) {
+              store.setActiveGroupId(null);
+            }
+          }}
+        />
       )}
     </aside>
   );

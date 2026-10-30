@@ -34,6 +34,12 @@ import {
   useChatCacheVersion,
 } from "./chatCache";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
+import {
+  encodeForwardedBody,
+  extractForwardedContext,
+  stripForwardedMetadataFromText,
+  type ForwardedMessageContext,
+} from "./forwardedContext";
 import { ensureValidFileMime, normalizeImageFileForUpload } from "./imageUtils";
 import {
   LEGACY_SERVER_REACTION_EMOJIS,
@@ -178,14 +184,23 @@ function normalizeGroupMessage(raw: GroupMessage): GroupMessage {
 }
 
 function normalizeCommunityMessage(raw: CommunityMessage): CommunityMessage {
-  const { cleanBody, bubbleStyle } = extractMessageBubbleStyle(raw.body, raw.attachmentType);
+  const { cleanBody: bubbleCleanBody, bubbleStyle } = extractMessageBubbleStyle(
+    raw.body,
+    raw.attachmentType,
+  );
+  const { context: fwdContext, strippedBody } = extractForwardedContext(bubbleCleanBody);
   return {
     ...raw,
-    body: cleanBody,
+    body: strippedBody,
     bubbleStyle,
+    forwardedContext: fwdContext ?? raw.forwardedContext,
+    forwardedFromName: raw.forwardedFromName ?? fwdContext?.originalSenderName,
     attachmentType: cleanAttachmentMime(raw.attachmentType),
     replyTo: raw.replyTo
-      ? { ...raw.replyTo, body: stripBubbleStyleFromText(raw.replyTo.body) }
+      ? {
+          ...raw.replyTo,
+          body: stripForwardedMetadataFromText(stripBubbleStyleFromText(raw.replyTo.body)),
+        }
       : undefined,
   };
 }
@@ -546,6 +561,26 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     canModerate: boolean;
     moderatorIds: string[];
   };
+  const communitySettingsQuery = useQuery(
+    api.community.mySettings,
+    isAuthenticated ? {} : "skip",
+  ) as { isMuted: boolean; lastReadAt: number } | undefined;
+  const communityMuted = communitySettingsQuery?.isMuted ?? false;
+  const communityUnreadCount = useMemo(() => {
+    if (!me?.id || !communitySettingsQuery) return 0;
+    const cutoff = communitySettingsQuery.lastReadAt ?? 0;
+    return communityMessages.reduce((count, msg) => {
+      if (
+        msg.senderId !== me.id &&
+        !msg.unsentAt &&
+        msg.createdAt > cutoff &&
+        !msg.body.startsWith("__JATEXT_REACT__:")
+      ) {
+        return count + 1;
+      }
+      return count;
+    }, 0);
+  }, [communityMessages, communitySettingsQuery, me?.id]);
   const communityDirectory = (useQuery(
     api.users.ownerDirectory,
     isAuthenticated &&
@@ -778,6 +813,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const toggleCommunityReactionMut = useMutation(api.community.toggleReaction);
   const deleteCommunityForMeMut = useMutation(api.community.deleteForMe);
   const unsendCommunityMut = useMutation(api.community.unsend);
+  const setCommunityMutedMut = useMutation(api.community.setMuted);
+  const markCommunityReadMut = useMutation(api.community.markRead);
   const createGroupMut = useMutation(api.groups.create);
   const addGroupMembersMut = useMutation(api.groups.addMembers);
   const sendGroupMessageMut = useMutation(api.groups.send);
@@ -794,6 +831,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const removeGroupMemberMut = useMutation(api.groups.removeMember);
   const leaveGroupMut = useMutation(api.groups.leave);
   const deleteGroupMut = useMutation(api.groups.deleteGroup);
+  const updateMyGroupSettingsMut = useMutation(api.groups.updateMyGroupSettings);
+  const markGroupReadMut = useMutation(api.groups.markGroupRead);
 
   const setActiveChatIdForStore = useCallback((id: string | null) => {
     setActiveChatId(id);
@@ -1313,7 +1352,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const forwardCommunityMessage: JaTextStore["forwardCommunityMessage"] = useCallback(
     async (messageId, target) => {
       const src = communityMessages.find((m) => m.id === messageId);
-      if (target.community || !src) {
+      if (!src) {
         if (target.groupId) {
           await sendCommunityForwardMut({ messageId: messageId as Id<"communityMessages">, targetGroupId: target.groupId as Id<"groups"> });
         } else if (target.userId) {
@@ -1323,26 +1362,63 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         }
         return;
       }
+
+      const fwdCtx: ForwardedMessageContext = src.forwardedContext ?? {
+        v: 1,
+        sourceKind: "community",
+        originalMessageId: src.id,
+        originalCreatedAt: src.createdAt,
+        originalSenderId: src.senderId,
+        originalSenderName: src.senderName || "JaText",
+        originalSenderUsername: src.senderUsername,
+        originalSenderAvatarUrl: src.senderAvatarUrl,
+        originalSenderAvatarColor: src.senderAvatarColor,
+      };
+      const fwdText = encodeForwardedBody(src.body, fwdCtx);
+
+      if (target.community) {
+        await sendCommunityTextMut({
+          body: fwdText,
+          forwardedFromId: messageId as Id<"communityMessages">,
+        });
+        return;
+      }
+
       let fwdFile: File | undefined;
-      if (src.attachmentUrl) {
-        try {
-          const resp = await fetch(src.attachmentUrl);
-          if (resp.ok) {
-            const blob = await resp.blob();
-            fwdFile = new File([blob], src.attachmentName || "forwarded", {
-              type: src.attachmentType || blob.type || "application/octet-stream",
-            });
+      let klipySticker: StickerMedia | undefined;
+      const mediaUrl = src.attachmentUrl ?? src.stickerUrl;
+      if (mediaUrl) {
+        if (src.stickerKey?.startsWith("klipy:")) {
+          klipySticker = {
+            key: src.stickerKey,
+            url: mediaUrl,
+            name: src.stickerName || src.attachmentName || "GIF",
+            mediaType: "gif",
+            source: "klipy",
+            isFavorite: false,
+            useCount: 0,
+          };
+        } else {
+          try {
+            const resp = await fetch(mediaUrl);
+            if (resp.ok) {
+              const blob = await resp.blob();
+              fwdFile = new File([blob], src.attachmentName || src.stickerName || "forwarded", {
+                type: src.attachmentType || blob.type || "application/octet-stream",
+              });
+            }
+          } catch {
+            // Ignore media fetch failure
           }
-        } catch {
-          // Ignore media fetch failure
         }
       }
-      const fwdText = src.body ? `Forwarded from @${src.senderUsername}:\n${src.body}` : "";
+
       if (target.userId) {
         const enc = await prepareOutgoingDmEncrypted({
           receiverId: target.userId,
           wireBody: fwdText,
           file: fwdFile,
+          sticker: klipySticker,
           uploadFile: upload,
         });
         if (enc) {
@@ -1366,6 +1442,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           groupId: target.groupId,
           wireBody: fwdText,
           file: fwdFile,
+          sticker: klipySticker,
           uploadFile: upload,
         });
         if (enc) {
@@ -1389,6 +1466,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       communityMessages,
       ensureGroupEpochReadyForSend,
       sendCommunityForwardMut,
+      sendCommunityTextMut,
       sendGroupMessageMut,
       sendMessageMut,
       upload,
@@ -1753,7 +1831,33 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
           }
         }
       }
-      const fwdBody = src.body ? `Forwarded from ${src.senderName || "group"}:\n${src.body}` : "";
+
+      const currentGroupName =
+        groupDetails?.name ??
+        groups.find((g) => g.id === activeGroupId)?.name ??
+        "Group chat";
+      const fwdCtx: ForwardedMessageContext = src.forwardedContext ?? {
+        v: 1,
+        sourceKind: "group",
+        originalMessageId: src.id,
+        originalCreatedAt: src.createdAt,
+        originalSenderId: src.senderId,
+        originalSenderName: src.senderName || "Unknown user",
+        originalSenderUsername: src.senderUsername,
+        originalSenderAvatarUrl: src.senderAvatarUrl,
+        originalSenderAvatarColor: src.senderAvatarColor,
+        groupId: activeGroupId ?? undefined,
+        groupName: currentGroupName,
+      };
+      const fwdBody = encodeForwardedBody(src.body, fwdCtx);
+
+      if (target.community) {
+        await sendCommunityTextMut({
+          body: fwdBody,
+          ...(fwdFile ? { attachmentId: await upload(fwdFile), attachmentName: fwdFile.name, attachmentType: fwdFile.type } : {}),
+        });
+        return;
+      }
 
       if (target.userId) {
         const enc = await prepareOutgoingDmEncrypted({
@@ -1805,9 +1909,13 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       }
     },
     [
+      activeGroupId,
       ensureGroupEpochReadyForSend,
       forwardGroupMut,
+      groupDetails?.name,
       groupMessages,
+      groups,
+      sendCommunityTextMut,
       sendGroupMessageMut,
       sendMessageMut,
       upload,
@@ -1937,6 +2045,45 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     },
     [deleteGroupMut, slotId],
   );
+  const setGroupSilenced = useCallback<JaTextStore["setGroupSilenced"]>(
+    async (groupId, silenced) => {
+      await updateMyGroupSettingsMut({
+        groupId: groupId as Id<"groups">,
+        isSilenced: silenced,
+      });
+    },
+    [updateMyGroupSettingsMut],
+  );
+  const setGroupArchived = useCallback<JaTextStore["setGroupArchived"]>(
+    async (groupId, archived) => {
+      await updateMyGroupSettingsMut({
+        groupId: groupId as Id<"groups">,
+        isArchived: archived,
+      });
+    },
+    [updateMyGroupSettingsMut],
+  );
+  const markGroupRead = useCallback<JaTextStore["markGroupRead"]>(
+    async (groupId) => {
+      await markGroupReadMut({
+        groupId: groupId as Id<"groups">,
+        readAt: Date.now(),
+      });
+    },
+    [markGroupReadMut],
+  );
+  const setCommunityMuted = useCallback<JaTextStore["setCommunityMuted"]>(
+    async (muted) => {
+      await setCommunityMutedMut({ muted });
+    },
+    [setCommunityMutedMut],
+  );
+  const markCommunityRead = useCallback<JaTextStore["markCommunityRead"]>(
+    async () => {
+      await markCommunityReadMut({ readAt: Date.now() });
+    },
+    [markCommunityReadMut],
+  );
 
   const signInEmail = useCallback<JaTextStore["signInEmail"]>(
     async (email, password) => {
@@ -2065,6 +2212,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         avatarColor: input.avatarColor,
         ...(avatarId !== undefined ? { avatarId } : {}),
         ...(bannerId !== undefined ? { bannerId } : {}),
+        ...(input.socials !== undefined ? { socials: input.socials } : {}),
+        ...(input.website !== undefined ? { website: input.website } : {}),
       });
     },
     [saveProfileMut, upload],
@@ -2306,8 +2455,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     [sendMessageMut, sendStickerMut, upload],
   );
 
-  const forwardMessage = useCallback<JaTextStore["forwardMessage"]>(
-    async (messageId, receiverId) => {
+  const forwardDmToTarget = useCallback<NonNullable<JaTextStore["forwardDmToTarget"]>>(
+    async (messageId, target) => {
       const src = activeMessages.find((m) => m.id === messageId);
       if (src) {
         let fwdFile: File | undefined;
@@ -2337,34 +2486,95 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
             }
           }
         }
-        const enc = await prepareOutgoingDmEncrypted({
-          receiverId,
-          wireBody: src.body ? `Forwarded:\n${src.body}` : "",
-          file: fwdFile,
-          sticker: klipySticker,
-          uploadFile: upload,
-        });
-        if (enc) {
-          await sendMessageMut({
-            receiverId: receiverId as Id<"users">,
-            body: enc.wireBody,
-            ...(enc.attachmentId
-              ? {
-                  attachmentId: enc.attachmentId,
-                  attachmentName: enc.attachmentName,
-                  attachmentType: enc.attachmentType,
-                }
-              : {}),
+        const senderUser =
+          src.senderId === me?.id
+            ? me
+            : friends.find((f) => f.id === src.senderId);
+        const fwdCtx: ForwardedMessageContext = src.forwardedContext ?? {
+          v: 1,
+          sourceKind: "dm",
+          originalMessageId: src.id,
+          originalCreatedAt: src.createdAt,
+          originalSenderId: src.senderId,
+          originalSenderName: senderUser?.displayName || "JaText user",
+          originalSenderUsername: senderUser?.username,
+          originalSenderAvatarUrl: senderUser?.avatarUrl,
+          originalSenderAvatarColor: senderUser?.avatarColor,
+          dmUserIds: [src.senderId, src.receiverId],
+        };
+        const wireText = encodeForwardedBody(src.body, fwdCtx);
+
+        if (target.userId) {
+          const enc = await prepareOutgoingDmEncrypted({
+            receiverId: target.userId,
+            wireBody: wireText,
+            file: fwdFile,
+            sticker: klipySticker,
+            uploadFile: upload,
           });
-          return;
+          if (enc) {
+            await sendMessageMut({
+              receiverId: target.userId as Id<"users">,
+              body: enc.wireBody,
+              ...(enc.attachmentId
+                ? {
+                    attachmentId: enc.attachmentId,
+                    attachmentName: enc.attachmentName,
+                    attachmentType: enc.attachmentType,
+                  }
+                : {}),
+            });
+            return;
+          }
+        } else if (target.groupId) {
+          await ensureGroupEpochReadyForSend(target.groupId);
+          const enc = await prepareOutgoingGroupEncrypted({
+            groupId: target.groupId,
+            wireBody: wireText,
+            file: fwdFile,
+            sticker: klipySticker,
+            uploadFile: upload,
+          });
+          if (enc) {
+            await sendGroupMessageMut({
+              groupId: target.groupId as Id<"groups">,
+              body: enc.wireBody,
+              ...(enc.attachmentId
+                ? {
+                    attachmentId: enc.attachmentId,
+                    attachmentName: enc.attachmentName,
+                    attachmentType: enc.attachmentType,
+                  }
+                : {}),
+            });
+            return;
+          }
         }
       }
-      await forwardMessageMut({
-        messageId: messageId as Id<"messages">,
-        receiverId: receiverId as Id<"users">,
-      });
+      if (target.userId) {
+        await forwardMessageMut({
+          messageId: messageId as Id<"messages">,
+          receiverId: target.userId as Id<"users">,
+        });
+      }
     },
-    [activeMessages, forwardMessageMut, sendMessageMut, upload],
+    [
+      activeMessages,
+      ensureGroupEpochReadyForSend,
+      forwardMessageMut,
+      friends,
+      me,
+      sendGroupMessageMut,
+      sendMessageMut,
+      upload,
+    ],
+  );
+
+  const forwardMessage = useCallback<JaTextStore["forwardMessage"]>(
+    async (messageId, receiverId) => {
+      await forwardDmToTarget(messageId, { userId: receiverId });
+    },
+    [forwardDmToTarget],
   );
 
   const toggleMessageReaction = useCallback<JaTextStore["toggleMessageReaction"]>(
@@ -3520,6 +3730,10 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
       !canUseCachedSession ||
       communityMessagesQuery !== undefined ||
       Boolean(bootstrapCache?.communityMessages?.length),
+    communityMuted,
+    communityUnreadCount,
+    setCommunityMuted,
+    markCommunityRead,
     communityPermissions,
     communityDirectory,
     groups,
@@ -3547,6 +3761,7 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     sendMessage,
     fetchMessagesWithUser,
     forwardMessage,
+    forwardDmToTarget,
     toggleMessageReaction,
     deleteMessageForMe,
     unsendMessage,
@@ -3599,6 +3814,9 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
     removeGroupMember,
     leaveGroup,
     deleteGroup,
+    setGroupSilenced,
+    setGroupArchived,
+    markGroupRead,
     refreshPushRegistration,
     setNotificationsEnabled,
     setSoundsEnabled,

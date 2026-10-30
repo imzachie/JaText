@@ -131,21 +131,69 @@ export const listMine = query({
       memberships.map(async (membership) => {
         const group = await ctx.db.get(membership.groupId);
         if (!group) return null;
-        const members = await ctx.db
-          .query("groupMembers")
-          .withIndex("by_group", (q) => q.eq("groupId", group._id))
-          .collect();
-        const recentGroupMessages = await ctx.db
-          .query("groupMessages")
-          .withIndex("by_group", (q) => q.eq("groupId", group._id))
-          .order("desc")
-          .take(40);
-        const lastMessage =
-          recentGroupMessages.find(
-            (m) =>
-              !m.body.startsWith("__JATEXT_CALL_SIG__:") &&
-              !m.body.startsWith("__JATEXT_REACT__:"),
-          ) ?? null;
+        const [members, recentGroupMessages, mySettings] = await Promise.all([
+          ctx.db
+            .query("groupMembers")
+            .withIndex("by_group", (q) => q.eq("groupId", group._id))
+            .collect(),
+          ctx.db
+            .query("groupMessages")
+            .withIndex("by_group", (q) => q.eq("groupId", group._id))
+            .order("desc")
+            .take(60),
+          ctx.db
+            .query("groupUserSettings")
+            .withIndex("by_user_group", (q) =>
+              q.eq("userId", me._id).eq("groupId", group._id),
+            )
+            .unique(),
+        ]);
+        const isSilentGroupSignal = (body: string, stickerName?: string, attachmentName?: string) =>
+          body.startsWith("__JATEXT_CALL_SIG__:") ||
+          body.startsWith("__JATEXT_REACT__:") ||
+          body.startsWith("__JATEXT_SEEN__:") ||
+          body.startsWith("__JATEXT_E2EE_IK__:") ||
+          body.startsWith("__JATEXT_E2EE_GK__:") ||
+          body.startsWith("__JATEXT_E2EE_VER__:") ||
+          body.includes("(__JATEXT_CALL_CANCEL__") ||
+          body.includes("(__JATEXT_CALL_CLAIM__") ||
+          stickerName === "__jatext_e2ee_vault__" ||
+          stickerName === "__jatext_e2ee_autosync__" ||
+          attachmentName === "__jatext_e2ee_vault__" ||
+          attachmentName === "__jatext_e2ee_autosync__";
+
+        let mySeenTs = mySettings?.lastReadAt ?? membership._creationTime;
+        for (const row of recentGroupMessages) {
+          if (row.senderId === me._id && row.body.startsWith("__JATEXT_SEEN__:")) {
+            try {
+              const parsed = JSON.parse(row.body.slice("__JATEXT_SEEN__:".length));
+              if (typeof parsed?.ts === "number" && parsed.ts > mySeenTs) {
+                mySeenTs = parsed.ts;
+              }
+            } catch {
+              if (row._creationTime > mySeenTs) mySeenTs = row._creationTime;
+            }
+          } else if (row.senderId === me._id && !isSilentGroupSignal(row.body, row.stickerName, row.attachmentName)) {
+            if (row._creationTime > mySeenTs) mySeenTs = row._creationTime;
+          }
+        }
+
+        const visibleGroupMessages = recentGroupMessages.filter(
+          (m) => !isSilentGroupSignal(m.body, m.stickerName, m.attachmentName),
+        );
+        const lastMessage = visibleGroupMessages[0] ?? null;
+        const unreadCount = visibleGroupMessages.reduce((count, m) => {
+          if (
+            m.senderId !== me._id &&
+            !m.unsentAt &&
+            !m.hiddenFor?.includes(me._id) &&
+            m._creationTime > mySeenTs
+          ) {
+            return count + 1;
+          }
+          return count;
+        }, 0);
+
         const lastSender = lastMessage ? await ctx.db.get(lastMessage.senderId) : null;
         const previewBody = lastMessage?.hiddenFor?.includes(me._id) || lastMessage?.unsentAt
           ? lastMessage?.unsentAt
@@ -157,6 +205,7 @@ export const listMine = query({
             !lastMessage.unsentAt &&
             !lastMessage.hiddenFor?.includes(me._id) &&
             lastMessage.senderId !== me._id &&
+            lastMessage._creationTime > mySeenTs &&
             (lastMessage.mentionsEveryone || lastMessage.mentionedUserIds?.includes(me._id)),
         );
         return {
@@ -173,6 +222,9 @@ export const listMine = query({
           lastSenderId: lastMessage ? (lastMessage.senderId as string) : undefined,
           lastSenderName: lastSender?.displayName ?? lastSender?.name ?? undefined,
           lastMentionedMe,
+          isSilenced: mySettings?.isSilenced ?? false,
+          isArchived: mySettings?.isArchived ?? false,
+          unreadCount,
         };
       }),
     ).then((groups) => groups.filter((group) => group !== null).sort(
@@ -704,19 +756,91 @@ export const leave = mutation({
   },
 });
 
+export const updateMyGroupSettings = mutation({
+  args: {
+    groupId: v.id("groups"),
+    isSilenced: v.optional(v.boolean()),
+    isArchived: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { groupId, isSilenced, isArchived }) => {
+    const me = await requireUser(ctx);
+    await requireMembership(ctx, groupId, me._id);
+    const existing = await ctx.db
+      .query("groupUserSettings")
+      .withIndex("by_user_group", (q) =>
+        q.eq("userId", me._id).eq("groupId", groupId),
+      )
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        ...(isSilenced !== undefined ? { isSilenced } : {}),
+        ...(isArchived !== undefined ? { isArchived } : {}),
+      });
+    } else {
+      await ctx.db.insert("groupUserSettings", {
+        userId: me._id,
+        groupId,
+        isSilenced: isSilenced ?? false,
+        isArchived: isArchived ?? false,
+      });
+    }
+  },
+});
+
+export const markGroupRead = mutation({
+  args: {
+    groupId: v.id("groups"),
+    readAt: v.optional(v.number()),
+  },
+  handler: async (ctx, { groupId, readAt }) => {
+    const me = await requireUser(ctx);
+    const membership = await ctx.db
+      .query("groupMembers")
+      .withIndex("by_group_user", (q) =>
+        q.eq("groupId", groupId).eq("userId", me._id),
+      )
+      .unique();
+    if (!membership) return;
+    const targetTs = Math.max(Date.now(), readAt ?? 0);
+    const existing = await ctx.db
+      .query("groupUserSettings")
+      .withIndex("by_user_group", (q) =>
+        q.eq("userId", me._id).eq("groupId", groupId),
+      )
+      .unique();
+    if (existing) {
+      if (!existing.lastReadAt || targetTs > existing.lastReadAt) {
+        await ctx.db.patch(existing._id, { lastReadAt: targetTs });
+      }
+    } else {
+      await ctx.db.insert("groupUserSettings", {
+        userId: me._id,
+        groupId,
+        isSilenced: false,
+        isArchived: false,
+        lastReadAt: targetTs,
+      });
+    }
+  },
+});
+
 export const deleteGroup = mutation({
   args: { groupId: v.id("groups") },
   handler: async (ctx, { groupId }) => {
     const me = await requireUser(ctx);
     const group = await ctx.db.get(groupId);
     if (!group || group.ownerId !== me._id) throw new Error("Only the group owner can delete this group.");
-    const [members, messages] = await Promise.all([
+    const [members, messages, userSettings, e2eeKeys] = await Promise.all([
       ctx.db.query("groupMembers").withIndex("by_group", (q) => q.eq("groupId", groupId)).collect(),
       ctx.db.query("groupMessages").withIndex("by_group", (q) => q.eq("groupId", groupId)).collect(),
+      ctx.db.query("groupUserSettings").withIndex("by_group", (q) => q.eq("groupId", groupId)).collect(),
+      ctx.db.query("e2eeGroupKeys").withIndex("by_group_epoch", (q) => q.eq("groupId", groupId)).collect(),
     ]);
     await Promise.all([
       ...members.map((member) => ctx.db.delete(member._id)),
       ...messages.map((message) => ctx.db.delete(message._id)),
+      ...userSettings.map((setting) => ctx.db.delete(setting._id)),
+      ...e2eeKeys.map((key) => ctx.db.delete(key._id)),
       ctx.db.delete(groupId),
     ]);
   },

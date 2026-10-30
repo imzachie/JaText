@@ -17,6 +17,7 @@ import type * as groups from "../groups.js";
 import type * as http from "../http.js";
 import type * as klipy from "../klipy.js";
 import type * as lib from "../lib.js";
+import type * as linkPreview from "../linkPreview.js";
 import type * as messages from "../messages.js";
 import type * as push from "../push.js";
 import type * as pushActions from "../pushActions.js";
@@ -39,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   klipy: typeof klipy;
   lib: typeof lib;
+  linkPreview: typeof linkPreview;
   messages: typeof messages;
   push: typeof push;
   pushActions: typeof pushActions;

@@ -363,6 +363,7 @@ function AppContent() {
         preview.createdAt === 0 ||
         preview.senderId === me.id ||
         preview.isMuted ||
+        preview.isArchived ||
         me.statusPreference === "dnd" ||
         isHiddenCallSignal(preview.body) ||
         Boolean(parseCallInvite(preview.body))
@@ -485,6 +486,8 @@ function AppContent() {
       if (previous.get(group.id) === signature || current.get(group.id) !== signature) continue;
       if (
         !group.lastMentionedMe ||
+        group.isSilenced ||
+        group.isArchived ||
         group.lastSenderId === me.id ||
         me.statusPreference === "dnd"
       ) {
@@ -588,7 +591,11 @@ function AppContent() {
     }
     previousAnnouncementId.current = latestId;
 
-    if (latest.senderId === me.id || me.statusPreference === "dnd") {
+    if (
+      latest.senderId === me.id ||
+      store.communityMuted ||
+      me.statusPreference === "dnd"
+    ) {
       return;
     }
 
@@ -645,6 +652,7 @@ function AppContent() {
     soundsEnabled,
     store.communityMessages,
     store.communityMessagesReady,
+    store.communityMuted,
   ]);
 
   useLayoutEffect(() => {
