@@ -1,11 +1,15 @@
 import {
+  forwardRef,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  buildCssGradientFromSpec,
+  computeBlendedGradientStops,
+  computePreviewAccent,
   flushThemePersistence,
   getThemeConfig,
   hexToHsv,
@@ -13,7 +17,6 @@ import {
   normalizeHexColor,
   toSyncedThemePayload,
   updateThemeConfig,
-  useJaTextTheme,
 } from "../lib/themeEngine";
 import { useJaText } from "../lib/store";
 import { CheckIcon, CloseIcon, PlusIcon } from "./UiIcons";
@@ -37,11 +40,279 @@ interface LiveDraftState {
   val: number;
 }
 
-function buildStopsGradientCss(cols: string[]): string {
-  if (cols.length <= 1) return cols[0] ?? "#efb4aa";
-  return `linear-gradient(90deg, ${cols
-    .map((c, idx) => `${c} ${Math.round((idx / (cols.length - 1)) * 100)}%`)
-    .join(", ")})`;
+interface FastGpuSliderHandle {
+  setValue: (nextValue: number) => void;
+  setAccentColor: (hex: string) => void;
+}
+
+interface FastGpuSliderProps {
+  ariaLabel: string;
+  min: number;
+  max: number;
+  initialValue: number;
+  variant: "hue" | "accent";
+  initialAccentColor?: string;
+  onValueInput: (nextValue: number) => void;
+}
+
+const SLIDER_THUMB_RADIUS = 11;
+
+function clamp01(n: number): number {
+  if (n <= 0) return 0;
+  if (n >= 1) return 1;
+  return n;
+}
+
+/**
+ * Zero-layout-thrash, GPU-composited touch slider built specifically for
+ * 60/120 FPS response inside scrollable Android WebView sheets:
+ * - Native passive:false touch guard eliminates scroll-arbitration touch-slop.
+ * - Caches track geometry via ResizeObserver + once on pointerdown (zero getBoundingClientRect in move).
+ * - Updates thumb via pure translate3d(x, 0, 0) and fill bar via pure scaleX(ratio).
+ */
+const FastGpuSlider = forwardRef<FastGpuSliderHandle, FastGpuSliderProps>(
+  function FastGpuSlider(
+    {
+      ariaLabel,
+      min,
+      max,
+      initialValue,
+      variant,
+      initialAccentColor = "#9b6cff",
+      onValueInput,
+    },
+    ref,
+  ) {
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const fillRef = useRef<HTMLDivElement | null>(null);
+    const thumbRef = useRef<HTMLSpanElement | null>(null);
+
+    const widthRef = useRef(0);
+    const dragRectRef = useRef<{ left: number; width: number } | null>(null);
+    const draggingRef = useRef(false);
+    const ratioRef = useRef(
+      clamp01((initialValue - min) / Math.max(1, max - min)),
+    );
+    const valueRef = useRef(initialValue);
+    const pendingClientXRef = useRef<number | null>(null);
+    const sliderRafRef = useRef<number | null>(null);
+    const onValueInputRef = useRef(onValueInput);
+    useEffect(() => {
+      onValueInputRef.current = onValueInput;
+    }, [onValueInput]);
+
+    function syncVisualFromRatio(ratio: number, discreteVal: number) {
+      const clamped = clamp01(ratio);
+      ratioRef.current = clamped;
+      valueRef.current = discreteVal;
+
+      const w = dragRectRef.current?.width ?? widthRef.current;
+      if (thumbRef.current && w > 0) {
+        const usable = Math.max(0, w - SLIDER_THUMB_RADIUS * 2);
+        const x = SLIDER_THUMB_RADIUS + clamped * usable;
+        thumbRef.current.style.transform = `translate3d(${x.toFixed(2)}px, 0, 0)`;
+      }
+      if (fillRef.current) {
+        fillRef.current.style.transform = `scaleX(${clamped.toFixed(4)})`;
+      }
+      if (rootRef.current) {
+        rootRef.current.setAttribute("aria-valuenow", String(discreteVal));
+      }
+    }
+
+    useImperativeHandle(ref, () => ({
+      setValue(nextValue: number) {
+        const clampedVal = Math.max(min, Math.min(max, Math.round(nextValue)));
+        const r = clamp01((clampedVal - min) / Math.max(1, max - min));
+        syncVisualFromRatio(r, clampedVal);
+      },
+      setAccentColor(hex: string) {
+        if (fillRef.current) {
+          fillRef.current.style.backgroundColor = hex;
+        }
+      },
+    }));
+
+    useEffect(() => {
+      const el = rootRef.current;
+      if (!el) return;
+
+      const measure = (w: number) => {
+        if (w <= 0) return;
+        widthRef.current = w;
+        syncVisualFromRatio(ratioRef.current, valueRef.current);
+      };
+
+      measure(el.clientWidth || el.getBoundingClientRect().width);
+
+      let ro: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== "undefined") {
+        ro = new ResizeObserver((entries) => {
+          const entry = entries[0];
+          if (!entry) return;
+          measure(entry.contentRect.width);
+        });
+        ro.observe(el);
+      }
+
+      const preventScrollSteal = (ev: TouchEvent) => {
+        if (ev.cancelable) ev.preventDefault();
+      };
+      el.addEventListener("touchstart", preventScrollSteal, { passive: false });
+      el.addEventListener("touchmove", preventScrollSteal, { passive: false });
+
+      return () => {
+        if (sliderRafRef.current !== null) {
+          window.cancelAnimationFrame(sliderRafRef.current);
+          sliderRafRef.current = null;
+        }
+        ro?.disconnect();
+        el.removeEventListener("touchstart", preventScrollSteal);
+        el.removeEventListener("touchmove", preventScrollSteal);
+      };
+    }, [min, max]);
+
+    function applyClientX(clientX: number) {
+      const rect = dragRectRef.current;
+      if (!rect || rect.width <= 0) return;
+      const usable = Math.max(1, rect.width - SLIDER_THUMB_RADIUS * 2);
+      const ratio = clamp01((clientX - rect.left - SLIDER_THUMB_RADIUS) / usable);
+      const nextVal = Math.round(min + ratio * (max - min));
+      const valChanged = nextVal !== valueRef.current;
+      syncVisualFromRatio(ratio, nextVal);
+      if (valChanged) {
+        onValueInputRef.current(nextVal);
+      }
+    }
+
+    function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      e.preventDefault();
+      e.stopPropagation();
+      const el = e.currentTarget;
+      const rect = el.getBoundingClientRect();
+      widthRef.current = rect.width;
+      dragRectRef.current = { left: rect.left, width: rect.width };
+      draggingRef.current = true;
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore synthetic pointer capture errors
+      }
+      applyClientX(e.clientX);
+    }
+
+    function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+      if (!draggingRef.current) return;
+      pendingClientXRef.current = e.clientX;
+      if (sliderRafRef.current !== null) return;
+      sliderRafRef.current = window.requestAnimationFrame(() => {
+        sliderRafRef.current = null;
+        const latestX = pendingClientXRef.current;
+        if (latestX !== null) {
+          pendingClientXRef.current = null;
+          applyClientX(latestX);
+        }
+      });
+    }
+
+    function onPointerEnd() {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      if (sliderRafRef.current !== null) {
+        window.cancelAnimationFrame(sliderRafRef.current);
+        sliderRafRef.current = null;
+      }
+      if (pendingClientXRef.current !== null) {
+        const lastX = pendingClientXRef.current;
+        pendingClientXRef.current = null;
+        applyClientX(lastX);
+      }
+      dragRectRef.current = null;
+    }
+
+    function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+      let delta = 0;
+      if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = -1;
+      else if (e.key === "ArrowRight" || e.key === "ArrowUp") delta = 1;
+      else if (e.key === "PageDown") delta = -10;
+      else if (e.key === "PageUp") delta = 10;
+      else if (e.key === "Home") delta = min - valueRef.current;
+      else if (e.key === "End") delta = max - valueRef.current;
+      if (delta === 0) return;
+      e.preventDefault();
+      const nextVal = Math.max(min, Math.min(max, valueRef.current + delta));
+      if (nextVal === valueRef.current) return;
+      const r = clamp01((nextVal - min) / Math.max(1, max - min));
+      syncVisualFromRatio(r, nextVal);
+      onValueInputRef.current(nextVal);
+    }
+
+    return (
+      <div
+        ref={rootRef}
+        role="slider"
+        tabIndex={0}
+        aria-label={ariaLabel}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={initialValue}
+        className={`custom-gpu-slider ${
+          variant === "hue" ? "is-hue" : "is-accent"
+        }`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerEnd}
+        onPointerCancel={onPointerEnd}
+        onKeyDown={onKeyDown}
+      >
+        <div className="custom-gpu-slider-track">
+          {variant === "accent" && (
+            <div
+              ref={fillRef}
+              className="custom-gpu-slider-fill"
+              style={{ backgroundColor: initialAccentColor }}
+            />
+          )}
+        </div>
+        <span ref={thumbRef} className="custom-gpu-slider-thumb" />
+      </div>
+    );
+  },
+);
+
+function paintLinearGradientOnCanvas(
+  ctx: CanvasRenderingContext2D | null,
+  w: number,
+  h: number,
+  stops: string[],
+  angleDeg: number,
+): void {
+  if (!ctx || w <= 0 || h <= 0) return;
+  if (stops.length <= 1) {
+    ctx.fillStyle = stops[0] ?? "#1d1d21";
+    ctx.fillRect(0, 0, w, h);
+    return;
+  }
+
+  const rad = (angleDeg * Math.PI) / 180;
+  const dx = Math.sin(rad);
+  const dy = -Math.cos(rad);
+  const halfLen = (Math.abs(w * dx) + Math.abs(h * dy)) * 0.5;
+  const cx = w * 0.5;
+  const cy = h * 0.5;
+  const grad = ctx.createLinearGradient(
+    cx - dx * halfLen,
+    cy - dy * halfLen,
+    cx + dx * halfLen,
+    cy + dy * halfLen,
+  );
+  const last = stops.length - 1;
+  for (let i = 0; i <= last; i++) {
+    grad.addColorStop(i / last, stops[i]);
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
 }
 
 export function CustomThemeDrawer({
@@ -52,208 +323,206 @@ export function CustomThemeDrawer({
   onBackToSettings: () => void;
 }) {
   const { me, saveProfile } = useJaText();
-  const theme = useJaTextTheme();
+
+  const initialCfgRef = useRef(getThemeConfig());
+  const initialCustom = initialCfgRef.current.custom;
+  const initialColors =
+    initialCustom.colors.length > 0 ? [...initialCustom.colors] : ["#efb4aa"];
+  const initialHex = initialColors[0] ?? "#efb4aa";
+  const initialHsv = hexToHsv(initialHex);
+
   const [closing, setClosing] = useState(false);
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const [hexDraft, setHexDraft] = useState(
-    () => (theme.custom.colors[0] ?? "#efb4aa").toUpperCase(),
+  const [appearance, setAppearance] = useState<"dark" | "light">(
+    initialCustom.appearance,
   );
+  const [stopSlots, setStopSlots] = useState<string[]>(initialColors);
+  const [selectedIdx, setSelectedIdx] = useState(0);
   const [appliedToast, setAppliedToast] = useState(false);
 
-  const drawerRef = useRef<HTMLElement | null>(null);
-  const liveBackdropRef = useRef<HTMLDivElement | null>(null);
-  const stopsBarRef = useRef<HTMLDivElement | null>(null);
-  const stopChipRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const svBoxRef = useRef<HTMLDivElement | null>(null);
-  const svThumbRef = useRef<HTMLSpanElement | null>(null);
-  const svRectRef = useRef<DOMRect | null>(null);
-  const hueInputRef = useRef<HTMLInputElement | null>(null);
-  const angleInputRef = useRef<HTMLInputElement | null>(null);
-  const angleLabelRef = useRef<HTMLElement | null>(null);
-  const intensityInputRef = useRef<HTMLInputElement | null>(null);
-  const intensityLabelRef = useRef<HTMLElement | null>(null);
-  const hexSwatchRef = useRef<HTMLSpanElement | null>(null);
-  const hexInputRef = useRef<HTMLInputElement | null>(null);
-  const fallbackColorInputRef = useRef<HTMLInputElement | null>(null);
-
-  const isDraggingRef = useRef(false);
-  const rafFrameRef = useRef<number | null>(null);
-
-  const colors = theme.custom.colors.length > 0 ? theme.custom.colors : ["#efb4aa"];
-  const safeIdx = Math.min(selectedIdx, colors.length - 1);
-  const activeHex = colors[safeIdx] ?? "#efb4aa";
-  const initialHsv = hexToHsv(activeHex);
-
   const draftRef = useRef<LiveDraftState>({
-    appearance: theme.custom.appearance,
-    colors: [...colors],
-    angle: theme.custom.angle,
-    intensity: theme.custom.intensity,
-    selectedIdx: safeIdx,
+    appearance: initialCustom.appearance,
+    colors: [...initialColors],
+    angle: initialCustom.angle,
+    intensity: initialCustom.intensity,
+    selectedIdx: 0,
     hue: initialHsv.h,
     sat: initialHsv.s,
     val: initialHsv.v,
   });
 
-  // Switch live preview to custom mode immediately on open
-  useEffect(() => {
-    if (getThemeConfig().kind !== "custom") {
-      updateThemeConfig({ kind: "custom" });
-    }
-    return () => {
-      if (rafFrameRef.current !== null) {
-        window.cancelAnimationFrame(rafFrameRef.current);
-        rafFrameRef.current = null;
-      }
-      flushThemePersistence();
-    };
-  }, []);
+  const liveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const liveCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const liveCanvasSizeRef = useRef<{ w: number; h: number }>({ w: 48, h: 84 });
 
-  // Keep draftRef & uncontrolled slider/picker DOM synced whenever non-drag state updates
-  useEffect(() => {
-    if (isDraggingRef.current) return;
-    const cols = theme.custom.colors.length > 0 ? theme.custom.colors : ["#efb4aa"];
-    const idx = Math.min(selectedIdx, cols.length - 1);
-    const hex = cols[idx] ?? "#efb4aa";
-    const parsed = hexToHsv(hex);
-    const prevHue = draftRef.current.hue;
-    const preservedHue = parsed.s < 0.015 || parsed.v < 0.015 ? prevHue : parsed.h;
+  const stopsCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stopsCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const stopChipRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
-    draftRef.current = {
-      appearance: theme.custom.appearance,
-      colors: [...cols],
-      angle: theme.custom.angle,
-      intensity: theme.custom.intensity,
-      selectedIdx: idx,
-      hue: preservedHue,
-      sat: parsed.s,
-      val: parsed.v,
-    };
+  const svBoxRef = useRef<HTMLDivElement | null>(null);
+  const svThumbRef = useRef<HTMLSpanElement | null>(null);
+  const svSizeRef = useRef<{ width: number; height: number }>({
+    width: 0,
+    height: 0,
+  });
+  const svDragRectRef = useRef<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const svDraggingRef = useRef(false);
+  const pendingSvPointRef = useRef<{ x: number; y: number } | null>(null);
 
-    setHexDraft(hex.toUpperCase());
-    if (hueInputRef.current) hueInputRef.current.value = String(Math.round(preservedHue));
-    if (angleInputRef.current) angleInputRef.current.value = String(theme.custom.angle);
-    if (angleLabelRef.current) angleLabelRef.current.textContent = `${theme.custom.angle}°`;
-    if (intensityInputRef.current) {
-      intensityInputRef.current.value = String(theme.custom.intensity);
-    }
-    if (intensityLabelRef.current) {
-      intensityLabelRef.current.textContent = `${theme.custom.intensity}%`;
-    }
-    positionSvThumb(parsed.s, parsed.v, hex, preservedHue);
-  }, [
-    selectedIdx,
-    theme.custom.appearance,
-    theme.custom.colors,
-    theme.custom.angle,
-    theme.custom.intensity,
-  ]);
+  const hueSliderRef = useRef<FastGpuSliderHandle | null>(null);
+  const angleSliderRef = useRef<FastGpuSliderHandle | null>(null);
+  const intensitySliderRef = useRef<FastGpuSliderHandle | null>(null);
 
-  function positionSvThumb(s: number, v: number, hex: string, hue: number) {
-    const box = svBoxRef.current;
+  const angleLabelRef = useRef<HTMLElement | null>(null);
+  const intensityLabelRef = useRef<HTMLElement | null>(null);
+  const hexSwatchRef = useRef<HTMLSpanElement | null>(null);
+  const hexInputRef = useRef<HTMLInputElement | null>(null);
+  const hexFocusedRef = useRef(false);
+  const fallbackColorInputRef = useRef<HTMLInputElement | null>(null);
+  const applyBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const rafFrameRef = useRef<number | null>(null);
+  const backdropPointerDownRef = useRef(false);
+  const hasUncommittedChangesRef = useRef(
+    initialCfgRef.current.kind !== "custom",
+  );
+
+  // Deduplication caches so unchanged properties never touch the DOM
+  const lastPaintedHueIntRef = useRef<number>(-1);
+  const lastStopsKeyRef = useRef<string>("");
+  const lastActiveHexRef = useRef<string>("");
+  const lastAccentKeyRef = useRef<string>("");
+
+  function positionSvThumbOnly(s: number, v: number) {
     const thumb = svThumbRef.current;
-    if (box) {
-      box.style.backgroundColor = hsvToHex(hue, 1, 1);
-    }
-    if (thumb && box) {
-      const rect = svRectRef.current ?? box.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        const x = Math.max(0, Math.min(rect.width, s * rect.width));
-        const y = Math.max(0, Math.min(rect.height, (1 - v) * rect.height));
-        thumb.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
-      }
-      thumb.style.backgroundColor = hex;
-    }
+    const w = svDragRectRef.current?.width ?? svSizeRef.current.width;
+    const h = svDragRectRef.current?.height ?? svSizeRef.current.height;
+    if (!thumb || w <= 0 || h <= 0) return;
+    const x = Math.max(0, Math.min(w, s * w));
+    const y = Math.max(0, Math.min(h, (1 - v) * h));
+    thumb.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0)`;
   }
 
-  /**
-   * 120 FPS zero-lag DOM painter during active touch/mouse dragging:
-   * Updates ONLY the isolated live backdrop + scoped drawer CSS variables + picker thumb,
-   * avoiding :root 2,500-node style invalidation and React re-renders until finger lift.
-   */
-  function scheduleFastDragPaint() {
+  function paintFrameNow() {
+    const d = draftRef.current;
+
+    if (pendingSvPointRef.current) {
+      const pt = pendingSvPointRef.current;
+      pendingSvPointRef.current = null;
+      const rect = svDragRectRef.current;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        const s = clamp01((pt.x - rect.left) / rect.width);
+        const v = clamp01(1 - (pt.y - rect.top) / rect.height);
+        d.sat = s;
+        d.val = v;
+        const cIdx = Math.min(d.selectedIdx, Math.max(0, d.colors.length - 1));
+        d.colors[cIdx] = hsvToHex(d.hue, s, v);
+        hasUncommittedChangesRef.current = true;
+      }
+    }
+
+    const idx = Math.min(d.selectedIdx, Math.max(0, d.colors.length - 1));
+    const activeHex = d.colors[idx] ?? "#efb4aa";
+    const hueInt = Math.round(d.hue);
+
+    if (hueInt !== lastPaintedHueIntRef.current && svBoxRef.current) {
+      lastPaintedHueIntRef.current = hueInt;
+      svBoxRef.current.style.backgroundColor = hsvToHex(d.hue, 1, 1);
+    }
+
+    positionSvThumbOnly(d.sat, d.val);
+
+    if (activeHex !== lastActiveHexRef.current) {
+      lastActiveHexRef.current = activeHex;
+      const activeChip = stopChipRefs.current[idx];
+      if (activeChip) {
+        activeChip.style.backgroundColor = activeHex;
+      }
+      if (hexSwatchRef.current) {
+        hexSwatchRef.current.style.backgroundColor = activeHex;
+      }
+      if (hexInputRef.current && !hexFocusedRef.current) {
+        hexInputRef.current.value = activeHex.toUpperCase();
+      }
+      if (fallbackColorInputRef.current) {
+        fallbackColorInputRef.current.value = activeHex;
+      }
+    }
+
+    const stopsKey = d.colors.join("|");
+    if (stopsKey !== lastStopsKeyRef.current) {
+      lastStopsKeyRef.current = stopsKey;
+      paintLinearGradientOnCanvas(
+        stopsCtxRef.current,
+        96,
+        2,
+        d.colors,
+        90,
+      );
+    }
+
+    const accentKey = `${d.appearance}|${d.colors[0] ?? ""}`;
+    if (accentKey !== lastAccentKeyRef.current) {
+      lastAccentKeyRef.current = accentKey;
+      const { accent, accentDark } = computePreviewAccent(
+        d.appearance,
+        d.colors[0] ?? "#7c5cff",
+      );
+      angleSliderRef.current?.setAccentColor(accent);
+      intensitySliderRef.current?.setAccentColor(accent);
+      if (applyBtnRef.current) {
+        applyBtnRef.current.style.backgroundColor = accent;
+        applyBtnRef.current.style.color = accentDark;
+      }
+    }
+
+    if (angleLabelRef.current) {
+      const nextAngleText = `${d.angle}°`;
+      if (angleLabelRef.current.textContent !== nextAngleText) {
+        angleLabelRef.current.textContent = nextAngleText;
+      }
+    }
+
+    if (intensityLabelRef.current) {
+      const nextIntText = `${d.intensity}%`;
+      if (intensityLabelRef.current.textContent !== nextIntText) {
+        intensityLabelRef.current.textContent = nextIntText;
+      }
+    }
+
+    const blended = computeBlendedGradientStops({
+      appearance: d.appearance,
+      colors: d.colors,
+      intensity: d.intensity,
+    });
+    const { w, h } = liveCanvasSizeRef.current;
+    paintLinearGradientOnCanvas(liveCtxRef.current, w, h, blended, d.angle);
+  }
+
+  function scheduleFastPaint() {
     if (rafFrameRef.current !== null) return;
     rafFrameRef.current = window.requestAnimationFrame(() => {
       rafFrameRef.current = null;
-      const d = draftRef.current;
-      const idx = Math.min(d.selectedIdx, Math.max(0, d.colors.length - 1));
-      const hex = d.colors[idx] ?? "#efb4aa";
-
-      positionSvThumb(d.sat, d.val, hex, d.hue);
-
-      if (stopsBarRef.current) {
-        stopsBarRef.current.style.background = buildStopsGradientCss(d.colors);
-      }
-      const activeChip = stopChipRefs.current[idx];
-      if (activeChip) {
-        activeChip.style.backgroundColor = hex;
-      }
-      if (hexSwatchRef.current) {
-        hexSwatchRef.current.style.backgroundColor = hex;
-      }
-      if (hexInputRef.current && document.activeElement !== hexInputRef.current) {
-        hexInputRef.current.value = hex.toUpperCase();
-      }
-      if (angleLabelRef.current) {
-        angleLabelRef.current.textContent = `${d.angle}°`;
-      }
-      if (intensityLabelRef.current) {
-        intensityLabelRef.current.textContent = `${d.intensity}%`;
-      }
-
-      const computed = buildCssGradientFromSpec({
-        appearance: d.appearance,
-        colors: d.colors,
-        angle: d.angle,
-        intensity: d.intensity,
-      });
-
-      if (liveBackdropRef.current) {
-        liveBackdropRef.current.style.opacity = "1";
-        liveBackdropRef.current.style.background = computed.backgroundCss;
-      }
-
-      const drawer = drawerRef.current;
-      if (drawer) {
-        drawer.style.setProperty("--panel", computed.panel);
-        drawer.style.setProperty("--panel-2", computed.panel2);
-        drawer.style.setProperty("--border", computed.border);
-        drawer.style.setProperty("--text", computed.text);
-        drawer.style.setProperty("--muted", computed.muted);
-        drawer.style.setProperty("--accent", computed.accent);
-        drawer.style.setProperty("--accent-dark", computed.accentDark);
-      }
+      paintFrameNow();
     });
   }
 
-  function clearDrawerInlineOverrides() {
-    if (liveBackdropRef.current) {
-      liveBackdropRef.current.style.opacity = "0";
-    }
-    const drawer = drawerRef.current;
-    if (drawer) {
-      drawer.style.removeProperty("--panel");
-      drawer.style.removeProperty("--panel-2");
-      drawer.style.removeProperty("--border");
-      drawer.style.removeProperty("--text");
-      drawer.style.removeProperty("--muted");
-      drawer.style.removeProperty("--accent");
-      drawer.style.removeProperty("--accent-dark");
-    }
-  }
-
-  function commitDraftToEngine() {
-    isDraggingRef.current = false;
+  function commitDraftToEngine(forceSyncNow = false) {
     if (rafFrameRef.current !== null) {
       window.cancelAnimationFrame(rafFrameRef.current);
       rafFrameRef.current = null;
     }
+    if (!hasUncommittedChangesRef.current && !forceSyncNow) {
+      flushThemePersistence();
+      return;
+    }
+    hasUncommittedChangesRef.current = false;
     const d = draftRef.current;
-    const idx = Math.min(d.selectedIdx, Math.max(0, d.colors.length - 1));
-    const currentHex = (d.colors[idx] ?? "#efb4aa").toUpperCase();
-    setHexDraft(currentHex);
-    clearDrawerInlineOverrides();
-    updateThemeConfig((prev) => ({
+    const latest = updateThemeConfig((prev) => ({
       ...prev,
       kind: "custom",
       custom: {
@@ -263,59 +532,190 @@ export function CustomThemeDrawer({
         intensity: d.intensity,
       },
     }));
+    flushThemePersistence();
+
+    if (latest.syncAcrossDevices && me) {
+      void saveProfile({
+        displayName: me.displayName,
+        username: me.username,
+        bio: me.bio,
+        pronouns: me.pronouns,
+        avatarColor: me.avatarColor,
+        syncedTheme: toSyncedThemePayload(latest),
+      }).catch(() => undefined);
+    }
+  }
+
+  const commitRef = useRef(commitDraftToEngine);
+  useEffect(() => {
+    commitRef.current = commitDraftToEngine;
+  });
+
+  // Setup lightweight canvases, ResizeObserver on SV palette, passive:false touch guard, and safe lifecycle flush
+  useEffect(() => {
+    const liveCanvas = liveCanvasRef.current;
+    if (liveCanvas) {
+      const syncAspect = () => {
+        const vw = Math.max(1, window.innerWidth);
+        const vh = Math.max(1, window.innerHeight);
+        const w = 48;
+        const h = Math.max(32, Math.min(128, Math.round(w * (vh / vw))));
+        if (liveCanvas.width !== w || liveCanvas.height !== h) {
+          liveCanvas.width = w;
+          liveCanvas.height = h;
+        }
+        liveCanvasSizeRef.current = { w, h };
+        liveCtxRef.current = liveCanvas.getContext("2d", { alpha: false });
+      };
+      syncAspect();
+    }
+
+    const stopsCanvas = stopsCanvasRef.current;
+    if (stopsCanvas) {
+      stopsCtxRef.current = stopsCanvas.getContext("2d", { alpha: false });
+    }
+
+    const svEl = svBoxRef.current;
+    let ro: ResizeObserver | null = null;
+    const preventSvScroll = (ev: TouchEvent) => {
+      if (ev.cancelable) ev.preventDefault();
+    };
+
+    if (svEl) {
+      const rect = svEl.getBoundingClientRect();
+      svSizeRef.current = { width: rect.width, height: rect.height };
+
+      if (typeof ResizeObserver !== "undefined") {
+        ro = new ResizeObserver((entries) => {
+          const entry = entries[0];
+          if (!entry) return;
+          svSizeRef.current = {
+            width: entry.contentRect.width,
+            height: entry.contentRect.height,
+          };
+          positionSvThumbOnly(draftRef.current.sat, draftRef.current.val);
+        });
+        ro.observe(svEl);
+      }
+
+      svEl.addEventListener("touchstart", preventSvScroll, { passive: false });
+      svEl.addEventListener("touchmove", preventSvScroll, { passive: false });
+    }
+
+    lastPaintedHueIntRef.current = -1;
+    lastStopsKeyRef.current = "";
+    lastActiveHexRef.current = "";
+    lastAccentKeyRef.current = "";
+    paintFrameNow();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        commitRef.current(false);
+      }
+    };
+    const onPageHide = () => {
+      commitRef.current(false);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", onPageHide);
+
+    return () => {
+      if (rafFrameRef.current !== null) {
+        window.cancelAnimationFrame(rafFrameRef.current);
+        rafFrameRef.current = null;
+      }
+      ro?.disconnect();
+      if (svEl) {
+        svEl.removeEventListener("touchstart", preventSvScroll);
+        svEl.removeEventListener("touchmove", preventSvScroll);
+      }
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", onPageHide);
+      commitRef.current(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function selectStopIndex(nextIdx: number, colsOverride?: string[]) {
+    const d = draftRef.current;
+    const cols = colsOverride ?? d.colors;
+    const clampedIdx = Math.max(0, Math.min(nextIdx, cols.length - 1));
+    const hex = cols[clampedIdx] ?? "#efb4aa";
+    const parsed = hexToHsv(hex);
+    const preservedHue =
+      parsed.s < 0.015 || parsed.v < 0.015 ? d.hue : parsed.h;
+
+    d.selectedIdx = clampedIdx;
+    d.hue = preservedHue;
+    d.sat = parsed.s;
+    d.val = parsed.v;
+
+    setSelectedIdx(clampedIdx);
+    hueSliderRef.current?.setValue(preservedHue);
+    lastActiveHexRef.current = "";
+    lastPaintedHueIntRef.current = -1;
+    scheduleFastPaint();
   }
 
   function updateActiveStopDirect(nextHexRaw: string) {
-    const clean = normalizeHexColor(nextHexRaw, activeHex);
-    const parsed = hexToHsv(clean);
-    draftRef.current.hue = parsed.h;
-    draftRef.current.sat = parsed.s;
-    draftRef.current.val = parsed.v;
-    const nextCols = [...draftRef.current.colors];
-    const idx = Math.min(safeIdx, Math.max(0, nextCols.length - 1));
-    nextCols[idx] = clean;
-    draftRef.current.colors = nextCols;
-    commitDraftToEngine();
-  }
-
-  function updateSvFromClientPoint(clientX: number, clientY: number) {
-    const rect = svRectRef.current ?? svBoxRef.current?.getBoundingClientRect() ?? null;
-    if (!rect || rect.width <= 0 || rect.height <= 0) return;
-    const s = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const v = Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
     const d = draftRef.current;
-    d.sat = s;
-    d.val = v;
     const idx = Math.min(d.selectedIdx, Math.max(0, d.colors.length - 1));
-    d.colors[idx] = hsvToHex(d.hue, s, v);
-    scheduleFastDragPaint();
+    const fallback = d.colors[idx] ?? "#efb4aa";
+    const clean = normalizeHexColor(nextHexRaw, fallback);
+    const parsed = hexToHsv(clean);
+    const preservedHue =
+      parsed.s < 0.015 || parsed.v < 0.015 ? d.hue : parsed.h;
+
+    d.hue = preservedHue;
+    d.sat = parsed.s;
+    d.val = parsed.v;
+    d.colors[idx] = clean;
+    hasUncommittedChangesRef.current = true;
+
+    hueSliderRef.current?.setValue(preservedHue);
+    lastActiveHexRef.current = "";
+    lastPaintedHueIntRef.current = -1;
+    scheduleFastPaint();
   }
 
   function onSvPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
     e.preventDefault();
-    isDraggingRef.current = true;
-    svRectRef.current = e.currentTarget.getBoundingClientRect();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    svSizeRef.current = { width: rect.width, height: rect.height };
+    svDragRectRef.current = {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+    svDraggingRef.current = true;
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
       // ignore synthetic pointer capture errors
     }
-    updateSvFromClientPoint(e.clientX, e.clientY);
+    pendingSvPointRef.current = { x: e.clientX, y: e.clientY };
+    paintFrameNow();
   }
 
   function onSvPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
-    if (!isDraggingRef.current) return;
-    updateSvFromClientPoint(e.clientX, e.clientY);
+    if (!svDraggingRef.current) return;
+    pendingSvPointRef.current = { x: e.clientX, y: e.clientY };
+    scheduleFastPaint();
   }
 
   function onSvPointerUp() {
-    if (!isDraggingRef.current) return;
-    svRectRef.current = null;
-    commitDraftToEngine();
+    if (!svDraggingRef.current) return;
+    svDraggingRef.current = false;
+    if (pendingSvPointRef.current) {
+      paintFrameNow();
+    }
+    svDragRectRef.current = null;
   }
 
   function handleHueInput(nextHue: number) {
-    isDraggingRef.current = true;
     const d = draftRef.current;
     d.hue = nextHue;
     const s = Math.max(0.04, d.sat);
@@ -324,54 +724,56 @@ export function CustomThemeDrawer({
     d.val = v;
     const idx = Math.min(d.selectedIdx, Math.max(0, d.colors.length - 1));
     d.colors[idx] = hsvToHex(nextHue, s, v);
-    scheduleFastDragPaint();
+    hasUncommittedChangesRef.current = true;
+    scheduleFastPaint();
   }
 
   function handleAngleInput(nextAngle: number) {
-    isDraggingRef.current = true;
     draftRef.current.angle = nextAngle;
-    scheduleFastDragPaint();
+    hasUncommittedChangesRef.current = true;
+    scheduleFastPaint();
   }
 
   function handleIntensityInput(nextIntensity: number) {
-    isDraggingRef.current = true;
     draftRef.current.intensity = nextIntensity;
-    scheduleFastDragPaint();
+    hasUncommittedChangesRef.current = true;
+    scheduleFastPaint();
   }
 
-  function handleSliderRelease() {
-    if (!isDraggingRef.current) return;
-    commitDraftToEngine();
+  function handleModeChange(nextMode: "dark" | "light") {
+    if (draftRef.current.appearance === nextMode) return;
+    draftRef.current.appearance = nextMode;
+    hasUncommittedChangesRef.current = true;
+    setAppearance(nextMode);
+    scheduleFastPaint();
   }
 
   function handleAddColour() {
-    if (colors.length >= 5) return;
     const d = draftRef.current;
-    const shifted = hsvToHex((d.hue + 48) % 360, Math.max(0.32, d.sat), Math.max(0.55, d.val));
-    const nextIndex = colors.length;
-    updateThemeConfig((prev) => ({
-      ...prev,
-      kind: "custom",
-      custom: {
-        ...prev.custom,
-        colors: [...prev.custom.colors, shifted].slice(0, 5),
-      },
-    }));
-    setSelectedIdx(nextIndex);
+    if (d.colors.length >= 5) return;
+    const shifted = hsvToHex(
+      (d.hue + 48) % 360,
+      Math.max(0.32, d.sat),
+      Math.max(0.55, d.val),
+    );
+    const nextColors = [...d.colors, shifted].slice(0, 5);
+    const nextIdx = nextColors.length - 1;
+    d.colors = nextColors;
+    hasUncommittedChangesRef.current = true;
+    setStopSlots([...nextColors]);
+    selectStopIndex(nextIdx, nextColors);
   }
 
   function handleRemoveColour() {
-    if (colors.length <= 1) return;
-    const nextIdx = Math.max(0, safeIdx - 1);
-    updateThemeConfig((prev) => ({
-      ...prev,
-      kind: "custom",
-      custom: {
-        ...prev.custom,
-        colors: prev.custom.colors.filter((_, i) => i !== safeIdx),
-      },
-    }));
-    setSelectedIdx(nextIdx);
+    const d = draftRef.current;
+    if (d.colors.length <= 1) return;
+    const removeAt = Math.min(d.selectedIdx, d.colors.length - 1);
+    const nextColors = d.colors.filter((_, i) => i !== removeAt);
+    const nextIdx = Math.max(0, removeAt - 1);
+    d.colors = nextColors;
+    hasUncommittedChangesRef.current = true;
+    setStopSlots([...nextColors]);
+    selectStopIndex(nextIdx, nextColors);
   }
 
   async function handleEyedropper() {
@@ -392,46 +794,64 @@ export function CustomThemeDrawer({
   }
 
   function handleRandomise() {
+    const d = draftRef.current;
     const baseHue = Math.floor(Math.random() * 360);
-    const isLight = theme.custom.appearance === "light";
+    const isLight = d.appearance === "light";
     const c1 = hsvToHex(baseHue, isLight ? 0.34 : 0.62, isLight ? 0.96 : 0.58);
-    const c2 = hsvToHex((baseHue + 52) % 360, isLight ? 0.3 : 0.56, isLight ? 0.94 : 0.48);
-    const c3 = hsvToHex((baseHue + 115) % 360, isLight ? 0.36 : 0.64, isLight ? 0.95 : 0.62);
-    updateThemeConfig((prev) => ({
-      ...prev,
-      kind: "custom",
-      custom: {
-        ...prev.custom,
-        colors: [c1, c2, c3],
-      },
-    }));
-    setSelectedIdx(0);
+    const c2 = hsvToHex(
+      (baseHue + 52) % 360,
+      isLight ? 0.3 : 0.56,
+      isLight ? 0.94 : 0.48,
+    );
+    const c3 = hsvToHex(
+      (baseHue + 115) % 360,
+      isLight ? 0.36 : 0.64,
+      isLight ? 0.95 : 0.62,
+    );
+    const nextColors = [c1, c2, c3];
+    d.colors = nextColors;
+    hasUncommittedChangesRef.current = true;
+    setStopSlots([...nextColors]);
+    selectStopIndex(0, nextColors);
   }
 
   function closeWithAnim(cb: () => void) {
     if (closing) return;
-    if (isDraggingRef.current) {
-      commitDraftToEngine();
-    } else {
-      flushThemePersistence();
-    }
+    commitDraftToEngine(false);
     setClosing(true);
-    window.setTimeout(cb, 170);
+    window.setTimeout(cb, 165);
   }
 
-  const stripGradient = buildStopsGradientCss(colors);
+  const safeIdx = Math.min(selectedIdx, Math.max(0, stopSlots.length - 1));
+  const currentActiveHex =
+    draftRef.current.colors[safeIdx] ?? stopSlots[safeIdx] ?? "#efb4aa";
   const pureHueHex = hsvToHex(draftRef.current.hue, 1, 1);
+  const liveAccent = computePreviewAccent(
+    draftRef.current.appearance,
+    draftRef.current.colors[0] ?? currentActiveHex,
+  );
 
   return (
     <>
-      <div
-        ref={liveBackdropRef}
-        className="custom-theme-live-backdrop"
+      <canvas
+        ref={liveCanvasRef}
+        width={48}
+        height={84}
+        className={`custom-theme-live-backdrop ${closing ? "closing" : ""}`}
         aria-hidden="true"
+        onPointerDown={(e) => {
+          backdropPointerDownRef.current = e.target === e.currentTarget;
+        }}
+        onClick={(e) => {
+          if (backdropPointerDownRef.current && e.target === e.currentTarget) {
+            backdropPointerDownRef.current = false;
+            closeWithAnim(onClose);
+          }
+        }}
       />
       <aside
-        ref={drawerRef}
         className={`custom-theme-drawer ${closing ? "closing" : ""}`}
+        data-drawer-mode={appearance}
         aria-label="Customise your theme"
       >
         <div className="custom-theme-drawer-head">
@@ -449,20 +869,17 @@ export function CustomThemeDrawer({
         <div className="custom-theme-drawer-body">
           <div className="custom-theme-group">
             <span className="custom-theme-label">Appearance</span>
-            <div className="custom-theme-mode-switch" role="group" aria-label="Base appearance">
+            <div
+              className="custom-theme-mode-switch"
+              role="group"
+              aria-label="Base appearance"
+            >
               <button
                 type="button"
                 className={`custom-theme-mode-btn ${
-                  theme.custom.appearance === "dark" ? "active" : ""
+                  appearance === "dark" ? "active" : ""
                 }`}
-                onClick={() => {
-                  draftRef.current.appearance = "dark";
-                  updateThemeConfig((prev) => ({
-                    ...prev,
-                    kind: "custom",
-                    custom: { ...prev.custom, appearance: "dark" },
-                  }));
-                }}
+                onClick={() => handleModeChange("dark")}
                 title="Dark appearance"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -473,16 +890,9 @@ export function CustomThemeDrawer({
               <button
                 type="button"
                 className={`custom-theme-mode-btn ${
-                  theme.custom.appearance === "light" ? "active" : ""
+                  appearance === "light" ? "active" : ""
                 }`}
-                onClick={() => {
-                  draftRef.current.appearance = "light";
-                  updateThemeConfig((prev) => ({
-                    ...prev,
-                    kind: "custom",
-                    custom: { ...prev.custom, appearance: "light" },
-                  }));
-                }}
+                onClick={() => handleModeChange("light")}
                 title="Light appearance"
               >
                 <svg
@@ -504,28 +914,32 @@ export function CustomThemeDrawer({
 
           <div className="custom-theme-group">
             <span className="custom-theme-label">Colours</span>
-            <div
-              ref={stopsBarRef}
-              className="custom-theme-stops-bar"
-              style={{ background: stripGradient }}
-            >
-              {colors.map((col, idx) => (
-                <button
-                  type="button"
-                  key={idx}
-                  ref={(el) => {
-                    stopChipRefs.current[idx] = el;
-                  }}
-                  className={`custom-theme-stop-chip ${idx === safeIdx ? "active" : ""}`}
-                  style={{ backgroundColor: col }}
-                  aria-label={`Colour stop ${idx + 1} (${col})`}
-                  onClick={() => {
-                    if (isDraggingRef.current) commitDraftToEngine();
-                    draftRef.current.selectedIdx = idx;
-                    setSelectedIdx(idx);
-                  }}
-                />
-              ))}
+            <div className="custom-theme-stops-bar">
+              <canvas
+                ref={stopsCanvasRef}
+                width={96}
+                height={2}
+                className="custom-theme-stops-canvas"
+                aria-hidden="true"
+              />
+              {stopSlots.map((slotHex, idx) => {
+                const liveHex = draftRef.current.colors[idx] ?? slotHex;
+                return (
+                  <button
+                    type="button"
+                    key={idx}
+                    ref={(el) => {
+                      stopChipRefs.current[idx] = el;
+                    }}
+                    className={`custom-theme-stop-chip ${
+                      idx === safeIdx ? "active" : ""
+                    }`}
+                    style={{ backgroundColor: liveHex }}
+                    aria-label={`Colour stop ${idx + 1}`}
+                    onClick={() => selectStopIndex(idx)}
+                  />
+                );
+              })}
             </div>
 
             <div
@@ -539,58 +953,59 @@ export function CustomThemeDrawer({
             >
               <div className="custom-theme-sv-white" />
               <div className="custom-theme-sv-black" />
-              <span
-                ref={svThumbRef}
-                className="custom-theme-sv-thumb"
-                style={{ backgroundColor: activeHex }}
-              />
+              <span ref={svThumbRef} className="custom-theme-sv-thumb" />
             </div>
 
-            <input
-              ref={hueInputRef}
-              type="range"
-              className="custom-theme-hue-slider"
-              aria-label="Colour hue"
+            <FastGpuSlider
+              ref={hueSliderRef}
+              ariaLabel="Colour hue"
               min={0}
               max={360}
-              step={1}
-              defaultValue={Math.round(initialHsv.h)}
-              onInput={(e) => handleHueInput(Number((e.target as HTMLInputElement).value))}
-              onPointerUp={handleSliderRelease}
-              onPointerCancel={handleSliderRelease}
-              onTouchEnd={handleSliderRelease}
-              onTouchCancel={handleSliderRelease}
-              onMouseUp={handleSliderRelease}
-              onKeyUp={handleSliderRelease}
-              onBlur={handleSliderRelease}
+              initialValue={Math.round(initialHsv.h)}
+              variant="hue"
+              onValueInput={handleHueInput}
             />
 
             <div className="custom-theme-hex-row">
               <span
                 ref={hexSwatchRef}
                 className="custom-theme-hex-swatch"
-                style={{ backgroundColor: activeHex }}
+                style={{ backgroundColor: currentActiveHex }}
               />
               <input
                 ref={hexInputRef}
                 type="text"
                 className="custom-theme-hex-input"
-                value={hexDraft}
+                defaultValue={currentActiveHex.toUpperCase()}
                 maxLength={7}
                 aria-label="Hex colour code"
+                onFocus={() => {
+                  hexFocusedRef.current = true;
+                }}
                 onChange={(e) => {
                   const val = e.target.value;
-                  setHexDraft(val);
                   if (/^#?[0-9a-fA-F]{6}$/.test(val.trim())) {
                     updateActiveStopDirect(val);
                   }
                 }}
-                onBlur={() => setHexDraft(activeHex.toUpperCase())}
+                onBlur={() => {
+                  hexFocusedRef.current = false;
+                  const idx = Math.min(
+                    draftRef.current.selectedIdx,
+                    Math.max(0, draftRef.current.colors.length - 1),
+                  );
+                  const latestHex = (
+                    draftRef.current.colors[idx] ?? "#efb4aa"
+                  ).toUpperCase();
+                  if (hexInputRef.current) {
+                    hexInputRef.current.value = latestHex;
+                  }
+                }}
               />
               <input
                 ref={fallbackColorInputRef}
                 type="color"
-                value={activeHex}
+                defaultValue={currentActiveHex}
                 hidden
                 onChange={(e) => updateActiveStopDirect(e.target.value)}
               />
@@ -621,7 +1036,7 @@ export function CustomThemeDrawer({
                 className="custom-theme-hex-icon-btn"
                 title="Remove colour stop"
                 aria-label="Remove colour stop"
-                disabled={colors.length <= 1}
+                disabled={stopSlots.length <= 1}
                 onClick={handleRemoveColour}
               >
                 <svg
@@ -638,7 +1053,7 @@ export function CustomThemeDrawer({
               </button>
             </div>
 
-            {colors.length < 5 && (
+            {stopSlots.length < 5 && (
               <button
                 type="button"
                 className="custom-theme-add-stop-btn"
@@ -656,50 +1071,36 @@ export function CustomThemeDrawer({
             <div className="custom-theme-slider-field">
               <div className="custom-theme-slider-head">
                 <span>Gradient Direction</span>
-                <strong ref={angleLabelRef}>{theme.custom.angle}°</strong>
+                <strong ref={angleLabelRef}>{initialCustom.angle}°</strong>
               </div>
-              <input
-                ref={angleInputRef}
-                type="range"
-                className="custom-theme-control-range"
+              <FastGpuSlider
+                ref={angleSliderRef}
+                ariaLabel="Gradient direction"
                 min={0}
                 max={360}
-                step={1}
-                defaultValue={theme.custom.angle}
-                onInput={(e) => handleAngleInput(Number((e.target as HTMLInputElement).value))}
-                onPointerUp={handleSliderRelease}
-                onPointerCancel={handleSliderRelease}
-                onTouchEnd={handleSliderRelease}
-                onTouchCancel={handleSliderRelease}
-                onMouseUp={handleSliderRelease}
-                onKeyUp={handleSliderRelease}
-                onBlur={handleSliderRelease}
+                initialValue={initialCustom.angle}
+                variant="accent"
+                initialAccentColor={liveAccent.accent}
+                onValueInput={handleAngleInput}
               />
             </div>
 
             <div className="custom-theme-slider-field">
               <div className="custom-theme-slider-head">
                 <span>Colour Intensity</span>
-                <strong ref={intensityLabelRef}>{theme.custom.intensity}%</strong>
+                <strong ref={intensityLabelRef}>
+                  {initialCustom.intensity}%
+                </strong>
               </div>
-              <input
-                ref={intensityInputRef}
-                type="range"
-                className="custom-theme-control-range"
+              <FastGpuSlider
+                ref={intensitySliderRef}
+                ariaLabel="Colour intensity"
                 min={10}
                 max={100}
-                step={1}
-                defaultValue={theme.custom.intensity}
-                onInput={(e) =>
-                  handleIntensityInput(Number((e.target as HTMLInputElement).value))
-                }
-                onPointerUp={handleSliderRelease}
-                onPointerCancel={handleSliderRelease}
-                onTouchEnd={handleSliderRelease}
-                onTouchCancel={handleSliderRelease}
-                onMouseUp={handleSliderRelease}
-                onKeyUp={handleSliderRelease}
-                onBlur={handleSliderRelease}
+                initialValue={initialCustom.intensity}
+                variant="accent"
+                initialAccentColor={liveAccent.accent}
+                onValueInput={handleIntensityInput}
               />
             </div>
           </div>
@@ -716,23 +1117,15 @@ export function CustomThemeDrawer({
               Shuffle
             </button>
             <button
+              ref={applyBtnRef}
               type="button"
               className="primary-btn custom-theme-apply-btn"
+              style={{
+                backgroundColor: liveAccent.accent,
+                color: liveAccent.accentDark,
+              }}
               onClick={() => {
-                if (isDraggingRef.current) {
-                  commitDraftToEngine();
-                }
-                const latest = updateThemeConfig((prev) => ({ ...prev, kind: "custom" }));
-                if (latest.syncAcrossDevices && me) {
-                  void saveProfile({
-                    displayName: me.displayName,
-                    username: me.username,
-                    bio: me.bio,
-                    pronouns: me.pronouns,
-                    avatarColor: me.avatarColor,
-                    syncedTheme: toSyncedThemePayload(latest),
-                  }).catch(() => undefined);
-                }
+                commitDraftToEngine(true);
                 setAppliedToast(true);
                 window.setTimeout(() => setAppliedToast(false), 1600);
               }}
