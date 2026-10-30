@@ -631,6 +631,48 @@ function bindSystemThemeListener() {
   }
 }
 
+export function computeBlendedGradientStops(spec: {
+  appearance: "dark" | "light";
+  colors: string[];
+  intensity: number;
+}): string[] {
+  const baseRgb: [number, number, number] =
+    spec.appearance === "light" ? [252, 253, 255] : [13, 14, 20];
+  const strength = Math.max(0.1, Math.min(1, spec.intensity / 100));
+  const rawStops = spec.colors.length > 0 ? spec.colors : ["#7c5cff"];
+  const factor = spec.appearance === "light" ? strength * 0.78 : strength * 0.72;
+  return rawStops.map((hex) => {
+    const rgb = hexToRgb(hex);
+    const mixed = mixRgb(baseRgb, rgb, factor);
+    return rgbToHex(mixed[0], mixed[1], mixed[2]);
+  });
+}
+
+export function computePreviewAccent(
+  appearance: "dark" | "light",
+  firstColorHex: string,
+): { accent: string; accentDark: string } {
+  const rawAccentHsv = hexToHsv(firstColorHex || "#7c5cff");
+  if (appearance === "light") {
+    return {
+      accent: hsvToHex(
+        rawAccentHsv.h,
+        Math.max(0.55, Math.min(0.88, rawAccentHsv.s + 0.28)),
+        Math.min(0.76, Math.max(0.45, rawAccentHsv.v * 0.78)),
+      ),
+      accentDark: "#ffffff",
+    };
+  }
+  return {
+    accent: hsvToHex(
+      rawAccentHsv.h,
+      Math.max(0.48, Math.min(0.82, rawAccentHsv.s + 0.14)),
+      Math.max(0.72, Math.min(0.95, rawAccentHsv.v + 0.18)),
+    ),
+    accentDark: "#0f1018",
+  };
+}
+
 export function buildCssGradientFromSpec(spec: {
   appearance: "dark" | "light";
   colors: string[];
@@ -647,19 +689,8 @@ export function buildCssGradientFromSpec(spec: {
   accent: string;
   accentDark: string;
 } {
-  const baseRgb: [number, number, number] =
-    spec.appearance === "light" ? [252, 253, 255] : [13, 14, 20];
-  const strength = Math.max(0.1, Math.min(1, spec.intensity / 100));
   const rawStops = spec.colors.length > 0 ? spec.colors : ["#7c5cff"];
-  const blendedStops = rawStops.map((hex) => {
-    const rgb = hexToRgb(hex);
-    const mixed = mixRgb(
-      baseRgb,
-      rgb,
-      spec.appearance === "light" ? strength * 0.78 : strength * 0.72,
-    );
-    return rgbToHex(mixed[0], mixed[1], mixed[2]);
-  });
+  const blendedStops = computeBlendedGradientStops(spec);
 
   const gradientStops =
     blendedStops.length === 1
@@ -671,17 +702,12 @@ export function buildCssGradientFromSpec(spec: {
   const firstRgb = hexToRgb(blendedStops[0]);
   const midRgb = hexToRgb(blendedStops[Math.floor(blendedStops.length / 2)]);
   const avgTint = mixRgb(firstRgb, midRgb, 0.5);
+  const { accent, accentDark } = computePreviewAccent(spec.appearance, rawStops[0]);
 
   if (spec.appearance === "light") {
     const panelRgb = mixRgb([255, 255, 255], avgTint, 0.42);
     const panel2Rgb = mixRgb([241, 243, 248], avgTint, 0.55);
     const borderRgb = mixRgb([204, 210, 222], avgTint, 0.42);
-    const rawAccentHsv = hexToHsv(rawStops[0]);
-    const accent = hsvToHex(
-      rawAccentHsv.h,
-      Math.max(0.55, Math.min(0.88, rawAccentHsv.s + 0.28)),
-      Math.min(0.76, Math.max(0.45, rawAccentHsv.v * 0.78)),
-    );
     return {
       backgroundCss: `linear-gradient(${spec.angle}deg, ${gradientStops})`,
       bgSolid: rgbToHex(avgTint[0], avgTint[1], avgTint[2]),
@@ -691,19 +717,13 @@ export function buildCssGradientFromSpec(spec: {
       text: "#12151c",
       muted: "#4a5162",
       accent,
-      accentDark: "#ffffff",
+      accentDark,
     };
   }
 
   const panelRgb = mixRgb([16, 17, 24], avgTint, 0.46);
   const panel2Rgb = mixRgb([26, 28, 38], avgTint, 0.52);
   const borderRgb = mixRgb([56, 60, 78], avgTint, 0.48);
-  const rawAccentHsv = hexToHsv(rawStops[0]);
-  const accent = hsvToHex(
-    rawAccentHsv.h,
-    Math.max(0.48, Math.min(0.82, rawAccentHsv.s + 0.14)),
-    Math.max(0.72, Math.min(0.95, rawAccentHsv.v + 0.18)),
-  );
   return {
     backgroundCss: `linear-gradient(${spec.angle}deg, ${gradientStops})`,
     bgSolid: rgbToHex(avgTint[0], avgTint[1], avgTint[2]),
@@ -713,7 +733,7 @@ export function buildCssGradientFromSpec(spec: {
     text: "#f4f5fa",
     muted: "#b4b8cb",
     accent,
-    accentDark: "#0f1018",
+    accentDark,
   };
 }
 
