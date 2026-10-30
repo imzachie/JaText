@@ -335,6 +335,7 @@ export interface JaTextStore {
   removeGroupMember: (groupId: string, userId: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
   deleteGroup: (groupId: string) => Promise<void>;
+  clearGroupChatForMe: (groupId: string) => Promise<void>;
   setGroupSilenced: (groupId: string, silenced: boolean) => Promise<void>;
   setGroupArchived: (groupId: string, archived: boolean) => Promise<void>;
   markGroupRead: (groupId: string) => Promise<void>;

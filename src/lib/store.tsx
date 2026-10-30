@@ -1587,6 +1587,7 @@ export function DemoStoreProvider({
     deleteGroup: async () => {
       throw new Error("Group chats are only available with the live JaText backend.");
     },
+    clearGroupChatForMe: async () => undefined,
     setGroupSilenced: async () => undefined,
     setGroupArchived: async () => undefined,
     markGroupRead: async () => undefined,

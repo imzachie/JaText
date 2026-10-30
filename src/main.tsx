@@ -5,6 +5,8 @@ import { ConvexReactClient } from "convex/react";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import App from "./App";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { LandingHeroPage } from "./components/LandingHeroPage";
+import { useJaTextWebRoute } from "./lib/webRoute";
 import {
   SLOT_AUTH_INVALIDATED_EVENT,
   clearDeadSlotTokensOnAuthFailure,
@@ -165,6 +167,7 @@ registerSlotCleanupHandler((slotId, mode) => {
 });
 
 export function Root() {
+  const webRoute = useJaTextWebRoute();
   const { activeSlotId } = useMultiAccountState();
   const authEpoch = useSlotAuthEpoch(activeSlotId);
 
@@ -177,6 +180,10 @@ export function Root() {
       void syncNativeActiveSlotTokens(activeSlotId, convexUrl);
     }
   }, [activeSlotId]);
+
+  if (webRoute === "landing") {
+    return <LandingHeroPage />;
+  }
 
   if (convexUrl) {
     const slotClient = getOrCreateSlotConvexClient(convexUrl, activeSlotId);

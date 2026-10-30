@@ -326,15 +326,15 @@ export function MobileUpdateGate({ readyForWelcome }: { readyForWelcome: boolean
             <ul className="mobile-welcome-highlights">
               <li>
                 <SparklesIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Rich Link Embeds, Smooth 3-Dots Dropdowns &amp; Forwarded Message Cards
+                Crisp Link Embeds on All Custom Bubbles + Rich JaText Preview Cards
               </li>
               <li>
                 <RocketIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Connect Socials (Discord, YouTube, X &amp; more) + Website on Your Profile
+                Owner-Only Delete Group &amp; Non-Leaving &ldquo;Remove chat&rdquo; History Clear
               </li>
               <li>
                 <BellIcon size={15} style={{ color: "var(--accent)" }} />{" "}
-                Unread Message Badges, Community Mute, Group Silence/Archive &amp; Quiet Archives
+                60 FPS Unread Sync, Community Mute, Group Silence/Archive &amp; Profile Socials
               </li>
               <li>
                 <ShieldCheckIcon size={15} style={{ color: "var(--accent)" }} />{" "}
