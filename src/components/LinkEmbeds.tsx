@@ -1,13 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAction } from "convex/react";
-import { api } from "../../convex/_generated/api";
-import type { LinkPreviewResult } from "../../convex/linkPreview";
-import { useJaText } from "../lib/store";
+import { Capacitor } from "@capacitor/core";
 
-const LS_CACHE_KEY = "jatext:link-preview-cache:v1";
+export interface LinkPreviewResult {
+  url: string;
+  hasEmbed: boolean;
+  siteName?: string;
+  title?: string;
+  description?: string;
+  imageUrl?: string;
+  themeColor?: string;
+}
+
+const LS_CACHE_KEY = "jatext:link-preview-cache:v2";
+const PUBLIC_PREVIEW_ENDPOINT = "https://jatext.vercel.app/api/link-preview";
 const MAX_LOCAL_CACHE_ENTRIES = 160;
 const POSITIVE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const NEGATIVE_TTL_MS = 20 * 60 * 1000;
+const NEGATIVE_TTL_MS = 15 * 60 * 1000;
 
 interface CachedEntry extends LinkPreviewResult {
   cachedAt: number;
@@ -61,7 +69,43 @@ function getFreshCachedPreview(url: string): CachedEntry | null {
   return entry;
 }
 
-const DIRECT_MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|mp4|webm|mov|mp3|wav|ogg|m4a)(\?|#|$)/i;
+function getPreviewApiEndpoint(targetUrl: string): string {
+  const qs = `?url=${encodeURIComponent(targetUrl)}`;
+  if (typeof window === "undefined") return `${PUBLIC_PREVIEW_ENDPOINT}${qs}`;
+  if (Capacitor.isNativePlatform()) {
+    return `${PUBLIC_PREVIEW_ENDPOINT}${qs}`;
+  }
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    return `${PUBLIC_PREVIEW_ENDPOINT}${qs}`;
+  }
+  return `/api/link-preview${qs}`;
+}
+
+async function requestLinkPreview(url: string): Promise<LinkPreviewResult> {
+  const endpoint = getPreviewApiEndpoint(url);
+  const res = await fetch(endpoint, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) return { url, hasEmbed: false };
+  const data = (await res.json()) as Partial<LinkPreviewResult>;
+  if (!data || typeof data !== "object" || !data.hasEmbed) {
+    return { url, hasEmbed: false };
+  }
+  return {
+    url: typeof data.url === "string" ? data.url : url,
+    hasEmbed: true,
+    siteName: typeof data.siteName === "string" ? data.siteName : undefined,
+    title: typeof data.title === "string" ? data.title : undefined,
+    description: typeof data.description === "string" ? data.description : undefined,
+    imageUrl: typeof data.imageUrl === "string" ? data.imageUrl : undefined,
+    themeColor: typeof data.themeColor === "string" ? data.themeColor : undefined,
+  };
+}
+
+const DIRECT_MEDIA_EXT_RE =
+  /\.(png|jpe?g|gif|webp|avif|bmp|svg|mp4|webm|mov|mp3|wav|ogg|m4a)(\?|#|$)/i;
 
 export function extractEmbeddableUrls(text?: string | null): string[] {
   if (!text) return [];
@@ -71,7 +115,6 @@ export function extractEmbeddableUrls(text?: string | null): string[] {
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {
     let candidate = match[0];
-    // Strip trailing sentence punctuation
     while (/[.,!?;:'"\]}]$/.test(candidate)) {
       candidate = candidate.slice(0, -1);
     }
@@ -96,8 +139,7 @@ export function extractEmbeddableUrls(text?: string | null): string[] {
   return urls;
 }
 
-function SingleConvexLinkEmbed({ url }: { url: string }) {
-  const fetchPreview = useAction(api.linkPreview.fetchPreview);
+function SingleLinkEmbed({ url }: { url: string }) {
   const [preview, setPreview] = useState<LinkPreviewResult | null>(() =>
     getFreshCachedPreview(url),
   );
@@ -114,7 +156,7 @@ function SingleConvexLinkEmbed({ url }: { url: string }) {
     let cancelled = false;
     let pending = inflightPreviewPromises.get(url);
     if (!pending) {
-      pending = fetchPreview({ url })
+      pending = requestLinkPreview(url)
         .then((res) => {
           const entry: CachedEntry = { ...res, cachedAt: Date.now() };
           memoryPreviewCache.set(url, entry);
@@ -137,7 +179,7 @@ function SingleConvexLinkEmbed({ url }: { url: string }) {
     return () => {
       cancelled = true;
     };
-  }, [fetchPreview, url]);
+  }, [url]);
 
   if (!preview || !preview.hasEmbed || (!preview.title && (!preview.imageUrl || imageBroken))) {
     return null;
@@ -154,9 +196,7 @@ function SingleConvexLinkEmbed({ url }: { url: string }) {
       style={{ borderLeftColor: accentColor }}
       onClick={(e) => e.stopPropagation()}
     >
-      {showSiteName ? (
-        <span className="link-embed-site">{preview.siteName}</span>
-      ) : null}
+      {showSiteName ? <span className="link-embed-site">{preview.siteName}</span> : null}
       {preview.title ? (
         <a
           className="link-embed-title"
@@ -196,13 +236,12 @@ function SingleConvexLinkEmbed({ url }: { url: string }) {
 }
 
 export function MessageLinkEmbeds({ text }: { text?: string | null }) {
-  const store = useJaText();
   const urls = useMemo(() => extractEmbeddableUrls(text), [text]);
-  if (store.mode !== "convex" || urls.length === 0) return null;
+  if (urls.length === 0) return null;
   return (
     <div className="link-embeds-list">
       {urls.map((u) => (
-        <SingleConvexLinkEmbed key={u} url={u} />
+        <SingleLinkEmbed key={u} url={u} />
       ))}
     </div>
   );

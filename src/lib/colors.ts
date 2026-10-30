@@ -1,3 +1,5 @@
+import { stripProfileMetaFromColorId } from "./profileMetaEnvelope";
+
 export interface AvatarColor {
   id: string;
   name: string;
@@ -77,5 +79,6 @@ export const AVATAR_COLORS: AvatarColor[] = [
 ];
 
 export function colorById(id: string | undefined): AvatarColor {
-  return AVATAR_COLORS.find((c) => c.id === id) ?? AVATAR_COLORS[0];
+  const cleanId = stripProfileMetaFromColorId(id);
+  return AVATAR_COLORS.find((c) => c.id === cleanId) ?? AVATAR_COLORS[0];
 }
