@@ -52,6 +52,7 @@ interface BootstrapResponse {
   communityDirectory: CommunityUser[];
   communityMuted: boolean;
   communityMessages: CommunityMessage[];
+  communityHasMore?: boolean;
   groups: GroupSummary[];
   hasRemoteE2EEVault: boolean;
   remoteVaultKeyId: string | null;
@@ -136,21 +137,35 @@ export function useTursoReactiveSession(
     undefined,
   );
   const [groupTypingUsers, setGroupTypingUsers] = useState<ChatTypingUser[]>([]);
+  const [hasMoreOlderMessages, setHasMoreOlderMessages] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [hasMoreOlderGroupMessages, setHasMoreOlderGroupMessages] = useState(false);
+  const [loadingOlderGroupMessages, setLoadingOlderGroupMessages] = useState(false);
+  const [hasMoreOlderCommunityMessages, setHasMoreOlderCommunityMessages] = useState(false);
+  const [loadingOlderCommunityMessages, setLoadingOlderCommunityMessages] = useState(false);
   const [serverHasRemoteVault, setServerHasRemoteVault] = useState(false);
   const [serverRemoteVaultKeyId, setServerRemoteVaultKeyId] = useState<string | null>(null);
 
   const sinceTsRef = useRef<number>(0);
   const lastPresenceBeatRef = useRef<number>(0);
   const syncInFlightRef = useRef<boolean>(false);
+  const pendingWakeRef = useRef<boolean>(false);
   const slotIdRef = useRef(slotId);
   slotIdRef.current = slotId;
   const activeChatRef = useRef(activeChatId);
   activeChatRef.current = activeChatId;
   const activeGroupRef = useRef(activeGroupId);
   activeGroupRef.current = activeGroupId;
+  const activeMessagesRef = useRef(activeMessagesQuery);
+  activeMessagesRef.current = activeMessagesQuery;
+  const groupMessagesRef = useRef(groupMessagesQuery);
+  groupMessagesRef.current = groupMessagesQuery;
+  const communityMessagesRef = useRef(communityMessagesQuery);
+  communityMessagesRef.current = communityMessagesQuery;
 
   const resetSessionState = useCallback(() => {
     sinceTsRef.current = 0;
+    pendingWakeRef.current = false;
     setMeQuery(undefined);
     setPreviewsQuery(undefined);
     setRawFriendsQuery(undefined);
@@ -168,6 +183,12 @@ export function useTursoReactiveSession(
     setGroupDetailsQuery(undefined);
     setGroupMessagesQuery(undefined);
     setGroupTypingUsers([]);
+    setHasMoreOlderMessages(false);
+    setLoadingOlderMessages(false);
+    setHasMoreOlderGroupMessages(false);
+    setLoadingOlderGroupMessages(false);
+    setHasMoreOlderCommunityMessages(false);
+    setLoadingOlderCommunityMessages(false);
     setServerHasRemoteVault(false);
     setServerRemoteVaultKeyId(null);
   }, []);
@@ -189,6 +210,7 @@ export function useTursoReactiveSession(
     setCommunityPermissions(boot.communityPermissions);
     setCommunityDirectory(boot.communityDirectory);
     setCommunityMessagesQuery(boot.communityMessages);
+    setHasMoreOlderCommunityMessages(Boolean(boot.communityHasMore));
     setGroupsQuery(boot.groups);
     setServerHasRemoteVault(Boolean(boot.hasRemoteE2EEVault));
     setServerRemoteVaultKeyId(boot.remoteVaultKeyId);
@@ -300,17 +322,24 @@ export function useTursoReactiveSession(
   useEffect(() => {
     if (!isAuthenticated || !activeChatId || activeChatId === OFFICIAL_COMMUNITY_ID) {
       setActiveMessagesQuery(undefined);
+      setHasMoreOlderMessages(false);
+      setLoadingOlderMessages(false);
       return;
     }
     let cancelled = false;
     setActiveMessagesQuery(undefined);
-    void tursoRpc<{ messages: ChatMessage[] }>(
+    setHasMoreOlderMessages(false);
+    setLoadingOlderMessages(false);
+    void tursoRpc<{ messages: ChatMessage[]; hasMore?: boolean }>(
       "listMessages",
       { otherId: activeChatId },
       { slotId },
     )
       .then((res) => {
-        if (!cancelled) setActiveMessagesQuery(res.messages);
+        if (!cancelled) {
+          setActiveMessagesQuery(res.messages);
+          setHasMoreOlderMessages(Boolean(res.hasMore));
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -324,18 +353,22 @@ export function useTursoReactiveSession(
       setGroupDetailsQuery(undefined);
       setGroupMessagesQuery(undefined);
       setGroupTypingUsers([]);
+      setHasMoreOlderGroupMessages(false);
+      setLoadingOlderGroupMessages(false);
       return;
     }
     let cancelled = false;
     setGroupDetailsQuery(undefined);
     setGroupMessagesQuery(undefined);
+    setHasMoreOlderGroupMessages(false);
+    setLoadingOlderGroupMessages(false);
     void Promise.all([
       tursoRpc<{ details: GroupDetails | null }>(
         "getGroupDetails",
         { groupId: activeGroupId },
         { slotId },
       ),
-      tursoRpc<{ messages: GroupMessage[] }>(
+      tursoRpc<{ messages: GroupMessage[]; hasMore?: boolean }>(
         "listGroupMessages",
         { groupId: activeGroupId },
         { slotId },
@@ -345,6 +378,7 @@ export function useTursoReactiveSession(
         if (cancelled) return;
         setGroupDetailsQuery(detRes.details);
         setGroupMessagesQuery(msgRes.messages);
+        setHasMoreOlderGroupMessages(Boolean(msgRes.hasMore));
       })
       .catch(() => undefined);
     return () => {
@@ -352,11 +386,114 @@ export function useTursoReactiveSession(
     };
   }, [activeGroupId, isAuthenticated, slotId]);
 
+  const loadOlderMessages = useCallback(async (): Promise<number> => {
+    const curChat = activeChatRef.current;
+    if (!isAuthenticated || !curChat || curChat === OFFICIAL_COMMUNITY_ID) return 0;
+    const current = activeMessagesRef.current ?? [];
+    if (!current.length) return 0;
+    const oldestTs = current.reduce(
+      (min, m) => (m.createdAt > 0 && m.createdAt < min ? m.createdAt : min),
+      Infinity,
+    );
+    if (!Number.isFinite(oldestTs)) return 0;
+    setLoadingOlderMessages(true);
+    try {
+      const res = await tursoRpc<{ messages: ChatMessage[]; hasMore?: boolean }>(
+        "listMessages",
+        { otherId: curChat, beforeTs: oldestTs, limit: 120 },
+        { slotId: slotIdRef.current },
+      );
+      if (activeChatRef.current !== curChat) return 0;
+      const incomingOlder = res.messages ?? [];
+      setHasMoreOlderMessages(Boolean(res.hasMore));
+      if (!incomingOlder.length) return 0;
+      const beforeCount = (activeMessagesRef.current ?? []).length;
+      const merged = mergeMessagesById(incomingOlder, activeMessagesRef.current ?? []);
+      setActiveMessagesQuery(merged);
+      return Math.max(0, merged.length - beforeCount);
+    } catch {
+      return 0;
+    } finally {
+      if (activeChatRef.current === curChat) {
+        setLoadingOlderMessages(false);
+      }
+    }
+  }, [isAuthenticated]);
+
+  const loadOlderGroupMessages = useCallback(async (): Promise<number> => {
+    const curGroup = activeGroupRef.current;
+    if (!isAuthenticated || !curGroup) return 0;
+    const current = groupMessagesRef.current ?? [];
+    if (!current.length) return 0;
+    const oldestTs = current.reduce(
+      (min, m) => (m.createdAt > 0 && m.createdAt < min ? m.createdAt : min),
+      Infinity,
+    );
+    if (!Number.isFinite(oldestTs)) return 0;
+    setLoadingOlderGroupMessages(true);
+    try {
+      const res = await tursoRpc<{ messages: GroupMessage[]; hasMore?: boolean }>(
+        "listGroupMessages",
+        { groupId: curGroup, beforeTs: oldestTs, limit: 120 },
+        { slotId: slotIdRef.current },
+      );
+      if (activeGroupRef.current !== curGroup) return 0;
+      const incomingOlder = res.messages ?? [];
+      setHasMoreOlderGroupMessages(Boolean(res.hasMore));
+      if (!incomingOlder.length) return 0;
+      const beforeCount = (groupMessagesRef.current ?? []).length;
+      const merged = mergeMessagesById(incomingOlder, groupMessagesRef.current ?? []);
+      setGroupMessagesQuery(merged);
+      return Math.max(0, merged.length - beforeCount);
+    } catch {
+      return 0;
+    } finally {
+      if (activeGroupRef.current === curGroup) {
+        setLoadingOlderGroupMessages(false);
+      }
+    }
+  }, [isAuthenticated]);
+
+  const loadOlderCommunityMessages = useCallback(async (): Promise<number> => {
+    if (!isAuthenticated) return 0;
+    const current = communityMessagesRef.current ?? [];
+    if (!current.length) return 0;
+    const oldestTs = current.reduce(
+      (min, m) => (m.createdAt > 0 && m.createdAt < min ? m.createdAt : min),
+      Infinity,
+    );
+    if (!Number.isFinite(oldestTs)) return 0;
+    setLoadingOlderCommunityMessages(true);
+    try {
+      const res = await tursoRpc<{ messages: CommunityMessage[]; hasMore?: boolean }>(
+        "listCommunityMessages",
+        { beforeTs: oldestTs, limit: 120 },
+        { slotId: slotIdRef.current },
+      );
+      const incomingOlder = res.messages ?? [];
+      setHasMoreOlderCommunityMessages(Boolean(res.hasMore));
+      if (!incomingOlder.length) return 0;
+      const beforeCount = (communityMessagesRef.current ?? []).length;
+      const merged = mergeMessagesById(incomingOlder, communityMessagesRef.current ?? []);
+      setCommunityMessagesQuery(merged);
+      return Math.max(0, merged.length - beforeCount);
+    } catch {
+      return 0;
+    } finally {
+      setLoadingOlderCommunityMessages(false);
+    }
+  }, [isAuthenticated]);
+
   // Adaptive Foreground Delta Sync Engine
   const runDeltaSync = useCallback(async () => {
-    if (!isAuthenticated || syncInFlightRef.current) return;
+    if (!isAuthenticated) return;
     if (typeof document !== "undefined" && document.hidden) return;
     if (!sinceTsRef.current) return;
+    if (syncInFlightRef.current) {
+      // Queue an immediate follow-up sync instead of dropping real-time FCM / mutation wakes!
+      pendingWakeRef.current = true;
+      return;
+    }
 
     syncInFlightRef.current = true;
     const targetSlot = slotIdRef.current;
@@ -411,6 +548,12 @@ export function useTursoReactiveSession(
       // transient network hiccup; keep cached state intact
     } finally {
       syncInFlightRef.current = false;
+      if (pendingWakeRef.current) {
+        pendingWakeRef.current = false;
+        window.setTimeout(() => {
+          void runDeltaSync();
+        }, 15);
+      }
     }
   }, [isAuthenticated]);
 
@@ -418,15 +561,16 @@ export function useTursoReactiveSession(
     if (!isAuthenticated) return;
     let timer: number | null = null;
     let cancelled = false;
+    let appStateHandle: PluginListenerHandle | undefined;
 
     const scheduleNext = () => {
       if (cancelled) return;
       if (timer !== null) window.clearTimeout(timer);
       const delay = isInTursoActivityBurst()
-        ? 700
+        ? 500
         : activeChatRef.current || activeGroupRef.current
-          ? 1800
-          : 4500;
+          ? 950
+          : 1800;
       timer = window.setTimeout(async () => {
         await runDeltaSync();
         scheduleNext();
@@ -440,20 +584,38 @@ export function useTursoReactiveSession(
       void runDeltaSync().finally(() => scheduleNext());
     });
 
-    const onFocusOrVisible = () => {
+    const onImmediateWake = () => {
       if (!document.hidden) {
         triggerImmediateTursoSync(true);
       }
     };
-    window.addEventListener("focus", onFocusOrVisible);
-    document.addEventListener("visibilitychange", onFocusOrVisible);
+    window.addEventListener("focus", onImmediateWake);
+    window.addEventListener("online", onImmediateWake);
+    window.addEventListener("jatext:fcm-wake", onImmediateWake);
+    document.addEventListener("visibilitychange", onImmediateWake);
+
+    if (Capacitor.isNativePlatform()) {
+      void App.addListener("appStateChange", ({ isActive }) => {
+        if (isActive) {
+          triggerImmediateTursoSync(true);
+        }
+      })
+        .then((h) => {
+          if (cancelled) void h.remove();
+          else appStateHandle = h;
+        })
+        .catch(() => undefined);
+    }
 
     return () => {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
       unsubWake();
-      window.removeEventListener("focus", onFocusOrVisible);
-      document.removeEventListener("visibilitychange", onFocusOrVisible);
+      if (appStateHandle) void appStateHandle.remove();
+      window.removeEventListener("focus", onImmediateWake);
+      window.removeEventListener("online", onImmediateWake);
+      window.removeEventListener("jatext:fcm-wake", onImmediateWake);
+      document.removeEventListener("visibilitychange", onImmediateWake);
     };
   }, [isAuthenticated, runDeltaSync]);
 
@@ -1426,8 +1588,17 @@ export function useTursoReactiveSession(
     communityTypingUsers,
     groupsQuery,
     activeMessagesQuery,
+    hasMoreOlderMessages,
+    loadingOlderMessages,
+    loadOlderMessages,
     groupDetailsQuery,
     groupMessagesQuery,
+    hasMoreOlderGroupMessages,
+    loadingOlderGroupMessages,
+    loadOlderGroupMessages,
+    hasMoreOlderCommunityMessages,
+    loadingOlderCommunityMessages,
+    loadOlderCommunityMessages,
     groupTypingUsers,
     serverHasRemoteVault,
     serverRemoteVaultKeyId,

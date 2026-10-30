@@ -223,6 +223,9 @@ function getConversationMessages(
 const GroupChatHistory = memo(function GroupChatHistory({
   messages,
   messagesReady,
+  hasMoreOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
   me,
   members,
   messagesRef,
@@ -247,6 +250,9 @@ const GroupChatHistory = memo(function GroupChatHistory({
 }: {
   messages: GroupMessage[];
   messagesReady: boolean;
+  hasMoreOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => Promise<number>;
   me: { id: string; username: string };
   members: GroupMember[];
   messagesRef: { current: HTMLDivElement | null };
@@ -287,6 +293,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   );
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const fetchingOlderRef = useRef(false);
 
   function cancelBubbleTouchHold() {
     if (longPressTimerRef.current !== null) {
@@ -296,28 +303,25 @@ const GroupChatHistory = memo(function GroupChatHistory({
     longPressOriginRef.current = null;
   }
 
-  function startBubbleTouchHold(
-    event: React.TouchEvent<HTMLDivElement>,
+  function startBubblePointerHold(
+    event: React.PointerEvent<HTMLDivElement>,
     message: GroupMessage,
   ) {
-    if (message.id.startsWith("pending-")) return;
-    if (event.touches.length !== 1) return;
-    const touch = event.touches[0];
-    longPressOriginRef.current = { x: touch.clientX, y: touch.clientY };
+    if (event.pointerType !== "touch" || message.id.startsWith("pending-")) return;
+    longPressOriginRef.current = { x: event.clientX, y: event.clientY };
     if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
-    const { clientX, clientY } = touch;
+    const { clientX, clientY } = event;
     longPressTimerRef.current = window.setTimeout(() => {
       longPressTimerRef.current = null;
       onOpenMessageMenuAt(clientX, clientY, message);
     }, 450);
   }
 
-  function moveBubbleTouchHold(event: React.TouchEvent<HTMLDivElement>) {
-    if (!longPressOriginRef.current || event.touches.length !== 1) return;
-    const touch = event.touches[0];
+  function moveBubblePointerHold(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.pointerType !== "touch" || !longPressOriginRef.current) return;
     const dist = Math.hypot(
-      touch.clientX - longPressOriginRef.current.x,
-      touch.clientY - longPressOriginRef.current.y,
+      event.clientX - longPressOriginRef.current.x,
+      event.clientY - longPressOriginRef.current.y,
     );
     if (dist > 12) cancelBubbleTouchHold();
   }
@@ -385,13 +389,41 @@ const GroupChatHistory = memo(function GroupChatHistory({
     }
   }, [windowedMessages.length, messagesRef]);
 
+  const canRevealMoreLocal = visibleCount < messages.length;
+  const canLoadOlderAny = canRevealMoreLocal || hasMoreOlder;
+
+  const triggerRevealOrFetchOlder = () => {
+    const el = messagesRef.current;
+    if (!el || prependAnchorRef.current) return;
+    if (visibleCount < messages.length) {
+      prependAnchorRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+      setVisibleCount((cur) => Math.min(messages.length, cur + 60));
+      return;
+    }
+    if (hasMoreOlder && onLoadOlder && !loadingOlder && !fetchingOlderRef.current) {
+      fetchingOlderRef.current = true;
+      void onLoadOlder()
+        .then((added) => {
+          if (added > 0 && messagesRef.current) {
+            prependAnchorRef.current = {
+              prevHeight: messagesRef.current.scrollHeight,
+              prevTop: messagesRef.current.scrollTop,
+            };
+            setVisibleCount((cur) => cur + Math.min(80, added));
+          }
+        })
+        .finally(() => {
+          fetchingOlderRef.current = false;
+        });
+    }
+  };
+
   const handleGroupScroll = (event: React.UIEvent<HTMLDivElement>) => {
     onScroll(event);
     const el = messagesRef.current;
     if (!el) return;
-    if (el.scrollTop < 260 && visibleCount < messages.length && !prependAnchorRef.current) {
-      prependAnchorRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
-      setVisibleCount((cur) => Math.min(messages.length, cur + 60));
+    if (el.scrollTop < 260) {
+      triggerRevealOrFetchOlder();
     }
   };
 
@@ -403,10 +435,22 @@ const GroupChatHistory = memo(function GroupChatHistory({
       onWheel={() => {
         initialScrollAllowedRef.current = false;
       }}
-      onTouchStart={() => {
+      onPointerDown={() => {
         initialScrollAllowedRef.current = false;
       }}
     >
+      {canLoadOlderAny && windowedMessages.length > 0 && (
+        <div className="older-messages-bar">
+          <button
+            type="button"
+            className="older-messages-btn"
+            disabled={loadingOlder}
+            onClick={triggerRevealOrFetchOlder}
+          >
+            {loadingOlder ? "Loading older messages…" : "Load older messages"}
+          </button>
+        </div>
+      )}
       {!messagesReady && windowedMessages.length === 0 && (
         <div className="empty-box center">
           <div className="spinner" style={{ width: 28, height: 28 }} />
@@ -535,10 +579,10 @@ const GroupChatHistory = memo(function GroupChatHistory({
                           ? undefined
                           : (event) => onOpenMessageMenu(event, message)
                       }
-                      onTouchStart={(event) => startBubbleTouchHold(event, message)}
-                      onTouchMove={moveBubbleTouchHold}
-                      onTouchEnd={cancelBubbleTouchHold}
-                      onTouchCancel={cancelBubbleTouchHold}
+                      onPointerDown={(event) => startBubblePointerHold(event, message)}
+                      onPointerMove={moveBubblePointerHold}
+                      onPointerUp={cancelBubbleTouchHold}
+                      onPointerCancel={cancelBubbleTouchHold}
                     >
                       {!message.unsentAt &&
                         (message.forwardedContext || message.forwardedFromName) && (
@@ -2663,6 +2707,9 @@ export function GroupChatView({
         key={groupId ?? "group"}
         messages={displayedMessages}
         messagesReady={conversationReady}
+        hasMoreOlder={Boolean(store.hasMoreOlderGroupMessages)}
+        loadingOlder={Boolean(store.loadingOlderGroupMessages)}
+        onLoadOlder={store.loadOlderGroupMessages}
         me={meSummary}
         members={group?.members ?? EMPTY_GROUP_MEMBERS}
         messagesRef={messagesRef}

@@ -3,6 +3,7 @@ import {
   isValidBubbleStyleId,
   stripBubbleStyleFromText,
 } from "../chatCustomization";
+import { fetchMediaBytesSmart } from "../tursoClient";
 import {
   extractForwardedContext,
   stripForwardedMetadataFromText,
@@ -486,9 +487,7 @@ function resolveSpilledText(
   if (!inFlightMsgBlob.has(key)) {
     const p = (async () => {
       try {
-        const res = await fetch(cipherUrl);
-        if (!res.ok) return;
-        const cipherBytes = new Uint8Array(await res.arrayBuffer());
+        const cipherBytes = await fetchMediaBytesSmart(cipherUrl);
         const plainBytes = await decryptAttachmentBytes(cipherBytes, descriptor);
         msgBlobTextCache.set(key, new TextDecoder().decode(plainBytes));
         onResolved();

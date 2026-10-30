@@ -40,8 +40,8 @@ import java.util.Set;
 public final class JaTextSoundManager {
 
     // v4 channel ensures existing installs pick up the calibrated +40% bundled jatext_notification.mp3!
-    public static final String DEFAULT_MESSAGES_CHANNEL_ID = "jatext_messages_default_v4";
-    public static final String CUSTOM_MESSAGES_CHANNEL_ID = "jatext_messages_custom_v4";
+    public static final String DEFAULT_MESSAGES_CHANNEL_ID = "jatext_messages_default_v5";
+    public static final String CUSTOM_MESSAGES_CHANNEL_ID = "jatext_messages_custom_v5";
     public static final String INCOMING_CALL_CHANNEL_ID = "jatext_incoming_calls_v4";
     public static final int INCOMING_CALL_NOTIFICATION_ID = 9413;
 
@@ -105,13 +105,15 @@ public final class JaTextSoundManager {
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return DEFAULT_MESSAGES_CHANNEL_ID;
 
-        // Clean up legacy v1/v2/v3 channels so Android loads the calibrated +40% v4 notification sound
+        // Clean up legacy v1-v4 channels so Android loads the calibrated +55% v5 notification sound
         try {
             nm.deleteNotificationChannel("messages");
             nm.deleteNotificationChannel("jatext_messages_default_v2");
             nm.deleteNotificationChannel("jatext_messages_custom_v2");
             nm.deleteNotificationChannel("jatext_messages_default_v3");
             nm.deleteNotificationChannel("jatext_messages_custom_v3");
+            nm.deleteNotificationChannel("jatext_messages_default_v4");
+            nm.deleteNotificationChannel("jatext_messages_custom_v4");
         } catch (Throwable ignored) {}
 
         AudioAttributes notifAttrs = new AudioAttributes.Builder()

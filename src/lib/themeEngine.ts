@@ -843,12 +843,21 @@ export function applyThemeToDocument(config: JaTextThemeConfig): void {
     };
   }
 
-  const signature = `${mode}|${hasGradient}|${vars.bg}|${vars.bgImage}|${vars.panel}|${vars.panel2}|${vars.border}|${vars.text}|${vars.muted}|${vars.accent}|${vars.accentDark}`;
+  const [ar, ag, ab] = hexToRgb(vars.accent);
+  const toLin = (c: number) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  const accentLuminance = 0.2126 * toLin(ar) + 0.7152 * toLin(ag) + 0.0722 * toLin(ab);
+  const isLightAccent = accentLuminance > 0.36;
+
+  const signature = `${mode}|${hasGradient}|${isLightAccent}|${vars.bg}|${vars.bgImage}|${vars.panel}|${vars.panel2}|${vars.border}|${vars.text}|${vars.muted}|${vars.accent}|${vars.accentDark}`;
   if (signature === lastAppliedSignature) return;
   lastAppliedSignature = signature;
 
   root.dataset.jtMode = mode;
   root.dataset.jtGradient = hasGradient ? "true" : "false";
+  root.dataset.jtLightAccent = isLightAccent ? "true" : "false";
   root.style.setProperty("--bg", vars.bg);
   root.style.setProperty("--app-bg-image", vars.bgImage);
   root.style.setProperty("--panel", vars.panel);

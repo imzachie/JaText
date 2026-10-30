@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Capacitor } from "@capacitor/core";
 import { createPortal } from "react-dom";
+
+function readSafeAreaPx(varName: string): number {
+  if (typeof window === "undefined" || typeof document === "undefined") return 0;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
 
 export function ContextMenu({
   x,
@@ -26,7 +34,10 @@ export function ContextMenu({
   const openedAtRef = useRef<number>(Date.now());
   const backdropPressedAfterOpenRef = useRef(false);
   const menuPressedAfterOpenRef = useRef(false);
-  const [position, setPosition] = useState({ left: x, top: y });
+  const [position, setPosition] = useState<{ left: number; top: number; maxHeight?: number }>({
+    left: x,
+    top: y,
+  });
   const [closing, setClosing] = useState(false);
 
   const closeWithAnimation = useCallback(
@@ -71,14 +82,44 @@ export function ContextMenu({
   useLayoutEffect(() => {
     const menu = menuRef.current;
     if (!menu) return;
+    const isMobileViewport =
+      Capacitor.isNativePlatform() ||
+      window.innerWidth <= 820 ||
+      Boolean(window.matchMedia?.("(pointer: coarse)")?.matches);
+
+    const safeTop = readSafeAreaPx("--safe-area-inset-top");
+    const safeBottom = readSafeAreaPx("--safe-area-inset-bottom");
+    const sidePad = isMobileViewport ? 14 : 8;
+    const topPad = isMobileViewport
+      ? variant === "dropdown"
+        ? Math.max(12, safeTop + 8)
+        : Math.max(56, safeTop + 18)
+      : 8;
+    const bottomPad = isMobileViewport
+      ? variant === "dropdown"
+        ? Math.max(84, safeBottom + 56)
+        : Math.max(98, safeBottom + 76)
+      : 8;
+
+    const maxMenuHeight = isMobileViewport
+      ? Math.max(200, window.innerHeight - topPad - bottomPad)
+      : undefined;
+    const effectiveHeight =
+      maxMenuHeight !== undefined ? Math.min(menu.offsetHeight, maxMenuHeight) : menu.offsetHeight;
+
     const next = {
-      left: Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8)),
-      top: Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8)),
+      left: Math.max(sidePad, Math.min(x, window.innerWidth - menu.offsetWidth - sidePad)),
+      top: Math.max(topPad, Math.min(y, window.innerHeight - effectiveHeight - bottomPad)),
+      maxHeight: maxMenuHeight,
     };
     setPosition((current) =>
-      current.left === next.left && current.top === next.top ? current : next,
+      current.left === next.left &&
+      current.top === next.top &&
+      current.maxHeight === next.maxHeight
+        ? current
+        : next,
     );
-  }, [children, x, y]);
+  }, [children, variant, x, y]);
 
   return createPortal(
     <div
@@ -119,7 +160,11 @@ export function ContextMenu({
         }`}
         role="menu"
         aria-label={label}
-        style={{ left: position.left, top: position.top }}
+        style={{
+          left: position.left,
+          top: position.top,
+          ...(position.maxHeight ? { maxHeight: position.maxHeight, overflowY: "auto" } : {}),
+        }}
         onPointerDownCapture={() => {
           menuPressedAfterOpenRef.current = true;
         }}

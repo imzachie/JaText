@@ -35,6 +35,25 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
+     * Pokes the Capacitor WebView so Turso reactive delta sync runs immediately (< 15ms)
+     * whenever an FCM data push arrives or MainActivity resumes.
+     */
+    public static void notifyRealtimeSyncWake() {
+        MainActivity act = activeInstanceRef.get();
+        if (act == null) return;
+        act.runOnUiThread(() -> {
+            try {
+                if (act.getBridge() != null && act.getBridge().getWebView() != null) {
+                    act.getBridge().getWebView().evaluateJavascript(
+                        "window.dispatchEvent(new Event('jatext:fcm-wake'));",
+                        null
+                    );
+                }
+            } catch (Throwable ignored) {}
+        });
+    }
+
+    /**
      * Returns true ONLY when JaText is actively resumed in front of the user AND the physical
      * display is interactive (screen ON) AND the keyguard is unlocked (unless an incoming/active
      * call explicitly bypassed the lock screen).
@@ -182,6 +201,7 @@ public class MainActivity extends BridgeActivity {
                 webView.resumeTimers();
             }
         } catch (Throwable ignored) {}
+        notifyRealtimeSyncWake();
     }
 
     @Override
