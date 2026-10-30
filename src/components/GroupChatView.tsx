@@ -1372,6 +1372,7 @@ export function GroupChatView({
 
   // Snapshot the pre-open unread cutoff synchronously when switching into a group
   if (initialUnreadCutoffRef.current.groupId !== groupId) {
+    capturedUnreadForGroupRef.current = null;
     let cutoff = Number.POSITIVE_INFINITY;
     if (groupId && store.me?.id) {
       const prefs = getUserChatPrefs(store.me.id).groups[groupId];

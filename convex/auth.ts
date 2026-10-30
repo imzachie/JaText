@@ -18,11 +18,11 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   callbacks: {
     async redirect({ redirectTo }) {
       if (redirectTo === ANDROID_AUTH_CALLBACK) return ANDROID_AUTH_CALLBACK;
-      const siteUrl = env.SITE_URL ?? env.CONVEX_SITE_URL;
+      const siteUrl = (env.SITE_URL ?? env.CONVEX_SITE_URL ?? "").replace(/\/+$/, "");
       if (redirectTo.startsWith("?") || redirectTo.startsWith("/")) {
         return `${siteUrl}${redirectTo}`;
       }
-      if (redirectTo.startsWith(siteUrl)) {
+      if (siteUrl && redirectTo.startsWith(siteUrl)) {
         const suffix = redirectTo.slice(siteUrl.length);
         if (suffix === "" || suffix.startsWith("?") || suffix.startsWith("/")) {
           return redirectTo;

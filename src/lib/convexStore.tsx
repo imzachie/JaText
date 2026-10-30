@@ -41,6 +41,7 @@ import {
   setThemeUserScope,
   type SyncedThemePayload,
 } from "./themeEngine";
+import { OAUTH_RETURN_CHATS_FLAG } from "./webRoute";
 import { loadNotificationPreferences, saveNotificationPreferences } from "./alerts";
 import {
   encodeForwardedBody,
@@ -339,36 +340,52 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const canUseCachedSession = isAuthenticated || (authLoading && hasStoredAuth);
 
-  // Safety watchdog: if Convex auth stalls >8.5s while online with an expired/broken JWT,
+  // Safety watchdog: if Convex auth stalls >22s while online with NO valid refresh token,
   // clear dead tokens so the slot never stays stuck in an unauthenticated limbo.
+  // Never wipe a valid 30-day refresh token or an in-flight OAuth ?code= exchange!
   useEffect(() => {
     if (!authLoading || isAuthenticated || !convexUrl) return;
     const timer = window.setTimeout(() => {
       if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      if (
+        typeof window !== "undefined" &&
+        new URLSearchParams(window.location.search).has("code")
+      ) {
+        return;
+      }
       try {
         const { jwtKey, refreshKey } = getConvexAuthKeysForSlot(convexUrl, slotId);
+        const hasRefresh = Boolean(window.localStorage.getItem(refreshKey));
         const rawJwt = window.localStorage.getItem(jwtKey);
         if (!rawJwt) {
-          if (!Capacitor.isNativePlatform() && !window.localStorage.getItem(refreshKey)) {
+          if (!Capacitor.isNativePlatform() && !hasRefresh) {
             void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
           }
           return;
         }
         const parts = rawJwt.split(".");
         if (parts.length !== 3) {
-          void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+          if (hasRefresh) {
+            window.localStorage.removeItem(jwtKey);
+          } else {
+            void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+          }
           return;
         }
         const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
         const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
         const payload = JSON.parse(window.atob(padded)) as { exp?: number };
         if (!payload.exp || payload.exp * 1000 < Date.now()) {
-          void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+          if (hasRefresh) {
+            window.localStorage.removeItem(jwtKey);
+          } else {
+            void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+          }
         }
       } catch {
-        void clearDeadSlotTokensOnAuthFailure(slotId, convexUrl);
+        // Never wipe refresh tokens on transient parse errors
       }
-    }, 8500);
+    }, 22_000);
     return () => window.clearTimeout(timer);
   }, [authLoading, convexUrl, isAuthenticated, slotId]);
 
@@ -2524,14 +2541,48 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const signInEmail = useCallback<JaTextStore["signInEmail"]>(
     async (email, password) => {
-      await signIn("password", { email: email.trim(), password, flow: "signIn" });
+      const cleanEmail = email.trim();
+      try {
+        const res = await signIn("password", {
+          email: cleanEmail,
+          password,
+          flow: "signIn",
+        });
+        if (!res.signingIn) {
+          throw new Error("Incorrect email or password.");
+        }
+      } catch (err) {
+        const lower = cleanEmail.toLowerCase();
+        if (lower !== cleanEmail) {
+          const res2 = await signIn("password", {
+            email: lower,
+            password,
+            flow: "signIn",
+          });
+          if (!res2.signingIn) {
+            throw new Error("Incorrect email or password.");
+          }
+          return;
+        }
+        throw err;
+      }
     },
     [signIn],
   );
 
   const signUpEmail = useCallback<JaTextStore["signUpEmail"]>(
     async (email, password) => {
-      await signIn("password", { email: email.trim(), password, flow: "signUp" });
+      if (password.length < 8) {
+        throw new Error("Password must be at least 8 characters long.");
+      }
+      const res = await signIn("password", {
+        email: email.trim().toLowerCase(),
+        password,
+        flow: "signUp",
+      });
+      if (!res.signingIn) {
+        throw new Error("Could not create account. Please try again.");
+      }
     },
     [signIn],
   );
@@ -2539,9 +2590,12 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
   const signInGoogle = useCallback<JaTextStore["signInGoogle"]>(
     async () => {
       if (!Capacitor.isNativePlatform()) {
-        await signIn("google", {
-          redirectTo: `${window.location.origin}/chats`,
-        });
+        try {
+          window.sessionStorage.setItem(OAUTH_RETURN_CHATS_FLAG, "1");
+        } catch {
+          // ignore storage errors
+        }
+        await signIn("google");
         return;
       }
 

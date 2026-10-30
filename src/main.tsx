@@ -93,39 +93,70 @@ function isJwtStillValid(jwt: string | null | undefined, minRemainingMs = 10_000
 }
 
 function createResilientSlotClient(url: string, slotId: string): ConvexReactClient {
-  // Reuse still-valid cached JWTs on startup instead of burning @convex-dev/auth's
-  // single-use refreshToken on every reload/account switch across tabs & devices.
+  // Prune any already-expired JWT from localStorage before client creation (keeping refreshKey
+  // intact!) so @convex-dev/auth refreshes immediately instead of failing an expired JWT first.
+  let reuseInitialJwt = true;
+  if (typeof window !== "undefined") {
+    try {
+      const { jwtKey, refreshKey } = getConvexAuthKeysForSlot(url, slotId);
+      const existingJwt = window.localStorage.getItem(jwtKey);
+      if (existingJwt && !isJwtStillValid(existingJwt, 15_000)) {
+        reuseInitialJwt = false;
+        if (window.localStorage.getItem(refreshKey)) {
+          window.localStorage.removeItem(jwtKey);
+        }
+      }
+    } catch {
+      reuseInitialJwt = false;
+    }
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const client = new ConvexReactClient(url, { initialAuthTokenReuse: true } as any);
+  const client = new ConvexReactClient(url, { initialAuthTokenReuse: reuseInitialJwt } as any);
   const origSetAuth = client.setAuth.bind(client);
   client.setAuth = (fetchToken, onChange, onRefreshChange) => {
     const safeFetchToken: typeof fetchToken = async (args) => {
       try {
         return await fetchToken(args);
       } catch (err) {
-        // 1. If we still hold a non-expired JWT (e.g. preemptive refresh failed because
-        //    another device rotated the single-use refreshToken), keep the live session!
-        let fallbackJwt: string | null = null;
-        try {
-          fallbackJwt = (await fetchToken({ forceRefreshToken: false })) ?? null;
-        } catch {
-          fallbackJwt = null;
-        }
-        if (!fallbackJwt && typeof window !== "undefined") {
+        // 1. Always check localStorage directly first: another tab may have just rotated
+        //    @convex-dev/auth's single-use refreshToken and stored a fresh valid JWT!
+        const readLatestStoredJwt = (): string | null => {
+          if (typeof window === "undefined") return null;
           try {
             const { jwtKey } = getConvexAuthKeysForSlot(url, slotId);
-            fallbackJwt = window.localStorage.getItem(jwtKey);
+            return window.localStorage.getItem(jwtKey);
           } catch {
-            fallbackJwt = null;
+            return null;
           }
-        }
-        if (isJwtStillValid(fallbackJwt, 8_000)) {
-          return fallbackJwt;
+        };
+
+        let candidateJwt = readLatestStoredJwt();
+        if (isJwtStillValid(candidateJwt, 5_000)) {
+          return candidateJwt;
         }
 
-        // 2. If the token is genuinely expired AND the refresh rejection is not a transient
-        //    network outage, clear the broken tokens and reset AuthProvider cleanly to Login.
-        if (!isLikelyNetworkFailure(err)) {
+        try {
+          const inMemoryJwt = (await fetchToken({ forceRefreshToken: false })) ?? null;
+          if (isJwtStillValid(inMemoryJwt, 5_000)) {
+            return inMemoryJwt;
+          }
+        } catch {
+          // ignore
+        }
+
+        // Wait briefly in case a sibling tab is mid-flight saving its rotated JWT
+        await new Promise((resolve) => setTimeout(resolve, 380));
+        candidateJwt = readLatestStoredJwt();
+        if (isJwtStillValid(candidateJwt, 5_000)) {
+          return candidateJwt;
+        }
+
+        // 2. Never wipe verifier/tokens while an OAuth ?code= exchange or network drop is active.
+        const oauthCodePending =
+          typeof window !== "undefined" &&
+          new URLSearchParams(window.location.search).has("code");
+        if (!isLikelyNetworkFailure(err) && !oauthCodePending) {
           await clearDeadSlotTokensOnAuthFailure(slotId, url).catch(() => undefined);
         }
         return null;
@@ -199,6 +230,17 @@ export function Root() {
         client={slotClient}
         storage={nativeAuthStorage}
         storageNamespace={slotNamespace}
+        replaceURL={(relativeUrl) => {
+          if (Capacitor.isNativePlatform()) {
+            window.history.replaceState({}, "", relativeUrl);
+            return;
+          }
+          const normalized =
+            relativeUrl === "/" || relativeUrl.startsWith("/?") || relativeUrl.startsWith("/#")
+              ? `/chats${relativeUrl.slice(1)}`
+              : relativeUrl;
+          window.history.replaceState({}, "", normalized);
+        }}
         shouldHandleCode={() =>
           !Capacitor.isNativePlatform() &&
           new URLSearchParams(window.location.search).has("code")
