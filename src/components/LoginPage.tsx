@@ -41,17 +41,21 @@ export function LoginPage() {
   const [email, setEmail] = useState(() => activeSavedAccount?.email ?? "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [errorSource, setErrorSource] = useState<"signin" | "signup" | "google" | null>(null);
   const [busy, setBusy] = useState(false);
   const [showDemoGoogle, setShowDemoGoogle] = useState(false);
   const [gName, setGName] = useState("Alex Google");
   const [gEmail, setGEmail] = useState("Alex@example.com");
   const [legalTab, setLegalTab] = useState<LegalTab | null>(null);
 
-  function formatAuthError(
+  async function resolveAuthError(
     err: unknown,
     context: "signin" | "signup" | "google",
-  ): string {
+  ): Promise<string> {
     const raw = err instanceof Error ? err.message : String(err ?? "");
+    if (/exceeded.*free plan|usage limit|deployments? ha(s|ve) been disabled/i.test(raw)) {
+      return "Convex backend is temporarily paused because the deployment reached its Convex plan/usage limit in dashboard.convex.dev.";
+    }
     if (/failed to fetch|networkerror|load failed|network request failed|fetch failed|offline/i.test(raw)) {
       return "Network error while reaching JaText. Check your internet connection and try again.";
     }
@@ -62,20 +66,37 @@ export function LoginPage() {
       return "Password must be at least 8 characters long.";
     }
     if (/already exists/i.test(raw)) {
-      return "An account with this email already exists. Switch to 'Sign in' or click 'Continue with Google' above.";
+      return "An account with this email already exists. Switch to 'Sign in' or tap 'Continue with Google' above.";
     }
     if (
       /\[CONVEX |server error|called by client|invalidaccountid|invalidsecret|invalid credentials/i.test(
         raw,
       )
     ) {
+      // Probe a read-only public query to distinguish a paused/over-quota Convex deployment
+      // from an auth-specific failure.
+      if (store.mode === "convex") {
+        try {
+          await store.checkUsername("jatext_probe");
+        } catch (probeErr) {
+          const probeMsg =
+            probeErr instanceof Error ? probeErr.message : String(probeErr ?? "");
+          if (/exceeded.*free plan|usage limit|deployments? ha(s|ve) been disabled/i.test(probeMsg)) {
+            return "JaText's Convex database reached its Convex Free Plan / usage limit and paused function execution. Open dashboard.convex.dev -> Settings / Usage to re-enable it.";
+          }
+          if (/\[CONVEX |server error/i.test(probeMsg)) {
+            return "JaText's Convex backend is currently returning a server error across queries and auth. Check dashboard.convex.dev -> Logs / Settings for your deployment.";
+          }
+        }
+      }
+
       if (context === "google") {
-        return "Google sign-in could not start. Please refresh and try again.";
+        return "Convex Auth returned a server error starting Google OAuth. Verify SITE_URL, AUTH_GOOGLE_ID, AUTH_GOOGLE_SECRET, JWT_PRIVATE_KEY, and JWKS in Convex Dashboard -> Settings -> Environment Variables.";
       }
       if (context === "signup") {
         return "Could not create account. This email may already be registered (try 'Sign in' or 'Continue with Google'), or use an 8+ character password.";
       }
-      return "Incorrect email or password. If your account uses Google, click 'Continue with Google' above.";
+      return "Incorrect email or password, or Convex Auth environment keys need attention. If your account uses Google, tap 'Continue with Google' above.";
     }
     return raw.trim() || "Something went wrong. Please try again.";
   }
@@ -86,10 +107,13 @@ export function LoginPage() {
   ) {
     setBusy(true);
     setError(null);
+    setErrorSource(null);
     try {
       await fn();
     } catch (e) {
-      setError(formatAuthError(e, context));
+      const msg = await resolveAuthError(e, context);
+      setErrorSource(context);
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -113,203 +137,212 @@ export function LoginPage() {
   }
 
   return (
-    <div className="login-page">
-      <section className="login-hero">
-        <img
-          className="logo-full"
-          src="/jatext-logo-full.png"
-          alt="JaText · JAMusic Coding and Research Corp"
-        />
-        <p className="hero-tagline">
-          Text your people. Add friends by username, make your profile yours,
-          and chat in real time.
-        </p>
-        <ul className="hero-points">
-          <li>
-            <MessageCircleIcon size={16} style={{ color: "var(--accent)" }} /> Real-time chats &amp; attachments
-          </li>
-          <li>
-            <PaletteIcon size={16} style={{ color: "var(--accent)" }} /> Profile picture, banner &amp; your own avatar color
-          </li>
-          <li>
-            <UsersIcon size={16} style={{ color: "var(--accent)" }} /> Friend requests: you only chat with people you accept
-          </li>
-        </ul>
-      </section>
+    <div className="login-viewport">
+      <div className="login-page">
+        <section className="login-hero">
+          <img
+            className="logo-full"
+            src="/jatext-logo-full.png"
+            alt="JaText · JAMusic Coding and Research Corp"
+          />
+          <p className="hero-tagline">
+            Text your people. Add friends by username, make your profile yours,
+            and chat in real time.
+          </p>
+          <ul className="hero-points">
+            <li>
+              <MessageCircleIcon size={16} style={{ color: "var(--accent)" }} /> Real-time chats &amp; attachments
+            </li>
+            <li>
+              <PaletteIcon size={16} style={{ color: "var(--accent)" }} /> Profile picture, banner &amp; your own avatar color
+            </li>
+            <li>
+              <UsersIcon size={16} style={{ color: "var(--accent)" }} /> Friend requests: you only chat with people you accept
+            </li>
+          </ul>
+        </section>
 
-      <section className="login-card">
-        {returnToSlotId && (
-          <div className="login-add-account-banner">
+        <section className="login-card">
+          {returnToSlotId && (
+            <div className="login-add-account-banner">
+              <button
+                type="button"
+                className="ghost-btn login-back-account-btn"
+                onClick={() => cancelAddAnotherAccount(CONVEX_URL)}
+              >
+                <ArrowLeftIcon size={15} />
+                <span>
+                  {returnAccount
+                    ? `Back to @${returnAccount.username ?? returnAccount.displayName}`
+                    : "Back to active account"}
+                </span>
+              </button>
+              <span className="login-add-account-badge">
+                <SwitchAccountIcon size={13} /> Adding account
+              </span>
+            </div>
+          )}
+
+          {switchableAccounts.length > 0 && (
+            <div className="login-saved-accounts">
+              <div className="login-saved-accounts-header">
+                <span>Saved accounts on this device</span>
+                <span className="muted small">Tap to switch directly</span>
+              </div>
+              <div className="login-saved-accounts-list">
+                {switchableAccounts.map((acct) => (
+                  <button
+                    key={acct.slotId}
+                    type="button"
+                    className="login-saved-account-btn"
+                    onClick={() => switchToAccountSlot(acct.slotId, CONVEX_URL)}
+                  >
+                    <Avatar
+                      user={{
+                        displayName: acct.displayName || acct.username || "JaText User",
+                        username: acct.username || "user",
+                        avatarUrl: acct.avatarUrl,
+                        avatarColor: acct.avatarColor,
+                      }}
+                      size={34}
+                    />
+                    <span className="login-saved-account-meta">
+                      <strong>{acct.displayName}</strong>
+                      <span>
+                        {acct.username
+                          ? `@${acct.username}`
+                          : acct.email ?? "Saved account"}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <h2>
+            {returnToSlotId
+              ? tab === "signin"
+                ? "Add another account"
+                : "Create another account"
+              : activeSavedAccount
+                ? `Sign back in as ${activeSavedAccount.displayName}`
+                : tab === "signin"
+                  ? "Welcome back"
+                  : "Create your account"}
+          </h2>
+
+          <button type="button" className="google-btn" onClick={onGoogle} disabled={busy}>
+            <GoogleIcon /> Continue with Google
+          </button>
+
+          {error && errorSource === "google" && <div className="error-box">{error}</div>}
+
+          {showDemoGoogle && (
+            <div className="demo-google-box">
+              <p className="muted small">
+                <FlaskIcon size={14} /> Demo mode: this simulates a Google account. Connect Convex +
+                Google OAuth (see README) for the real Google sign-in popup.
+              </p>
+              <label>
+                Name
+                <input value={gName} onChange={(e) => setGName(e.target.value)} />
+              </label>
+              <label>
+                Google email
+                <input value={gEmail} onChange={(e) => setGEmail(e.target.value)} />
+              </label>
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={busy}
+                onClick={() =>
+                  void run("google", () => store.signInGoogle({ name: gName, email: gEmail }))
+                }
+              >
+                Continue as {gName || "Guest"}
+              </button>
+            </div>
+          )}
+
+          <div className="divider"><span>or</span></div>
+
+          <div className="tabs">
             <button
               type="button"
-              className="ghost-btn login-back-account-btn"
-              onClick={() => cancelAddAnotherAccount(CONVEX_URL)}
+              className={tab === "signin" ? "active" : ""}
+              onClick={() => {
+                setError(null);
+                setErrorSource(null);
+                setTab("signin");
+              }}
             >
-              <ArrowLeftIcon size={15} />
-              <span>
-                {returnAccount
-                  ? `Back to @${returnAccount.username ?? returnAccount.displayName}`
-                  : "Back to active account"}
-              </span>
+              Sign in
             </button>
-            <span className="login-add-account-badge">
-              <SwitchAccountIcon size={13} /> Adding account
-            </span>
-          </div>
-        )}
-
-        {switchableAccounts.length > 0 && (
-          <div className="login-saved-accounts">
-            <div className="login-saved-accounts-header">
-              <span>Saved accounts on this device</span>
-              <span className="muted small">Tap to switch directly</span>
-            </div>
-            <div className="login-saved-accounts-list">
-              {switchableAccounts.map((acct) => (
-                <button
-                  key={acct.slotId}
-                  type="button"
-                  className="login-saved-account-btn"
-                  onClick={() => switchToAccountSlot(acct.slotId, CONVEX_URL)}
-                >
-                  <Avatar
-                    user={{
-                      displayName: acct.displayName || acct.username || "JaText User",
-                      username: acct.username || "user",
-                      avatarUrl: acct.avatarUrl,
-                      avatarColor: acct.avatarColor,
-                    }}
-                    size={34}
-                  />
-                  <span className="login-saved-account-meta">
-                    <strong>{acct.displayName}</strong>
-                    <span>
-                      {acct.username
-                        ? `@${acct.username}`
-                        : acct.email ?? "Saved account"}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <h2>
-          {returnToSlotId
-            ? tab === "signin"
-              ? "Add another account"
-              : "Create another account"
-            : activeSavedAccount
-              ? `Sign back in as ${activeSavedAccount.displayName}`
-              : tab === "signin"
-                ? "Welcome back"
-                : "Create your account"}
-        </h2>
-
-        <button className="google-btn" onClick={onGoogle} disabled={busy}>
-          <GoogleIcon /> Continue with Google
-        </button>
-
-        {showDemoGoogle && (
-          <div className="demo-google-box">
-            <p className="muted small">
-              <FlaskIcon size={14} /> Demo mode: this simulates a Google account. Connect Convex +
-              Google OAuth (see README) for the real Google sign-in popup.
-            </p>
-            <label>
-              Name
-              <input value={gName} onChange={(e) => setGName(e.target.value)} />
-            </label>
-            <label>
-              Google email
-              <input value={gEmail} onChange={(e) => setGEmail(e.target.value)} />
-            </label>
             <button
-              className="primary-btn"
-              disabled={busy}
-              onClick={() =>
-                void run("google", () => store.signInGoogle({ name: gName, email: gEmail }))
-              }
+              type="button"
+              className={tab === "signup" ? "active" : ""}
+              onClick={() => {
+                setError(null);
+                setErrorSource(null);
+                setTab("signup");
+              }}
             >
-              Continue as {gName || "Guest"}
+              Sign up
             </button>
           </div>
-        )}
 
-        <div className="divider"><span>or</span></div>
-
-        <div className="tabs">
-          <button
-            className={tab === "signin" ? "active" : ""}
-            onClick={() => {
-              setError(null);
-              setTab("signin");
-            }}
-          >
-            Sign in
-          </button>
-          <button
-            className={tab === "signup" ? "active" : ""}
-            onClick={() => {
-              setError(null);
-              setTab("signup");
-            }}
-          >
-            Sign up
-          </button>
-        </div>
-
-        <form onSubmit={onEmailSubmit} className="login-form">
-          <label>
-            Email
-            <input
-              type="email"
-              required
-              autoComplete="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              required
-              autoComplete={tab === "signin" ? "current-password" : "new-password"}
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-          {error && <div className="error-box">{error}</div>}
-          <button className="primary-btn" type="submit" disabled={busy}>
-            {busy ? "Please wait…" : tab === "signin" ? "Sign in" : "Create account"}
-          </button>
-        </form>
-
-        {store.mode === "demo" ? (
-          <p className="muted small center">
-            Running in <strong>demo mode</strong> (no Convex URL set yet). Your data
-            lives in this browser. Add <code>VITE_CONVEX_URL</code> to go live on Convex.
-          </p>
-        ) : null}
-
-        <div className="login-legal-footer">
-          <span className="muted small">By continuing, you agree to JaText&apos;s</span>
-          <div className="legal-inline-btns">
-            <button type="button" className="inline-link-btn" onClick={() => setLegalTab("terms")}>
-              Terms of Service
+          <form onSubmit={onEmailSubmit} className="login-form">
+            <label>
+              Email
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                required
+                autoComplete={tab === "signin" ? "current-password" : "new-password"}
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            {error && errorSource !== "google" && <div className="error-box">{error}</div>}
+            <button className="primary-btn" type="submit" disabled={busy}>
+              {busy ? "Please wait…" : tab === "signin" ? "Sign in" : "Create account"}
             </button>
-            <span className="muted small">·</span>
-            <button type="button" className="inline-link-btn" onClick={() => setLegalTab("privacy")}>
-              Privacy Policy
-            </button>
+          </form>
+
+          {store.mode === "demo" ? (
+            <p className="muted small center">
+              Running in <strong>demo mode</strong> (no Convex URL set yet). Your data
+              lives in this browser. Add <code>VITE_CONVEX_URL</code> to go live on Convex.
+            </p>
+          ) : null}
+
+          <div className="login-legal-footer">
+            <span className="muted small">By continuing, you agree to JaText&apos;s</span>
+            <div className="legal-inline-btns">
+              <button type="button" className="inline-link-btn" onClick={() => setLegalTab("terms")}>
+                Terms of Service
+              </button>
+              <span className="muted small">·</span>
+              <button type="button" className="inline-link-btn" onClick={() => setLegalTab("privacy")}>
+                Privacy Policy
+              </button>
+            </div>
           </div>
-        </div>
-      </section>
-      {legalTab && <LegalModal initialTab={legalTab} onClose={() => setLegalTab(null)} />}
+        </section>
+        {legalTab && <LegalModal initialTab={legalTab} onClose={() => setLegalTab(null)} />}
+      </div>
     </div>
   );
 }
