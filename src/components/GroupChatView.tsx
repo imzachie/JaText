@@ -1378,20 +1378,28 @@ export function GroupChatView({
     }
   }, [conversationMessages, groupId, store.groupMessagesReady, store.me?.id, summary?.unreadCount]);
 
+  const {
+    activeGroupId,
+    editGroupMessage,
+    markGroupRead,
+    me: currentGroupMe,
+    sendGroupMessage,
+  } = store;
+
   // Publish / update our single in-place seen cursor row ONLY when actively viewing the group chat
   useEffect(() => {
-    if (!groupId || !store.me || store.activeGroupId !== groupId || conversationMessages.length === 0) {
+    if (!groupId || !currentGroupMe?.id || activeGroupId !== groupId || conversationMessages.length === 0) {
       return;
     }
     let cancelled = false;
 
     const maybePublishSeen = async () => {
-      if (cancelled || store.activeGroupId !== groupId) return;
+      if (cancelled || activeGroupId !== groupId) return;
       if (seenSyncInFlightRef.current) return;
       const activelyViewing = await isChatActivelyVisibleToUser();
       if (cancelled || !activelyViewing || seenSyncInFlightRef.current) return;
 
-      void store.markGroupRead(groupId).catch(() => undefined);
+      void markGroupRead(groupId).catch(() => undefined);
 
       let latestVisible: GroupMessage | null = null;
       for (let i = conversationMessages.length - 1; i >= 0; i -= 1) {
@@ -1400,7 +1408,7 @@ export function GroupChatView({
           break;
         }
       }
-      if (!latestVisible || latestVisible.senderId === store.me?.id) return;
+      if (!latestVisible || latestVisible.senderId === currentGroupMe.id) return;
 
       const prevPublished = lastPublishedSeenTsRef.current[groupId] ?? 0;
       const effectiveKnownSeen = Math.max(groupSeenData.mySeenUpToTs, prevPublished);
@@ -1416,8 +1424,8 @@ export function GroupChatView({
       });
 
       const op = groupSeenData.myCursorMessageId
-        ? store.editGroupMessage(groupSeenData.myCursorMessageId, payload)
-        : store.sendGroupMessage(groupId, payload);
+        ? editGroupMessage(groupSeenData.myCursorMessageId, payload)
+        : sendGroupMessage(groupId, payload);
 
       void op
         .catch(() => {
@@ -1450,11 +1458,15 @@ export function GroupChatView({
       }
     };
   }, [
+    activeGroupId,
     conversationMessages,
+    currentGroupMe?.id,
+    editGroupMessage,
     groupId,
     groupSeenData.myCursorMessageId,
     groupSeenData.mySeenUpToTs,
-    store,
+    markGroupRead,
+    sendGroupMessage,
   ]);
 
   // Hydrate group call history entries cleanly into Calls tab (normalized to ended when nobody is in the call)

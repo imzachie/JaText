@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 
 export interface LinkPreviewResult {
@@ -235,7 +235,11 @@ function SingleLinkEmbed({ url }: { url: string }) {
   );
 }
 
-export function MessageLinkEmbeds({ text }: { text?: string | null }) {
+export const MessageLinkEmbeds = memo(function MessageLinkEmbeds({
+  text,
+}: {
+  text?: string | null;
+}) {
   const urls = useMemo(() => extractEmbeddableUrls(text), [text]);
   if (urls.length === 0) return null;
   return (
@@ -245,4 +249,4 @@ export function MessageLinkEmbeds({ text }: { text?: string | null }) {
       ))}
     </div>
   );
-}
+});

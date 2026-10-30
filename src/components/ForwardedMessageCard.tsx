@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   canAccessForwardedContext,
   formatForwardedTimestamp,
@@ -14,7 +15,7 @@ interface ForwardedMessageCardProps {
   fallbackTimestamp?: number;
 }
 
-export function ForwardedMessageCard({
+export const ForwardedMessageCard = memo(function ForwardedMessageCard({
   context,
   legacySenderName,
   fallbackTimestamp,
@@ -125,4 +126,4 @@ export function ForwardedMessageCard({
       {cardInner}
     </div>
   );
-}
+});

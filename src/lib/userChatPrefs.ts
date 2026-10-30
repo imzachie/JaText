@@ -124,13 +124,18 @@ export function setLocalCommunityMuted(userId: string, muted: boolean) {
   });
 }
 
-export function markLocalCommunityRead(userId: string, readAt?: number) {
+/**
+ * Strictly idempotent: uses ONLY message/event timestamp (never Date.now())
+ * so repeated calls for the same chat state are guaranteed 0-op!
+ */
+export function markLocalCommunityRead(userId: string, latestMessageAt?: number) {
   const prev = getUserChatPrefs(userId);
-  const ts = Math.max(Date.now(), readAt ?? 0, prev.communityLastReadAt);
-  if (ts === prev.communityLastReadAt) return;
+  const candidate = latestMessageAt ?? prev.communityLastReadAt;
+  const nextReadAt = Math.max(candidate, prev.communityLastReadAt);
+  if (nextReadAt <= prev.communityLastReadAt) return;
   saveUserChatPrefs(userId, {
     ...prev,
-    communityLastReadAt: ts,
+    communityLastReadAt: nextReadAt,
   });
 }
 
@@ -143,57 +148,36 @@ export function updateLocalGroupSettings(
   const existing = prev.groups[groupId] ?? {
     isSilenced: false,
     isArchived: false,
-    lastReadAt: prev.initializedAt || Date.now(),
+    lastReadAt: prev.initializedAt || 0,
     unreadTimestamps: [],
   };
-  const nextGroup: GroupLocalPrefs = {
-    ...existing,
-    ...(patch.isSilenced !== undefined ? { isSilenced: patch.isSilenced } : {}),
-    ...(patch.isArchived !== undefined ? { isArchived: patch.isArchived } : {}),
-  };
-  saveUserChatPrefs(userId, {
-    ...prev,
-    groups: {
-      ...prev.groups,
-      [groupId]: nextGroup,
-    },
-  });
-}
-
-export function markLocalGroupRead(userId: string, groupId: string, readAt?: number) {
-  const prev = getUserChatPrefs(userId);
-  const existing = prev.groups[groupId] ?? {
-    isSilenced: false,
-    isArchived: false,
-    lastReadAt: prev.initializedAt || Date.now(),
-    unreadTimestamps: [],
-  };
-  const nextReadAt = Math.max(Date.now(), readAt ?? 0, existing.lastReadAt);
-  if (nextReadAt === existing.lastReadAt && existing.unreadTimestamps.length === 0) return;
+  const nextSilenced = patch.isSilenced ?? existing.isSilenced;
+  const nextArchived = patch.isArchived ?? existing.isArchived;
+  if (nextSilenced === existing.isSilenced && nextArchived === existing.isArchived) {
+    return;
+  }
   saveUserChatPrefs(userId, {
     ...prev,
     groups: {
       ...prev.groups,
       [groupId]: {
         ...existing,
-        lastReadAt: nextReadAt,
-        unreadTimestamps: [],
+        isSilenced: nextSilenced,
+        isArchived: nextArchived,
       },
     },
   });
 }
 
-export function recordIncomingGroupSummary(
-  userId: string,
-  groupId: string,
-  lastMessageAt: number,
-  isFromOther: boolean,
-) {
-  if (!userId || !groupId || !lastMessageAt) return;
+/**
+ * Strictly idempotent: clears unreadTimestamps once and advances lastReadAt
+ * only to latestMessageAt — never loops!
+ */
+export function markLocalGroupRead(userId: string, groupId: string, latestMessageAt?: number) {
   const prev = getUserChatPrefs(userId);
   const existing = prev.groups[groupId];
   if (!existing) {
-    // Seed initial baseline on first observation so old group history isn't flagged unread
+    if (!latestMessageAt) return;
     saveUserChatPrefs(userId, {
       ...prev,
       groups: {
@@ -201,39 +185,100 @@ export function recordIncomingGroupSummary(
         [groupId]: {
           isSilenced: false,
           isArchived: false,
-          lastReadAt: lastMessageAt,
+          lastReadAt: latestMessageAt,
           unreadTimestamps: [],
         },
       },
     });
     return;
   }
-  if (!isFromOther || lastMessageAt <= existing.lastReadAt) return;
-  if (existing.unreadTimestamps.includes(lastMessageAt)) return;
-  const nextTimestamps = [...existing.unreadTimestamps, lastMessageAt]
-    .filter((t) => t > existing.lastReadAt)
-    .slice(-99);
+  const candidate = latestMessageAt ?? existing.lastReadAt;
+  const nextReadAt = Math.max(candidate, existing.lastReadAt);
+  if (nextReadAt <= existing.lastReadAt && existing.unreadTimestamps.length === 0) {
+    return;
+  }
   saveUserChatPrefs(userId, {
     ...prev,
     groups: {
       ...prev.groups,
       [groupId]: {
         ...existing,
-        unreadTimestamps: nextTimestamps,
+        lastReadAt: nextReadAt,
+        unreadTimestamps: [],
       },
     },
   });
 }
 
-export function markLocalDmRead(userId: string, friendId: string, readAt?: number) {
+export function recordIncomingGroupSummariesBatch(
+  userId: string,
+  items: Array<{ groupId: string; lastMessageAt: number; isFromOther: boolean }>,
+) {
+  if (!userId || items.length === 0) return;
+  const prev = getUserChatPrefs(userId);
+  let mutatedGroups: Record<string, GroupLocalPrefs> | null = null;
+
+  for (const { groupId, lastMessageAt, isFromOther } of items) {
+    if (!groupId || !lastMessageAt) continue;
+    const currentMap = mutatedGroups ?? prev.groups;
+    const existing = currentMap[groupId];
+    if (!existing) {
+      if (!mutatedGroups) mutatedGroups = { ...prev.groups };
+      mutatedGroups[groupId] = {
+        isSilenced: false,
+        isArchived: false,
+        lastReadAt: lastMessageAt,
+        unreadTimestamps: [],
+      };
+      continue;
+    }
+    if (!isFromOther || lastMessageAt <= existing.lastReadAt) continue;
+    if (existing.unreadTimestamps.includes(lastMessageAt)) continue;
+    const nextTimestamps = [...existing.unreadTimestamps, lastMessageAt]
+      .filter((t) => t > existing.lastReadAt)
+      .slice(-99);
+    if (!mutatedGroups) mutatedGroups = { ...prev.groups };
+    mutatedGroups[groupId] = {
+      ...existing,
+      unreadTimestamps: nextTimestamps,
+    };
+  }
+
+  if (mutatedGroups) {
+    saveUserChatPrefs(userId, {
+      ...prev,
+      groups: mutatedGroups,
+    });
+  }
+}
+
+/**
+ * Strictly idempotent: clears unreadTimestamps once and advances lastReadAt
+ * only to latestMessageAt — never loops!
+ */
+export function markLocalDmRead(userId: string, friendId: string, latestMessageAt?: number) {
   if (!userId || !friendId) return;
   const prev = getUserChatPrefs(userId);
-  const existing = prev.dms[friendId] ?? {
-    lastReadAt: prev.initializedAt || Date.now(),
-    unreadTimestamps: [],
-  };
-  const nextReadAt = Math.max(Date.now(), readAt ?? 0, existing.lastReadAt);
-  if (nextReadAt === existing.lastReadAt && existing.unreadTimestamps.length === 0) return;
+  const existing = prev.dms[friendId];
+  if (!existing) {
+    if (!latestMessageAt) return;
+    saveUserChatPrefs(userId, {
+      ...prev,
+      dms: {
+        ...prev.dms,
+        [friendId]: {
+          lastReadAt: latestMessageAt,
+          unreadTimestamps: [],
+        },
+      },
+    });
+    return;
+  }
+  const candidate = latestMessageAt ?? existing.lastReadAt;
+  const nextReadAt = Math.max(candidate, existing.lastReadAt);
+  if (nextReadAt <= existing.lastReadAt && existing.unreadTimestamps.length === 0) {
+    return;
+  }
   saveUserChatPrefs(userId, {
     ...prev,
     dms: {
@@ -246,43 +291,44 @@ export function markLocalDmRead(userId: string, friendId: string, readAt?: numbe
   });
 }
 
-export function recordIncomingDmPreview(
+export function recordIncomingDmPreviewsBatch(
   userId: string,
-  friendId: string,
-  createdAt: number,
-  isFromFriend: boolean,
+  items: Array<{ friendId: string; createdAt: number; isFromFriend: boolean }>,
 ) {
-  if (!userId || !friendId || !createdAt) return;
+  if (!userId || items.length === 0) return;
   const prev = getUserChatPrefs(userId);
-  const existing = prev.dms[friendId];
-  if (!existing) {
+  let mutatedDms: Record<string, DmLocalPrefs> | null = null;
+
+  for (const { friendId, createdAt, isFromFriend } of items) {
+    if (!friendId || !createdAt) continue;
+    const currentMap = mutatedDms ?? prev.dms;
+    const existing = currentMap[friendId];
+    if (!existing) {
+      if (!mutatedDms) mutatedDms = { ...prev.dms };
+      mutatedDms[friendId] = {
+        lastReadAt: createdAt,
+        unreadTimestamps: [],
+      };
+      continue;
+    }
+    if (!isFromFriend || createdAt <= existing.lastReadAt) continue;
+    if (existing.unreadTimestamps.includes(createdAt)) continue;
+    const nextTimestamps = [...existing.unreadTimestamps, createdAt]
+      .filter((t) => t > existing.lastReadAt)
+      .slice(-99);
+    if (!mutatedDms) mutatedDms = { ...prev.dms };
+    mutatedDms[friendId] = {
+      ...existing,
+      unreadTimestamps: nextTimestamps,
+    };
+  }
+
+  if (mutatedDms) {
     saveUserChatPrefs(userId, {
       ...prev,
-      dms: {
-        ...prev.dms,
-        [friendId]: {
-          lastReadAt: createdAt,
-          unreadTimestamps: [],
-        },
-      },
+      dms: mutatedDms,
     });
-    return;
   }
-  if (!isFromFriend || createdAt <= existing.lastReadAt) return;
-  if (existing.unreadTimestamps.includes(createdAt)) return;
-  const nextTimestamps = [...existing.unreadTimestamps, createdAt]
-    .filter((t) => t > existing.lastReadAt)
-    .slice(-99);
-  saveUserChatPrefs(userId, {
-    ...prev,
-    dms: {
-      ...prev.dms,
-      [friendId]: {
-        ...existing,
-        unreadTimestamps: nextTimestamps,
-      },
-    },
-  });
 }
 
 let lastSyncedNativePayload = "";
