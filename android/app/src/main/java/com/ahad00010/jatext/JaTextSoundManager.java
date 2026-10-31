@@ -24,10 +24,9 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
 import androidx.core.app.NotificationCompat;
-import com.getcapacitor.JSArray;
-import com.getcapacitor.JSObject;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -232,8 +231,18 @@ public final class JaTextSoundManager {
         }
     }
 
-    public static JSArray listDeviceSounds(Context ctx, String category) {
-        JSArray out = new JSArray();
+    public static final class DeviceSoundItem {
+        public final String title;
+        public final String uri;
+
+        public DeviceSoundItem(String title, String uri) {
+            this.title = title;
+            this.uri = uri;
+        }
+    }
+
+    public static List<DeviceSoundItem> listDeviceSounds(Context ctx, String category) {
+        List<DeviceSoundItem> out = new ArrayList<>();
         if (ctx == null) return out;
         int ringType = "ringtone".equalsIgnoreCase(category)
             ? RingtoneManager.TYPE_RINGTONE
@@ -253,10 +262,10 @@ public final class JaTextSoundManager {
                 String uriStr = uri.toString();
                 if (seenUris.contains(uriStr)) continue;
                 seenUris.add(uriStr);
-                JSObject item = new JSObject();
-                item.put("title", (title != null && !title.trim().isEmpty()) ? title.trim() : ("Sound " + (idx + 1)));
-                item.put("uri", uriStr);
-                out.put(item);
+                String cleanTitle = (title != null && !title.trim().isEmpty())
+                    ? title.trim()
+                    : ("Sound " + (idx + 1));
+                out.add(new DeviceSoundItem(cleanTitle, uriStr));
                 idx++;
             }
         } catch (Throwable ignored) {
@@ -268,6 +277,54 @@ public final class JaTextSoundManager {
             }
         }
         return out;
+    }
+
+    public static void playSoundboardClip(Context ctx, String effectId) {
+        if (ctx == null || effectId == null) return;
+        final int rawResId;
+        switch (effectId.toLowerCase()) {
+            case "bruh":
+                rawResId = R.raw.sb_bruh;
+                break;
+            case "cheer":
+            case "tada":
+                rawResId = R.raw.sb_cheer;
+                break;
+            case "chime":
+                rawResId = R.raw.sb_chime;
+                break;
+            case "laser":
+                rawResId = R.raw.sb_laser;
+                break;
+            case "rimshot":
+                rawResId = R.raw.sb_rimshot;
+                break;
+            default:
+                rawResId = R.raw.sb_bruh;
+                break;
+        }
+        try {
+            AssetFileDescriptor afd = ctx.getResources().openRawResourceFd(rawResId);
+            if (afd == null) return;
+            MediaPlayer mp = new MediaPlayer();
+            mp.setAudioAttributes(
+                new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            );
+            try {
+                mp.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+            } finally {
+                try {
+                    afd.close();
+                } catch (Throwable ignored) {}
+            }
+            mp.setVolume(1.0f, 1.0f);
+            mp.setOnCompletionListener(JaTextSoundManager::stopPlayerQuietly);
+            mp.prepare();
+            mp.start();
+        } catch (Throwable ignored) {}
     }
 
     public static File saveCustomSoundFile(
@@ -468,7 +525,7 @@ public final class JaTextSoundManager {
         MainActivity.setCallLockScreenMode(true);
 
         // If user is already actively looking at JaText on an unlocked, interactive screen,
-        // the CallOverlay UI is already right in front of them — just arm the 60s safety timeout!
+        // the CallOverlay UI is already right in front of them, so just arm the 60s safety timeout!
         boolean needsWakeOrForegroundLaunch = !MainActivity.isActivelyVisibleUnlocked(ctx);
 
         if (needsWakeOrForegroundLaunch) {
@@ -548,6 +605,20 @@ public final class JaTextSoundManager {
                     ? "Incoming video call · Tap to answer"
                     : "Incoming voice call · Tap to answer";
 
+                Intent declineIntent = new Intent(ctx, MainActivity.class);
+                declineIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK |
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP |
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                );
+                declineIntent.putExtra("jatext_decline_call", true);
+                PendingIntent declinePi = PendingIntent.getActivity(
+                    ctx,
+                    INCOMING_CALL_NOTIFICATION_ID + 1,
+                    declineIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                );
+
                 NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, INCOMING_CALL_CHANNEL_ID)
                     .setSmallIcon(iconRes)
                     .setContentTitle(safeTitle)
@@ -560,7 +631,8 @@ public final class JaTextSoundManager {
                     .setTimeoutAfter(INCOMING_CALL_RING_TIMEOUT_MS)
                     .setContentIntent(fullScreenPi)
                     .setFullScreenIntent(fullScreenPi, true)
-                    .addAction(android.R.drawable.sym_call_incoming, "Answer / View Call", fullScreenPi);
+                    .addAction(android.R.drawable.sym_call_incoming, "Answer / View Call", fullScreenPi)
+                    .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePi);
 
                 nm.notify("incoming_call", INCOMING_CALL_NOTIFICATION_ID, builder.build());
             }

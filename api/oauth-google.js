@@ -1,6 +1,12 @@
 import crypto from "node:crypto";
 import { getTursoConfig, upsertGoogleOAuthAccount } from "../server/tursoBackend.js";
 
+function setCors(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+}
+
 function getGoogleCredentials() {
   const clientId = (
     process.env.GOOGLE_CLIENT_ID ||
@@ -12,7 +18,16 @@ function getGoogleCredentials() {
     process.env.AUTH_GOOGLE_SECRET ||
     ""
   ).trim();
-  return { clientId, clientSecret, configured: Boolean(clientId && clientSecret) };
+  const extraAndroidClientIds = (process.env.GOOGLE_ANDROID_CLIENT_ID || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return {
+    clientId,
+    clientSecret,
+    extraAndroidClientIds,
+    configured: Boolean(clientId && clientSecret),
+  };
 }
 
 function getStateSecret() {
@@ -75,13 +90,133 @@ function redirectWithError(res, platform, origin, message) {
   return res.end();
 }
 
+async function handleNativeGoogleTokenSignIn(req, res, credentials) {
+  const { clientId, extraAndroidClientIds } = credentials;
+  if (!clientId) {
+    return res.status(500).json({
+      ok: false,
+      error: "Google Sign-In is not configured on the server (missing GOOGLE_CLIENT_ID).",
+    });
+  }
+
+  let body = {};
+  try {
+    body =
+      typeof req.body === "string"
+        ? JSON.parse(req.body || "{}")
+        : req.body && typeof req.body === "object"
+          ? req.body
+          : {};
+  } catch {
+    return res.status(400).json({ ok: false, error: "Invalid JSON request body." });
+  }
+
+  const idToken = typeof body.idToken === "string" ? body.idToken.trim() : "";
+  const accessToken = typeof body.accessToken === "string" ? body.accessToken.trim() : "";
+
+  if (!idToken && !accessToken) {
+    return res.status(400).json({
+      ok: false,
+      error: "Missing Google idToken or accessToken.",
+    });
+  }
+
+  try {
+    if (idToken) {
+      const verifyResp = await fetch(
+        `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
+      );
+      const claims = await verifyResp.json();
+      if (!verifyResp.ok || !claims?.sub || !claims?.email) {
+        return res.status(401).json({
+          ok: false,
+          error: claims?.error_description || "Invalid or expired Google ID token.",
+        });
+      }
+
+      const iss = String(claims.iss || "");
+      if (iss !== "accounts.google.com" && iss !== "https://accounts.google.com") {
+        return res.status(401).json({ ok: false, error: "Invalid Google token issuer." });
+      }
+
+      const allowedAudiences = new Set([clientId, ...extraAndroidClientIds]);
+      const aud = String(claims.aud || "");
+      if (!allowedAudiences.has(aud)) {
+        return res.status(401).json({
+          ok: false,
+          error: "Google ID token audience mismatch.",
+        });
+      }
+
+      if (String(claims.email_verified) === "false") {
+        return res.status(401).json({
+          ok: false,
+          error: "Your Google email address is not verified.",
+        });
+      }
+
+      const { token, me } = await upsertGoogleOAuthAccount({
+        googleSub: String(claims.sub),
+        email: String(claims.email),
+        name: claims.name ? String(claims.name) : undefined,
+        picture: claims.picture ? String(claims.picture) : undefined,
+      });
+
+      return res.status(200).json({ ok: true, token, me });
+    }
+
+    const userResp = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const profile = await userResp.json();
+    if (!userResp.ok || !profile?.sub || !profile?.email) {
+      return res.status(401).json({
+        ok: false,
+        error: "Could not verify Google account profile.",
+      });
+    }
+
+    const { token, me } = await upsertGoogleOAuthAccount({
+      googleSub: String(profile.sub),
+      email: String(profile.email),
+      name: profile.name ? String(profile.name) : undefined,
+      picture: profile.picture ? String(profile.picture) : undefined,
+    });
+    return res.status(200).json({ ok: true, token, me });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : "Google Sign-In failed.",
+    });
+  }
+}
+
 export default async function handler(req, res) {
+  setCors(res);
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
   res.setHeader("Cache-Control", "no-store");
+
+  const credentials = getGoogleCredentials();
+  const { clientId, clientSecret, configured } = credentials;
+  const action = String(req.query?.action || "");
+
+  if (req.method === "GET" && action === "config") {
+    return res.status(200).json({
+      ok: true,
+      configured: Boolean(clientId),
+      clientId,
+    });
+  }
+
+  if (req.method === "POST") {
+    return handleNativeGoogleTokenSignIn(req, res, credentials);
+  }
+
   const origin = resolveCallbackOrigin(req);
   const redirectUri = `${origin}/api/oauth-google`;
-  const { clientId, clientSecret, configured } = getGoogleCredentials();
 
-  const action = String(req.query?.action || "");
   if (action === "start" || (!req.query?.code && !req.query?.error)) {
     const platform = req.query?.platform === "android" ? "android" : "web";
     if (!configured) {

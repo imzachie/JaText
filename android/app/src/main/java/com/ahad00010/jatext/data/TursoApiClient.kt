@@ -1,0 +1,481 @@
+package com.ahad00010.jatext.data
+
+import com.ahad00010.jatext.BuildConfig
+import java.io.File
+import java.io.FileOutputStream
+import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+
+class TursoApiException(message: String, val statusCode: Int = 500) : Exception(message)
+
+object TursoApiClient {
+    val apiOrigin: String = BuildConfig.API_ORIGIN.trimEnd('/')
+
+    private const val MEDIA_CHUNK_BYTES = 768 * 1024
+    private const val CHUNK_UPLOAD_THRESHOLD = 700 * 1024
+    private const val MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+    private const val RANGE_SLICE_BYTES = 3 * 1024 * 1024
+
+    val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    private val octetMediaType = "application/octet-stream".toMediaType()
+
+    fun anyToJsonElement(value: Any?): JsonElement = when (value) {
+        null -> JsonNull
+        is JsonElement -> value
+        is Boolean -> JsonPrimitive(value)
+        is Number -> JsonPrimitive(value)
+        is String -> JsonPrimitive(value)
+        is Map<*, *> -> JsonObject(
+            value.entries
+                .filter { it.key != null }
+                .associate { it.key.toString() to anyToJsonElement(it.value) }
+        )
+        is Iterable<*> -> JsonArray(value.map { anyToJsonElement(it) })
+        is Array<*> -> JsonArray(value.map { anyToJsonElement(it) })
+        else -> JsonPrimitive(value.toString())
+    }
+
+    suspend fun rpcRaw(
+        op: String,
+        args: Map<String, Any?> = emptyMap(),
+        token: String? = null,
+        onRefreshedToken: ((String) -> Unit)? = null,
+    ): JsonElement = withContext(Dispatchers.IO) {
+        val payloadObj = JsonObject(
+            mapOf(
+                "op" to JsonPrimitive(op),
+                "args" to anyToJsonElement(args),
+            )
+        )
+        val reqBuilder = Request.Builder()
+            .url("$apiOrigin/api/turso")
+            .post(payloadObj.toString().toRequestBody(jsonMediaType))
+            .header("Content-Type", "application/json")
+        if (!token.isNullOrBlank()) {
+            reqBuilder.header("Authorization", "Bearer $token")
+        }
+
+        httpClient.newCall(reqBuilder.build()).execute().use { resp ->
+            val rawText = resp.body?.string().orEmpty()
+            val root = try {
+                JaTextJson.parseToJsonElement(rawText).jsonObject
+            } catch (_: Throwable) {
+                null
+            }
+            val ok = root?.get("ok")?.jsonPrimitive?.booleanOrNull == true
+            if (!resp.isSuccessful || !ok) {
+                val errMsg = root?.get("error")?.jsonPrimitive?.contentOrNull
+                    ?: "Request failed (${resp.code})"
+                throw TursoApiException(errMsg, resp.code)
+            }
+            val dataEl = root?.get("data") ?: JsonNull
+            if (dataEl is JsonObject) {
+                val refreshed = dataEl["refreshedToken"]?.jsonPrimitive?.contentOrNull
+                if (!refreshed.isNullOrBlank()) {
+                    onRefreshedToken?.invoke(refreshed)
+                }
+            }
+            dataEl
+        }
+    }
+
+    suspend inline fun <reified T> rpc(
+        op: String,
+        args: Map<String, Any?> = emptyMap(),
+        token: String? = null,
+        noinline onRefreshedToken: ((String) -> Unit)? = null,
+    ): T {
+        val el = rpcRaw(op, args, token, onRefreshedToken)
+        return JaTextJson.decodeFromJsonElement(kotlinx.serialization.serializer<T>(), el)
+    }
+
+    /* ==================== Native In-App Google Sign-In API ==================== */
+
+    suspend fun fetchGoogleOAuthWebClientId(): String? = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("$apiOrigin/api/oauth-google?action=config")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val obj = JaTextJson.parseToJsonElement(resp.body?.string().orEmpty()).jsonObject
+                obj["clientId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    suspend fun signInWithGoogleIdToken(idToken: String): Pair<String, JaUser> =
+        withContext(Dispatchers.IO) {
+            val bodyJson = JsonObject(
+                mapOf("idToken" to JsonPrimitive(idToken))
+            ).toString()
+            val req = Request.Builder()
+                .url("$apiOrigin/api/oauth-google")
+                .post(bodyJson.toRequestBody(jsonMediaType))
+                .header("Content-Type", "application/json")
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                val raw = resp.body?.string().orEmpty()
+                val obj = try {
+                    JaTextJson.parseToJsonElement(raw).jsonObject
+                } catch (_: Throwable) {
+                    null
+                }
+                val ok = obj?.get("ok")?.jsonPrimitive?.booleanOrNull == true
+                val token = obj?.get("token")?.jsonPrimitive?.contentOrNull
+                if (!resp.isSuccessful || !ok || token.isNullOrBlank()) {
+                    val err = obj?.get("error")?.jsonPrimitive?.contentOrNull
+                        ?: "Google Sign-In failed (${resp.code})."
+                    throw TursoApiException(err, resp.code)
+                }
+                val meEl = obj["me"]
+                val me = if (meEl != null && meEl !is JsonNull) {
+                    JaTextJson.decodeFromJsonElement(JaUser.serializer(), meEl)
+                } else {
+                    JaUser()
+                }
+                token to me
+            }
+        }
+
+    /* ==================== Chunked Media Upload & Range Streaming ==================== */
+
+    suspend fun uploadMediaBytes(
+        bytes: ByteArray,
+        fileName: String,
+        mimeType: String,
+        token: String,
+    ): String = withContext(Dispatchers.IO) {
+        if (bytes.isEmpty()) throw TursoApiException("Selected file is empty.", 400)
+        if (bytes.size > MAX_UPLOAD_BYTES) {
+            throw TursoApiException("Attachment exceeds the 64 MB size limit.", 413)
+        }
+        val baseMime = mimeType.substringBefore(';').trim().ifBlank { "application/octet-stream" }
+        val storageMime = if (baseMime == "application/x-jatext-call+json") {
+            "application/json"
+        } else {
+            baseMime
+        }
+        val safeName = fileName.ifBlank { "attachment" }
+
+        if (bytes.size <= CHUNK_UPLOAD_THRESHOLD) {
+            val encodedName = URLEncoder.encode(safeName, "UTF-8")
+            val req = Request.Builder()
+                .url("$apiOrigin/api/media")
+                .post(bytes.toRequestBody(storageMime.toMediaType()))
+                .header("Authorization", "Bearer $token")
+                .header("Content-Type", storageMime)
+                .header("X-JaText-Mime", storageMime)
+                .header("X-JaText-Filename", encodedName)
+                .build()
+            return@withContext executeWithRetry(req) { resp ->
+                val obj = JaTextJson.parseToJsonElement(resp.body?.string().orEmpty()).jsonObject
+                val url = obj["url"]?.jsonPrimitive?.contentOrNull
+                if (!resp.isSuccessful || url.isNullOrBlank()) {
+                    throw TursoApiException(
+                        obj["error"]?.jsonPrimitive?.contentOrNull ?: "Upload failed.",
+                        resp.code
+                    )
+                }
+                resolveAbsoluteMediaUrl(url)
+            }
+        }
+
+        val chunkCount = (bytes.size + MEDIA_CHUNK_BYTES - 1) / MEDIA_CHUNK_BYTES
+        val initJson = JsonObject(
+            mapOf(
+                "mimeType" to JsonPrimitive(storageMime),
+                "fileName" to JsonPrimitive(safeName),
+                "byteSize" to JsonPrimitive(bytes.size),
+                "chunkCount" to JsonPrimitive(chunkCount),
+            )
+        ).toString()
+        val initReq = Request.Builder()
+            .url("$apiOrigin/api/media?action=init")
+            .post(initJson.toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $token")
+            .header("Content-Type", "application/json")
+            .build()
+
+        val (mediaId, finalUrl, chunkBytes) = executeWithRetry(initReq) { resp ->
+            val obj = JaTextJson.parseToJsonElement(resp.body?.string().orEmpty()).jsonObject
+            val id = obj["id"]?.jsonPrimitive?.contentOrNull
+            val url = obj["url"]?.jsonPrimitive?.contentOrNull
+            val cSize = obj["chunkSize"]?.jsonPrimitive?.intOrNull ?: MEDIA_CHUNK_BYTES
+            if (!resp.isSuccessful || id.isNullOrBlank() || url.isNullOrBlank()) {
+                throw TursoApiException(
+                    obj["error"]?.jsonPrimitive?.contentOrNull ?: "Chunked upload init failed.",
+                    resp.code
+                )
+            }
+            Triple(id, resolveAbsoluteMediaUrl(url), cSize)
+        }
+
+        val totalChunks = (bytes.size + chunkBytes - 1) / chunkBytes
+        val nextIndex = AtomicInteger(0)
+        val workers = minOf(4, totalChunks)
+        coroutineScope {
+            (0 until workers).map {
+                async(Dispatchers.IO) {
+                    while (true) {
+                        val idx = nextIndex.getAndIncrement()
+                        if (idx >= totalChunks) break
+                        val start = idx * chunkBytes
+                        val len = minOf(chunkBytes, bytes.size - start)
+                        val chunkReq = Request.Builder()
+                            .url(
+                                "$apiOrigin/api/media?action=chunk&id=${
+                                    URLEncoder.encode(mediaId, "UTF-8")
+                                }&index=$idx"
+                            )
+                            .post(bytes.toRequestBody(octetMediaType, start, len))
+                            .header("Authorization", "Bearer $token")
+                            .header("Content-Type", "application/octet-stream")
+                            .header("X-JaText-Chunk-Index", idx.toString())
+                            .build()
+                        executeWithRetry(chunkReq) { resp ->
+                            if (!resp.isSuccessful) {
+                                throw TursoApiException("Upload chunk $idx failed (${resp.code}).", resp.code)
+                            }
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+        finalUrl
+    }
+
+    fun resolveAbsoluteMediaUrl(rawUrl: String): String {
+        val trimmed = rawUrl.trim()
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
+        if (trimmed.startsWith("/")) return "$apiOrigin$trimmed"
+        return "$apiOrigin/$trimmed"
+    }
+
+    suspend fun fetchMediaBytesSmart(rawUrl: String, hintTotalBytes: Int = 0): ByteArray =
+        withContext(Dispatchers.IO) {
+            val mediaUrl = resolveAbsoluteMediaUrl(rawUrl)
+            var knownSize = hintTotalBytes
+            if (knownSize <= 0) {
+                val szMatch = Regex("[?&]sz=(\\d+)").find(mediaUrl)
+                knownSize = szMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+            }
+
+            suspend fun fetchSlice(start: Int, end: Int): ByteArray {
+                val req = Request.Builder()
+                    .url(mediaUrl)
+                    .get()
+                    .header("Range", "bytes=$start-$end")
+                    .build()
+                return executeWithRetry(req) { resp ->
+                    if (!resp.isSuccessful && resp.code != 206) {
+                        throw TursoApiException("Media slice failed (${resp.code})", resp.code)
+                    }
+                    resp.body?.bytes() ?: ByteArray(0)
+                }
+            }
+
+            if (knownSize > RANGE_SLICE_BYTES) {
+                val out = ByteArray(knownSize)
+                val ranges = mutableListOf<Pair<Int, Int>>()
+                var offset = 0
+                while (offset < knownSize) {
+                    ranges.add(offset to minOf(knownSize - 1, offset + RANGE_SLICE_BYTES - 1))
+                    offset += RANGE_SLICE_BYTES
+                }
+                val idxRef = AtomicInteger(0)
+                coroutineScope {
+                    (0 until minOf(4, ranges.size)).map {
+                        async(Dispatchers.IO) {
+                            while (true) {
+                                val i = idxRef.getAndIncrement()
+                                if (i >= ranges.size) break
+                                val (s, e) = ranges[i]
+                                val part = fetchSlice(s, e)
+                                System.arraycopy(part, 0, out, s, minOf(part.size, out.size - s))
+                            }
+                        }
+                    }.awaitAll()
+                }
+                return@withContext out
+            }
+
+            val req = Request.Builder().url(mediaUrl).get().build()
+            val (code, firstBytes, totalSize) = executeWithRetry(req) { resp ->
+                if (!resp.isSuccessful && resp.code != 206) {
+                    throw TursoApiException("Media download failed (${resp.code})", resp.code)
+                }
+                val bytes = resp.body?.bytes() ?: ByteArray(0)
+                val rangeHdr = resp.header("Content-Range").orEmpty()
+                val totalFromRange = Regex("/(\\d+)$").find(rangeHdr)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                val totalFromHdr = resp.header("X-JaText-Total-Size")?.toIntOrNull()
+                Triple(resp.code, bytes, totalFromRange ?: totalFromHdr ?: bytes.size)
+            }
+
+            if (code != 206 || totalSize <= firstBytes.size) {
+                return@withContext firstBytes
+            }
+
+            val out = ByteArray(totalSize)
+            System.arraycopy(firstBytes, 0, out, 0, firstBytes.size)
+            val ranges = mutableListOf<Pair<Int, Int>>()
+            var offset = firstBytes.size
+            while (offset < totalSize) {
+                ranges.add(offset to minOf(totalSize - 1, offset + RANGE_SLICE_BYTES - 1))
+                offset += RANGE_SLICE_BYTES
+            }
+            val idxRef = AtomicInteger(0)
+            coroutineScope {
+                (0 until minOf(4, ranges.size)).map {
+                    async(Dispatchers.IO) {
+                        while (true) {
+                            val i = idxRef.getAndIncrement()
+                            if (i >= ranges.size) break
+                            val (s, e) = ranges[i]
+                            val part = fetchSlice(s, e)
+                            System.arraycopy(part, 0, out, s, minOf(part.size, out.size - s))
+                        }
+                    }
+                }.awaitAll()
+            }
+            out
+        }
+
+    /* ==================== OpenGraph Link Preview & OTA APK Updater ==================== */
+
+    private val linkPreviewCache = java.util.concurrent.ConcurrentHashMap<String, LinkPreviewInfo>()
+
+    suspend fun fetchLinkPreview(targetUrl: String): LinkPreviewInfo? = withContext(Dispatchers.IO) {
+        linkPreviewCache[targetUrl]?.let { return@withContext it }
+        try {
+            val encoded = URLEncoder.encode(targetUrl, "UTF-8")
+            val req = Request.Builder()
+                .url("$apiOrigin/api/link-preview?url=$encoded")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val raw = resp.body?.string().orEmpty()
+                val root = JaTextJson.parseToJsonElement(raw).jsonObject
+                val previewEl = root["preview"] ?: root
+                val parsed = JaTextJson.decodeFromJsonElement(LinkPreviewInfo.serializer(), previewEl)
+                if (!parsed.title.isNullOrBlank() || !parsed.description.isNullOrBlank()) {
+                    linkPreviewCache[targetUrl] = parsed
+                    parsed
+                } else {
+                    null
+                }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    suspend fun fetchLatestApkManifest(): ApkVersionManifest? = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("$apiOrigin/apk-version.json?t=${System.currentTimeMillis()}")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                JaTextJson.decodeFromString<ApkVersionManifest>(resp.body?.string().orEmpty())
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    suspend fun downloadApkFile(
+        downloadUrl: String,
+        destFile: File,
+        onProgress: (Float) -> Unit,
+    ): File = withContext(Dispatchers.IO) {
+        val url = resolveAbsoluteMediaUrl(downloadUrl)
+        val req = Request.Builder().url(url).get().build()
+        httpClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                throw TursoApiException("APK download failed (${resp.code})", resp.code)
+            }
+            val body = resp.body ?: throw TursoApiException("Empty APK response", 500)
+            val total = body.contentLength()
+            destFile.parentFile?.mkdirs()
+            body.byteStream().use { input ->
+                FileOutputStream(destFile, false).use { output ->
+                    val buf = ByteArray(16 * 1024)
+                    var downloaded = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        output.write(buf, 0, n)
+                        downloaded += n
+                        if (total > 0L) {
+                            onProgress((downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                        }
+                    }
+                    output.flush()
+                }
+            }
+        }
+        onProgress(1f)
+        destFile
+    }
+
+    private suspend fun <R> executeWithRetry(
+        request: Request,
+        attempts: Int = 3,
+        block: (okhttp3.Response) -> R,
+    ): R {
+        var lastErr: Throwable? = null
+        for (i in 0 until attempts) {
+            try {
+                httpClient.newCall(request).execute().use { resp ->
+                    if (resp.code >= 500 && i + 1 < attempts) {
+                        lastErr = TursoApiException("Server error (${resp.code})", resp.code)
+                    } else {
+                        return block(resp)
+                    }
+                }
+            } catch (e: TursoApiException) {
+                if (e.statusCode < 500 || i + 1 >= attempts) throw e
+                lastErr = e
+            } catch (e: Throwable) {
+                lastErr = e
+                if (i + 1 >= attempts) throw e
+            }
+            delay(250L * (i + 1))
+        }
+        throw lastErr ?: TursoApiException("Network request failed.")
+    }
+}

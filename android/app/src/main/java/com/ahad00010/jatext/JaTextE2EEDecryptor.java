@@ -613,21 +613,25 @@ public final class JaTextE2EEDecryptor {
                 ? convexUrl.substring(0, convexUrl.length() - 1)
                 : convexUrl;
             if (!base.contains(".convex.cloud")) {
+                JSONArray userIds = new JSONArray();
+                userIds.put(peerUserId);
                 JSONObject argsObj = new JSONObject();
-                argsObj.put("userId", peerUserId);
+                argsObj.put("userIds", userIds);
                 JSONObject rpcReq = new JSONObject();
-                rpcReq.put("op", "getPublicPeerKeys");
+                rpcReq.put("op", "getUserE2EEIdentities");
                 rpcReq.put("args", argsObj);
                 JSONObject res = postJson(base + "/api/turso", rpcReq.toString(), jwt);
-                if (res == null || !res.optBoolean("ok", false)) return keys;
-                JSONObject data = res.optJSONObject("data");
-                JSONArray arr = data != null ? data.optJSONArray("bundles") : null;
-                if (arr == null) return keys;
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject item = arr.optJSONObject(i);
-                    if (item != null) {
-                        String dh = item.optString("dhPubB64", "");
-                        if (!dh.isEmpty() && !keys.contains(dh)) keys.add(dh);
+                if (res != null && res.optBoolean("ok", false)) {
+                    JSONObject data = res.optJSONObject("data");
+                    JSONArray arr = data != null ? data.optJSONArray("bundles") : null;
+                    if (arr != null) {
+                        for (int i = 0; i < arr.length(); i++) {
+                            JSONObject item = arr.optJSONObject(i);
+                            if (item != null) {
+                                String dh = item.optString("dhPubB64", "");
+                                if (!dh.isEmpty() && !keys.contains(dh)) keys.add(dh);
+                            }
+                        }
                     }
                 }
                 return keys;
@@ -1218,7 +1222,7 @@ public final class JaTextE2EEDecryptor {
                 body.equals(lastPostedBody) &&
                 now - lastPostedAtMs < 15_000L
             ) {
-                // Exact same decrypted message was already posted seconds ago — skip duplicate chime!
+                // Exact same decrypted message was already posted seconds ago; skip duplicate chime!
                 return;
             }
             if (resolvedTag.equals(lastPostedTag) && now - lastPostedAtMs < 4_500L) {
