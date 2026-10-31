@@ -17,7 +17,10 @@ import { playMessageSound } from "../lib/alerts";
 import { CONVERSATION_MARKED_READ_EVENT } from "../lib/convexStore";
 import { getUserChatPrefs } from "../lib/userChatPrefs";
 import { isChatActivelyVisibleToUser } from "../lib/nativeBridge";
-import { useChatAutoScrollAndKeyboard } from "../lib/useChatAutoScrollAndKeyboard";
+import {
+  isSoftKeyboardCurrentlyOpen,
+  useChatAutoScrollAndKeyboard,
+} from "../lib/useChatAutoScrollAndKeyboard";
 import {
   formatPreviewMessageText,
   isHiddenCallSignal,
@@ -852,7 +855,8 @@ const DirectChatComposer = memo(function DirectChatComposer({
     if (isFriendBlocked) return;
     const trimmed = draft.trim();
     if (isEditing ? !trimmed : !trimmed && !hasFile) return;
-    const keepFocus = document.activeElement === composerRef.current;
+    const keepFocus =
+      document.activeElement === composerRef.current && isSoftKeyboardCurrentlyOpen();
     prevLenRef.current = 0;
     setDraft("");
     if (!isEditing) {
@@ -977,6 +981,7 @@ export function ChatView({
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
   const [deletedUndoState, setDeletedUndoState] = useState<DeletedForMeUndoState | null>(null);
+  const [locallyHiddenIds, setLocallyHiddenIds] = useState<Record<string, true>>({});
   const deletedSnapshotRef = useRef<Map<string, ChatMessage>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [showUnsendWarning, setShowUnsendWarning] = useState(false);
@@ -1049,7 +1054,14 @@ export function ChatView({
     () => getConversationMessages(pendingMessages, conversationMessages, friend.id, me?.id),
     [conversationMessages, friend.id, me?.id, pendingMessages],
   );
-  const displayedMessages = useUnsendThanosWatcher(rawDisplayedMessages, `dm:${friend.id}`);
+  const visibleRawDisplayedMessages = useMemo(
+    () =>
+      rawDisplayedMessages.filter(
+        (m) => !locallyHiddenIds[m.id] && !(m.renderKey && locallyHiddenIds[m.renderKey]),
+      ),
+    [locallyHiddenIds, rawDisplayedMessages],
+  );
+  const displayedMessages = useUnsendThanosWatcher(visibleRawDisplayedMessages, `dm:${friend.id}`);
   const activeWallpaperUrl = useMemo(() => {
     for (let i = displayedMessages.length - 1; i >= 0; i--) {
       const msg = displayedMessages[i];
@@ -1629,6 +1641,23 @@ export function ChatView({
   async function deleteForMe(message: ChatMessage) {
     closeMessageMenu();
     deletedSnapshotRef.current.set(message.id, message);
+    setLocallyHiddenIds((prev) => ({
+      ...prev,
+      [message.id]: true,
+      ...(message.renderKey ? { [message.renderKey]: true } : {}),
+    }));
+    setPendingMessages((cur) =>
+      cur.filter(
+        (m) =>
+          m.id !== message.id &&
+          m.id !== message.renderKey &&
+          !(
+            m.senderId === message.senderId &&
+            m.body === message.body &&
+            Math.abs(m.createdAt - message.createdAt) < 60_000
+          ),
+      ),
+    );
     setDeletedUndoState({
       messageId: message.id,
       nonce: Date.now(),
@@ -1637,6 +1666,12 @@ export function ChatView({
     try {
       await store.deleteMessageForMe(message.id);
     } catch (actionError) {
+      setLocallyHiddenIds((prev) => {
+        const next = { ...prev };
+        delete next[message.id];
+        if (message.renderKey) delete next[message.renderKey];
+        return next;
+      });
       setDeletedUndoState(null);
       setError(friendlyError(actionError, "Couldn't delete the message. Please try again."));
     }
@@ -1645,6 +1680,12 @@ export function ChatView({
   async function undoDeleteForMe(messageId: string) {
     const snap = deletedSnapshotRef.current.get(messageId);
     deletedSnapshotRef.current.delete(messageId);
+    setLocallyHiddenIds((prev) => {
+      const next = { ...prev };
+      delete next[messageId];
+      if (snap?.renderKey) delete next[snap.renderKey];
+      return next;
+    });
     setDeletedUndoState(null);
     if (!snap || !store.restoreMessageForMe) return;
     try {

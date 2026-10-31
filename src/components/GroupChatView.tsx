@@ -19,7 +19,10 @@ import { playMessageSound } from "../lib/alerts";
 import { CONVERSATION_MARKED_READ_EVENT } from "../lib/convexStore";
 import { getUserChatPrefs } from "../lib/userChatPrefs";
 import { isChatActivelyVisibleToUser } from "../lib/nativeBridge";
-import { useChatAutoScrollAndKeyboard } from "../lib/useChatAutoScrollAndKeyboard";
+import {
+  isSoftKeyboardCurrentlyOpen,
+  useChatAutoScrollAndKeyboard,
+} from "../lib/useChatAutoScrollAndKeyboard";
 import { upsertCallHistoryEntry } from "../lib/callHistory";
 import { formatCallDuration, formatPreviewMessageText, isHiddenCallSignal } from "../lib/calling";
 import {
@@ -1110,7 +1113,8 @@ const GroupChatComposer = memo(function GroupChatComposer({
     event?.preventDefault();
     const trimmed = draft.trim();
     if (isEditing ? !trimmed : !trimmed && !hasFile && !hasForwardedMessage) return;
-    const keepFocus = document.activeElement === composerRef.current;
+    const keepFocus =
+      document.activeElement === composerRef.current && isSoftKeyboardCurrentlyOpen();
     prevLenRef.current = 0;
     setDraft("");
     if (!isEditing) clearDraft(draftKey);
@@ -1345,6 +1349,7 @@ export function GroupChatView({
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
   const [deletedUndoState, setDeletedUndoState] = useState<DeletedForMeUndoState | null>(null);
+  const [locallyHiddenIds, setLocallyHiddenIds] = useState<Record<string, true>>({});
   const deletedSnapshotRef = useRef<Map<string, GroupMessage>>(new Map());
   const [replyTo, setReplyTo] = useState<GroupMessage | null>(null);
   const [editingMessage, setEditingMessage] = useState<GroupMessage | null>(null);
@@ -1744,8 +1749,15 @@ export function GroupChatView({
     () => getConversationMessages(pendingMessages, conversationMessages, store.me?.id),
     [conversationMessages, pendingMessages, store.me?.id],
   );
+  const visibleRawDisplayedMessages = useMemo(
+    () =>
+      rawDisplayedMessages.filter(
+        (m) => !locallyHiddenIds[m.id] && !(m.renderKey && locallyHiddenIds[m.renderKey]),
+      ),
+    [locallyHiddenIds, rawDisplayedMessages],
+  );
   const displayedMessages = useUnsendThanosWatcher(
-    rawDisplayedMessages,
+    visibleRawDisplayedMessages,
     `group:${groupId ?? ""}`,
   );
   const lastDisplayedKey = displayedMessages.at(-1)?.id ?? "";
@@ -2362,6 +2374,23 @@ export function GroupChatView({
   async function deleteForMe(message: GroupMessage) {
     closeMessageMenu();
     deletedSnapshotRef.current.set(message.id, message);
+    setLocallyHiddenIds((prev) => ({
+      ...prev,
+      [message.id]: true,
+      ...(message.renderKey ? { [message.renderKey]: true } : {}),
+    }));
+    setPendingMessages((cur) =>
+      cur.filter(
+        (m) =>
+          m.id !== message.id &&
+          m.id !== message.renderKey &&
+          !(
+            m.senderId === message.senderId &&
+            m.body === message.body &&
+            Math.abs(m.createdAt - message.createdAt) < 60_000
+          ),
+      ),
+    );
     setDeletedUndoState({
       messageId: message.id,
       nonce: Date.now(),
@@ -2370,6 +2399,12 @@ export function GroupChatView({
     try {
       await store.deleteGroupMessageForMe(message.id);
     } catch (err) {
+      setLocallyHiddenIds((prev) => {
+        const next = { ...prev };
+        delete next[message.id];
+        if (message.renderKey) delete next[message.renderKey];
+        return next;
+      });
       setDeletedUndoState(null);
       setError(friendlyError(err, "Couldn't delete the message."));
     }
@@ -2378,6 +2413,12 @@ export function GroupChatView({
   async function undoDeleteForMe(messageId: string) {
     const snap = deletedSnapshotRef.current.get(messageId);
     deletedSnapshotRef.current.delete(messageId);
+    setLocallyHiddenIds((prev) => {
+      const next = { ...prev };
+      delete next[messageId];
+      if (snap?.renderKey) delete next[snap.renderKey];
+      return next;
+    });
     setDeletedUndoState(null);
     if (!snap || !store.restoreGroupMessageForMe) return;
     try {

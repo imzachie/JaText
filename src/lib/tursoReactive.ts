@@ -23,6 +23,7 @@ import {
   prewarmDecryptedDmBatch,
   prewarmDecryptedGroupBatch,
 } from "./e2ee/messagePipeline";
+import { removeMessageFromConversationCache } from "./chatCache";
 import { OAUTH_RETURN_CHATS_FLAG } from "./webRoute";
 import { OFFICIAL_COMMUNITY_ID } from "./types";
 import type {
@@ -128,6 +129,30 @@ function mergeMessagesById<T extends { id: string; createdAt: number }>(
 }
 
 const handledAndroidTokens = new Set<string>();
+const MAX_PERSISTED_DELETED_IDS = 600;
+
+function readDeletedForMeIds(slotId: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(`jatext:deleted-for-me:v1:${slotId}`);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((x): x is string => typeof x === "string" && x.length > 0));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeDeletedForMeIds(slotId: string, ids: Set<string>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const arr = [...ids].slice(-MAX_PERSISTED_DELETED_IDS);
+    window.localStorage.setItem(`jatext:deleted-for-me:v1:${slotId}`, JSON.stringify(arr));
+  } catch {
+    // ignore storage quota errors
+  }
+}
 
 export function useTursoReactiveSession(
   slotId: string,
@@ -197,6 +222,27 @@ export function useTursoReactiveSession(
   groupMessagesRef.current = groupMessagesQuery;
   const communityMessagesRef = useRef(communityMessagesQuery);
   communityMessagesRef.current = communityMessagesQuery;
+  const deletedForMeIdsRef = useRef<Set<string>>(readDeletedForMeIds(slotId));
+
+  const markDeletedForMe = useCallback(
+    (messageId: string) => {
+      if (!messageId) return;
+      deletedForMeIdsRef.current.add(messageId);
+      writeDeletedForMeIds(slotIdRef.current, deletedForMeIdsRef.current);
+      removeMessageFromConversationCache(slotIdRef.current, messageId);
+    },
+    [],
+  );
+
+  const unmarkDeletedForMe = useCallback(
+    (messageId: string) => {
+      if (!messageId) return;
+      if (deletedForMeIdsRef.current.delete(messageId)) {
+        writeDeletedForMeIds(slotIdRef.current, deletedForMeIdsRef.current);
+      }
+    },
+    [],
+  );
 
   const resetSessionState = useCallback(() => {
     sinceTsRef.current = 0;
@@ -244,7 +290,9 @@ export function useTursoReactiveSession(
     });
     setCommunityPermissions(boot.communityPermissions);
     setCommunityDirectory(boot.communityDirectory);
-    setCommunityMessagesQuery(boot.communityMessages);
+    setCommunityMessagesQuery(
+      (boot.communityMessages ?? []).filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+    );
     setHasMoreOlderCommunityMessages(Boolean(boot.communityHasMore));
     setGroupsQuery(boot.groups);
     setServerHasRemoteVault(Boolean(boot.hasRemoteE2EEVault));
@@ -362,25 +410,39 @@ export function useTursoReactiveSession(
       return;
     }
     let cancelled = false;
+    let retryTimer: number | null = null;
     setActiveMessagesQuery(undefined);
     setHasMoreOlderMessages(false);
     setLoadingOlderMessages(false);
-    void tursoRpc<{ messages: ChatMessage[]; hasMore?: boolean }>(
-      "listMessages",
-      { otherId: activeChatId },
-      { slotId },
-    )
-      .then(async (res) => {
-        if (cancelled) return;
-        await prewarmDecryptedDmBatch(res.messages ?? []);
-        if (!cancelled) {
-          setActiveMessagesQuery(res.messages);
-          setHasMoreOlderMessages(Boolean(res.hasMore));
-        }
-      })
-      .catch(() => undefined);
+    const loadDm = (attempt: number) => {
+      void tursoRpc<{ messages: ChatMessage[]; hasMore?: boolean }>(
+        "listMessages",
+        { otherId: activeChatId },
+        { slotId },
+      )
+        .then(async (res) => {
+          if (cancelled) return;
+          const visible = (res.messages ?? []).filter(
+            (m) => !deletedForMeIdsRef.current.has(m.id),
+          );
+          await prewarmDecryptedDmBatch(visible);
+          if (!cancelled) {
+            setActiveMessagesQuery(
+              visible.filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+            );
+            setHasMoreOlderMessages(Boolean(res.hasMore));
+          }
+        })
+        .catch(() => {
+          if (!cancelled && attempt === 0) {
+            retryTimer = window.setTimeout(() => loadDm(1), 650);
+          }
+        });
+    };
+    loadDm(0);
     return () => {
       cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
   }, [activeChatId, isAuthenticated, slotId]);
 
@@ -395,33 +457,47 @@ export function useTursoReactiveSession(
       return;
     }
     let cancelled = false;
+    let retryTimer: number | null = null;
     setGroupDetailsQuery(undefined);
     setGroupMessagesQuery(undefined);
     setHasMoreOlderGroupMessages(false);
     setLoadingOlderGroupMessages(false);
-    void Promise.all([
-      tursoRpc<{ details: GroupDetails | null }>(
-        "getGroupDetails",
-        { groupId: activeGroupId },
-        { slotId },
-      ),
-      tursoRpc<{ messages: GroupMessage[]; hasMore?: boolean }>(
-        "listGroupMessages",
-        { groupId: activeGroupId },
-        { slotId },
-      ),
-    ])
-      .then(async ([detRes, msgRes]) => {
-        if (cancelled) return;
-        await prewarmDecryptedGroupBatch(msgRes.messages ?? [], activeGroupId);
-        if (cancelled) return;
-        setGroupDetailsQuery(detRes.details);
-        setGroupMessagesQuery(msgRes.messages);
-        setHasMoreOlderGroupMessages(Boolean(msgRes.hasMore));
-      })
-      .catch(() => undefined);
+    const loadGroup = (attempt: number) => {
+      void Promise.all([
+        tursoRpc<{ details: GroupDetails | null }>(
+          "getGroupDetails",
+          { groupId: activeGroupId },
+          { slotId },
+        ),
+        tursoRpc<{ messages: GroupMessage[]; hasMore?: boolean }>(
+          "listGroupMessages",
+          { groupId: activeGroupId },
+          { slotId },
+        ),
+      ])
+        .then(async ([detRes, msgRes]) => {
+          if (cancelled) return;
+          const visible = (msgRes.messages ?? []).filter(
+            (m) => !deletedForMeIdsRef.current.has(m.id),
+          );
+          await prewarmDecryptedGroupBatch(visible, activeGroupId);
+          if (cancelled) return;
+          setGroupDetailsQuery(detRes.details);
+          setGroupMessagesQuery(
+            visible.filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+          );
+          setHasMoreOlderGroupMessages(Boolean(msgRes.hasMore));
+        })
+        .catch(() => {
+          if (!cancelled && attempt === 0) {
+            retryTimer = window.setTimeout(() => loadGroup(1), 650);
+          }
+        });
+    };
+    loadGroup(0);
     return () => {
       cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
   }, [activeGroupId, isAuthenticated, slotId]);
 
@@ -443,13 +519,18 @@ export function useTursoReactiveSession(
         { slotId: slotIdRef.current },
       );
       if (activeChatRef.current !== curChat) return 0;
-      const incomingOlder = res.messages ?? [];
+      const incomingOlder = (res.messages ?? []).filter(
+        (m) => !deletedForMeIdsRef.current.has(m.id),
+      );
       setHasMoreOlderMessages(Boolean(res.hasMore));
       if (!incomingOlder.length) return 0;
       await prewarmDecryptedDmBatch(incomingOlder);
       if (activeChatRef.current !== curChat) return 0;
       const beforeCount = (activeMessagesRef.current ?? []).length;
-      const merged = mergeMessagesById(incomingOlder, activeMessagesRef.current ?? []);
+      const merged = mergeMessagesById(
+        incomingOlder.filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+        (activeMessagesRef.current ?? []).filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+      );
       setActiveMessagesQuery(merged);
       return Math.max(0, merged.length - beforeCount);
     } catch {
@@ -479,13 +560,18 @@ export function useTursoReactiveSession(
         { slotId: slotIdRef.current },
       );
       if (activeGroupRef.current !== curGroup) return 0;
-      const incomingOlder = res.messages ?? [];
+      const incomingOlder = (res.messages ?? []).filter(
+        (m) => !deletedForMeIdsRef.current.has(m.id),
+      );
       setHasMoreOlderGroupMessages(Boolean(res.hasMore));
       if (!incomingOlder.length) return 0;
       await prewarmDecryptedGroupBatch(incomingOlder, curGroup);
       if (activeGroupRef.current !== curGroup) return 0;
       const beforeCount = (groupMessagesRef.current ?? []).length;
-      const merged = mergeMessagesById(incomingOlder, groupMessagesRef.current ?? []);
+      const merged = mergeMessagesById(
+        incomingOlder.filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+        (groupMessagesRef.current ?? []).filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+      );
       setGroupMessagesQuery(merged);
       return Math.max(0, merged.length - beforeCount);
     } catch {
@@ -513,11 +599,16 @@ export function useTursoReactiveSession(
         { beforeTs: oldestTs, limit: 120 },
         { slotId: slotIdRef.current },
       );
-      const incomingOlder = res.messages ?? [];
+      const incomingOlder = (res.messages ?? []).filter(
+        (m) => !deletedForMeIdsRef.current.has(m.id),
+      );
       setHasMoreOlderCommunityMessages(Boolean(res.hasMore));
       if (!incomingOlder.length) return 0;
       const beforeCount = (communityMessagesRef.current ?? []).length;
-      const merged = mergeMessagesById(incomingOlder, communityMessagesRef.current ?? []);
+      const merged = mergeMessagesById(
+        incomingOlder,
+        (communityMessagesRef.current ?? []).filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+      );
       setCommunityMessagesQuery(merged);
       return Math.max(0, merged.length - beforeCount);
     } catch {
@@ -595,15 +686,43 @@ export function useTursoReactiveSession(
         );
       }
       if (res.changedDmMessages?.length && activeChatRef.current === curChat) {
-        setActiveMessagesQuery((prev) => mergeMessagesById(prev, res.changedDmMessages!));
+        const visibleDm = res.changedDmMessages.filter(
+          (m) => !deletedForMeIdsRef.current.has(m.id),
+        );
+        if (visibleDm.length) {
+          setActiveMessagesQuery((prev) =>
+            mergeMessagesById(
+              prev?.filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+              visibleDm,
+            ),
+          );
+        }
       }
       if (res.changedGroupMessages?.length && activeGroupRef.current === curGroup) {
-        setGroupMessagesQuery((prev) => mergeMessagesById(prev, res.changedGroupMessages!));
+        const visibleGroup = res.changedGroupMessages.filter(
+          (m) => !deletedForMeIdsRef.current.has(m.id),
+        );
+        if (visibleGroup.length) {
+          setGroupMessagesQuery((prev) =>
+            mergeMessagesById(
+              prev?.filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+              visibleGroup,
+            ),
+          );
+        }
       }
       if (res.changedCommunityMessages?.length) {
-        setCommunityMessagesQuery((prev) =>
-          mergeMessagesById(prev, res.changedCommunityMessages!),
+        const visibleComm = res.changedCommunityMessages.filter(
+          (m) => !deletedForMeIdsRef.current.has(m.id),
         );
+        if (visibleComm.length) {
+          setCommunityMessagesQuery((prev) =>
+            mergeMessagesById(
+              prev?.filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+              visibleComm,
+            ),
+          );
+        }
       }
       if (res.groups) {
         const nextGroups = res.groups;
@@ -875,9 +994,14 @@ export function useTursoReactiveSession(
       },
 
       deleteForMeMut: async (args: { messageId: string }) => {
+        markDeletedForMe(args.messageId);
+        let capturedRaw: ChatMessage | undefined;
         setActiveMessagesQuery((prev) => {
           const found = prev?.find((m) => m.id === args.messageId);
-          if (found) hiddenRawDmRef.current.set(args.messageId, found);
+          if (found) {
+            capturedRaw = found;
+            hiddenRawDmRef.current.set(args.messageId, found);
+          }
           return prev?.filter((m) => m.id !== args.messageId);
         });
         const hidePromise = tursoRpc("deleteMessageForMe", args, { slotId }).finally(() => {
@@ -886,10 +1010,19 @@ export function useTursoReactiveSession(
           }
         });
         inFlightHideRpcRef.current.set(args.messageId, hidePromise);
-        await hidePromise;
+        try {
+          await hidePromise;
+        } catch (err) {
+          unmarkDeletedForMe(args.messageId);
+          if (capturedRaw) {
+            setActiveMessagesQuery((prev) => mergeMessagesById(prev ?? [], [capturedRaw!]));
+          }
+          throw err;
+        }
       },
 
       restoreForMeMut: async (args: { message: ChatMessage }) => {
+        unmarkDeletedForMe(args.message.id);
         const rawToRestore = hiddenRawDmRef.current.get(args.message.id) ?? args.message;
         hiddenRawDmRef.current.delete(args.message.id);
         setActiveMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
@@ -898,6 +1031,7 @@ export function useTursoReactiveSession(
           await pendingHide.catch(() => undefined);
         }
         await tursoRpc("restoreMessageForMe", { messageId: args.message.id }, { slotId });
+        unmarkDeletedForMe(args.message.id);
         setActiveMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
       },
 
@@ -1294,9 +1428,14 @@ export function useTursoReactiveSession(
       },
 
       deleteCommunityForMeMut: async (args: { messageId: string }) => {
+        markDeletedForMe(args.messageId);
+        let capturedRaw: CommunityMessage | undefined;
         setCommunityMessagesQuery((prev) => {
           const found = prev?.find((m) => m.id === args.messageId);
-          if (found) hiddenRawCommunityRef.current.set(args.messageId, found);
+          if (found) {
+            capturedRaw = found;
+            hiddenRawCommunityRef.current.set(args.messageId, found);
+          }
           return prev?.filter((m) => m.id !== args.messageId);
         });
         const hidePromise = tursoRpc(
@@ -1309,10 +1448,19 @@ export function useTursoReactiveSession(
           }
         });
         inFlightHideRpcRef.current.set(args.messageId, hidePromise);
-        await hidePromise;
+        try {
+          await hidePromise;
+        } catch (err) {
+          unmarkDeletedForMe(args.messageId);
+          if (capturedRaw) {
+            setCommunityMessagesQuery((prev) => mergeMessagesById(prev ?? [], [capturedRaw!]));
+          }
+          throw err;
+        }
       },
 
       restoreCommunityForMeMut: async (args: { message: CommunityMessage }) => {
+        unmarkDeletedForMe(args.message.id);
         const rawToRestore = hiddenRawCommunityRef.current.get(args.message.id) ?? args.message;
         hiddenRawCommunityRef.current.delete(args.message.id);
         setCommunityMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
@@ -1325,6 +1473,7 @@ export function useTursoReactiveSession(
           { messageId: args.message.id, action: "unhideForMe" },
           { slotId },
         );
+        unmarkDeletedForMe(args.message.id);
         setCommunityMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
       },
 
@@ -1489,9 +1638,14 @@ export function useTursoReactiveSession(
       },
 
       deleteGroupForMeMut: async (args: { messageId: string }) => {
+        markDeletedForMe(args.messageId);
+        let capturedRaw: GroupMessage | undefined;
         setGroupMessagesQuery((prev) => {
           const found = prev?.find((m) => m.id !== undefined && m.id === args.messageId);
-          if (found) hiddenRawGroupRef.current.set(args.messageId, found);
+          if (found) {
+            capturedRaw = found;
+            hiddenRawGroupRef.current.set(args.messageId, found);
+          }
           return prev?.filter((m) => m.id !== args.messageId);
         });
         const hidePromise = tursoRpc(
@@ -1504,10 +1658,19 @@ export function useTursoReactiveSession(
           }
         });
         inFlightHideRpcRef.current.set(args.messageId, hidePromise);
-        await hidePromise;
+        try {
+          await hidePromise;
+        } catch (err) {
+          unmarkDeletedForMe(args.messageId);
+          if (capturedRaw) {
+            setGroupMessagesQuery((prev) => mergeMessagesById(prev ?? [], [capturedRaw!]));
+          }
+          throw err;
+        }
       },
 
       restoreGroupForMeMut: async (args: { message: GroupMessage }) => {
+        unmarkDeletedForMe(args.message.id);
         const rawToRestore = hiddenRawGroupRef.current.get(args.message.id) ?? args.message;
         hiddenRawGroupRef.current.delete(args.message.id);
         setGroupMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
@@ -1520,6 +1683,7 @@ export function useTursoReactiveSession(
           { messageId: args.message.id, action: "unhideForMe" },
           { slotId },
         );
+        unmarkDeletedForMe(args.message.id);
         setGroupMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
       },
 
@@ -1741,7 +1905,7 @@ export function useTursoReactiveSession(
           { otherId },
           { slotId },
         );
-        return res.messages;
+        return (res.messages ?? []).filter((m) => !deletedForMeIdsRef.current.has(m.id));
       },
 
       queryGroupMessages: async (groupId: string) => {
@@ -1750,7 +1914,7 @@ export function useTursoReactiveSession(
           { groupId },
           { slotId },
         );
-        return res.messages;
+        return (res.messages ?? []).filter((m) => !deletedForMeIdsRef.current.has(m.id));
       },
 
       queryGroupDetails: async (groupId: string) => {
@@ -1797,7 +1961,7 @@ export function useTursoReactiveSession(
         return res.vault;
       },
     }),
-    [slotId],
+    [markDeletedForMe, slotId, unmarkDeletedForMe],
   );
 
   return {

@@ -12,6 +12,14 @@ function isMobileViewport(): boolean {
   );
 }
 
+export function isSoftKeyboardCurrentlyOpen(): boolean {
+  if (typeof window === "undefined") return false;
+  if (!isMobileViewport()) return true;
+  const vv = window.visualViewport;
+  if (!vv) return true;
+  return window.innerHeight - vv.height > 100;
+}
+
 /**
  * Keeps a `.messages` scroll container:
  * 1) Automatically scrolled to the newest message whenever new messages arrive at the bottom.
@@ -186,14 +194,25 @@ export function useChatAutoScrollAndKeyboard({
       typeof ResizeObserver !== "undefined" ? new ResizeObserver(onContainerResize) : null;
     ro?.observe(el);
 
+    let wasMobileKeyboardOpen = false;
     const onImeEvent = (ev: Event) => {
       const detail = (ev as CustomEvent<{ open?: boolean }>).detail;
       if (detail?.open) {
+        wasMobileKeyboardOpen = true;
         const composerFocused =
           composerRef.current !== null && document.activeElement === composerRef.current;
         if (composerFocused || wasPinnedRef.current) {
           pinToBottomNow();
           window.requestAnimationFrame(pinToBottomNow);
+        }
+      } else if (detail?.open === false) {
+        wasMobileKeyboardOpen = false;
+        if (
+          isMobileViewport() &&
+          composerRef.current !== null &&
+          document.activeElement === composerRef.current
+        ) {
+          composerRef.current.blur();
         }
       }
     };
@@ -201,6 +220,18 @@ export function useChatAutoScrollAndKeyboard({
     const vv = typeof window !== "undefined" ? window.visualViewport : null;
     const onVisualViewportResize = () => {
       if (!isMobileViewport()) return;
+      const kbInset = vv ? window.innerHeight - vv.height : 0;
+      if (kbInset > 100) {
+        wasMobileKeyboardOpen = true;
+      } else if (wasMobileKeyboardOpen && kbInset < 32) {
+        wasMobileKeyboardOpen = false;
+        if (
+          composerRef.current !== null &&
+          document.activeElement === composerRef.current
+        ) {
+          composerRef.current.blur();
+        }
+      }
       const composerFocused =
         composerRef.current !== null && document.activeElement === composerRef.current;
       if (composerFocused || wasPinnedRef.current) {

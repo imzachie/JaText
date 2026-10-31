@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import { ACCOUNT_SLOT_CHANGE_EVENT, getScopedStorageKey } from "./accountManager";
 
 export type BubbleStyleId =
@@ -319,6 +320,30 @@ export function saveCachedWallpaper(scopeKey: string, url: string | null): void 
   }
 }
 
+function checkIsMobileWallpaperViewport(): boolean {
+  if (typeof window === "undefined") return false;
+  if (Capacitor.isNativePlatform()) return true;
+  return Boolean(window.matchMedia?.("(max-width: 820px)")?.matches);
+}
+
 export function useIsMobileWallpaperSupported(): boolean {
-  return true;
+  const [supported, setSupported] = useState<boolean>(() => checkIsMobileWallpaperViewport());
+
+  useEffect(() => {
+    if (typeof window === "undefined" || Capacitor.isNativePlatform()) {
+      setSupported(checkIsMobileWallpaperViewport());
+      return;
+    }
+    const mq = window.matchMedia?.("(max-width: 820px)");
+    const sync = () => setSupported(checkIsMobileWallpaperViewport());
+    sync();
+    mq?.addEventListener?.("change", sync);
+    window.addEventListener("resize", sync);
+    return () => {
+      mq?.removeEventListener?.("change", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, []);
+
+  return supported;
 }

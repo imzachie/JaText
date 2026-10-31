@@ -40,11 +40,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -64,6 +67,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -184,6 +189,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        window.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
         activeActivityRef = WeakReference(this)
 
         // Register global Coil GIF / Animated WebP decoder + OkHttp Range reassembly & NETSCAPE2.0 loop=0
@@ -346,6 +355,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        window.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
         activeActivityRef = WeakReference(this)
         sessionViewModel.onActivityResumed()
     }
@@ -423,12 +436,29 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun JaTextRootHost(
     activity: MainActivity,
     vm: JaTextSessionViewModel,
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val isImeVisible = WindowInsets.isImeVisible
+    var wasImeVisible by remember { mutableStateOf(false) }
+
+    // Whenever the user closes/dismisses the soft keyboard, immediately release focus from
+    // any BasicTextField/TextField so Android NEVER re-opens the keyboard on its own!
+    LaunchedEffect(isImeVisible) {
+        if (isImeVisible) {
+            wasImeVisible = true
+        } else if (wasImeVisible) {
+            wasImeVisible = false
+            focusManager.clearFocus(force = true)
+        }
+    }
+
     val state by vm.state.collectAsState()
     val palette = LocalJaTextPalette.current
 
@@ -437,6 +467,18 @@ private fun JaTextRootHost(
     var verifyingPeerCode by remember { mutableStateOf<JaUser?>(null) }
     var showGroupMembers by remember { mutableStateOf(false) }
     var showPermissionsModal by remember { mutableStateOf(false) }
+
+    val anyRootModalOpen =
+        viewingPeerProfile != null ||
+            verifyingPeerCode != null ||
+            showGroupMembers ||
+            showPermissionsModal ||
+            state.showPostUpdateWelcome
+
+    LaunchedEffect(anyRootModalOpen, showSettings, state.activeChatId, state.activeGroupId) {
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+    }
 
     val requiredPermissions = remember {
         buildList {

@@ -445,6 +445,28 @@ fun ChatThreadScreen(
     var confirmUnfriendTarget by remember { mutableStateOf<JaUser?>(null) }
     var confirmDeleteGroupTarget by remember { mutableStateOf<GroupSummary?>(null) }
 
+    val anyThreadOverlayOpen =
+        contextMenuMessage != null ||
+            emojiPickerTargetMessageId != null ||
+            forwardingItem != null ||
+            fullscreenImageModel != null ||
+            showOverflowMenu ||
+            showStickerSheet ||
+            showBubbleStyleModal ||
+            showWallpaperModal ||
+            showCreatePollModal ||
+            pollVotersTarget != null ||
+            showModeratorsModal ||
+            confirmUnfriendTarget != null ||
+            confirmDeleteGroupTarget != null
+
+    LaunchedEffect(anyThreadOverlayOpen) {
+        if (anyThreadOverlayOpen) {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+        }
+    }
+
     // Voice Note Recorder
     val recorder = remember { VoiceNoteRecorderController(context) }
     var isRecordingVoice by remember { mutableStateOf(false) }
@@ -1591,11 +1613,9 @@ fun ChatThreadScreen(
                         }
                     }
                 }
-                if (!isCommunity) {
-                    MessageSheetAction(WebUiIconKind.Trash, "Delete for me", tint = palette.danger) {
-                        vm.deleteMessageForMe(msg.id)
-                        contextMenuMessage = null
-                    }
+                MessageSheetAction(WebUiIconKind.Trash, "Delete for me", tint = palette.danger) {
+                    vm.deleteMessageForMe(msg.id)
+                    contextMenuMessage = null
                 }
                 Spacer(Modifier.height(12.dp))
             }
