@@ -124,10 +124,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.5.4",
+    date: "October 31, 2026",
+    headline: "Seamless Desktop & Mobile E2EE Keyring Sync, Stroked SVG Chat Menu & Wallpaper Event Pills",
+    latest: true,
+    bullets: [
+      "Unified multi-device E2EE keyring auto-sync and live Turso delta sync across Desktop Web and Native Android so messages sent from either device decrypt immediately with zero waiting.",
+      "Upgraded the mobile 3-dots chat menu to JaText's crisp stroked SVG vector icons, rendered shared wallpaper updates as clean event pills, and added a one-tap Sync Messages & Keys action.",
+    ],
+  },
+  {
     version: "v3.5.3",
     date: "October 31, 2026",
     headline: "24 Vector Mascot Bubble Styles, Wallpaper-Tinted Contact Cards, Rich Media & Full Web UI Parity",
-    latest: true,
     bullets: [
       "Ported all 24 Web vector mascot and illustrated bubble styles, real shared chat wallpapers that tint contact headers and profile cards, Markdown bios on both Web and Android, and 1:1 Customise Theme, Socials, Legal Policies, and JaText Community announcement layouts.",
       "Fixed mobile image, inline video, and voice note attachments, decrypted quoted reply previews, added Sent / Delivered / Read text receipts, Group Seen by avatars, Group PFP uploads, Sticker & Emoji Favourites and Most Used tabs, OpenGraph link embed images, Call event cards, and a freely draggable floating call bubble.",

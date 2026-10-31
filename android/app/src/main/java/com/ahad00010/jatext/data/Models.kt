@@ -492,10 +492,17 @@ data class SyncSocialPayload(
 )
 
 @Serializable
+data class SyncStickersPayload(
+    val stickerFavorites: List<StickerMedia> = emptyList(),
+    val recentStickers: List<StickerMedia> = emptyList(),
+)
+
+@Serializable
 data class SyncResponse(
     val serverTime: Long = 0L,
     val me: JaUser? = null,
     val social: SyncSocialPayload? = null,
+    val stickers: SyncStickersPayload? = null,
     val changedDmMessages: List<ChatMessage>? = null,
     val changedGroupMessages: List<GroupMessage>? = null,
     val changedCommunityMessages: List<CommunityMessage>? = null,
@@ -503,6 +510,54 @@ data class SyncResponse(
     val groupTypingUsers: List<ChatTypingUser> = emptyList(),
     val communityTypingUsers: List<ChatTypingUser> = emptyList(),
     val refreshedToken: String? = null,
+)
+
+@Serializable
+data class E2EEVaultGroupEpoch(
+    val groupId: String = "",
+    val epoch: Int = 1,
+    val secretB64: String = "",
+    val createdAt: Long = 0L,
+)
+
+@Serializable
+data class E2EEVaultContents(
+    val v: Int = 1,
+    val userId: String = "",
+    val primaryIdentity: StoredIdentityRecord = StoredIdentityRecord(),
+    val previousIdentities: List<StoredIdentityRecord> = emptyList(),
+    val groupEpochs: List<E2EEVaultGroupEpoch> = emptyList(),
+    val exportedAt: Long = 0L,
+)
+
+@Serializable
+data class SealedAutoSyncKeyring(
+    val v: Int = 1,
+    val userId: String = "",
+    val keyIds: List<String> = emptyList(),
+    val iv: String = "",
+    val ct: String = "",
+    val updatedAt: Long = 0L,
+)
+
+@Serializable
+data class SealedVaultWrap(
+    val salt: String = "",
+    val iterations: Int = 600_000,
+    val iv: String = "",
+    val ct: String = "",
+)
+
+@Serializable
+data class SealedE2EEVault(
+    val v: Int = 1,
+    val userId: String = "",
+    val keyId: String = "",
+    val pinWrap: SealedVaultWrap = SealedVaultWrap(),
+    val recoveryWrap: SealedVaultWrap = SealedVaultWrap(),
+    val vaultIv: String = "",
+    val vaultCt: String = "",
+    val updatedAt: Long = 0L,
 )
 
 @Serializable

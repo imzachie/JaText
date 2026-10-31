@@ -1551,6 +1551,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         grpTypingRes,
         commTypingRes,
         myGroupsCheck,
+        stickerDeltaRes,
       ] = await Promise.all([
         db.execute({
           sql: `SELECT id FROM messages WHERE (receiver_id = ? OR sender_id = ?) AND updated_at > ? LIMIT 1`,
@@ -1595,6 +1596,10 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
                 WHERE gm.user_id = ? AND (gm.updated_at > ? OR g.updated_at > ? OR m.id IS NOT NULL)
                 LIMIT 1`,
           args: [sinceTs, meId, sinceTs, sinceTs],
+        }),
+        db.execute({
+          sql: `SELECT 1 FROM sticker_library WHERE user_id = ? AND updated_at > ? LIMIT 1`,
+          args: [meId, sinceTs],
         }),
         args.touchPresence
           ? db.execute({
@@ -1676,15 +1681,17 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           .map((u) => ({ id: u.id, displayName: u.displayName, username: u.username }));
       };
 
-      const [groupTypingUsers, communityTypingUsers] = await Promise.all([
+      const [groupTypingUsers, communityTypingUsers, stickersDelta] = await Promise.all([
         mapTypingUsers(grpTypingRes.rows),
         mapTypingUsers(commTypingRes.rows),
+        stickerDeltaRes.rows.length > 0 ? getStickersForUser(db, meId) : Promise.resolve(null),
       ]);
 
       return {
         serverTime: syncStartedAt,
         ...(Number(meRow.updated_at) > sinceTs ? { me: mapUserRow(meRow, true) } : {}),
         ...(social ? { social } : {}),
+        ...(stickersDelta ? { stickers: stickersDelta } : {}),
         ...(changedDmMessages.length ? { changedDmMessages } : {}),
         ...(changedGroupMessages.length ? { changedGroupMessages } : {}),
         ...(changedCommunityMessages.length ? { changedCommunityMessages } : {}),

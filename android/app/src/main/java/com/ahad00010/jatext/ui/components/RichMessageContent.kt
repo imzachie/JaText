@@ -1261,6 +1261,19 @@ private fun parseHexThemeColor(hex: String?, fallback: Color): Color {
 /**
  * Full Markdown + Mention + Link + OpenGraph Image Embed renderer (used for messages AND user bios!).
  */
+private fun sanitizeInternalTextBeforeMarkdown(raw: String): String {
+    val clean = JaTextCryptoEngine.stripBubbleStyleFromText(raw)
+    JaTextCryptoEngine.parseWallpaperSignal(clean, null)?.let { wp ->
+        val actor = wp.actorName?.takeIf { it.isNotBlank() }
+        val action = if (wp.kind == "none") "cleared the chat wallpaper" else "changed the chat wallpaper"
+        return if (actor != null) "$actor $action" else action.replaceFirstChar { it.uppercase() }
+    }
+    if (clean.startsWith(JaTextCryptoEngine.WALLPAPER_PREFIX)) {
+        return "Updated chat wallpaper"
+    }
+    return clean
+}
+
 @Composable
 fun RichMarkdownText(
     text: String,
@@ -1273,9 +1286,10 @@ fun RichMarkdownText(
     onNonLinkTap: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    val blocks = remember(text) { parseMarkdownBlocks(text) }
-    val firstUrl = remember(text, showLinkEmbeds) {
-        if (showLinkEmbeds) URL_REGEX.find(text)?.value else null
+    val safeText = remember(text) { sanitizeInternalTextBeforeMarkdown(text) }
+    val blocks = remember(safeText) { parseMarkdownBlocks(safeText) }
+    val firstUrl = remember(safeText, showLinkEmbeds) {
+        if (showLinkEmbeds) URL_REGEX.find(safeText)?.value else null
     }
     val codeBg = if (isLightSurface) Color(0x18000000) else Color(0x2E000000)
     val linkTint = if (isLightSurface) textColor else textColor

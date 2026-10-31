@@ -1,4 +1,5 @@
 import { Fragment, memo, useState, type ReactNode } from "react";
+import { parseWallpaperSignal, WALLPAPER_PREFIX } from "../lib/chatCustomization";
 import type { GroupMember, JaUser } from "../lib/types";
 import { CheckIcon, CopyIcon } from "./UiIcons";
 
@@ -759,7 +760,19 @@ export const MessageMarkdown = memo(function MessageMarkdown({
   className?: string;
   mentionContext?: MarkdownMentionContext;
 }) {
-  const blocks = parseBlocks(text, mine, mentionContext);
+  const safeText = (() => {
+    const wp = parseWallpaperSignal(text, null);
+    if (wp) {
+      const actor = wp.actorName?.trim();
+      const action = wp.kind === "none" ? "cleared the chat wallpaper" : "changed the chat wallpaper";
+      return actor ? `${actor} ${action}` : action.charAt(0).toUpperCase() + action.slice(1);
+    }
+    if (text.trimStart().startsWith(WALLPAPER_PREFIX)) {
+      return "Updated chat wallpaper";
+    }
+    return text;
+  })();
+  const blocks = parseBlocks(safeText, mine, mentionContext);
   return (
     <div className={`md-body ${mine ? "mine" : "theirs"} ${className ?? ""}`}>
       {blocks}

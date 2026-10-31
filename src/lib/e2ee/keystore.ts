@@ -850,6 +850,7 @@ export async function importRestoredVaultContents(contents: E2EEVaultContents): 
     backedUpKeyId: contents.primaryIdentity.keyId,
   };
   decryptedMessageCache.clear();
+  decryptedByWireCache.clear();
   failedDecryptRetryAt.clear();
   await writePersistedState(activeState);
   notifyListeners();
@@ -972,6 +973,7 @@ export async function mergeAutoSyncedKeyring(
       backedUpKeyId: canonicalPrimary.keyId,
     };
     decryptedMessageCache.clear();
+    decryptedByWireCache.clear();
     failedDecryptRetryAt.clear();
     await writePersistedState(activeState);
     notifyListeners();

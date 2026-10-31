@@ -116,6 +116,8 @@ import com.ahad00010.jatext.ui.components.RichMarkdownText
 import com.ahad00010.jatext.ui.components.jaBouncyClick
 import com.ahad00010.jatext.ui.icons.SOCIAL_PLATFORM_SPECS
 import com.ahad00010.jatext.ui.icons.SocialBrandVectorIcon
+import com.ahad00010.jatext.ui.icons.WebUiIconKind
+import com.ahad00010.jatext.ui.icons.WebUiSvgIcon
 import com.ahad00010.jatext.ui.icons.WebsiteGlobeVectorIcon
 import com.ahad00010.jatext.ui.icons.getSocialPlatformMeta
 import com.ahad00010.jatext.ui.theme.AVATAR_COLOR_SPECS
@@ -695,8 +697,12 @@ fun SettingsModalScreen(
                         }
 
                         "encryption" -> {
+                            var showVaultUnlock by remember { mutableStateOf(false) }
+                            var useRecoveryMode by remember { mutableStateOf(false) }
+                            var vaultSecretInput by remember { mutableStateOf("") }
+
                             Text(
-                                text = "End-to-End Encryption",
+                                text = "End-to-End Encryption & Multi-Device Sync",
                                 color = palette.textPrimary,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
@@ -709,6 +715,73 @@ fun SettingsModalScreen(
                                 lineHeight = 19.sp,
                             )
                             Spacer(Modifier.height(16.dp))
+
+                            /* ---- Multi-Device Keyring Sync Card ---- */
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(palette.surface)
+                                    .border(1.dp, palette.borderStrong, RoundedCornerShape(16.dp))
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    WebUiSvgIcon(
+                                        kind = WebUiIconKind.RefreshSync,
+                                        tint = palette.accent,
+                                        size = 18.dp,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "Multi-Device Message & Key Sync",
+                                        color = palette.textPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.5.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(palette.success.copy(alpha = 0.16f))
+                                            .padding(horizontal = 9.dp, vertical = 3.dp)
+                                    ) {
+                                        Text(
+                                            text = "Auto-Sync On",
+                                            color = palette.success,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "Your account keyring automatically converges across Desktop Web and Android Mobile so messages sent from either device decrypt immediately. Tap below anytime to force an instant re-sync.",
+                                    color = palette.textSecondary,
+                                    fontSize = 12.8.sp,
+                                    lineHeight = 18.sp,
+                                )
+                                JaWebPrimaryButton(
+                                    text = if (state.isSyncingKeysAndMessages) {
+                                        "Syncing Messages & Keys…"
+                                    } else {
+                                        "Sync Messages & Keys Now"
+                                    },
+                                    onClick = { vm.syncMessagesAndKeysNow() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !state.isSyncingKeysAndMessages,
+                                    leading = {
+                                        WebUiSvgIcon(
+                                            kind = WebUiIconKind.RefreshSync,
+                                            tint = palette.onAccent,
+                                            size = 16.dp,
+                                        )
+                                    },
+                                )
+                            }
+
+                            Spacer(Modifier.height(14.dp))
+
+                            /* ---- Active Identity Key Card ---- */
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -718,12 +791,26 @@ fun SettingsModalScreen(
                                     .padding(14.dp)
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Rounded.Lock, null, tint = palette.accent, modifier = Modifier.size(18.dp))
+                                    WebUiSvgIcon(
+                                        kind = WebUiIconKind.ShieldCheck,
+                                        tint = palette.accent,
+                                        size = 18.dp,
+                                    )
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Active Device Identity Key", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text(
+                                        text = "Active Account Identity Key",
+                                        color = palette.textPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                    )
                                 }
                                 Spacer(Modifier.height(8.dp))
-                                Text("Key ID: ${state.myKeyId}", color = palette.textSecondary, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                Text(
+                                    text = "Key ID: ${state.myKeyId}",
+                                    color = palette.textSecondary,
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
                                     text = "Fingerprint: ${state.myKeyFingerprint}",
@@ -731,6 +818,88 @@ fun SettingsModalScreen(
                                     fontSize = 12.5.sp,
                                     fontFamily = FontFamily.Monospace,
                                 )
+                            }
+
+                            Spacer(Modifier.height(14.dp))
+
+                            /* ---- Optional E2EE Backup Vault Unlock (PIN / 24-Char Recovery Key) ---- */
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(palette.surface)
+                                    .border(1.dp, palette.borderStrong, RoundedCornerShape(16.dp))
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    WebUiSvgIcon(
+                                        kind = WebUiIconKind.Unlock,
+                                        tint = palette.accent,
+                                        size = 18.dp,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "E2EE Cloud Backup Vault",
+                                        color = palette.textPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    JaWebGhostButton(
+                                        text = if (showVaultUnlock) "Hide" else "Unlock Vault",
+                                        onClick = { showVaultUnlock = !showVaultUnlock },
+                                    )
+                                }
+                                Text(
+                                    text = if (state.hasRemoteE2EEVault) {
+                                        "Encrypted E2EE Backup Vault detected on your account. If you ever created a PIN or 24-character Recovery Key backup on Desktop, you can also unlock it here."
+                                    } else {
+                                        "If you saved an encrypted E2EE Backup Vault with a PIN or 24-character Recovery Key on Desktop, you can unlock it here."
+                                    },
+                                    color = palette.textSecondary,
+                                    fontSize = 12.5.sp,
+                                    lineHeight = 17.5.sp,
+                                )
+                                if (showVaultUnlock) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        JaWebGhostButton(
+                                            text = "Backup PIN",
+                                            onClick = { useRecoveryMode = false },
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        JaWebGhostButton(
+                                            text = "Recovery Key",
+                                            onClick = { useRecoveryMode = true },
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                    JaWebInput(
+                                        value = vaultSecretInput,
+                                        onValueChange = { vaultSecretInput = it },
+                                        placeholder = if (useRecoveryMode) {
+                                            "XXXXXX-XXXXXX-XXXXXX-XXXXXX"
+                                        } else {
+                                            "Enter your E2EE Vault PIN / passphrase"
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    JaWebPrimaryButton(
+                                        text = if (state.isSyncingKeysAndMessages) "Unlocking…" else "Unlock Vault & Sync",
+                                        onClick = {
+                                            vm.restoreE2EEVault(
+                                                secretInput = vaultSecretInput,
+                                                useRecoveryKey = useRecoveryMode,
+                                                onSuccess = {
+                                                    vaultSecretInput = ""
+                                                    showVaultUnlock = false
+                                                },
+                                            )
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !state.isSyncingKeysAndMessages && vaultSecretInput.isNotBlank(),
+                                    )
+                                }
                             }
                         }
 
