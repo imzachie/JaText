@@ -2060,7 +2060,7 @@ class JaTextSessionViewModel(app: Application) :
                                         attachmentUrl = null,
                                         attachmentName = null,
                                         attachmentType = null,
-                                        encryptedAttachment = null,
+                                        encryptedAttachmentJson = null,
                                         unsentAt = System.currentTimeMillis(),
                                         reactions = emptyList(),
                                     )
@@ -2079,7 +2079,7 @@ class JaTextSessionViewModel(app: Application) :
                                         attachmentUrl = null,
                                         attachmentName = null,
                                         attachmentType = null,
-                                        encryptedAttachment = null,
+                                        encryptedAttachmentJson = null,
                                         unsentAt = System.currentTimeMillis(),
                                         reactions = emptyList(),
                                     )
