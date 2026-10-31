@@ -12,6 +12,7 @@ import {
 } from "./e2ee/cryptoPrimitives";
 import {
   ensureUserE2EEInitialized,
+  exportCurrentVaultContents,
   importRestoredVaultContents,
 } from "./e2ee/keystore";
 import {
@@ -20,6 +21,8 @@ import {
 } from "./e2ee/messagePipeline";
 import type { ChatMessage, GroupMessage } from "./types";
 import {
+  exportAllCachedWallpapers,
+  getSavedOutgoingBubbleStyle,
   isValidBubbleStyleId,
   saveCachedWallpaper,
   saveOutgoingBubbleStyle,
@@ -304,3 +307,166 @@ export async function decryptAndHydrateLinkedWebSession(
     );
   }
 }
+
+/* ================================================================== */
+/* Primary Mobile -> Desktop Web QR Linking & Device Management        */
+/* ================================================================== */
+
+export interface LinkedWebDeviceInfo {
+  id: string;
+  deviceLabel: string;
+  browserName: string;
+  osName: string;
+  linkedAt: number;
+  lastActiveAt: number;
+}
+
+export async function listLinkedWebDevices(): Promise<{
+  devices: LinkedWebDeviceInfo[];
+  maxDevices: number;
+}> {
+  const res = await tursoRpc<{
+    devices?: LinkedWebDeviceInfo[];
+    maxDevices?: number;
+  }>("listLinkedDevices", {});
+  return {
+    devices: Array.isArray(res?.devices) ? res.devices : [],
+    maxDevices: typeof res?.maxDevices === "number" ? res.maxDevices : 5,
+  };
+}
+
+export async function disconnectLinkedWebDevice(deviceId: string): Promise<void> {
+  await tursoRpc("disconnectLinkedDevice", { deviceId });
+}
+
+export async function approveQrPairingFromPrimaryMobile(
+  rawQrPayload: string,
+  userId: string,
+): Promise<{
+  linkedDeviceId: string;
+  browserName: string;
+  osName: string;
+}> {
+  const trimmed = rawQrPayload.trim();
+  const parts = trimmed.split("|");
+  if (parts.length < 4 || parts[0] !== QR_LINK_PREFIX) {
+    throw new Error(
+      "That QR code is not a valid JaText Web login code. Open jatext.vercel.app/chats on your computer and scan the QR code shown there.",
+    );
+  }
+  const [, pairingId, linkSecret, webDhPubB64] = parts;
+  if (!pairingId || !linkSecret || !webDhPubB64) {
+    throw new Error("Incomplete JaText QR code payload. Refresh the QR code on your computer and try again.");
+  }
+
+  // Step 1: Claim session so Desktop Web immediately shows encrypted sync progress
+  const claimed = await tursoRpc<{
+    ok: boolean;
+    webDhPubB64: string;
+    browserName: string;
+    osName: string;
+  }>("claimDeviceLinkSession", {
+    pairingId,
+    linkSecret,
+  });
+
+  // Step 2: Export E2EE keyring + outgoing bubble style + wallpapers
+  await ensureUserE2EEInitialized(userId);
+  const vault = exportCurrentVaultContents();
+  if (!vault) {
+    throw new Error("Your local encryption keyring is still initializing. Please try scanning again in a moment.");
+  }
+
+  const rawWallpapers = exportAllCachedWallpapers();
+  const wallpapers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rawWallpapers)) {
+    if (typeof v === "string" && v.length > 0) {
+      wallpapers[k] = v;
+    }
+  }
+
+  const plainBundle: PlainDeviceLinkBundle = {
+    v: 1,
+    userId,
+    vault,
+    outgoingBubbleStyle: getSavedOutgoingBubbleStyle(),
+    wallpapers,
+  };
+
+  // Step 3: Seal with ephemeral ECDH P-256 + HKDF-SHA256 + AES-256-GCM
+  const subtle = globalThis.crypto.subtle;
+  const peerPub = await subtle.importKey(
+    "raw",
+    toAb(base64UrlToBytes(claimed.webDhPubB64 || webDhPubB64)),
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    [],
+  );
+  const epkPair = await subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    ["deriveBits"],
+  );
+  const epkRaw = new Uint8Array(await subtle.exportKey("raw", epkPair.publicKey));
+  const epk = bytesToBase64Url(epkRaw);
+
+  const sharedBits = await subtle.deriveBits(
+    { name: "ECDH", public: peerPub },
+    epkPair.privateKey,
+    256,
+  );
+  const hkdfBase = await subtle.importKey("raw", sharedBits, "HKDF", false, ["deriveKey"]);
+  const saltBuf = await subtle.digest("SHA-256", toAb(enc.encode(linkSecret)));
+  const infoBytes = enc.encode(`JaText-DeviceLink-Wrap-v1|${pairingId}`);
+  const aesKey = await subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: saltBuf,
+      info: toAb(infoBytes),
+    },
+    hkdfBase,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt"],
+  );
+
+  const ivBytes = randomBytes(12);
+  const aadBytes = enc.encode(`JaText-DeviceLink-AAD-v1|${pairingId}|${userId}`);
+  const ctBuf = await subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv: toAb(ivBytes),
+      additionalData: toAb(aadBytes),
+    },
+    aesKey,
+    toAb(enc.encode(JSON.stringify(plainBundle))),
+  );
+
+  const sealed: SealedDeviceLinkBundle = {
+    v: 1,
+    userId,
+    epk,
+    iv: bytesToBase64Url(ivBytes),
+    ct: bytesToBase64Url(new Uint8Array(ctBuf)),
+  };
+
+  // Step 4: Approve session and push zero-knowledge sealed vault bundle
+  const approved = await tursoRpc<{
+    ok: boolean;
+    linkedDeviceId: string;
+    browserName?: string;
+    osName?: string;
+  }>("approveDeviceLinkSession", {
+    pairingId,
+    linkSecret,
+    sealedBundleJson: JSON.stringify(sealed),
+  });
+
+  return {
+    linkedDeviceId: approved.linkedDeviceId,
+    browserName: approved.browserName || claimed.browserName || "Web Browser",
+    osName: approved.osName || claimed.osName || "",
+  };
+}
+

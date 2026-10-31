@@ -1,50 +1,65 @@
 import { useSyncExternalStore } from "react";
 import { Capacitor } from "@capacitor/core";
+import { isGenuineIosDevice, isIosChatsPathname } from "./iosDetection";
 
-export type JaTextWebRoute = "landing" | "chats";
+export type JaTextWebRoute =
+  | "landing"
+  | "chats"
+  | "ios_chats"
+  | "ios_unauthorized_404";
 
 export const OAUTH_RETURN_CHATS_FLAG = "jatext:oauth-return-chats";
+export const OAUTH_RETURN_IOS_CHATS_FLAG = "jatext:oauth-return-ios-chats";
 
 const listeners = new Set<() => void>();
 let popstateBound = false;
-let oauthLatchedToChats = false;
+let oauthLatchedRoute: "chats" | "ios_chats" | null = null;
 
-function promoteOAuthLandingUrlIfNeeded(): boolean {
-  if (typeof window === "undefined" || Capacitor.isNativePlatform()) return false;
+function promoteOAuthLandingUrlIfNeeded(): "chats" | "ios_chats" | null {
+  if (typeof window === "undefined" || Capacitor.isNativePlatform()) return null;
   const params = new URLSearchParams(window.location.search);
   const hasCode =
     params.has("code") || params.has("tursoToken") || params.has("authError");
-  let hasReturnFlag = false;
+  let hasDesktopReturnFlag = false;
+  let hasIosReturnFlag = false;
   try {
-    hasReturnFlag = window.sessionStorage.getItem(OAUTH_RETURN_CHATS_FLAG) === "1";
-    if (hasReturnFlag) {
+    hasDesktopReturnFlag = window.sessionStorage.getItem(OAUTH_RETURN_CHATS_FLAG) === "1";
+    hasIosReturnFlag = window.sessionStorage.getItem(OAUTH_RETURN_IOS_CHATS_FLAG) === "1";
+    if (hasDesktopReturnFlag) {
       window.sessionStorage.removeItem(OAUTH_RETURN_CHATS_FLAG);
+    }
+    if (hasIosReturnFlag) {
+      window.sessionStorage.removeItem(OAUTH_RETURN_IOS_CHATS_FLAG);
     }
   } catch {
     // ignore storage errors
   }
 
-  if (!hasCode && !hasReturnFlag) {
-    return false;
+  if (!hasCode && !hasDesktopReturnFlag && !hasIosReturnFlag) {
+    return null;
   }
 
-  oauthLatchedToChats = true;
+  const preferIos = hasIosReturnFlag || isGenuineIosDevice() || isIosChatsPathname();
+  const targetRoute: "chats" | "ios_chats" = preferIos ? "ios_chats" : "chats";
+  const targetPath = preferIos ? "/ios/chats" : "/chats";
+  oauthLatchedRoute = targetRoute;
+
   const pathname = window.location.pathname || "/";
-  if (pathname !== "/chats" && !pathname.startsWith("/chats/")) {
+  if (pathname !== targetPath && !pathname.startsWith(`${targetPath}/`)) {
     try {
       window.history.replaceState(
         null,
         "",
-        `/chats${window.location.search}${window.location.hash}`,
+        `${targetPath}${window.location.search}${window.location.hash}`,
       );
     } catch {
       // ignore history errors
     }
   }
-  return true;
+  return targetRoute;
 }
 
-// Run immediately at module load before ConvexAuthProvider reads window.location
+// Run immediately at module load before auth providers read window.location
 promoteOAuthLandingUrlIfNeeded();
 
 function emitRouteChange() {
@@ -61,7 +76,7 @@ function ensurePopstateListener() {
   if (popstateBound || typeof window === "undefined") return;
   popstateBound = true;
   window.addEventListener("popstate", () => {
-    oauthLatchedToChats = false;
+    oauthLatchedRoute = null;
     emitRouteChange();
   });
 }
@@ -76,11 +91,37 @@ export function resolveCurrentWebRoute(): JaTextWebRoute {
   }
 
   const pathname = window.location.pathname || "/";
+
+  // Strict authorization gate for /ios/chats: ONLY genuine iOS devices are permitted
+  if (isIosChatsPathname(pathname)) {
+    if (!isGenuineIosDevice()) {
+      return "ios_unauthorized_404";
+    }
+    return "ios_chats";
+  }
+
+  // If an iOS device navigates to /chats, seamlessly upgrade it to /ios/chats
   if (pathname === "/chats" || pathname.startsWith("/chats/")) {
+    if (isGenuineIosDevice()) {
+      try {
+        window.history.replaceState(
+          null,
+          "",
+          `/ios/chats${window.location.search}${window.location.hash}`,
+        );
+      } catch {
+        // ignore history errors
+      }
+      return "ios_chats";
+    }
     return "chats";
   }
 
-  if (oauthLatchedToChats || promoteOAuthLandingUrlIfNeeded()) {
+  const promoted = oauthLatchedRoute ?? promoteOAuthLandingUrlIfNeeded();
+  if (promoted === "ios_chats") {
+    return isGenuineIosDevice() ? "ios_chats" : "ios_unauthorized_404";
+  }
+  if (promoted === "chats") {
     return "chats";
   }
 
@@ -103,9 +144,28 @@ export function useJaTextWebRoute(): JaTextWebRoute {
   );
 }
 
+export function navigateToIosChats(): void {
+  if (typeof window === "undefined") return;
+  if (!Capacitor.isNativePlatform()) {
+    const pathname = window.location.pathname || "/";
+    if (!isIosChatsPathname(pathname)) {
+      window.history.pushState(null, "", "/ios/chats");
+    }
+    window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+  }
+  if (isGenuineIosDevice()) {
+    oauthLatchedRoute = "ios_chats";
+  }
+  emitRouteChange();
+}
+
 export function navigateToChats(): void {
   if (typeof window === "undefined") return;
-  oauthLatchedToChats = true;
+  if (!Capacitor.isNativePlatform() && isGenuineIosDevice()) {
+    navigateToIosChats();
+    return;
+  }
+  oauthLatchedRoute = "chats";
   if (!Capacitor.isNativePlatform()) {
     const pathname = window.location.pathname || "/";
     if (pathname !== "/chats" && !pathname.startsWith("/chats/")) {
@@ -118,7 +178,7 @@ export function navigateToChats(): void {
 
 export function navigateToLanding(): void {
   if (typeof window === "undefined" || Capacitor.isNativePlatform()) return;
-  oauthLatchedToChats = false;
+  oauthLatchedRoute = null;
   if (window.location.pathname !== "/") {
     window.history.pushState(null, "", "/");
   }

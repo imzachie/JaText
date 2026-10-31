@@ -8,6 +8,7 @@ import {
   setTursoTokenForSlot,
 } from "./accountManager";
 import { ensureValidFileMime } from "./imageUtils";
+import { isPrimaryMobileAppRuntime } from "./iosDetection";
 
 export const PUBLIC_TURSO_API_ORIGIN = (
   (import.meta.env.VITE_API_ORIGIN as string | undefined)?.trim().replace(/\/+$/, "") ||
@@ -414,8 +415,9 @@ export async function captureUrlOAuthCallbackIfPresent(
   url.searchParams.delete("authError");
   window.history.replaceState({}, "", url.pathname + url.search + url.hash);
 
-  // Web is strictly linked-device via Mobile QR; ignore direct OAuth tokens on Web.
-  if (!Capacitor.isNativePlatform()) {
+  // Desktop Web (/chats) is strictly linked-device via Mobile QR; primary mobile runtimes
+  // (Android APK and authorized iOS /ios/chats) accept direct OAuth callback tokens.
+  if (!isPrimaryMobileAppRuntime()) {
     return false;
   }
 

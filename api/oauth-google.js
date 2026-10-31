@@ -102,8 +102,9 @@ async function redirectWithError(res, platform, origin, message, mobileSession =
     });
     return res.end();
   }
+  const targetPath = platform === "ios_web" ? "/ios/chats" : "/chats";
   res.writeHead(302, {
-    Location: `${origin}/chats?authError=${encoded}`,
+    Location: `${origin}${targetPath}?authError=${encoded}`,
   });
   return res.end();
 }
@@ -283,7 +284,13 @@ export default async function handler(req, res) {
   const redirectUri = `${origin}/api/oauth-google`;
 
   if (action === "start" || (!req.query?.code && !req.query?.error)) {
-    const platform = req.query?.platform === "android" ? "android" : "web";
+    const rawPlatform = String(req.query?.platform || "");
+    const platform =
+      rawPlatform === "android"
+        ? "android"
+        : rawPlatform === "ios_web"
+          ? "ios_web"
+          : "web";
     const mobileSession =
       typeof req.query?.mobileSession === "string" &&
       /^[a-f0-9]{24,96}$/i.test(req.query.mobileSession.trim())
@@ -326,7 +333,12 @@ export default async function handler(req, res) {
   }
 
   const parsedState = verifyState(String(req.query?.state || ""));
-  const platform = parsedState?.platform === "android" ? "android" : "web";
+  const platform =
+    parsedState?.platform === "android"
+      ? "android"
+      : parsedState?.platform === "ios_web"
+        ? "ios_web"
+        : "web";
   const targetOrigin = parsedState?.origin || origin;
   const mobileSession = String(parsedState?.mobileSession || "");
 
@@ -411,8 +423,9 @@ export default async function handler(req, res) {
       return res.end();
     }
 
+    const webCallbackPath = platform === "ios_web" ? "/ios/chats" : "/chats";
     res.writeHead(302, {
-      Location: `${targetOrigin}/chats?tursoToken=${encodeURIComponent(token)}`,
+      Location: `${targetOrigin}${webCallbackPath}?tursoToken=${encodeURIComponent(token)}`,
     });
     return res.end();
   } catch (err) {

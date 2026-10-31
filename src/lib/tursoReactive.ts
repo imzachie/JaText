@@ -24,7 +24,8 @@ import {
   prewarmDecryptedGroupBatch,
 } from "./e2ee/messagePipeline";
 import { removeMessageFromConversationCache } from "./chatCache";
-import { OAUTH_RETURN_CHATS_FLAG } from "./webRoute";
+import { isAuthorizedIosChatsRuntime } from "./iosDetection";
+import { OAUTH_RETURN_CHATS_FLAG, OAUTH_RETURN_IOS_CHATS_FLAG } from "./webRoute";
 import { OFFICIAL_COMMUNITY_ID } from "./types";
 import type {
   ChatMessage,
@@ -864,6 +865,15 @@ export function useTursoReactiveSession(
 
   const authSignInGoogle = useCallback(async () => {
     const base = getTursoApiBase() || window.location.origin;
+    if (isAuthorizedIosChatsRuntime()) {
+      try {
+        window.sessionStorage.setItem(OAUTH_RETURN_IOS_CHATS_FLAG, "1");
+      } catch {
+        // ignore
+      }
+      window.location.assign(`${base}/api/oauth-google?action=start&platform=ios_web`);
+      return;
+    }
     if (!Capacitor.isNativePlatform()) {
       try {
         window.sessionStorage.setItem(OAUTH_RETURN_CHATS_FLAG, "1");
@@ -880,14 +890,16 @@ export function useTursoReactiveSession(
 
   const authSignOut = useCallback(async () => {
     if (!Capacitor.isNativePlatform()) {
-      await tursoRpc("disconnectLinkedDevice", {}, { slotId, skipAuthClear: true }).catch(
-        () => undefined,
-      );
+      if (!isAuthorizedIosChatsRuntime()) {
+        await tursoRpc("disconnectLinkedDevice", {}, { slotId, skipAuthClear: true }).catch(
+          () => undefined,
+        );
+      }
       await setTursoTokenForSlot(slotId, "", PUBLIC_TURSO_API_ORIGIN).catch(() => undefined);
       try {
-        window.localStorage.removeItem(
-          slotId === "slot-1" ? "jatext:turso-jwt:v1" : `jatext:turso-jwt:v1:${slotId}`,
-        );
+        const tokenKey =
+          slotId === "default" ? "jatext:turso-jwt:v1" : `jatext:turso-jwt:v1:${slotId}`;
+        window.localStorage.removeItem(tokenKey);
       } catch {
         // ignore
       }

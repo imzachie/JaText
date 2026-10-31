@@ -7,6 +7,36 @@
   },
   "rewrites": [
     {
+      "source": "/ios/chats",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(Android|Windows NT|CrOS|X11;|Linux x86|Linux aarch64|curl/).*"
+        }
+      ],
+      "destination": "/api/ios-404"
+    },
+    {
+      "source": "/ios/chats/(.*)",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(Android|Windows NT|CrOS|X11;|Linux x86|Linux aarch64|curl/).*"
+        }
+      ],
+      "destination": "/api/ios-404"
+    },
+    {
+      "source": "/ios/chats",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/ios/chats/(.*)",
+      "destination": "/index.html"
+    },
+    {
       "source": "/chats",
       "destination": "/index.html"
     },
@@ -26,6 +56,28 @@
         { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+      ]
+    },
+    {
+      "source": "/web-version.json",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" },
+        { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" },
+        { "key": "Service-Worker-Allowed", "value": "/" },
+        { "key": "Content-Type", "value": "application/javascript; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/manifest.webmanifest",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" },
+        { "key": "Content-Type", "value": "application/manifest+json; charset=utf-8" }
       ]
     },
     {

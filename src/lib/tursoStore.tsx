@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { App } from "@capacitor/app";
 import { PUBLIC_TURSO_API_ORIGIN, triggerImmediateTursoSync } from "./tursoClient";
+import { isAuthorizedIosChatsRuntime } from "./iosDetection";
 import { useTursoReactiveSession } from "./tursoReactive";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
@@ -3955,7 +3956,11 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     async () => {
       if (!me?.id) throw new Error("Sign in first.");
       const deviceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-      const label = Capacitor.isNativePlatform() ? "JaText Android App" : "JaText Web Browser";
+      const label = Capacitor.isNativePlatform()
+        ? "JaText Android App"
+        : isAuthorizedIosChatsRuntime()
+          ? "JaText iOS App"
+          : "JaText Web Browser";
       const syncPair = await generateDeviceSyncKeypair(me.id, deviceId, label);
       localDeviceSyncRef.current = syncPair;
       setActiveDeviceSyncCode(syncPair.request.sasCode);
