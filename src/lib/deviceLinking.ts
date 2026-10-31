@@ -11,11 +11,14 @@ import {
   type E2EEVaultContents,
 } from "./e2ee/cryptoPrimitives";
 import {
-  decryptOrPassMessage,
-  decryptRemoteAttachmentToObjectUrl,
   ensureUserE2EEInitialized,
   importRestoredVaultContents,
 } from "./e2ee/keystore";
+import {
+  prewarmDecryptedDmBatch,
+  prewarmDecryptedGroupBatch,
+} from "./e2ee/messagePipeline";
+import type { ChatMessage, GroupMessage } from "./types";
 import {
   isValidBubbleStyleId,
   saveCachedWallpaper,
@@ -248,68 +251,28 @@ export async function decryptAndHydrateLinkedWebSession(
 
     const topDms = (boot?.previews ?? []).slice(0, 4);
     const topGroups = (boot?.groups ?? []).slice(0, 3);
-    const warmAttachmentUrls: Promise<unknown>[] = [];
 
     await Promise.all([
       ...topDms.map(async (conv) => {
         try {
-          const thread = await tursoRpc<{
-            messages?: {
-              id: string;
-              senderId: string;
-              receiverId: string;
-              body: string;
-              attachmentUrl?: string;
-            }[];
-          }>("listMessages", { otherId: conv.friendId }, { slotId: DEFAULT_ACCOUNT_SLOT_ID });
-          const recent = (thread?.messages ?? []).slice(-12);
-          for (const m of recent) {
-            const d = await decryptOrPassMessage({
-              cacheKey: `dm:${m.id}:${m.body.slice(0, 28)}`,
-              rawBody: m.body,
-              senderId: m.senderId,
-              expectedChannel: "dm",
-              expectedReceiverId: m.receiverId,
-            });
-            if (m.attachmentUrl && d.attachmentDescriptor && warmAttachmentUrls.length < 6) {
-              warmAttachmentUrls.push(
-                decryptRemoteAttachmentToObjectUrl(m.attachmentUrl, d.attachmentDescriptor).catch(
-                  () => null,
-                ),
-              );
-            }
-          }
+          const thread = await tursoRpc<{ messages?: ChatMessage[] }>(
+            "listMessages",
+            { otherId: conv.friendId },
+            { slotId: DEFAULT_ACCOUNT_SLOT_ID },
+          );
+          await prewarmDecryptedDmBatch((thread?.messages ?? []).slice(-16));
         } catch {
           // Best-effort thread warm
         }
       }),
       ...topGroups.map(async (grp) => {
         try {
-          const thread = await tursoRpc<{
-            messages?: {
-              id: string;
-              senderId: string;
-              body: string;
-              attachmentUrl?: string;
-            }[];
-          }>("listGroupMessages", { groupId: grp.id }, { slotId: DEFAULT_ACCOUNT_SLOT_ID });
-          const recent = (thread?.messages ?? []).slice(-12);
-          for (const m of recent) {
-            const d = await decryptOrPassMessage({
-              cacheKey: `grp:${m.id}:${m.body.slice(0, 28)}`,
-              rawBody: m.body,
-              senderId: m.senderId,
-              expectedChannel: "grp",
-              expectedGroupId: grp.id,
-            });
-            if (m.attachmentUrl && d.attachmentDescriptor && warmAttachmentUrls.length < 6) {
-              warmAttachmentUrls.push(
-                decryptRemoteAttachmentToObjectUrl(m.attachmentUrl, d.attachmentDescriptor).catch(
-                  () => null,
-                ),
-              );
-            }
-          }
+          const thread = await tursoRpc<{ messages?: GroupMessage[] }>(
+            "listGroupMessages",
+            { groupId: grp.id },
+            { slotId: DEFAULT_ACCOUNT_SLOT_ID },
+          );
+          await prewarmDecryptedGroupBatch((thread?.messages ?? []).slice(-16), grp.id);
         } catch {
           // Best-effort group warm
         }
@@ -317,12 +280,6 @@ export async function decryptAndHydrateLinkedWebSession(
     ]);
 
     onProgress?.(88);
-    if (warmAttachmentUrls.length > 0) {
-      await Promise.race([
-        Promise.allSettled(warmAttachmentUrls),
-        new Promise((resolve) => setTimeout(resolve, 2500)),
-      ]);
-    }
   } catch {
     // Non-fatal: reactive store hydrates on mount
   }
