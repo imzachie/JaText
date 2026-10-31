@@ -605,6 +605,20 @@ public final class JaTextSoundManager {
                     ? "Incoming video call · Tap to answer"
                     : "Incoming voice call · Tap to answer";
 
+                Intent declineIntent = new Intent(ctx, MainActivity.class);
+                declineIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK |
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP |
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                );
+                declineIntent.putExtra("jatext_decline_call", true);
+                PendingIntent declinePi = PendingIntent.getActivity(
+                    ctx,
+                    INCOMING_CALL_NOTIFICATION_ID + 1,
+                    declineIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                );
+
                 NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, INCOMING_CALL_CHANNEL_ID)
                     .setSmallIcon(iconRes)
                     .setContentTitle(safeTitle)
@@ -617,7 +631,8 @@ public final class JaTextSoundManager {
                     .setTimeoutAfter(INCOMING_CALL_RING_TIMEOUT_MS)
                     .setContentIntent(fullScreenPi)
                     .setFullScreenIntent(fullScreenPi, true)
-                    .addAction(android.R.drawable.sym_call_incoming, "Answer / View Call", fullScreenPi);
+                    .addAction(android.R.drawable.sym_call_incoming, "Answer / View Call", fullScreenPi)
+                    .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePi);
 
                 nm.notify("incoming_call", INCOMING_CALL_NOTIFICATION_ID, builder.build());
             }

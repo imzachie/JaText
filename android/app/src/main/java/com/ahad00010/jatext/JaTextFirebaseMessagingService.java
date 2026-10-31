@@ -204,4 +204,10 @@ public class JaTextFirebaseMessagingService extends FirebaseMessagingService {
             );
         }
     }
+
+    @Override
+    public void onNewToken(@NonNull String token) {
+        super.onNewToken(token);
+        NativeRuntimeBridge.dispatchFcmToken(token);
+    }
 }

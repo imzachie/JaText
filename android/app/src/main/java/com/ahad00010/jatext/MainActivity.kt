@@ -1,11 +1,17 @@
 package com.ahad00010.jatext
 
 import android.Manifest
+import android.app.KeyguardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
 import android.view.WindowManager
+import java.lang.ref.WeakReference
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -46,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.ahad00010.jatext.data.JaUser
+import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.ui.screens.ChatThreadScreen
 import com.ahad00010.jatext.ui.screens.EnableCallAndAlertPermissionsModal
@@ -64,11 +71,71 @@ import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private val mainHandler = Handler(Looper.getMainLooper())
+
+        @Volatile
+        private var activeActivityRef: WeakReference<MainActivity>? = null
+
+        @JvmStatic
+        fun notifyRealtimeSyncWake() {
+            NativeRuntimeBridge.notifySyncWake()
+        }
+
+        @JvmStatic
+        fun isActivelyVisibleUnlocked(ctx: Context?): Boolean {
+            if (!NativeRuntimeBridge.isAppInForeground) return false
+            val appCtx = ctx?.applicationContext ?: activeActivityRef?.get()?.applicationContext ?: return true
+            return try {
+                val pm = appCtx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                val km = appCtx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                val interactive = pm?.isInteractive ?: true
+                val locked = km?.isKeyguardLocked ?: false
+                interactive && !locked
+            } catch (_: Throwable) {
+                NativeRuntimeBridge.isAppInForeground
+            }
+        }
+
+        @JvmStatic
+        fun setCallLockScreenMode(enabled: Boolean) {
+            mainHandler.post {
+                val activity = activeActivityRef?.get() ?: return@post
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                        activity.setShowWhenLocked(enabled)
+                        activity.setTurnScreenOn(enabled)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        if (enabled) {
+                            activity.window.addFlags(
+                                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                            )
+                        } else {
+                            activity.window.clearFlags(
+                                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                            )
+                        }
+                    }
+                    if (enabled) {
+                        activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+        }
+    }
+
     private val sessionViewModel: JaTextSessionViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        activeActivityRef = WeakReference(this)
 
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -109,6 +176,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        activeActivityRef = WeakReference(this)
         NativeRuntimeBridge.isAppInForeground = true
         sessionViewModel.triggerImmediateSync(burst = true)
     }
@@ -116,6 +184,13 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         NativeRuntimeBridge.isAppInForeground = false
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        if (activeActivityRef?.get() === this) {
+            activeActivityRef = null
+        }
+        super.onDestroy()
     }
 
     private fun handleIncomingPushIntent(intent: Intent?) {
@@ -135,7 +210,22 @@ class MainActivity : ComponentActivity() {
                 "group" -> if (!targetId.isNullOrBlank()) sessionViewModel.openGroupChat(targetId)
                 "community" -> sessionViewModel.openCommunityChat()
             }
+            return
         }
+        val groupId = intent.getStringExtra("groupId")
+        val chatId = intent.getStringExtra("chatId")
+        val senderId = intent.getStringExtra("senderId")
+        val pushType = intent.getStringExtra("type")
+        when {
+            !groupId.isNullOrBlank() -> sessionViewModel.openGroupChat(groupId)
+            chatId == OFFICIAL_COMMUNITY_ID ||
+                chatId == "jatext-community" ||
+                pushType == "community" ||
+                pushType == "announcement" -> sessionViewModel.openCommunityChat()
+            !senderId.isNullOrBlank() && pushType != "incoming_call" -> sessionViewModel.openDmChat(senderId)
+            !chatId.isNullOrBlank() -> sessionViewModel.openDmChat(chatId)
+        }
+        sessionViewModel.triggerImmediateSync(burst = true)
     }
 
     private fun requestHighestRefreshRate() {
