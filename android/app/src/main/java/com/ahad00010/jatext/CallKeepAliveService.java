@@ -68,13 +68,24 @@ public class CallKeepAliveService extends Service {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
                     PackageManager.PERMISSION_GRANTED;
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && hasMicPerm) {
-                    int fgsTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    int fgsTypes = 0;
+                    if (hasMicPerm) {
+                        fgsTypes |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+                    }
                     if (hasCamPerm) {
                         fgsTypes |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA;
                     }
+                    if (fgsTypes == 0) {
+                        stopSelf();
+                        return START_NOT_STICKY;
+                    }
                     startForeground(NOTIFICATION_ID, notification, fgsTypes);
                 } else {
+                    if (!hasMicPerm && !hasCamPerm) {
+                        stopSelf();
+                        return START_NOT_STICKY;
+                    }
                     startForeground(NOTIFICATION_ID, notification);
                 }
 

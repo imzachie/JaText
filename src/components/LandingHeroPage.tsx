@@ -124,10 +124,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.5.2",
+    date: "October 31, 2026",
+    headline: "1:1 Web UI Parity Overhaul, Fixed Google Sign-In Sheet, Legacy E2EE Repair & Crash-Proof Calls",
+    latest: true,
+    bullets: [
+      "Rebuilt the Android UI to match jatext.vercel.app 1:1 with the #9B6CFF web purple palette, 3px ringed 9-colour avatars, 2.5px profile card outlines, greeting banner, pill tabs, and verified JaText Community badges.",
+      "Fixed the AndroidX Browser CustomTab toolbar cornerRadiusDp crash on Sign in with Google, repaired legacy incomplete E2EE identity slots causing error parsing private key on send, added runtime mic/camera permission guards for calls, and mounted a global Update your JaText version! prompt across all screens.",
+    ],
+  },
+  {
     version: "v3.5.1",
     date: "October 31, 2026",
     headline: "Zero-Config In-App Mobile Google Sign-In Sheet & Dual-Channel Session Handoff",
-    latest: true,
     bullets: [
       "Fixed mobile Continue with Google silently dropping Play Services [28444] unregistered SHA-1 responses after account selection.",
       "Added an in-app 82%-height rounded Partial Custom Tab OAuth sheet with dual-channel return (instant com.ahad00010.jatext://auth deep-link plus Turso mobileSession background polling) so Google Sign-In goes straight into JaText with zero Google Cloud SHA-1 setup required.",

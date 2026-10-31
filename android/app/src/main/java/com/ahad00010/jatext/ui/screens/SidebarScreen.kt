@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,46 +23,38 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CallMade
 import androidx.compose.material.icons.rounded.CallReceived
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.ExitToApp
-import androidx.compose.material.icons.rounded.Forum
-import androidx.compose.material.icons.rounded.GroupAdd
 import androidx.compose.material.icons.rounded.Groups
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Unarchive
+import androidx.compose.material.icons.rounded.UnfoldMore
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.VolumeUp
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -75,22 +67,37 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import coil.compose.AsyncImage
 import com.ahad00010.jatext.R
 import com.ahad00010.jatext.data.CallHistoryEntry
 import com.ahad00010.jatext.data.ChatPreview
 import com.ahad00010.jatext.data.GroupSummary
 import com.ahad00010.jatext.data.JaUser
+import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.state.SessionUiState
 import com.ahad00010.jatext.ui.components.JaAvatar
+import com.ahad00010.jatext.ui.components.JaOfficialBadge
+import com.ahad00010.jatext.ui.components.JaTabItem
+import com.ahad00010.jatext.ui.components.JaVerifiedBadge
+import com.ahad00010.jatext.ui.components.JaWebDangerButton
+import com.ahad00010.jatext.ui.components.JaWebGhostButton
+import com.ahad00010.jatext.ui.components.JaWebIconButton
+import com.ahad00010.jatext.ui.components.JaWebInput
+import com.ahad00010.jatext.ui.components.JaWebPrimaryButton
+import com.ahad00010.jatext.ui.components.JaWebTabs
 import com.ahad00010.jatext.ui.icons.OwnerCrownVectorBadge
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -100,21 +107,36 @@ private sealed interface SidebarHoldTarget {
     data class Group(val group: GroupSummary) : SidebarHoldTarget
 }
 
+private fun currentDayPartLabel(): String {
+    val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+    return when {
+        h in 5..11 -> "morning"
+        h in 12..16 -> "afternoon"
+        h in 17..21 -> "evening"
+        else -> "night"
+    }
+}
+
+/**
+ * Exact 1:1 recreation of src/components/Sidebar.tsx + `.sidebar` in src/index.css!
+ */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SidebarScreen(
     state: SessionUiState,
     vm: JaTextSessionViewModel,
     onOpenSettings: () -> Unit,
-    onInstallUpdate: () -> Unit,
+    onOpenProfile: (JaUser) -> Unit = {},
+    onInstallUpdate: () -> Unit = {},
 ) {
     val palette = LocalJaTextPalette.current
     val me = state.me
 
+    var activeTab by remember { mutableStateOf("chats") } // "chats" | "calls" | "add" (exact 3 web tabs!)
     var searchQuery by remember { mutableStateOf("") }
-    var activeTab by remember { mutableStateOf("chats") } // chats | groups | friends | requests | calls | archived
+    var showArchived by remember { mutableStateOf(false) }
+    var addUsername by remember { mutableStateOf("") }
     var showAccountSwitcher by remember { mutableStateOf(false) }
-    var showAddFriendDialog by remember { mutableStateOf(false) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var holdTarget by remember { mutableStateOf<SidebarHoldTarget?>(null) }
 
@@ -125,6 +147,65 @@ fun SidebarScreen(
 
     val previewByFriend = remember(state.previews) { state.previews.associateBy { it.friendId } }
     val activityByFriend = remember(state.friendActivities) { state.friendActivities.associateBy { it.userId } }
+    val typingDmSenders = remember(state.dmMessages, state.friendActivities) { emptySet<String>() }
+
+    val archivedCount = remember(state.friends, state.previews, state.groups) {
+        val dmArch = state.friends.count { previewByFriend[it.id]?.isArchived == true }
+        val grpArch = state.groups.count { it.isArchived }
+        dmArch + grpArch
+    }
+
+    val totalUnreadCount = remember(
+        state.friends,
+        state.previews,
+        state.groups,
+        state.communityUnreadCount,
+        state.communityMuted,
+        state.activeChatId,
+        state.activeGroupId,
+    ) {
+        var total = 0
+        if (!state.communityMuted && state.activeChatId != OFFICIAL_COMMUNITY_ID) {
+            total += state.communityUnreadCount
+        }
+        for (grp in state.groups) {
+            if (!grp.isArchived && !grp.isSilenced && state.activeGroupId != grp.id) {
+                total += grp.unreadCount
+            }
+        }
+        for (f in state.friends) {
+            val prev = previewByFriend[f.id]
+            if (prev != null && !prev.isArchived && !prev.isMuted && state.activeChatId != f.id) {
+                total += prev.unreadCount
+            }
+        }
+        total
+    }
+
+    val otherSavedAccounts = remember(state.accounts, state.slotId, me?.id) {
+        state.accounts.filter { it.slotId != state.slotId && it.userId != me?.id }
+    }
+
+    val visibleGroups = remember(state.groups, showArchived, searchQuery) {
+        val q = searchQuery.trim().lowercase()
+        state.groups.filter { grp ->
+            grp.isArchived == showArchived && (q.isEmpty() || grp.name.lowercase().contains(q))
+        }
+    }
+
+    val sortedFriends = remember(state.friends, previewByFriend, showArchived, searchQuery) {
+        val q = searchQuery.trim().lowercase()
+        state.friends
+            .filter { f ->
+                val isArch = previewByFriend[f.id]?.isArchived == true
+                isArch == showArchived && (
+                    q.isEmpty() ||
+                        f.displayName.lowercase().contains(q) ||
+                        f.username.lowercase().contains(q)
+                    )
+            }
+            .sortedByDescending { f -> previewByFriend[f.id]?.createdAt ?: 0L }
+    }
 
     Column(
         modifier = Modifier
@@ -133,551 +214,689 @@ fun SidebarScreen(
                 if (palette.rootGradientBrush != null) {
                     Modifier.background(palette.rootGradientBrush)
                 } else {
-                    Modifier.background(palette.bgPrimary)
+                    Modifier.background(palette.bgSecondary)
                 }
             )
             .statusBarsPadding()
             .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        /* ==================== Top Header Bar ==================== */
+        /* ==================== 1. `.sidebar-header` (`[logo] JaText` + SwitchAccount + Settings) ==================== */
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.jatext_logo_icon),
+                    contentDescription = "JaText",
+                    modifier = Modifier.size(36.dp),
+                )
+                Text(
+                    text = "JaText",
+                    color = palette.textPrimary,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Black,
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                JaWebIconButton(
+                    icon = Icons.Rounded.SwapHoriz,
+                    contentDescription = "Switch or add account",
+                    badgeCount = if (state.accounts.size > 1) state.accounts.size else 0,
+                    onClick = { showAccountSwitcher = true },
+                )
+                JaWebIconButton(
+                    icon = Icons.Rounded.Settings,
+                    contentDescription = "Settings",
+                    onClick = onOpenSettings,
+                )
+            }
+        }
+
+        /* ==================== 2. `.greeting` Card ("Good morning/afternoon/evening, <Name>!") ==================== */
+        if (me != null) {
+            val myStatus = when (me.statusPreference) {
+                "offline" -> "offline"
+                "dnd" -> "dnd"
+                "away", "idle" -> "away"
+                else -> "online"
+            }
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable { showAccountSwitcher = true }
-                    .padding(vertical = 4.dp, horizontal = 4.dp),
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(palette.bgTertiary)
+                    .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 JaAvatar(
-                    avatarUrl = me?.avatarUrl,
-                    displayName = me?.displayName?.ifBlank { me.username } ?: "JaText",
-                    avatarColor = me?.avatarColor,
-                    size = 40.dp,
-                    presenceStatus = me?.statusPreference ?: "online",
-                    statusBorderColor = palette.bgPrimary,
+                    avatarUrl = me.avatarUrl,
+                    displayName = me.displayName.ifBlank { me.username },
+                    avatarColor = me.avatarColor,
+                    size = 50.dp,
+                    ringWidth = 3.dp,
+                    presenceStatus = myStatus,
+                    statusBorderColor = palette.bgTertiary,
+                    modifier = Modifier.clickable { onOpenProfile(me) },
                 )
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f, fill = false)) {
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = me?.displayName?.ifBlank { me.username } ?: "JaText",
+                            text = "Good ${currentDayPartLabel()}, ${me.displayName.ifBlank { me.username }}!",
                             color = palette.textPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
-                        if (me?.isOwner == true) {
+                        if (me.isOwner) {
                             Spacer(Modifier.width(5.dp))
                             OwnerCrownVectorBadge(size = 14.dp)
                         }
-                        Spacer(Modifier.width(3.dp))
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showAccountSwitcher = true }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "@${me.username}",
+                            color = palette.textSecondary,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.width(2.dp))
                         Icon(
-                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                            imageVector = Icons.Rounded.UnfoldMore,
                             contentDescription = "Switch account",
                             tint = palette.textSecondary,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(14.dp),
                         )
                     }
-                    Text(
-                        text = if (!me?.customStatus.isNullOrBlank()) {
-                            me?.customStatus.orEmpty()
-                        } else {
-                            "@${me?.username.orEmpty()}"
-                        },
-                        color = palette.textSecondary,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
                 }
-            }
-
-            IconButton(onClick = { showAddFriendDialog = true }) {
-                Icon(
-                    imageVector = Icons.Rounded.PersonAdd,
-                    contentDescription = "Add Friend",
-                    tint = palette.textPrimary,
-                )
-            }
-            IconButton(onClick = { showCreateGroupDialog = true }) {
-                Icon(
-                    imageVector = Icons.Rounded.GroupAdd,
-                    contentDescription = "Create Group",
-                    tint = palette.textPrimary,
-                )
-            }
-            IconButton(onClick = onOpenSettings) {
-                Icon(
-                    imageVector = Icons.Rounded.Settings,
-                    contentDescription = "Settings",
-                    tint = palette.textPrimary,
-                )
-            }
-        }
-
-        /* ==================== Mobile-Only OTA Update Banner ==================== */
-        state.availableUpdate?.let { manifest ->
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(palette.accentSoft)
-                    .border(1.dp, palette.accent, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 14.dp, vertical = 11.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Rounded.SystemUpdate,
-                        contentDescription = null,
-                        tint = palette.accent,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(Modifier.width(9.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Update your JaText version!",
-                            color = palette.textPrimary,
-                            fontSize = 13.5.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = "v${manifest.versionName} (Build ${manifest.versionCode}) is ready to install.",
-                            color = palette.textSecondary,
-                            fontSize = 11.5.sp,
-                        )
-                    }
-                    if (!state.updateDownloading) {
-                        Button(
-                            onClick = onInstallUpdate,
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.height(34.dp),
-                        ) {
-                            Text("Update", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                        IconButton(onClick = { vm.dismissUpdatePrompt() }, modifier = Modifier.size(30.dp)) {
-                            Icon(Icons.Rounded.Close, contentDescription = "Dismiss", tint = palette.textSecondary, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
-                if (state.updateDownloading) {
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { state.updateProgress },
-                        color = palette.accent,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        }
-
-        /* ==================== Search Input ==================== */
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp)
-                .clip(RoundedCornerShape(13.dp))
-                .background(palette.bgSecondary)
-                .border(1.dp, palette.border, RoundedCornerShape(13.dp))
-                .padding(horizontal = 12.dp, vertical = 2.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.height(40.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Search,
-                    contentDescription = null,
-                    tint = palette.textTertiary,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                androidx.compose.foundation.text.BasicTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        color = palette.textPrimary,
-                        fontSize = 14.sp,
-                    ),
-                    modifier = Modifier.weight(1f),
-                    decorationBox = { inner ->
-                        if (searchQuery.isEmpty()) {
-                            Text(
-                                text = "Search chats, groups, or @friends…",
-                                color = palette.textTertiary,
-                                fontSize = 13.5.sp,
+                if (otherSavedAccounts.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        otherSavedAccounts.take(2).forEach { acct ->
+                            JaAvatar(
+                                avatarUrl = acct.avatarUrl,
+                                displayName = acct.displayName.ifBlank { acct.username },
+                                avatarColor = acct.avatarColor,
+                                size = 30.dp,
+                                ringWidth = 2.dp,
+                                modifier = Modifier.clickable { vm.switchToAccountSlot(acct.slotId) },
                             )
                         }
-                        inner()
-                    }
-                )
-                if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Clear", tint = palette.textSecondary, modifier = Modifier.size(16.dp))
-                    }
-                }
-            }
-        }
-
-        /* ==================== Filter Tabs (Full Width Scrollable -> Calls Never Cut Off!) ==================== */
-        val reqCount = state.incoming.size
-        val tabs = listOf(
-            "chats" to "Chats",
-            "groups" to "Groups",
-            "friends" to "Friends",
-            "requests" to if (reqCount > 0) "Requests ($reqCount)" else "Requests",
-            "calls" to "Calls",
-            "archived" to "Archived",
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            tabs.forEach { (id, label) ->
-                val selected = activeTab == id
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(if (selected) palette.accent else palette.bgSecondary)
-                        .border(
-                            width = 1.dp,
-                            color = if (selected) palette.accent else palette.border,
-                            shape = RoundedCornerShape(999.dp),
-                        )
-                        .clickable { activeTab = id }
-                        .padding(horizontal = 14.dp, vertical = 7.dp)
-                ) {
-                    Text(
-                        text = label,
-                        color = if (selected) palette.onAccent else palette.textSecondary,
-                        fontSize = 12.5.sp,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    )
-                }
-            }
-        }
-
-        HorizontalDivider(color = palette.border)
-
-        /* ==================== Smooth 120Hz Native LazyColumn List ==================== */
-        val q = searchQuery.trim().lowercase()
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = 8.dp),
-        ) {
-            if (activeTab == "chats") {
-                // Pinned Official JaText Community (Hold ONLY shows Mute / Unmute!)
-                if (q.isEmpty() || "jatext community".contains(q)) {
-                    item(key = "pinned-community") {
-                        val lastComm = state.communityMessages.lastOrNull()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .combinedClickable(
-                                    onClick = { vm.openCommunityChat() },
-                                    onLongClick = { holdTarget = SidebarHoldTarget.Community },
-                                )
-                                .padding(horizontal = 16.dp, vertical = 11.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
+                        if (otherSavedAccounts.size > 2) {
                             Box(
                                 modifier = Modifier
-                                    .size(46.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(palette.accentSoft),
+                                    .size(30.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.bgSecondary)
+                                    .border(1.dp, palette.border, CircleShape)
+                                    .clickable { showAccountSwitcher = true },
                                 contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "+${otherSavedAccounts.size - 2}",
+                                    color = palette.textPrimary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /* ==================== 3. `.tabs` (`Chats` | `Calls` | `Add`) ==================== */
+        JaWebTabs(
+            tabs = listOf(
+                JaTabItem(
+                    id = "chats",
+                    label = "Chats",
+                    icon = Icons.Rounded.ChatBubbleOutline,
+                    badgeCount = totalUnreadCount,
+                ),
+                JaTabItem(
+                    id = "calls",
+                    label = "Calls",
+                    icon = Icons.Rounded.Call,
+                ),
+                JaTabItem(
+                    id = "add",
+                    label = "Add",
+                    icon = Icons.Rounded.Add,
+                    badgeCount = state.incoming.size,
+                ),
+            ),
+            selectedId = activeTab,
+            onSelect = { activeTab = it },
+        )
+
+        /* ==================== 4. Tab Panes ==================== */
+        when (activeTab) {
+            "chats" -> {
+                JaWebInput(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = "Search friends…",
+                    leadingIcon = Icons.Rounded.Search,
+                    trailingContent = if (searchQuery.isNotEmpty()) {
+                        {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "Clear",
+                                tint = palette.textSecondary,
+                                modifier = Modifier
+                                    .size(17.dp)
+                                    .clickable { searchQuery = "" },
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                )
+
+                // `.archive-toggle`
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (showArchived) palette.bgTertiary else Color.Transparent)
+                        .border(
+                            width = 1.dp,
+                            color = if (showArchived) palette.border else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        .clickable { showArchived = !showArchived }
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = if (showArchived) Icons.AutoMirrored.Rounded.ArrowBack else Icons.Rounded.Archive,
+                        contentDescription = null,
+                        tint = if (showArchived) palette.textPrimary else palette.textSecondary,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        text = if (showArchived) {
+                            "Chats"
+                        } else if (archivedCount > 0) {
+                            "Archived ($archivedCount)"
+                        } else {
+                            "Archived"
+                        },
+                        color = if (showArchived) palette.textPrimary else palette.textSecondary,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    contentPadding = PaddingValues(bottom = 12.dp),
+                ) {
+                    /* ---- Official JaText Community Row (`.official-community-row`) ---- */
+                    if (!showArchived) {
+                        item(key = "official-community") {
+                            val commUnread = if (state.activeChatId == OFFICIAL_COMMUNITY_ID) 0 else state.communityUnreadCount
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(
+                                        if (state.activeChatId == OFFICIAL_COMMUNITY_ID) palette.bgTertiary
+                                        else Color.Transparent
+                                    )
+                                    .border(
+                                        width = 1.dp,
+                                        color = Color(0x384ADE80),
+                                        shape = RoundedCornerShape(16.dp),
+                                    )
+                                    .combinedClickable(
+                                        onClick = { vm.openCommunityChat() },
+                                        onLongClick = { holdTarget = SidebarHoldTarget.Community },
+                                    )
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Image(
                                     painter = painterResource(id = R.drawable.jatext_logo_icon),
                                     contentDescription = "JaText Community",
                                     modifier = Modifier
-                                        .size(34.dp)
-                                        .clip(RoundedCornerShape(10.dp)),
+                                        .size(48.dp)
+                                        .clip(CircleShape),
                                 )
-                            }
-                            Spacer(Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = "JaText Community",
+                                            color = palette.textPrimary,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            if (state.communityMuted) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.NotificationsOff,
+                                                    contentDescription = "Muted",
+                                                    tint = palette.textSecondary,
+                                                    modifier = Modifier.size(14.dp),
+                                                )
+                                            }
+                                            if (commUnread > 0) {
+                                                UnreadCountPill(
+                                                    count = commUnread,
+                                                    muted = state.communityMuted,
+                                                )
+                                            }
+                                            JaVerifiedBadge(size = 17.dp)
+                                            JaOfficialBadge()
+                                        }
+                                    }
+                                    Spacer(Modifier.height(2.dp))
                                     Text(
-                                        text = "JaText Community",
-                                        color = palette.textPrimary,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.weight(1f),
+                                        text = "Official JaText announcements",
+                                        color = palette.textSecondary,
+                                        fontSize = 13.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
-                                    if (state.communityMuted) {
+                                }
+                            }
+                        }
+                    }
+
+                    /* ---- Group Rows (`.group-list-row`) ---- */
+                    items(visibleGroups, key = { "grp:${it.id}" }) { grp ->
+                        GroupSidebarRow(
+                            group = grp,
+                            myUserId = me?.id.orEmpty(),
+                            isSelected = state.activeGroupId == grp.id,
+                            onClick = { vm.openGroupChat(grp.id) },
+                            onLongClick = { holdTarget = SidebarHoldTarget.Group(grp) },
+                        )
+                    }
+
+                    /* ---- Empty State (`.empty-box`) ---- */
+                    if (sortedFriends.isEmpty() && visibleGroups.isEmpty()) {
+                        item(key = "empty-chats") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                                    .padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (state.friends.isEmpty() && state.groups.isEmpty() && !showArchived) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(
-                                            imageVector = Icons.Rounded.NotificationsOff,
-                                            contentDescription = "Muted",
-                                            tint = palette.textTertiary,
-                                            modifier = Modifier.size(15.dp),
+                                            imageVector = Icons.Rounded.PersonAdd,
+                                            contentDescription = null,
+                                            tint = palette.accent,
+                                            modifier = Modifier.size(18.dp),
                                         )
                                         Spacer(Modifier.width(6.dp))
-                                    }
-                                    lastComm?.let {
                                         Text(
-                                            text = formatShortTime(it.createdAt),
-                                            color = palette.textTertiary,
-                                            fontSize = 11.5.sp,
+                                            text = "No friends yet",
+                                            color = palette.textPrimary,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Bold,
                                         )
                                     }
+                                    Text(
+                                        text = "Head to Add and add someone by their username. Once they accept, you can start texting!",
+                                        color = palette.textSecondary,
+                                        fontSize = 13.sp,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                    JaWebPrimaryButton(
+                                        text = "Add a friend",
+                                        onClick = { activeTab = "add" },
+                                    )
+                                } else {
+                                    Text(
+                                        text = if (showArchived) "No archived chats." else "No chats match your search.",
+                                        color = palette.textSecondary,
+                                        fontSize = 14.sp,
+                                    )
                                 }
-                                Spacer(Modifier.height(2.dp))
+                            }
+                        }
+                    }
+
+                    /* ---- 1:1 Friend Rows (`.friend-row`) ---- */
+                    items(sortedFriends, key = { "dm:${it.id}" }) { friend ->
+                        val prev = previewByFriend[friend.id]
+                        val act = activityByFriend[friend.id]
+                        DmSidebarRow(
+                            friend = friend,
+                            preview = prev,
+                            myUserId = me?.id.orEmpty(),
+                            isSelected = state.activeChatId == friend.id,
+                            presenceStatus = act?.status ?: "offline",
+                            typingToMe = typingDmSenders.contains(friend.id),
+                            onClick = { vm.openDmChat(friend.id) },
+                            onAvatarClick = { onOpenProfile(friend) },
+                            onLongClick = { holdTarget = SidebarHoldTarget.Dm(friend, prev) },
+                        )
+                    }
+                }
+            }
+
+            "calls" -> {
+                if (state.callHistory.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                            .padding(22.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.Call,
+                                contentDescription = null,
+                                tint = palette.accent,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "No calls yet",
+                                color = palette.textPrimary,
+                                fontSize = 15.5.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        Text(
+                            text = "Start a voice or video call with a friend or group. Your incoming and outgoing call history will show right here.",
+                            color = palette.textSecondary,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        contentPadding = PaddingValues(bottom = 12.dp),
+                    ) {
+                        items(state.callHistory, key = { "call:${it.id}" }) { entry ->
+                            val friendPeer = entry.peerId?.let { pid -> state.friends.firstOrNull { it.id == pid } }
+                            val groupTarget = entry.groupId?.let { gid -> state.groups.firstOrNull { it.id == gid } }
+                            val handleText = when {
+                                entry.groupId != null -> "Group call"
+                                friendPeer != null -> "@${friendPeer.username}"
+                                else -> "Direct call"
+                            }
+                            CallHistoryRowUi(
+                                entry = entry,
+                                handleText = handleText,
+                                presenceStatus = friendPeer?.let { activityByFriend[it.id]?.status },
+                                onRowClick = {
+                                    if (groupTarget != null) vm.openGroupChat(groupTarget.id)
+                                    else if (friendPeer != null) vm.openDmChat(friendPeer.id)
+                                },
+                                onVoiceCall = {
+                                    if (me == null) return@CallHistoryRowUi
+                                    if (groupTarget != null) vm.callEngine.startGroupCall(me, groupTarget, "voice")
+                                    else if (friendPeer != null) vm.callEngine.startDmCall(me, friendPeer, "voice")
+                                },
+                                onVideoCall = {
+                                    if (me == null) return@CallHistoryRowUi
+                                    if (groupTarget != null) vm.callEngine.startGroupCall(me, groupTarget, "video")
+                                    else if (friendPeer != null) vm.callEngine.startDmCall(me, friendPeer, "video")
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
+            "add" -> {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                ) {
+                    /* ---- Add by username ---- */
+                    item(key = "add-by-username") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = "Add by username",
+                                color = palette.textPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                            )
+                            JaWebInput(
+                                value = addUsername,
+                                onValueChange = { addUsername = it.lowercase().removePrefix("@") },
+                                leadingPrefix = "@",
+                                placeholder = "their-username",
+                            )
+                            JaWebPrimaryButton(
+                                text = "Send friend request",
+                                enabled = addUsername.trim().isNotEmpty(),
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    val clean = addUsername.trim().removePrefix("@")
+                                    if (clean.isNotEmpty()) {
+                                        vm.sendFriendRequest(clean)
+                                        addUsername = ""
+                                    }
+                                },
+                            )
+                        }
+                    }
+
+                    /* ---- `.groups-add-section` ---- */
+                    item(key = "groups-add-section") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(palette.bgTertiary)
+                                .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                                .padding(13.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Text(
-                                    text = if (lastComm != null) {
-                                        "${lastComm.senderName}: ${lastComm.body.ifBlank { "Sticker / Poll" }}"
-                                    } else {
-                                        "Official announcements, polls & global chat"
-                                    },
-                                    color = palette.textSecondary,
-                                    fontSize = 13.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                                    text = "Groups",
+                                    color = palette.textPrimary,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                )
+                                JaWebGhostButton(
+                                    text = "New group",
+                                    leadingIcon = Icons.Rounded.Add,
+                                    onClick = { showCreateGroupDialog = true },
+                                )
+                            }
+                            Text(
+                                text = "Create an encrypted group chat with up to 50 friends.",
+                                color = palette.textSecondary,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
+
+                    /* ---- Incoming Friend Requests ---- */
+                    item(key = "incoming-header") {
+                        Text(
+                            text = "Incoming requests (${state.incoming.size})",
+                            color = palette.textPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
+                    if (state.incoming.isEmpty()) {
+                        item(key = "incoming-empty") {
+                            Text(
+                                text = "No incoming friend requests right now.",
+                                color = palette.textSecondary,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    } else {
+                        items(state.incoming, key = { "in:${it.requestId}" }) { req ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(palette.bgTertiary)
+                                    .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                JaAvatar(
+                                    avatarUrl = req.user.avatarUrl,
+                                    displayName = req.user.displayName.ifBlank { req.user.username },
+                                    avatarColor = req.user.avatarColor,
+                                    size = 42.dp,
+                                    ringWidth = 2.5.dp,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = req.user.displayName.ifBlank { req.user.username },
+                                        color = palette.textPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = "@${req.user.username}",
+                                        color = palette.textSecondary,
+                                        fontSize = 12.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                // `.accept-btn`
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(palette.success)
+                                        .clickable { vm.respondFriendRequest(req.requestId, true) }
+                                        .padding(horizontal = 13.dp, vertical = 8.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = "Accept",
+                                        color = Color(0xFF06280F),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                    )
+                                }
+                                Spacer(Modifier.width(6.dp))
+                                JaWebGhostButton(
+                                    text = "Decline",
+                                    onClick = { vm.respondFriendRequest(req.requestId, false) },
                                 )
                             }
                         }
                     }
-                }
 
-                // Unified sorted DM + Group feed (excluding archived)
-                data class UnifiedRow(
-                    val key: String,
-                    val sortTs: Long,
-                    val friend: JaUser? = null,
-                    val preview: ChatPreview? = null,
-                    val group: GroupSummary? = null,
-                )
-
-                val dmRows = state.friends.mapNotNull { f ->
-                    val p = previewByFriend[f.id]
-                    if (p?.isArchived == true) return@mapNotNull null
-                    if (q.isNotEmpty() && !f.displayName.lowercase().contains(q) && !f.username.lowercase().contains(q)) {
-                        return@mapNotNull null
-                    }
-                    UnifiedRow(
-                        key = "dm:${f.id}",
-                        sortTs = p?.createdAt ?: 0L,
-                        friend = f,
-                        preview = p,
-                    )
-                }
-                val grpRows = state.groups.mapNotNull { g ->
-                    if (!g.isArchived && (q.isEmpty() || g.name.lowercase().contains(q))) {
-                        UnifiedRow(
-                            key = "grp:${g.id}",
-                            sortTs = g.lastMessageAt,
-                            group = g,
-                        )
-                    } else {
-                        null
-                    }
-                }
-                val combined = (dmRows + grpRows).sortedByDescending { it.sortTs }
-
-                items(items = combined, key = { it.key }) { item ->
-                    if (item.friend != null) {
-                        val f = item.friend
-                        val p = item.preview
-                        val act = activityByFriend[f.id]
-                        val status = when {
-                            act?.online == true -> act.statusPreference
-                            else -> "offline"
-                        }
-                        DmSidebarRow(
-                            friend = f,
-                            preview = p,
-                            presenceStatus = status,
-                            typingToMe = act?.typingToMe == true,
-                            onClick = { vm.openDmChat(f.id) },
-                            onLongClick = { holdTarget = SidebarHoldTarget.Dm(f, p) },
-                        )
-                    } else if (item.group != null) {
-                        GroupSidebarRow(
-                            group = item.group,
-                            onClick = { vm.openGroupChat(item.group.id) },
-                            onLongClick = { holdTarget = SidebarHoldTarget.Group(item.group) },
-                        )
-                    }
-                }
-            } else if (activeTab == "groups") {
-                val filtered = state.groups.filter { !it.isArchived && (q.isEmpty() || it.name.lowercase().contains(q)) }
-                items(filtered, key = { "grp-tab:${it.id}" }) { g ->
-                    GroupSidebarRow(
-                        group = g,
-                        onClick = { vm.openGroupChat(g.id) },
-                        onLongClick = { holdTarget = SidebarHoldTarget.Group(g) },
-                    )
-                }
-            } else if (activeTab == "friends") {
-                val filtered = state.friends.filter {
-                    q.isEmpty() || it.displayName.lowercase().contains(q) || it.username.lowercase().contains(q)
-                }
-                items(filtered, key = { "fr-tab:${it.id}" }) { f ->
-                    val act = activityByFriend[f.id]
-                    val status = if (act?.online == true) act.statusPreference else "offline"
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { vm.openDmChat(f.id) }
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        JaAvatar(
-                            avatarUrl = f.avatarUrl,
-                            displayName = f.displayName.ifBlank { f.username },
-                            avatarColor = f.avatarColor,
-                            size = 44.dp,
-                            presenceStatus = status,
-                            statusBorderColor = palette.bgPrimary,
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
+                    /* ---- Outgoing Sent Requests ---- */
+                    if (state.outgoing.isNotEmpty()) {
+                        item(key = "outgoing-header") {
                             Text(
-                                text = f.displayName.ifBlank { f.username },
+                                text = "Sent requests (${state.outgoing.size})",
                                 color = palette.textPrimary,
                                 fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                text = "@${f.username}",
-                                color = palette.textSecondary,
-                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.ExtraBold,
                             )
                         }
-                        IconButton(onClick = { me?.let { vm.callEngine.startDmCall(it, f, "voice") } }) {
-                            Icon(Icons.Rounded.Call, contentDescription = "Voice Call", tint = palette.accent)
-                        }
-                        IconButton(onClick = { me?.let { vm.callEngine.startDmCall(it, f, "video") } }) {
-                            Icon(Icons.Rounded.Videocam, contentDescription = "Video Call", tint = palette.accent)
-                        }
-                    }
-                }
-            } else if (activeTab == "requests") {
-                if (state.incoming.isEmpty() && state.outgoing.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(40.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("No pending friend requests", color = palette.textSecondary, fontSize = 14.sp)
-                        }
-                    }
-                }
-                items(state.incoming, key = { "in:${it.requestId}" }) { req ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        JaAvatar(
-                            avatarUrl = req.user.avatarUrl,
-                            displayName = req.user.displayName.ifBlank { req.user.username },
-                            avatarColor = req.user.avatarColor,
-                            size = 44.dp,
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = req.user.displayName.ifBlank { req.user.username },
-                                color = palette.textPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.5.sp,
-                            )
-                            Text("@${req.user.username} wants to connect", color = palette.textSecondary, fontSize = 12.sp)
-                        }
-                        Button(
-                            onClick = { vm.respondFriendRequest(req.requestId, true) },
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                            modifier = Modifier.height(34.dp),
-                        ) {
-                            Text("Accept", fontSize = 12.sp, color = Color.White)
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        TextButton(onClick = { vm.respondFriendRequest(req.requestId, false) }) {
-                            Text("Decline", fontSize = 12.sp, color = palette.danger)
-                        }
-                    }
-                }
-            } else if (activeTab == "calls") {
-                // Spacious full-width Calls rows so nothing is ever clipped or cut off!
-                if (state.callHistory.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(40.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("No recent voice or video calls yet", color = palette.textSecondary, fontSize = 14.sp)
-                        }
-                    }
-                }
-                items(state.callHistory, key = { "call:${it.id}" }) { entry ->
-                    CallHistoryRowUi(
-                        entry = entry,
-                        onRedial = {
-                            if (me == null) return@CallHistoryRowUi
-                            if (entry.peerId != null) {
-                                val peer = state.friends.firstOrNull { it.id == entry.peerId }
-                                if (peer != null) vm.callEngine.startDmCall(me, peer, entry.mode)
-                            } else if (entry.groupId != null) {
-                                val grp = state.groups.firstOrNull { it.id == entry.groupId }
-                                if (grp != null) vm.callEngine.startGroupCall(me, grp, entry.mode)
+                        items(state.outgoing, key = { "out:${it.requestId}" }) { req ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(palette.bgTertiary)
+                                    .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                JaAvatar(
+                                    avatarUrl = req.user.avatarUrl,
+                                    displayName = req.user.displayName.ifBlank { req.user.username },
+                                    avatarColor = req.user.avatarColor,
+                                    size = 40.dp,
+                                    ringWidth = 2.5.dp,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = req.user.displayName.ifBlank { req.user.username },
+                                        color = palette.textPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                    )
+                                    Text(
+                                        text = "@${req.user.username}",
+                                        color = palette.textSecondary,
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                                Text(
+                                    text = "Pending",
+                                    color = palette.textSecondary,
+                                    fontSize = 13.sp,
+                                )
                             }
                         }
-                    )
-                }
-            } else if (activeTab == "archived") {
-                val archDms = state.friends.mapNotNull { f ->
-                    val p = previewByFriend[f.id]
-                    if (p?.isArchived == true) f to p else null
-                }
-                val archGrps = state.groups.filter { it.isArchived }
-                if (archDms.isEmpty() && archGrps.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(40.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("No archived chats", color = palette.textSecondary, fontSize = 14.sp)
-                        }
                     }
-                }
-                items(archDms, key = { "arch-dm:${it.first.id}" }) { (f, p) ->
-                    DmSidebarRow(
-                        friend = f,
-                        preview = p,
-                        presenceStatus = "offline",
-                        typingToMe = false,
-                        onClick = { vm.openDmChat(f.id) },
-                        onLongClick = { holdTarget = SidebarHoldTarget.Dm(f, p) },
-                    )
-                }
-                items(archGrps, key = { "arch-grp:${it.id}" }) { g ->
-                    GroupSidebarRow(
-                        group = g,
-                        onClick = { vm.openGroupChat(g.id) },
-                        onLongClick = { holdTarget = SidebarHoldTarget.Group(g) },
-                    )
                 }
             }
         }
@@ -687,7 +906,7 @@ fun SidebarScreen(
     holdTarget?.let { target ->
         ModalBottomSheet(
             onDismissRequest = { holdTarget = null },
-            containerColor = palette.surface,
+            containerColor = palette.bgSecondary,
             contentColor = palette.textPrimary,
         ) {
             Column(
@@ -701,7 +920,7 @@ fun SidebarScreen(
                         // Constraint: Holding JaText Community ONLY shows Mute / Unmute!
                         Text(
                             text = "JaText Community",
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.ExtraBold,
                             fontSize = 16.sp,
                             modifier = Modifier.padding(bottom = 10.dp),
                         )
@@ -719,7 +938,7 @@ fun SidebarScreen(
                         val isArchived = target.preview?.isArchived == true
                         Text(
                             text = target.friend.displayName.ifBlank { target.friend.username },
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.ExtraBold,
                             fontSize = 16.sp,
                             modifier = Modifier.padding(bottom = 10.dp),
                         )
@@ -749,7 +968,7 @@ fun SidebarScreen(
                         )
                         ContextActionItem(
                             icon = Icons.Rounded.DeleteSweep,
-                            label = "Remove chat",
+                            label = "Delete chat history",
                             tint = palette.danger,
                             onClick = {
                                 vm.setDmConversationPrefs(target.friend.id, removeChatHistory = true)
@@ -762,7 +981,7 @@ fun SidebarScreen(
                         val isOwner = grp.myRole == "owner" || grp.ownerId == me?.id
                         Text(
                             text = grp.name,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.ExtraBold,
                             fontSize = 16.sp,
                             modifier = Modifier.padding(bottom = 10.dp),
                         )
@@ -799,7 +1018,6 @@ fun SidebarScreen(
                             }
                         )
                         if (!isOwner) {
-                            // Non-owners get Leave group, never "Delete group"!
                             ContextActionItem(
                                 icon = Icons.Rounded.ExitToApp,
                                 label = "Leave group",
@@ -832,101 +1050,101 @@ fun SidebarScreen(
 
     /* ==================== Owner-Only 2-Step Exact-Name Group Deletion Modal ==================== */
     ownerDeleteTarget?.let { grp ->
-        AlertDialog(
-            onDismissRequest = { ownerDeleteTarget = null },
-            containerColor = palette.surface,
-            title = {
+        Dialog(onDismissRequest = { ownerDeleteTarget = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(palette.bgSecondary)
+                    .border(1.dp, palette.border, RoundedCornerShape(22.dp))
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
                 Text(
                     text = if (ownerDeleteStep == 1) "Delete \"${grp.name}\"?" else "Confirm exact group name",
                     color = palette.textPrimary,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
                 )
-            },
-            text = {
                 if (ownerDeleteStep == 1) {
                     Text(
-                        text = "This permanently deletes \"${grp.name}\" and all encrypted messages for every member. This action cannot be undone.",
+                        text = "This permanently deletes \"${grp.name}\" and all messages for every member. This action cannot be undone.",
                         color = palette.textSecondary,
                         fontSize = 14.sp,
+                        lineHeight = 20.sp,
                     )
                 } else {
-                    Column {
-                        Text(
-                            text = "Type \"${grp.name}\" below to permanently delete this group for everyone:",
-                            color = palette.textSecondary,
-                            fontSize = 13.5.sp,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        OutlinedTextField(
-                            value = ownerDeleteTypedName,
-                            onValueChange = { ownerDeleteTypedName = it },
-                            placeholder = { Text(grp.name) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
+                    Text(
+                        text = "Type \"${grp.name}\" below to permanently delete this group for everyone:",
+                        color = palette.textSecondary,
+                        fontSize = 13.5.sp,
+                    )
+                    JaWebInput(
+                        value = ownerDeleteTypedName,
+                        onValueChange = { ownerDeleteTypedName = it },
+                        placeholder = grp.name,
+                    )
                 }
-            },
-            confirmButton = {
-                if (ownerDeleteStep == 1) {
-                    Button(
-                        onClick = { ownerDeleteStep = 2 },
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.danger),
-                    ) {
-                        Text("Continue", color = Color.White)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    JaWebGhostButton(
+                        text = "Cancel",
+                        onClick = { ownerDeleteTarget = null },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    if (ownerDeleteStep == 1) {
+                        JaWebDangerButton(
+                            text = "Continue",
+                            onClick = { ownerDeleteStep = 2 },
+                        )
+                    } else {
+                        JaWebDangerButton(
+                            text = "Delete permanently",
+                            enabled = ownerDeleteTypedName.trim() == grp.name.trim(),
+                            onClick = {
+                                vm.deleteGroupPermanentlyAsOwner(grp.id)
+                                ownerDeleteTarget = null
+                            },
+                        )
                     }
-                } else {
-                    Button(
-                        onClick = {
-                            vm.deleteGroupPermanentlyAsOwner(grp.id)
-                            ownerDeleteTarget = null
-                        },
-                        enabled = ownerDeleteTypedName.trim() == grp.name.trim(),
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.danger),
-                    ) {
-                        Text("Delete permanently", color = Color.White)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { ownerDeleteTarget = null }) {
-                    Text("Cancel", color = palette.textSecondary)
                 }
             }
-        )
+        }
     }
 
-    /* ==================== Multi-Account Switcher Sheet ==================== */
+    /* ==================== Multi-Account Switcher Modal (`AccountSwitcherModal.tsx`) ==================== */
     if (showAccountSwitcher) {
         ModalBottomSheet(
             onDismissRequest = { showAccountSwitcher = false },
-            containerColor = palette.surface,
+            containerColor = palette.bgSecondary,
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = "Accounts on this device",
+                    text = "Switch or add account",
                     color = palette.textPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 17.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 18.sp,
                 )
-                Spacer(Modifier.height(12.dp))
                 state.accounts.forEach { slot ->
                     val active = slot.slotId == state.slotId
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(if (active) palette.accentSoft else palette.bgSecondary)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(if (active) palette.accentSoft else palette.bgTertiary)
                             .border(
                                 1.dp,
                                 if (active) palette.accent else palette.border,
-                                RoundedCornerShape(13.dp)
+                                RoundedCornerShape(16.dp),
                             )
                             .clickable {
                                 showAccountSwitcher = false
@@ -939,7 +1157,8 @@ fun SidebarScreen(
                             avatarUrl = slot.avatarUrl,
                             displayName = slot.displayName.ifBlank { slot.username },
                             avatarColor = slot.avatarColor,
-                            size = 40.dp,
+                            size = 42.dp,
+                            ringWidth = 2.5.dp,
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
@@ -947,166 +1166,199 @@ fun SidebarScreen(
                                 text = slot.displayName.ifBlank { slot.username },
                                 color = palette.textPrimary,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.5.sp,
+                                fontSize = 15.sp,
                             )
                             Text(
                                 text = "@${slot.username}",
                                 color = palette.textSecondary,
-                                fontSize = 12.sp,
+                                fontSize = 12.5.sp,
                             )
                         }
                         if (active) {
-                            Text("Active", color = palette.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(13.dp))
-                        .background(palette.bgSecondary)
-                        .clickable {
-                            showAccountSwitcher = false
-                            vm.startAddAnotherAccount()
-                        }
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Rounded.Add, contentDescription = null, tint = palette.accent)
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = "Add another JaText account",
-                        color = palette.textPrimary,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                TextButton(
-                    onClick = {
-                        showAccountSwitcher = false
-                        vm.signOutCurrentAccount()
-                    },
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Text("Sign out of @${me?.username.orEmpty()}", color = palette.danger)
-                }
-                Spacer(Modifier.height(10.dp))
-            }
-        }
-    }
-
-    /* ==================== Add Friend Dialog ==================== */
-    if (showAddFriendDialog) {
-        var friendHandle by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showAddFriendDialog = false },
-            containerColor = palette.surface,
-            title = { Text("Add Friend", color = palette.textPrimary, fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    Text(
-                        text = "Enter their exact @username to send an encrypted friend invite:",
-                        color = palette.textSecondary,
-                        fontSize = 13.5.sp,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = friendHandle,
-                        onValueChange = { friendHandle = it },
-                        prefix = { Text("@") },
-                        label = { Text("username") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        vm.sendFriendRequest(friendHandle)
-                        showAddFriendDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                ) {
-                    Text("Send Request", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddFriendDialog = false }) {
-                    Text("Cancel", color = palette.textSecondary)
-                }
-            }
-        )
-    }
-
-    /* ==================== Create Group Dialog ==================== */
-    if (showCreateGroupDialog) {
-        var groupName by remember { mutableStateOf("") }
-        val selectedIds = remember { mutableStateListOf<String>() }
-        AlertDialog(
-            onDismissRequest = { showCreateGroupDialog = false },
-            containerColor = palette.surface,
-            title = { Text("New Encrypted Group", color = palette.textPrimary, fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = groupName,
-                        onValueChange = { groupName = it },
-                        label = { Text("Group name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text("Select friends:", color = palette.textSecondary, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
-                    LazyColumn(modifier = Modifier.height(210.dp)) {
-                        items(state.friends, key = { it.id }) { f ->
-                            val checked = selectedIds.contains(f.id)
                             Row(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        if (checked) selectedIds.remove(f.id) else selectedIds.add(f.id)
-                                    }
-                                    .padding(vertical = 6.dp),
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(palette.accent)
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Checkbox(
-                                    checked = checked,
-                                    onCheckedChange = {
-                                        if (it) selectedIds.add(f.id) else selectedIds.remove(f.id)
-                                    }
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = palette.accentDark,
+                                    modifier = Modifier.size(13.dp),
                                 )
-                                Spacer(Modifier.width(6.dp))
+                                Spacer(Modifier.width(3.dp))
                                 Text(
-                                    text = "${f.displayName.ifBlank { f.username }} (@${f.username})",
-                                    color = palette.textPrimary,
-                                    fontSize = 13.5.sp,
+                                    text = "Active",
+                                    color = palette.accentDark,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 11.5.sp,
                                 )
                             }
                         }
                     }
                 }
-            },
-            confirmButton = {
-                Button(
+                JaWebPrimaryButton(
+                    text = "Add another account",
+                    modifier = Modifier.fillMaxWidth(),
                     onClick = {
-                        vm.createNewGroup(groupName, selectedIds.toList())
-                        showCreateGroupDialog = false
+                        showAccountSwitcher = false
+                        vm.startAddAnotherAccount()
                     },
-                    enabled = groupName.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                )
+                JaWebDangerButton(
+                    text = "Sign out of @${me?.username.orEmpty()}",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        showAccountSwitcher = false
+                        vm.signOutCurrentAccount()
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+
+    /* ==================== Create Group Dialog (`.create-group-dialog`) ==================== */
+    if (showCreateGroupDialog) {
+        var groupName by remember { mutableStateOf("") }
+        val selectedIds = remember { mutableStateListOf<String>() }
+        Dialog(onDismissRequest = { showCreateGroupDialog = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(palette.bgSecondary)
+                    .border(1.dp, palette.border, RoundedCornerShape(22.dp))
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Create Group", color = Color.White)
+                    Text(
+                        text = "New group chat",
+                        color = palette.textPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    JaWebIconButton(
+                        icon = Icons.Rounded.Close,
+                        contentDescription = "Close",
+                        size = 34.dp,
+                        iconSize = 16.dp,
+                        onClick = { showCreateGroupDialog = false },
+                    )
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateGroupDialog = false }) {
-                    Text("Cancel", color = palette.textSecondary)
+                JaWebInput(
+                    value = groupName,
+                    onValueChange = { groupName = it },
+                    label = "Group name",
+                    placeholder = "Weekend squad…",
+                )
+                Text(
+                    text = "Add friends (${selectedIds.size} selected)",
+                    color = palette.textSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(state.friends, key = { it.id }) { f ->
+                        val checked = selectedIds.contains(f.id)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(palette.bgTertiary)
+                                .clickable {
+                                    if (checked) selectedIds.remove(f.id) else selectedIds.add(f.id)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            JaAvatar(
+                                avatarUrl = f.avatarUrl,
+                                displayName = f.displayName.ifBlank { f.username },
+                                avatarColor = f.avatarColor,
+                                size = 32.dp,
+                                ringWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = f.displayName.ifBlank { f.username },
+                                    color = palette.textPrimary,
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "@${f.username}",
+                                    color = palette.textSecondary,
+                                    fontSize = 11.5.sp,
+                                )
+                            }
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = {
+                                    if (it) selectedIds.add(f.id) else selectedIds.remove(f.id)
+                                },
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor = palette.accent,
+                                    checkmarkColor = palette.accentDark,
+                                ),
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    JaWebGhostButton(
+                        text = "Cancel",
+                        onClick = { showCreateGroupDialog = false },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    JaWebPrimaryButton(
+                        text = "Create group",
+                        enabled = groupName.trim().isNotEmpty(),
+                        onClick = {
+                            vm.createNewGroup(groupName.trim(), selectedIds.toList())
+                            showCreateGroupDialog = false
+                        },
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun UnreadCountPill(
+    count: Int,
+    muted: Boolean,
+) {
+    val palette = LocalJaTextPalette.current
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (muted) palette.borderStrong else palette.accent)
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = if (count > 99) "99+" else count.toString(),
+            color = if (muted) palette.textPrimary else palette.accentDark,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Black,
         )
     }
 }
@@ -1116,102 +1368,100 @@ fun SidebarScreen(
 private fun DmSidebarRow(
     friend: JaUser,
     preview: ChatPreview?,
+    myUserId: String,
+    isSelected: Boolean,
     presenceStatus: String,
     typingToMe: Boolean,
     onClick: () -> Unit,
+    onAvatarClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
     val palette = LocalJaTextPalette.current
-    val unread = preview?.unreadCount ?: 0
+    val unread = if (isSelected) 0 else (preview?.unreadCount ?: 0)
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (isSelected) palette.bgTertiary else Color.Transparent)
+            .then(
+                if (isSelected) Modifier.border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                else Modifier
+            )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         JaAvatar(
             avatarUrl = friend.avatarUrl,
             displayName = friend.displayName.ifBlank { friend.username },
             avatarColor = friend.avatarColor,
-            size = 46.dp,
+            size = 44.dp,
+            ringWidth = 3.dp,
             presenceStatus = presenceStatus,
-            statusBorderColor = palette.bgPrimary,
+            statusBorderColor = if (isSelected) palette.bgTertiary else palette.bgSecondary,
+            modifier = Modifier.clickable { onAvatarClick() },
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     text = friend.displayName.ifBlank { friend.username },
                     color = palette.textPrimary,
                     fontSize = 15.sp,
-                    fontWeight = if (unread > 0) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    fontWeight = if (unread > 0) FontWeight.ExtraBold else FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                if (preview?.isMuted == true) {
-                    Icon(
-                        imageVector = Icons.Rounded.NotificationsOff,
-                        contentDescription = "Muted",
-                        tint = palette.textTertiary,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Spacer(Modifier.width(5.dp))
-                }
-                preview?.createdAt?.takeIf { it > 0L }?.let {
-                    Text(
-                        text = formatShortTime(it),
-                        color = if (unread > 0) palette.accent else palette.textTertiary,
-                        fontSize = 11.5.sp,
-                        fontWeight = if (unread > 0) FontWeight.Bold else FontWeight.Normal,
-                    )
-                }
-            }
-            Spacer(Modifier.height(2.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Rounded.Lock,
-                    contentDescription = null,
-                    tint = palette.accent.copy(alpha = 0.85f),
-                    modifier = Modifier.size(12.dp),
-                )
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    text = when {
-                        typingToMe -> "typing…"
-                        preview != null && preview.body.isNotBlank() -> preview.body
-                        else -> "Tap to start an encrypted chat"
-                    },
-                    color = when {
-                        typingToMe -> palette.accent
-                        unread > 0 -> palette.textPrimary
-                        else -> palette.textSecondary
-                    },
-                    fontSize = 13.sp,
-                    fontWeight = if (unread > 0 || typingToMe) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (unread > 0) {
-                    Spacer(Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(palette.accent)
-                            .padding(horizontal = 7.dp, vertical = 2.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (preview?.isMuted == true) {
+                        Icon(
+                            imageVector = Icons.Rounded.NotificationsOff,
+                            contentDescription = "Muted",
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(13.dp),
+                        )
+                    }
+                    if (unread > 0) {
+                        UnreadCountPill(count = unread, muted = preview?.isMuted == true)
+                    }
+                    preview?.createdAt?.takeIf { it > 0L }?.let {
                         Text(
-                            text = if (unread > 99) "99+" else unread.toString(),
-                            color = palette.onAccent,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
+                            text = formatShortTime(it),
+                            color = palette.textSecondary,
+                            fontSize = 12.sp,
                         )
                     }
                 }
             }
+            Spacer(Modifier.height(2.dp))
+            val previewCopy = when {
+                typingToMe -> "typing…"
+                preview != null && preview.body.isNotBlank() -> {
+                    val prefix = if (preview.senderId == myUserId) "You: " else ""
+                    "$prefix${preview.body}"
+                }
+                else -> "@${friend.username}"
+            }
+            Text(
+                text = previewCopy,
+                color = when {
+                    typingToMe -> palette.accent
+                    unread > 0 -> palette.textPrimary
+                    else -> palette.textSecondary
+                },
+                fontSize = 13.sp,
+                fontWeight = if (unread > 0 || typingToMe) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -1220,98 +1470,125 @@ private fun DmSidebarRow(
 @Composable
 private fun GroupSidebarRow(
     group: GroupSummary,
+    myUserId: String,
+    isSelected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
     val palette = LocalJaTextPalette.current
-    val unread = group.unreadCount
+    val unread = if (isSelected) 0 else group.unreadCount
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (isSelected) palette.bgTertiary else Color.Transparent)
+            .then(
+                if (isSelected) Modifier.border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                else Modifier
+            )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (!group.avatarUrl.isNullOrBlank()) {
-            JaAvatar(
-                avatarUrl = group.avatarUrl,
-                displayName = group.name,
-                avatarColor = "teal",
-                size = 46.dp,
+            AsyncImage(
+                model = group.avatarUrl,
+                contentDescription = group.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape),
             )
         } else {
             Box(
                 modifier = Modifier
-                    .size(46.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
-                    .background(palette.bgTertiary),
+                    .background(palette.bgTertiary)
+                    .border(1.dp, palette.border, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Groups,
                     contentDescription = group.name,
-                    tint = palette.accent,
-                    modifier = Modifier.size(24.dp),
+                    tint = palette.textPrimary,
+                    modifier = Modifier.size(22.dp),
                 )
             }
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     text = group.name,
                     color = palette.textPrimary,
                     fontSize = 15.sp,
-                    fontWeight = if (unread > 0) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    fontWeight = if (unread > 0) FontWeight.ExtraBold else FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                if (group.isSilenced) {
-                    Icon(
-                        imageVector = Icons.Rounded.NotificationsOff,
-                        contentDescription = "Muted",
-                        tint = palette.textTertiary,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Spacer(Modifier.width(5.dp))
-                }
-                group.lastMessageAt.takeIf { it > 0L }?.let {
-                    Text(
-                        text = formatShortTime(it),
-                        color = if (unread > 0) palette.accent else palette.textTertiary,
-                        fontSize = 11.5.sp,
-                    )
-                }
-            }
-            Spacer(Modifier.height(2.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = group.lastMessage.ifBlank { "${group.memberCount} members" },
-                    color = if (unread > 0) palette.textPrimary else palette.textSecondary,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (unread > 0) {
-                    Spacer(Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(palette.accent)
-                            .padding(horizontal = 7.dp, vertical = 2.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (group.isSilenced) {
+                        Icon(
+                            imageVector = Icons.Rounded.NotificationsOff,
+                            contentDescription = "Silenced",
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(13.dp),
+                        )
+                    }
+                    if (group.lastMentionedMe && !isSelected) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(palette.accent)
+                                .padding(horizontal = 6.dp, vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "@",
+                                color = palette.accentDark,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Black,
+                            )
+                        }
+                    }
+                    if (unread > 0) {
+                        UnreadCountPill(count = unread, muted = group.isSilenced || group.isArchived)
+                    }
+                    group.lastMessageAt.takeIf { it > 0L }?.let {
                         Text(
-                            text = if (unread > 99) "99+" else unread.toString(),
-                            color = palette.onAccent,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
+                            text = formatShortTime(it),
+                            color = palette.textSecondary,
+                            fontSize = 12.sp,
                         )
                     }
                 }
             }
+            Spacer(Modifier.height(2.dp))
+            val subText = if (group.lastMessage.isNotBlank()) {
+                val prefix = when {
+                    group.lastSenderId == myUserId -> "You: "
+                    !group.lastSenderName.isNullOrBlank() -> "${group.lastSenderName}: "
+                    else -> ""
+                }
+                "$prefix${group.lastMessage}"
+            } else {
+                "${group.memberCount} members"
+            }
+            Text(
+                text = subText,
+                color = if (unread > 0) palette.textPrimary else palette.textSecondary,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -1319,14 +1596,33 @@ private fun GroupSidebarRow(
 @Composable
 private fun CallHistoryRowUi(
     entry: CallHistoryEntry,
-    onRedial: () -> Unit,
+    handleText: String,
+    presenceStatus: String?,
+    onRowClick: () -> Unit,
+    onVoiceCall: () -> Unit,
+    onVideoCall: () -> Unit,
 ) {
     val palette = LocalJaTextPalette.current
+    val isMissed = entry.status == "missed" || entry.status == "declined"
+    val stateCopy = when {
+        entry.status == "missed" -> "Missed"
+        entry.status == "declined" -> "Declined"
+        entry.durationSec > 0 -> {
+            val m = entry.durationSec / 60
+            val s = entry.durationSec % 60
+            "%d:%02d".format(m, s)
+        }
+        entry.groupId != null -> "GC VC Ended"
+        else -> "Ended"
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onRedial() }
-            .padding(horizontal = 16.dp, vertical = 11.dp),
+            .clip(RoundedCornerShape(16.dp))
+            .background(palette.bgTertiary)
+            .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+            .clickable { onRowClick() }
+            .padding(11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         JaAvatar(
@@ -1334,14 +1630,36 @@ private fun CallHistoryRowUi(
             displayName = entry.title,
             avatarColor = entry.avatarColor,
             size = 44.dp,
+            ringWidth = 2.5.dp,
+            presenceStatus = presenceStatus,
+            statusBorderColor = palette.bgTertiary,
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = entry.title,
+                    color = palette.textPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = formatShortTime(entry.timestamp),
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                )
+            }
             Text(
-                text = entry.title,
-                color = palette.textPrimary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
+                text = handleText,
+                color = palette.textSecondary,
+                fontSize = 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1350,24 +1668,34 @@ private fun CallHistoryRowUi(
                 Icon(
                     imageVector = if (entry.direction == "outgoing") Icons.Rounded.CallMade else Icons.Rounded.CallReceived,
                     contentDescription = null,
-                    tint = if (entry.status == "missed" || entry.status == "declined") palette.danger else palette.success,
-                    modifier = Modifier.size(14.dp),
+                    tint = if (isMissed) palette.danger else palette.success,
+                    modifier = Modifier.size(13.dp),
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    text = "${entry.mode.replaceFirstChar { it.uppercase() }} • ${formatShortTime(entry.timestamp)}",
-                    color = palette.textSecondary,
-                    fontSize = 12.5.sp,
+                    text = "${if (entry.direction == "outgoing") "Outgoing" else "Incoming"} · ${if (entry.mode == "video") "Video" else "Voice"} · $stateCopy",
+                    color = if (isMissed) palette.danger else palette.textSecondary,
+                    fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        IconButton(onClick = onRedial) {
-            Icon(
-                imageVector = if (entry.mode == "video") Icons.Rounded.Videocam else Icons.Rounded.Call,
-                contentDescription = "Call back",
-                tint = palette.accent,
+        Spacer(Modifier.width(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            JaWebIconButton(
+                icon = Icons.Rounded.Call,
+                contentDescription = "Voice Call",
+                size = 36.dp,
+                iconSize = 16.dp,
+                onClick = onVoiceCall,
+            )
+            JaWebIconButton(
+                icon = Icons.Rounded.Videocam,
+                contentDescription = "Video Call",
+                size = 36.dp,
+                iconSize = 16.dp,
+                onClick = onVideoCall,
             )
         }
     }
@@ -1390,9 +1718,9 @@ private fun ContextActionItem(
             .padding(horizontal = 12.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(imageVector = icon, contentDescription = null, tint = resolvedTint, modifier = Modifier.size(21.dp))
-        Spacer(Modifier.width(14.dp))
-        Text(text = label, color = resolvedTint, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Icon(imageVector = icon, contentDescription = null, tint = resolvedTint, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(13.dp))
+        Text(text = label, color = resolvedTint, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

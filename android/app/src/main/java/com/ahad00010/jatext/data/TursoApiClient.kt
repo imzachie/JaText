@@ -456,18 +456,27 @@ object TursoApiClient {
     }
 
     suspend fun fetchLatestApkManifest(): ApkVersionManifest? = withContext(Dispatchers.IO) {
-        try {
-            val req = Request.Builder()
-                .url("$apiOrigin/apk-version.json?t=${System.currentTimeMillis()}")
-                .get()
-                .build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@withContext null
-                JaTextJson.decodeFromString<ApkVersionManifest>(resp.body?.string().orEmpty())
+        val candidateUrls = listOf(
+            "$apiOrigin/apk-version.json?t=${System.currentTimeMillis()}",
+            "https://jatext.vercel.app/apk-version.json?t=${System.currentTimeMillis()}",
+        ).distinct()
+        for (url in candidateUrls) {
+            try {
+                val req = Request.Builder()
+                    .url(url)
+                    .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    .header("Pragma", "no-cache")
+                    .get()
+                    .build()
+                val parsed = httpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) null
+                    else JaTextJson.decodeFromString<ApkVersionManifest>(resp.body?.string().orEmpty())
+                }
+                if (parsed != null && parsed.versionCode > 0) return@withContext parsed
+            } catch (_: Throwable) {
             }
-        } catch (_: Throwable) {
-            null
         }
+        null
     }
 
     suspend fun downloadApkFile(

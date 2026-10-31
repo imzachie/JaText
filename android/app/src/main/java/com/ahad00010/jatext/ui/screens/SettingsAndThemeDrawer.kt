@@ -93,10 +93,16 @@ import com.ahad00010.jatext.data.UserWebsiteLink
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.state.SessionUiState
 import com.ahad00010.jatext.ui.components.JaAvatar
+import com.ahad00010.jatext.ui.components.JaWebGhostButton
+import com.ahad00010.jatext.ui.components.JaWebIconButton
+import com.ahad00010.jatext.ui.components.JaWebInput
+import com.ahad00010.jatext.ui.components.JaWebPrimaryButton
+import com.ahad00010.jatext.ui.theme.AVATAR_COLOR_SPECS
 import com.ahad00010.jatext.ui.theme.COLOUR_THEME_PRESETS
 import com.ahad00010.jatext.ui.theme.CustomThemeData
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
+import com.ahad00010.jatext.ui.theme.stripProfileMetaFromColorId
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -139,29 +145,32 @@ fun SettingsModalScreen(
                 .background(palette.bgSecondary)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Settings",
                     color = palette.textPrimary,
                     fontSize = 19.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.Black,
                 )
                 Text(
-                    text = "JaText Native Android v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
+                    text = "JaText v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
                     color = palette.textSecondary,
                     fontSize = 11.5.sp,
                 )
             }
-            IconButton(
+            JaWebGhostButton(
+                text = "Check updates",
+                onClick = { vm.checkApkUpdate(manual = true) },
+            )
+            JaWebIconButton(
+                icon = Icons.Rounded.Close,
+                contentDescription = "Close Settings",
+                size = 38.dp,
+                iconSize = 18.dp,
                 onClick = onClose,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(palette.bgTertiary),
-            ) {
-                Icon(Icons.Rounded.Close, contentDescription = "Close Settings", tint = palette.textPrimary, modifier = Modifier.size(19.dp))
-            }
+            )
         }
 
         /* ==================== Categorized Settings Navigation ==================== */
@@ -215,12 +224,16 @@ fun SettingsModalScreen(
                     var username by remember(me.id) { mutableStateOf(me.username) }
                     var pronouns by remember(me.id) { mutableStateOf(me.pronouns) }
                     var bio by remember(me.id) { mutableStateOf(me.bio) }
-                    var avatarColor by remember(me.id) { mutableStateOf(me.avatarColor.ifBlank { "purple" }) }
+                    var avatarColor by remember(me.id) { mutableStateOf(stripProfileMetaFromColorId(me.avatarColor)) }
                     var customStatus by remember(me.id) { mutableStateOf(me.customStatus.orEmpty()) }
                     var statusPref by remember(me.id) { mutableStateOf(me.statusPreference.orEmpty().ifBlank { "online" }) }
                     var avatarUri by remember { mutableStateOf<Uri?>(null) }
                     var bannerUri by remember { mutableStateOf<Uri?>(null) }
                     var saving by remember { mutableStateOf(false) }
+
+                    val colorSpec = remember(avatarColor) {
+                        JaTextThemeManager.avatarColorSpec(avatarColor)
+                    }
 
                     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) {
                         if (it != null) avatarUri = it
@@ -229,26 +242,28 @@ fun SettingsModalScreen(
                         if (it != null) bannerUri = it
                     }
 
-                    // Profile Banner + Avatar Preview Card
-                    Box(
+                    // 1:1 Web `ProfileForm.tsx` `.pf-preview` (`2.5dp` `--profile-outline` `color.hex` border!)
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(palette.surface)
-                            .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(palette.bgSecondary)
+                            .border(2.5.dp, colorSpec.ringColor, RoundedCornerShape(18.dp))
                     ) {
-                        Column {
+                        Box(modifier = Modifier.fillMaxWidth()) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(104.dp)
+                                    .height(114.dp)
                                     .background(
                                         Brush.linearGradient(
-                                            JaTextThemeManager.avatarGradientColors(avatarColor)
+                                            listOf(
+                                                colorSpec.ringColor.copy(alpha = 0.44f),
+                                                palette.bgTertiary,
+                                            )
                                         )
                                     )
                                     .clickable { bannerPicker.launch("image/*") },
-                                contentAlignment = Alignment.TopEnd,
                             ) {
                                 val shownBanner = bannerUri?.toString() ?: me.bannerUrl
                                 if (!shownBanner.isNullOrBlank()) {
@@ -261,132 +276,175 @@ fun SettingsModalScreen(
                                 }
                                 Box(
                                     modifier = Modifier
-                                        .padding(8.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(0x88000000))
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        .align(Alignment.BottomCenter)
+                                        .fillMaxWidth()
+                                        .height(2.5.dp)
+                                        .background(colorSpec.ringColor)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(10.dp)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(Color(0x940A0A10))
+                                        .border(1.dp, Color(0x38FFFFFF), RoundedCornerShape(999.dp))
+                                        .padding(horizontal = 10.dp, vertical = 5.dp)
                                 ) {
-                                    Text("Change banner", color = Color.White, fontSize = 11.sp)
+                                    Text("Upload banner", color = Color(0xFFF2F2F7), fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
-                            Row(
+
+                            Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                                    .padding(start = 16.dp, top = 70.dp)
+                                    .size(90.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.bgSecondary)
+                                    .clickable { avatarPicker.launch("image/*") },
+                                contentAlignment = Alignment.Center,
                             ) {
-                                Box(modifier = Modifier.clickable { avatarPicker.launch("image/*") }) {
-                                    JaAvatar(
-                                        avatarUrl = avatarUri?.toString() ?: me.avatarUrl,
-                                        displayName = displayName.ifBlank { username },
-                                        avatarColor = avatarColor,
-                                        size = 62.dp,
-                                        presenceStatus = statusPref,
-                                        statusBorderColor = palette.surface,
-                                    )
-                                }
-                                Spacer(Modifier.width(12.dp))
-                                Column {
-                                    Text(
-                                        text = displayName.ifBlank { username },
-                                        color = palette.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp,
-                                    )
-                                    Text(
-                                        text = "@$username • Tap photo to upload",
-                                        color = palette.textSecondary,
-                                        fontSize = 12.sp,
-                                    )
-                                }
+                                JaAvatar(
+                                    avatarUrl = avatarUri?.toString() ?: me.avatarUrl,
+                                    displayName = displayName.ifBlank { username },
+                                    avatarColor = avatarColor,
+                                    size = 82.dp,
+                                    ringWidth = 3.5.dp,
+                                    presenceStatus = statusPref,
+                                    statusBorderColor = palette.bgSecondary,
+                                )
                             }
+                        }
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 18.dp, vertical = 12.dp),
+                        ) {
+                            Text(
+                                text = displayName.ifBlank { username },
+                                color = palette.textPrimary,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 18.sp,
+                            )
+                            Text(
+                                text = "@$username · Tap avatar to change photo",
+                                color = palette.textSecondary,
+                                fontSize = 12.5.sp,
+                            )
                         }
                     }
 
                     Spacer(Modifier.height(16.dp))
 
                     // Presence Status Picker
-                    Text("Online Status", color = palette.textSecondary, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Online Status", color = palette.textSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         listOf("online" to "Online", "idle" to "Idle", "dnd" to "Do Not Disturb", "offline" to "Invisible").forEach { (id, lbl) ->
                             val active = statusPref == id
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
+                                    .clip(RoundedCornerShape(999.dp))
                                     .background(if (active) palette.accentSoft else palette.bgSecondary)
-                                    .border(1.dp, if (active) palette.accent else palette.border, RoundedCornerShape(10.dp))
+                                    .border(1.dp, if (active) palette.accent else palette.border, RoundedCornerShape(999.dp))
                                     .clickable {
                                         statusPref = id
                                         vm.setPresenceStatus(id, customStatus)
                                     }
-                                    .padding(horizontal = 10.dp, vertical = 7.dp)
+                                    .padding(horizontal = 12.dp, vertical = 7.dp)
                             ) {
-                                Text(lbl, color = if (active) palette.accent else palette.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(lbl, color = if (active) palette.textPrimary else palette.textSecondary, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
 
                     Spacer(Modifier.height(14.dp))
-                    OutlinedTextField(
+                    JaWebInput(
                         value = customStatus,
                         onValueChange = { customStatus = it.take(80) },
-                        label = { Text("Custom Status") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        label = "Custom status",
+                        placeholder = "What are you up to?",
                     )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
+                    Spacer(Modifier.height(12.dp))
+                    JaWebInput(
                         value = displayName,
                         onValueChange = { displayName = it },
-                        label = { Text("Display Name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        label = "Display name",
+                        placeholder = "Your display name",
                     )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
+                    Spacer(Modifier.height(12.dp))
+                    JaWebInput(
                         value = username,
-                        onValueChange = { username = it.lowercase().filter { ch -> ch.isLetterOrDigit() || ch == '.' || ch == '_' } },
-                        label = { Text("Username (14-day change cooldown)") },
-                        prefix = { Text("@") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        onValueChange = { username = it.lowercase().filter { ch -> ch.isLetterOrDigit() || ch == '.' || ch == '_' || ch == '-' } },
+                        label = "Username (14-day change cooldown)",
+                        leadingPrefix = "@",
+                        placeholder = "your-username",
                     )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
+                    Spacer(Modifier.height(12.dp))
+                    JaWebInput(
                         value = pronouns,
                         onValueChange = { pronouns = it.take(32) },
-                        label = { Text("Pronouns") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        label = "Pronouns",
+                        placeholder = "they/them, he/him, she/her…",
                     )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
+                    Spacer(Modifier.height(12.dp))
+                    JaWebInput(
                         value = bio,
                         onValueChange = { bio = it.take(190) },
-                        label = { Text("Bio") },
-                        maxLines = 3,
-                        modifier = Modifier.fillMaxWidth(),
+                        label = "Bio (${bio.length}/190)",
+                        placeholder = "Tell friends a little about yourself…",
+                        singleLine = false,
+                        maxLines = 4,
                     )
 
-                    Spacer(Modifier.height(14.dp))
-                    Text("Avatar Accent", color = palette.textSecondary, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Avatar colour & profile outline", color = palette.textSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        listOf("purple", "blue", "green", "pink", "orange", "teal", "red", "yellow").forEach { c ->
-                            Box(
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        AVATAR_COLOR_SPECS.forEach { spec ->
+                            val selected = avatarColor == spec.id
+                            Row(
                                 modifier = Modifier
-                                    .size(30.dp)
-                                    .clip(CircleShape)
-                                    .background(Brush.linearGradient(JaTextThemeManager.avatarGradientColors(c)))
-                                    .border(if (avatarColor == c) 2.5.dp else 0.dp, Color.White, CircleShape)
-                                    .clickable { avatarColor = c }
-                            )
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (selected) palette.accentSoft else palette.bgSecondary)
+                                    .border(
+                                        width = if (selected) 1.5.dp else 1.dp,
+                                        color = if (selected) spec.ringColor else palette.border,
+                                        shape = RoundedCornerShape(12.dp),
+                                    )
+                                    .clickable { avatarColor = spec.id }
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clip(CircleShape)
+                                        .background(Brush.linearGradient(spec.gradientStops))
+                                        .border(1.5.dp, spec.ringColor, CircleShape)
+                                )
+                                Text(
+                                    text = spec.name,
+                                    color = palette.textPrimary,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
                         }
                     }
 
-                    Spacer(Modifier.height(18.dp))
-                    Button(
+                    Spacer(Modifier.height(20.dp))
+                    JaWebPrimaryButton(
+                        text = if (saving) "Saving…" else "Save profile",
+                        enabled = !saving,
+                        modifier = Modifier.fillMaxWidth(),
                         onClick = {
                             saving = true
                             vm.setPresenceStatus(statusPref, customStatus)
@@ -409,17 +467,7 @@ fun SettingsModalScreen(
                                 }
                             }
                         },
-                        enabled = !saving,
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                        shape = RoundedCornerShape(13.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                    ) {
-                        if (saving) {
-                            CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                        } else {
-                            Text("Save Profile", color = Color.White, fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    )
                 }
 
                 "appearance" -> {

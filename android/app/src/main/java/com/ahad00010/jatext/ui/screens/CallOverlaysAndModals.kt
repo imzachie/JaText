@@ -1,10 +1,13 @@
 package com.ahad00010.jatext.ui.screens
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -79,6 +82,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -89,10 +93,15 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.ahad00010.jatext.BuildConfig
+import com.ahad00010.jatext.R
+import com.ahad00010.jatext.data.ApkVersionManifest
 import com.ahad00010.jatext.data.GroupDetails
 import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.ui.components.JaAvatar
+import com.ahad00010.jatext.ui.components.JaWebGhostButton
+import com.ahad00010.jatext.ui.components.JaWebInput
+import com.ahad00010.jatext.ui.components.JaWebPrimaryButton
 import com.ahad00010.jatext.ui.icons.OwnerCrownVectorBadge
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
@@ -194,6 +203,25 @@ fun NativeCallOverlay(
             delay(1000L)
         }
         if (!callState.active) elapsedSec = 0L
+    }
+
+    val callPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val micOk = results[Manifest.permission.RECORD_AUDIO] == true ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val camOk = results[Manifest.permission.CAMERA] == true ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        callEngine.onCallPermissionsResult(micGranted = micOk, cameraGranted = camOk)
+    }
+
+    LaunchedEffect(callState.pendingPermissionRequest?.id) {
+        val req = callState.pendingPermissionRequest ?: return@LaunchedEffect
+        val perms = buildList {
+            add(Manifest.permission.RECORD_AUDIO)
+            if (req.needsCamera) add(Manifest.permission.CAMERA)
+        }
+        callPermissionLauncher.launch(perms.toTypedArray())
     }
 
     val screenShareLauncher = rememberLauncherForActivityResult(
@@ -717,12 +745,13 @@ private fun CallDockCircleButton(
     active: Boolean,
     onClick: () -> Unit,
 ) {
+    val palette = LocalJaTextPalette.current
     Box(
         modifier = Modifier
             .size(48.dp)
             .clip(CircleShape)
-            .background(if (active) Color(0xFF2B3548) else Color(0xFF181E29))
-            .border(1.dp, if (active) Color(0xFF10B981) else Color(0x28FFFFFF), CircleShape)
+            .background(if (active) palette.accentSoft else Color(0xFF1B1B26))
+            .border(1.dp, if (active) palette.accent else Color(0x28FFFFFF), CircleShape)
             .clickable { onClick() },
         contentAlignment = Alignment.Center,
     ) {
@@ -731,8 +760,9 @@ private fun CallDockCircleButton(
 }
 
 /**
- * Peer "View profile" Modal featuring Banner, Bio, Socials & Website,
- * and a compact E2EE Key Box with proper card outline + "Verify security code"!
+ * Exact 1:1 Web `ProfileCard.tsx` Modal (`2.5dp` `--profile-outline` `color.hex` border,
+ * `2.5dp` banner bottom divider, overlapping `84dp` `JaAvatar` with `3.5dp` ring,
+ * Bio, Socials & Website, and compact E2EE Key Box with "Verify security code")!
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -744,155 +774,252 @@ fun PeerProfileBottomModal(
 ) {
     val context = LocalContext.current
     val palette = LocalJaTextPalette.current
+    val colorSpec = remember(peer.avatarColor) {
+        JaTextThemeManager.avatarColorSpec(peer.avatarColor)
+    }
 
     val securityPair by produceState<Pair<String, String>?>(initialValue = null, peer.id) {
         value = vm.computePeerSecurityCode(peer.id)
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = palette.surface,
-    ) {
+    Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(palette.bgSecondary)
+                .border(2.5.dp, colorSpec.ringColor, RoundedCornerShape(22.dp))
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(96.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Brush.linearGradient(JaTextThemeManager.avatarGradientColors(peer.avatarColor)))
-            ) {
-                if (!peer.bannerUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = peer.bannerUrl,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(126.dp)
+                        .background(
+                            Brush.linearGradient(
+                                listOf(
+                                    colorSpec.ringColor.copy(alpha = 0.45f),
+                                    palette.bgTertiary,
+                                )
+                            )
+                        )
+                ) {
+                    if (!peer.bannerUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = peer.bannerUrl,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(2.5.dp)
+                            .background(colorSpec.ringColor)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp)
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x940A0A10))
+                            .border(1.dp, Color(0x38FFFFFF), CircleShape)
+                            .clickable { onDismiss() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Close",
+                            tint = Color(0xFFF2F2F7),
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .padding(start = 18.dp, top = 80.dp)
+                        .size(92.dp)
+                        .clip(CircleShape)
+                        .background(palette.bgSecondary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    JaAvatar(
+                        avatarUrl = peer.avatarUrl,
+                        displayName = peer.displayName.ifBlank { peer.username },
+                        avatarColor = peer.avatarColor,
+                        size = 84.dp,
+                        ringWidth = 3.5.dp,
                     )
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                JaAvatar(peer.avatarUrl, peer.displayName.ifBlank { peer.username }, peer.avatarColor, size = 58.dp)
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = peer.displayName.ifBlank { peer.username },
                             color = palette.textPrimary,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Black,
                         )
                         if (peer.isOwner) {
-                            Spacer(Modifier.width(5.dp))
-                            OwnerCrownVectorBadge(size = 15.dp)
+                            Spacer(Modifier.width(6.dp))
+                            OwnerCrownVectorBadge(size = 16.dp)
                         }
                     }
-                    Text(
-                        text = buildString {
-                            append("@${peer.username}")
-                            if (peer.pronouns.isNotBlank()) append(" • ${peer.pronouns}")
-                        },
-                        color = palette.textSecondary,
-                        fontSize = 13.sp,
-                    )
-                }
-            }
-
-            if (peer.bio.isNotBlank()) {
-                Spacer(Modifier.height(12.dp))
-                Text(peer.bio, color = palette.textPrimary, fontSize = 14.sp, lineHeight = 19.sp)
-            }
-
-            peer.website?.takeIf { it.url.isNotBlank() }?.let { site ->
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(palette.bgSecondary)
-                        .clickable {
-                            try {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(site.url)))
-                            } catch (_: Throwable) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "@${peer.username}",
+                            color = palette.textSecondary,
+                            fontSize = 13.5.sp,
+                        )
+                        if (peer.pronouns.isNotBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(palette.bgTertiary)
+                                    .border(1.dp, palette.border, RoundedCornerShape(999.dp))
+                                    .padding(horizontal = 9.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    text = peer.pronouns,
+                                    color = palette.textSecondary,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
                             }
                         }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(site.title.ifBlank { site.url }, color = palette.accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.width(6.dp))
-                    Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, tint = palette.accent, modifier = Modifier.size(14.dp))
+                    }
                 }
-            }
 
-            if (!peer.socials.isNullOrEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                peer.socials.forEach { soc ->
+                if (peer.bio.isNotBlank()) {
                     Text(
-                        text = "${soc.platform}: ${soc.handle.ifBlank { soc.url }}",
-                        color = palette.textSecondary,
-                        fontSize = 12.5.sp,
+                        text = peer.bio,
+                        color = palette.textPrimary,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                    )
+                }
+
+                peer.website?.takeIf { it.url.isNotBlank() }?.let { site ->
+                    Row(
                         modifier = Modifier
-                            .padding(vertical = 2.dp)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(palette.bgTertiary)
+                            .border(1.dp, palette.border, RoundedCornerShape(12.dp))
                             .clickable {
-                                if (soc.url.startsWith("http")) {
-                                    try {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(soc.url)))
-                                    } catch (_: Throwable) {
-                                    }
+                                try {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(site.url)))
+                                } catch (_: Throwable) {
                                 }
                             }
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // Compact E2EE Key Box with proper card outline!
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(palette.bgSecondary)
-                    .border(1.dp, palette.borderStrong, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Lock, null, tint = palette.accent, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("End-to-End Encrypted", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = site.title.ifBlank { site.url },
+                            color = palette.accent,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                            contentDescription = null,
+                            tint = palette.accent,
+                            modifier = Modifier.size(15.dp),
+                        )
                     }
+                }
+
+                if (!peer.socials.isNullOrEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        peer.socials.forEach { soc ->
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(palette.bgTertiary)
+                                    .border(1.dp, palette.border, RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        if (soc.url.startsWith("http")) {
+                                            try {
+                                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(soc.url)))
+                                            } catch (_: Throwable) {
+                                            }
+                                        }
+                                    }
+                                    .padding(horizontal = 11.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "${soc.platform}: ${soc.handle.ifBlank { soc.url }}",
+                                    color = palette.textPrimary,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Compact E2EE Key Box with proper card outline!
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(palette.bgTertiary)
+                        .border(1.dp, palette.border, RoundedCornerShape(13.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Lock, null, tint = palette.accent, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "End-to-End Encrypted",
+                                color = palette.textPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.5.sp,
+                            )
+                        }
+                        Text(
+                            text = "Verify code",
+                            color = palette.accent,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 12.sp,
+                            modifier = Modifier.clickable {
+                                onDismiss()
+                                onOpenVerifySecurityCode()
+                            },
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "Verify code",
-                        color = palette.accent,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
-                        modifier = Modifier.clickable {
-                            onDismiss()
-                            onOpenVerifySecurityCode()
-                        },
+                        text = securityPair?.second ?: "Fetching P-256 identity key…",
+                        color = palette.textSecondary,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
                     )
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = securityPair?.second ?: "Fetching P-256 identity key…",
-                    color = palette.textSecondary,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                )
             }
-
-            Spacer(Modifier.height(18.dp))
         }
     }
 }
@@ -1007,20 +1134,17 @@ fun GroupMembersBottomModal(
 
             if (details.myRole == "owner" || details.myRole == "admin") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
+                    JaWebInput(
                         value = newName,
                         onValueChange = { newName = it },
-                        label = { Text("Rename group") },
-                        singleLine = true,
+                        placeholder = "Rename group",
                         modifier = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(8.dp))
-                    Button(
+                    JaWebPrimaryButton(
+                        text = "Save",
                         onClick = { vm.renameGroup(details.id, newName) },
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-                    ) {
-                        Text("Save", color = Color.White)
-                    }
+                    )
                 }
                 Spacer(Modifier.height(12.dp))
             }
@@ -1118,31 +1242,161 @@ fun EnableCallAndAlertPermissionsModal(
 @Composable
 fun PostUpdateWelcomeDialog(onDismiss: () -> Unit) {
     val palette = LocalJaTextPalette.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = palette.surface,
-        title = {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .background(palette.bgSecondary)
+                .border(1.dp, palette.border, RoundedCornerShape(22.dp))
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.jatext_logo_icon),
+                contentDescription = "JaText",
+                modifier = Modifier.size(54.dp),
+            )
             Text(
                 text = "Welcome to JaText v${BuildConfig.VERSION_NAME}!",
                 color = palette.textPrimary,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.Black,
+                fontSize = 19.sp,
+                textAlign = TextAlign.Center,
             )
-        },
-        text = {
             Text(
-                text = "JaText Android is now 100% Pure Native Jetpack Compose (zero WebView!) with native 120Hz GPU scrolling, in-app Google Sign-In, instant offline caching, and full E2EE + WebRTC parity.",
+                text = "You're now running JaText v${BuildConfig.VERSION_NAME} with 1:1 Web UI parity, fixed in-app Google Sign-In, upgraded E2EE key compatibility, and smooth encrypted voice & video calls.",
                 color = palette.textSecondary,
                 fontSize = 13.5.sp,
-                lineHeight = 19.sp,
+                lineHeight = 19.5.sp,
+                textAlign = TextAlign.Center,
             )
-        },
-        confirmButton = {
-            Button(
+            JaWebPrimaryButton(
+                text = "Let's go!",
+                modifier = Modifier.fillMaxWidth(),
                 onClick = onDismiss,
-                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+            )
+        }
+    }
+}
+
+/**
+ * Global Mobile-Only "Update your JaText version!" Modal (`MobileUpdateGate.tsx` 1:1)!
+ * Mounted at the root of `MainActivity` so it triggers immediately on ANY screen
+ * (including Login, Onboarding, Sidebar, Chat, and Settings) whenever a newer APK is live!
+ */
+@Composable
+fun MobileUpdatePromptModal(
+    manifest: ApkVersionManifest,
+    downloadingProgress: Int?,
+    onInstallClick: () -> Unit,
+    onLaterClick: () -> Unit,
+) {
+    val palette = LocalJaTextPalette.current
+    val isDownloading = downloadingProgress != null
+    Dialog(
+        onDismissRequest = {
+            if (!isDownloading) onLaterClick()
+        },
+        properties = DialogProperties(dismissOnBackPress = !isDownloading, dismissOnClickOutside = !isDownloading),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xFF14141D))
+                .border(1.5.dp, palette.accent.copy(alpha = 0.55f), RoundedCornerShape(24.dp))
+                .padding(horizontal = 24.dp, vertical = 26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.jatext_logo_icon),
+                contentDescription = "JaText",
+                modifier = Modifier.size(58.dp),
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(palette.accentSoft)
+                    .border(1.dp, palette.accent.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
             ) {
-                Text("Let's go!", color = Color.White, fontWeight = FontWeight.Bold)
+                Text(
+                    text = "NEW RELEASE · v${manifest.versionName} (Build ${manifest.versionCode})",
+                    color = palette.accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                )
+            }
+            Text(
+                text = "Update your JaText version!",
+                color = Color(0xFFF2F2F7),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Black,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = "A newer version of JaText is ready (installed: v${BuildConfig.VERSION_NAME}). Tap below to download and install the update directly inside the app.",
+                color = Color(0xFF9A9AAD),
+                fontSize = 13.5.sp,
+                lineHeight = 19.5.sp,
+                textAlign = TextAlign.Center,
+            )
+
+            if (isDownloading) {
+                val pct = (downloadingProgress ?: 0).coerceIn(0, 100)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = if (pct >= 100) "Launching Android installer…" else "Downloading update…",
+                            color = Color(0xFFF2F2F7),
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "$pct%",
+                            color = palette.accent,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0xFF262633))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(fraction = (pct / 100f).coerceIn(0.03f, 1f))
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(palette.accent)
+                        )
+                    }
+                }
+            } else {
+                Spacer(Modifier.height(4.dp))
+                JaWebPrimaryButton(
+                    text = "Update to v${manifest.versionName}",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onInstallClick,
+                )
+                JaWebGhostButton(
+                    text = "Remind me later",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onLaterClick,
+                )
             }
         }
-    )
+    }
 }

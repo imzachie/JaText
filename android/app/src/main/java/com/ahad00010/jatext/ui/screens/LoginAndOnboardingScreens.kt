@@ -1,7 +1,6 @@
 package com.ahad00010.jatext.ui.screens
 
 import android.app.Activity
-import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -34,20 +34,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CameraAlt
-import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -58,8 +58,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -68,30 +71,39 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import coil.compose.AsyncImage
 import com.ahad00010.jatext.R
-import com.ahad00010.jatext.auth.GoogleSignInCancelledException
 import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.ui.components.JaAvatar
+import com.ahad00010.jatext.ui.components.JaTabItem
+import com.ahad00010.jatext.ui.components.JaWebGhostButton
+import com.ahad00010.jatext.ui.components.JaWebIconButton
+import com.ahad00010.jatext.ui.components.JaWebInput
+import com.ahad00010.jatext.ui.components.JaWebPrimaryButton
+import com.ahad00010.jatext.ui.components.JaWebTabs
 import com.ahad00010.jatext.ui.icons.GoogleBrandVectorIcon
+import com.ahad00010.jatext.ui.theme.AVATAR_COLOR_SPECS
+import com.ahad00010.jatext.ui.theme.JaTextPalette
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Pure Native Startup Screen showing official JaText logo, "Loading JaText…",
- * and lock vector icon + "End-to-End Encrypted" right underneath.
+ * Pure Native Startup Screen matching `.splash` in src/index.css:
+ * shows official JaText logo, "Loading JaText…", and lock icon + "End-to-End Encrypted" underneath.
  */
 @Composable
 fun JaTextLoadingScreen() {
-    val palette = LocalJaTextPalette.current
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0B0C0E)),
+            .background(Color(0xFF0B0B10)),
         contentAlignment = Alignment.Center,
     ) {
         Column(
@@ -101,22 +113,20 @@ fun JaTextLoadingScreen() {
             Image(
                 painter = painterResource(id = R.drawable.jatext_logo_icon),
                 contentDescription = "JaText Logo",
-                modifier = Modifier
-                    .size(76.dp)
-                    .clip(RoundedCornerShape(20.dp)),
+                modifier = Modifier.size(80.dp),
             )
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(18.dp))
             CircularProgressIndicator(
-                color = palette.accent,
+                color = Color(0xFF9B6CFF),
                 strokeWidth = 2.6.dp,
-                modifier = Modifier.size(28.dp),
+                modifier = Modifier.size(26.dp),
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(14.dp))
             Text(
                 text = "Loading JaText…",
-                color = Color(0xFFF3F4F6),
+                color = Color(0xFFF2F2F7),
                 fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
             )
             Spacer(Modifier.height(8.dp))
             Row(
@@ -126,14 +136,14 @@ fun JaTextLoadingScreen() {
                 Icon(
                     imageVector = Icons.Rounded.Lock,
                     contentDescription = "Encrypted",
-                    tint = Color(0xFF10B981),
+                    tint = Color(0xFF9B6CFF),
                     modifier = Modifier.size(14.dp),
                 )
                 Spacer(Modifier.width(5.dp))
                 Text(
                     text = "End-to-End Encrypted",
-                    color = Color(0xFF9CA3AF),
-                    fontSize = 12.5.sp,
+                    color = Color(0xFF9A9AAD),
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                 )
             }
@@ -142,8 +152,7 @@ fun JaTextLoadingScreen() {
 }
 
 /**
- * Scrollable, responsive, 100% pure-native Login & Sign-Up Screen matching LoginPage.tsx,
- * featuring in-app Google Sign-In via Android Credential Manager (zero Chrome redirect!).
+ * Exact 1:1 recreation of src/components/LoginPage.tsx & `.login-*` in src/index.css!
  */
 @Composable
 fun NativeLoginScreen(
@@ -156,330 +165,572 @@ fun NativeLoginScreen(
     val scope = rememberCoroutineScope()
     val sessionState by vm.state.collectAsState()
 
-    var isSignUp by remember { mutableStateOf(false) }
+    // LoginPage.tsx always uses the signature `:root` dark palette (#0b0b10 / #14141d / #1b1b26 / #262633 / #9b6cff)
+    val loginPalette = remember {
+        JaTextPalette(
+            isDark = true,
+            bgPrimary = Color(0xFF0B0B10),
+            bgSecondary = Color(0xFF14141D),
+            bgTertiary = Color(0xFF1B1B26),
+            surface = Color(0xFF1B1B26),
+            surfaceElevated = Color(0xFF242433),
+            border = Color(0xFF262633),
+            borderStrong = Color(0xFF3A3A4D),
+            textPrimary = Color(0xFFF2F2F7),
+            textSecondary = Color(0xFF9A9AAD),
+            textTertiary = Color(0xFF6E6E82),
+            accent = Color(0xFF9B6CFF),
+            accentDark = Color(0xFF170D2B),
+            accentSoft = Color(0x2E9B6CFF),
+            onAccent = Color.White,
+            success = Color(0xFF22C55E),
+            danger = Color(0xFFEF4444),
+            warning = Color(0xFFF59E0B),
+            rootGradientBrush = null,
+        )
+    }
+
+    var authTab by remember { mutableStateOf("signin") } // "signin" | "signup"
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+    var legalDialogTab by remember { mutableStateOf<String?>(null) } // "terms" | "privacy" | null
 
     val googleBusy = sessionState.googleSignInInFlight
     val activeError = errorMsg?.takeIf { it.isNotBlank() } ?: sessionState.authError
+    val savedAccounts = sessionState.accounts.filter { it.slotId != sessionState.slotId }
 
-    val scrollState = rememberScrollState()
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF0A0D10), Color(0xFF0F1419), Color(0xFF0A0C0F))
-                )
-            )
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding()
-    ) {
-        Column(
+    CompositionLocalProvider(LocalJaTextPalette provides loginPalette) {
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(horizontal = 22.dp, vertical = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+                .background(loginPalette.bgPrimary)
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
         ) {
             Column(
                 modifier = Modifier
-                    .widthIn(max = 420.dp)
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(Color(0xFF15181F))
-                    .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(24.dp))
-                    .padding(horizontal = 24.dp, vertical = 28.dp),
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (isAddingAnotherAccount) {
+                /* ==================== .login-hero ==================== */
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 460.dp)
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp),
+                    horizontalAlignment = Alignment.Start,
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.jatext_logo_full),
+                        contentDescription = "JaText · JAMusic Coding and Research Corp",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .widthIn(max = 250.dp)
+                            .height(58.dp),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "Text your people. Add friends by username, make your profile yours, and chat in real time.",
+                        color = loginPalette.textSecondary,
+                        fontSize = 16.5.sp,
+                        lineHeight = 25.sp,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    LoginHeroBullet(
+                        icon = Icons.Rounded.ChatBubbleOutline,
+                        text = "Real-time chats & attachments",
+                        accent = loginPalette.accent,
+                        textColor = loginPalette.textPrimary,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    LoginHeroBullet(
+                        icon = Icons.Rounded.Palette,
+                        text = "Profile picture, banner & your own avatar color",
+                        accent = loginPalette.accent,
+                        textColor = loginPalette.textPrimary,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    LoginHeroBullet(
+                        icon = Icons.Rounded.Group,
+                        text = "Friend requests: you only chat with people you accept",
+                        accent = loginPalette.accent,
+                        textColor = loginPalette.textPrimary,
+                    )
+                }
+
+                /* ==================== .login-card ==================== */
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 460.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(26.dp))
+                        .background(loginPalette.bgSecondary)
+                        .border(1.dp, loginPalette.border, RoundedCornerShape(26.dp))
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(15.dp),
+                ) {
+                    if (isAddingAnotherAccount) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            JaWebGhostButton(
+                                text = "Back to active account",
+                                leadingIcon = Icons.AutoMirrored.Rounded.ArrowBack,
+                                onClick = onCancelAddAccount,
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(loginPalette.accentSoft)
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.SwapHoriz,
+                                    contentDescription = null,
+                                    tint = loginPalette.accent,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "Adding account",
+                                    color = loginPalette.accent,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    }
+
+                    if (savedAccounts.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(loginPalette.bgTertiary)
+                                .border(1.dp, loginPalette.border, RoundedCornerShape(16.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Saved accounts on this device",
+                                    color = loginPalette.textPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "Tap to switch",
+                                    color = loginPalette.textSecondary,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            savedAccounts.forEach { slot ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(loginPalette.bgSecondary)
+                                        .border(1.dp, loginPalette.border, RoundedCornerShape(12.dp))
+                                        .clickable { vm.switchToAccountSlot(slot.slotId) }
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    JaAvatar(
+                                        avatarUrl = slot.avatarUrl,
+                                        displayName = slot.displayName.ifBlank { slot.username },
+                                        avatarColor = slot.avatarColor,
+                                        size = 34.dp,
+                                        ringWidth = 2.5.dp,
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = slot.displayName.ifBlank { slot.username },
+                                            color = loginPalette.textPrimary,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = if (slot.username.isNotBlank()) "@${slot.username}" else "Saved account",
+                                            color = loginPalette.textSecondary,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = when {
+                            isAddingAnotherAccount && authTab == "signin" -> "Add another account"
+                            isAddingAnotherAccount -> "Create another account"
+                            authTab == "signin" -> "Welcome back"
+                            else -> "Create your account"
+                        },
+                        color = loginPalette.textPrimary,
+                        fontSize = 23.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+
+                    /* ==================== .google-btn (999px white pill) ==================== */
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 12.dp),
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color.White)
+                            .clickable(enabled = !googleBusy && !busy && activity != null) {
+                                val act = activity ?: return@clickable
+                                errorMsg = null
+                                vm.clearAuthError()
+                                vm.startGoogleSignIn(act)
+                            }
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(Color(0xFF202530))
-                                .clickable { onCancelAddAccount() }
-                                .padding(horizontal = 12.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                                contentDescription = "Back",
-                                tint = Color(0xFFE5E7EB),
-                                modifier = Modifier.size(16.dp),
+                        if (googleBusy) {
+                            CircularProgressIndicator(
+                                color = Color(0xFF1F1F1F),
+                                strokeWidth = 2.2.dp,
+                                modifier = Modifier.size(20.dp),
                             )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = "Back to active account",
-                                color = Color(0xFFE5E7EB),
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.Medium,
-                            )
-                        }
-                    }
-                }
-
-                Image(
-                    painter = painterResource(id = R.drawable.jatext_logo_icon),
-                    contentDescription = "JaText",
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(RoundedCornerShape(16.dp)),
-                )
-                Spacer(Modifier.height(14.dp))
-                Text(
-                    text = if (isSignUp) "Create your JaText account" else "Welcome back to JaText",
-                    color = Color.White,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = if (isSignUp) {
-                        "Fast, private, end-to-end encrypted messaging across web and Android."
-                    } else {
-                        "Sign in to sync your encrypted chats, groups, and custom themes."
-                    },
-                    color = Color(0xFF9CA3AF),
-                    fontSize = 13.5.sp,
-                    textAlign = TextAlign.Center,
-                    lineHeight = 19.sp,
-                )
-
-                Spacer(Modifier.height(22.dp))
-
-                // In-App Google Sign-In Button (Credential Manager + 82%-height In-App OAuth Sheet!)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color.White)
-                        .clickable(enabled = !googleBusy && !busy && activity != null) {
-                            val act = activity ?: return@clickable
-                            errorMsg = null
-                            vm.startGoogleSignIn(act)
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (googleBusy) {
-                        CircularProgressIndicator(
-                            color = Color(0xFF111827),
-                            strokeWidth = 2.2.dp,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        } else {
                             GoogleBrandVectorIcon(size = 20.dp)
                             Spacer(Modifier.width(10.dp))
                             Text(
                                 text = "Continue with Google",
-                                color = Color(0xFF111827),
-                                fontSize = 14.5.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF1F1F1F),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
                             )
                         }
                     }
-                }
 
-                Spacer(Modifier.height(18.dp))
+                    /* ==================== .divider ("or") ==================== */
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        HorizontalDivider(color = loginPalette.border, modifier = Modifier.weight(1f))
+                        Text(
+                            text = "   or   ",
+                            color = loginPalette.textSecondary,
+                            fontSize = 13.sp,
+                        )
+                        HorizontalDivider(color = loginPalette.border, modifier = Modifier.weight(1f))
+                    }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    HorizontalDivider(color = Color(0x22FFFFFF), modifier = Modifier.weight(1f))
-                    Text(
-                        text = "  OR CONTINUE WITH EMAIL  ",
-                        color = Color(0xFF6B7280),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
+                    /* ==================== .tabs (Sign in | Sign up) ==================== */
+                    JaWebTabs(
+                        tabs = listOf(
+                            JaTabItem("signin", "Sign in"),
+                            JaTabItem("signup", "Sign up"),
+                        ),
+                        selectedId = authTab,
+                        onSelect = {
+                            authTab = it
+                            errorMsg = null
+                            vm.clearAuthError()
+                        },
                     )
-                    HorizontalDivider(color = Color(0x22FFFFFF), modifier = Modifier.weight(1f))
-                }
 
-                Spacer(Modifier.height(16.dp))
+                    /* ==================== Email & Password Form ==================== */
+                    JaWebInput(
+                        value = email,
+                        onValueChange = {
+                            email = it
+                            errorMsg = null
+                            vm.clearAuthError()
+                        },
+                        label = "Email",
+                        placeholder = "you@example.com",
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Email,
+                            imeAction = ImeAction.Next,
+                        ),
+                    )
 
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it; errorMsg = null; vm.clearAuthError() },
-                    label = { Text("Email address") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Email,
-                        imeAction = ImeAction.Next,
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFF10B981),
-                        unfocusedBorderColor = Color(0x33FFFFFF),
-                        focusedLabelColor = Color(0xFF10B981),
-                        unfocusedLabelColor = Color(0xFF9CA3AF),
-                    ),
-                    shape = RoundedCornerShape(13.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it; errorMsg = null; vm.clearAuthError() },
-                    label = { Text(if (isSignUp) "Password (8+ characters)" else "Password") },
-                    singleLine = true,
-                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
-                        imeAction = ImeAction.Done,
-                    ),
-                    trailingIcon = {
-                        IconButton(onClick = { showPassword = !showPassword }) {
+                    JaWebInput(
+                        value = password,
+                        onValueChange = {
+                            password = it
+                            errorMsg = null
+                            vm.clearAuthError()
+                        },
+                        label = "Password",
+                        placeholder = "••••••••",
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done,
+                        ),
+                        trailingContent = {
                             Icon(
                                 imageVector = if (showPassword) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
                                 contentDescription = if (showPassword) "Hide password" else "Show password",
-                                tint = Color(0xFF9CA3AF),
+                                tint = loginPalette.textSecondary,
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clickable { showPassword = !showPassword },
                             )
-                        }
-                    },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFF10B981),
-                        unfocusedBorderColor = Color(0x33FFFFFF),
-                        focusedLabelColor = Color(0xFF10B981),
-                        unfocusedLabelColor = Color(0xFF9CA3AF),
-                    ),
-                    shape = RoundedCornerShape(13.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                if (!activeError.isNullOrBlank()) {
-                    Spacer(Modifier.height(12.dp))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(11.dp))
-                            .background(Color(0x29EF4444))
-                            .border(1.dp, Color(0x55EF4444), RoundedCornerShape(11.dp))
-                            .padding(horizontal = 12.dp, vertical = 10.dp)
-                    ) {
-                        Text(
-                            text = activeError,
-                            color = Color(0xFFFCA5A5),
-                            fontSize = 12.5.sp,
-                            lineHeight = 17.sp,
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(18.dp))
-
-                Button(
-                    onClick = {
-                        if (email.isBlank() || password.isBlank()) {
-                            errorMsg = "Please enter both your email and password."
-                            return@Button
-                        }
-                        busy = true
-                        errorMsg = null
-                        scope.launch {
-                            try {
-                                if (isSignUp) {
-                                    vm.signUpEmail(email, password)
-                                } else {
-                                    vm.signInEmail(email, password)
-                                }
-                            } catch (e: Throwable) {
-                                errorMsg = e.message ?: "Authentication failed"
-                            } finally {
-                                busy = false
-                            }
-                        }
-                    },
-                    enabled = !busy && !googleBusy,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF10B981),
-                        contentColor = Color.White,
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp),
-                ) {
-                    if (busy) {
-                        CircularProgressIndicator(
-                            color = Color.White,
-                            strokeWidth = 2.2.dp,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    } else {
-                        Text(
-                            text = if (isSignUp) "Create Account" else "Sign In",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(16.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    Text(
-                        text = if (isSignUp) "Already have an account? " else "New to JaText? ",
-                        color = Color(0xFF9CA3AF),
-                        fontSize = 13.5.sp,
-                    )
-                    Text(
-                        text = if (isSignUp) "Sign in" else "Create an account",
-                        color = Color(0xFF10B981),
-                        fontSize = 13.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable {
-                            isSignUp = !isSignUp
-                            errorMsg = null
                         },
                     )
-                }
 
-                Spacer(Modifier.height(18.dp))
+                    if (!activeError.isNullOrBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0x1FEF4444))
+                                .border(1.dp, Color(0x80EF4444), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 13.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = activeError,
+                                color = Color(0xFFFCA5A5),
+                                fontSize = 13.5.sp,
+                                lineHeight = 19.sp,
+                            )
+                        }
+                    }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Rounded.Lock,
-                        contentDescription = null,
-                        tint = Color(0xFF10B981),
-                        modifier = Modifier.size(13.dp),
+                    JaWebPrimaryButton(
+                        text = when {
+                            busy -> "Please wait…"
+                            authTab == "signin" -> "Sign in"
+                            else -> "Create account"
+                        },
+                        enabled = !busy && !googleBusy,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            if (email.isBlank() || password.isBlank()) {
+                                errorMsg = "Please enter both your email and password."
+                                return@JaWebPrimaryButton
+                            }
+                            busy = true
+                            errorMsg = null
+                            scope.launch {
+                                try {
+                                    if (authTab == "signup") {
+                                        vm.signUpEmail(email, password)
+                                    } else {
+                                        vm.signInEmail(email, password)
+                                    }
+                                } catch (e: Throwable) {
+                                    errorMsg = e.message ?: "Authentication failed"
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        },
                     )
-                    Spacer(Modifier.width(5.dp))
-                    Text(
-                        text = "Protected by P-256 End-to-End Encryption",
-                        color = Color(0xFF6B7280),
-                        fontSize = 11.5.sp,
-                    )
+
+                    /* ==================== .login-legal-footer ==================== */
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = "By continuing, you agree to JaText's",
+                            color = loginPalette.textSecondary,
+                            fontSize = 12.5.sp,
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Terms of Service",
+                                color = loginPalette.accent,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.clickable { legalDialogTab = "terms" },
+                            )
+                            Text(
+                                text = " · ",
+                                color = loginPalette.textSecondary,
+                                fontSize = 12.5.sp,
+                            )
+                            Text(
+                                text = "Privacy Policy",
+                                color = loginPalette.accent,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.clickable { legalDialogTab = "privacy" },
+                            )
+                        }
+                    }
                 }
+            }
+
+            legalDialogTab?.let { tab ->
+                LoginLegalModalDialog(
+                    initialTab = tab,
+                    onDismiss = { legalDialogTab = null },
+                )
             }
         }
     }
 }
 
+@Composable
+private fun LoginHeroBullet(
+    icon: ImageVector,
+    text: String,
+    accent: Color,
+    textColor: Color,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = accent,
+            modifier = Modifier.size(17.dp),
+        )
+        Spacer(Modifier.width(9.dp))
+        Text(
+            text = text,
+            color = textColor,
+            fontSize = 14.5.sp,
+        )
+    }
+}
+
+@Composable
+private fun LoginLegalModalDialog(
+    initialTab: String,
+    onDismiss: () -> Unit,
+) {
+    val palette = LocalJaTextPalette.current
+    var tab by remember(initialTab) { mutableStateOf(initialTab) }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .background(palette.bgSecondary)
+                .border(1.dp, palette.border, RoundedCornerShape(22.dp))
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "JaText Legal Policies",
+                    color = palette.textPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                JaWebIconButton(
+                    icon = Icons.Rounded.Close,
+                    contentDescription = "Close",
+                    size = 34.dp,
+                    iconSize = 16.dp,
+                    onClick = onDismiss,
+                )
+            }
+            JaWebTabs(
+                tabs = listOf(
+                    JaTabItem("terms", "Terms of Service"),
+                    JaTabItem("privacy", "Privacy Policy"),
+                ),
+                selectedId = tab,
+                onSelect = { tab = it },
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(260.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (tab == "terms") {
+                    Text(
+                        text = "1. Respectful Use & Zero Harassment",
+                        color = palette.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = "JaText is built for real-time communication with friends and groups you accept. Spam, impersonation, non-consensual content, malware, and unlawful abuse are strictly prohibited.",
+                        color = palette.textSecondary,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                    Text(
+                        text = "2. Account Ownership & Username Policy",
+                        color = palette.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = "Usernames are unique handles (3 to 20 lowercase letters, numbers, dots, or underscores) subject to a 14-day cooldown between changes.",
+                        color = palette.textSecondary,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                } else {
+                    Text(
+                        text = "1. End-to-End Encrypted Messaging",
+                        color = palette.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = "1:1 direct messages, group chats, voice notes, stickers, and media attachments are encrypted on your device using NIST P-256 ECDH, HKDF-SHA-256, and AES-256-GCM before leaving your phone.",
+                        color = palette.textSecondary,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                    Text(
+                        text = "2. Minimal Account Metadata",
+                        color = palette.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = "JaText stores only your account profile, encrypted ciphertext envelopes, friend graph, and push device token so your messages and calls reach your devices reliably.",
+                        color = palette.textSecondary,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                }
+            }
+            JaWebPrimaryButton(
+                text = "Done",
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onDismiss,
+            )
+        }
+    }
+}
+
 /**
- * First-time Profile Setup screen when me.needsProfileSetup == true.
+ * Exact 1:1 recreation of src/components/Onboarding.tsx + ProfileForm.tsx (`.onboarding-page`, `.pf-preview`, `.color-grid`).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -492,15 +743,22 @@ fun ProfileSetupOnboardingScreen(
 
     var displayName by remember(me.id) { mutableStateOf(me.displayName) }
     var username by remember(me.id) { mutableStateOf(me.username) }
+    var pronouns by remember(me.id) { mutableStateOf(me.pronouns) }
     var bio by remember(me.id) { mutableStateOf(me.bio) }
-    var avatarColor by remember(me.id) { mutableStateOf(me.avatarColor.ifBlank { "purple" }) }
+    var avatarColor by remember(me.id) {
+        mutableStateOf(JaTextThemeManager.stripProfileMetaFromColorId(me.avatarColor))
+    }
     var pickedAvatarUri by remember { mutableStateOf<Uri?>(null) }
+    var pickedBannerUri by remember { mutableStateOf<Uri?>(null) }
     var usernameHint by remember { mutableStateOf<String?>(null) }
     var usernameAvailable by remember { mutableStateOf(true) }
     var saving by remember { mutableStateOf(false) }
 
     val avatarLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) pickedAvatarUri = uri
+    }
+    val bannerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) pickedBannerUri = uri
     }
 
     LaunchedEffect(username) {
@@ -512,167 +770,318 @@ fun ProfileSetupOnboardingScreen(
         delay(300L)
         val (avail, msg) = vm.checkUsernameAvailability(clean)
         usernameAvailable = avail
-        usernameHint = msg ?: if (avail) "@$clean is available" else "@$clean is taken"
+        usernameHint = msg ?: if (avail) "@$clean is available!" else "@$clean is already taken."
     }
 
-    val colorChoices = listOf("purple", "blue", "green", "pink", "orange", "teal", "red", "yellow")
+    val colorSpec = JaTextThemeManager.avatarColorSpec(avatarColor)
+    val bannerPreview = pickedBannerUri?.toString() ?: me.bannerUrl
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(palette.bgPrimary)
+            .then(
+                if (palette.rootGradientBrush != null) Modifier.background(palette.rootGradientBrush)
+                else Modifier.background(palette.bgPrimary)
+            )
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(horizontal = 16.dp, vertical = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(16.dp))
-        Text(
-            text = "Finish setting up your profile",
-            color = palette.textPrimary,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "Pick your display name, unique @username, and avatar style.",
-            color = palette.textSecondary,
-            fontSize = 13.5.sp,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(22.dp))
-
-        Box(
-            modifier = Modifier.clickable { avatarLauncher.launch("image/*") },
-            contentAlignment = Alignment.BottomEnd,
+        Column(
+            modifier = Modifier
+                .widthIn(max = 600.dp)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            JaAvatar(
-                avatarUrl = pickedAvatarUri?.toString() ?: me.avatarUrl,
-                displayName = displayName.ifBlank { username.ifBlank { "JT" } },
-                avatarColor = avatarColor,
-                size = 86.dp,
-            )
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(palette.accent),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.CameraAlt,
-                    contentDescription = "Choose photo",
-                    tint = Color.White,
-                    modifier = Modifier.size(15.dp),
-                )
-            }
-        }
-
-        Spacer(Modifier.height(14.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            colorChoices.forEach { cName ->
-                val grad = JaTextThemeManager.avatarGradientColors(cName)
-                Box(
-                    modifier = Modifier
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .background(Brush.linearGradient(grad))
-                        .border(
-                            width = if (avatarColor == cName) 2.5.dp else 1.dp,
-                            color = if (avatarColor == cName) Color.White else Color.Transparent,
-                            shape = CircleShape,
-                        )
-                        .clickable { avatarColor = cName },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (avatarColor == cName) {
-                        Icon(
-                            imageVector = Icons.Rounded.Check,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(15.dp),
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        OutlinedTextField(
-            value = displayName,
-            onValueChange = { displayName = it },
-            label = { Text("Display Name") },
-            singleLine = true,
-            shape = RoundedCornerShape(13.dp),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = username,
-            onValueChange = { username = it.lowercase().filter { ch -> ch.isLetterOrDigit() || ch == '.' || ch == '_' } },
-            label = { Text("Username") },
-            prefix = { Text("@") },
-            singleLine = true,
-            shape = RoundedCornerShape(13.dp),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (!usernameHint.isNullOrBlank()) {
-            Spacer(Modifier.height(4.dp))
             Text(
-                text = usernameHint!!,
-                color = if (usernameAvailable) palette.success else palette.danger,
-                fontSize = 12.sp,
+                text = "Make it yours",
+                color = palette.textPrimary,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Black,
+                textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
-        }
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = bio,
-            onValueChange = { bio = it.take(180) },
-            label = { Text("Bio (optional)") },
-            maxLines = 3,
-            shape = RoundedCornerShape(13.dp),
-            modifier = Modifier.fillMaxWidth(),
-        )
+            Text(
+                text = "Pick your @username, profile picture, banner, and avatar outline color.",
+                color = palette.textSecondary,
+                fontSize = 16.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
-        Spacer(Modifier.height(22.dp))
-        Button(
-            onClick = {
-                saving = true
-                scope.launch {
-                    try {
-                        vm.saveProfile(
-                            displayName = displayName.ifBlank { username },
-                            username = username,
-                            bio = bio,
-                            pronouns = me.pronouns,
-                            avatarColor = avatarColor,
-                            avatarUri = pickedAvatarUri,
+            /* ==================== .pf-preview (2.5dp --profile-outline!) ==================== */
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(palette.bgSecondary)
+                    .border(2.5.dp, colorSpec.ringColor, RoundedCornerShape(22.dp))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(128.dp)
+                        .clickable { bannerLauncher.launch("image/*") },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (!bannerPreview.isNullOrBlank()) {
+                        AsyncImage(
+                            model = bannerPreview,
+                            contentDescription = "Profile banner",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
                         )
-                    } catch (e: Throwable) {
-                        vm.showToast(e.message ?: "Failed to save profile")
-                    } finally {
-                        saving = false
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = colorSpec.gradientStops,
+                                        start = Offset.Zero,
+                                        end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
+                                    )
+                                )
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0x8C000000))
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "Tap to change banner",
+                            color = Color.White,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(2.5.dp)
+                            .background(colorSpec.ringColor)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .offset(y = (-34).dp)
+                            .clickable { avatarLauncher.launch("image/*") },
+                    ) {
+                        JaAvatar(
+                            avatarUrl = pickedAvatarUri?.toString() ?: me.avatarUrl,
+                            displayName = displayName.ifBlank { username.ifBlank { "?" } },
+                            avatarColor = avatarColor,
+                            size = 82.dp,
+                            ringWidth = 3.5.dp,
+                        )
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(palette.bgTertiary)
+                                .border(1.dp, palette.border, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CameraAlt,
+                                contentDescription = "Upload avatar",
+                                tint = palette.textPrimary,
+                                modifier = Modifier.size(15.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = displayName.ifBlank { "Your Name" },
+                            color = palette.textPrimary,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                        Text(
+                            text = buildString {
+                                append("@")
+                                append(username.ifBlank { "username" })
+                                if (pronouns.isNotBlank()) {
+                                    append(" · ")
+                                    append(pronouns)
+                                }
+                            },
+                            color = palette.textSecondary,
+                            fontSize = 13.5.sp,
+                        )
+                        if (bio.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = bio,
+                                color = palette.textPrimary,
+                                fontSize = 13.5.sp,
+                            )
+                        }
                     }
                 }
-            },
-            enabled = !saving && username.length >= 3 && usernameAvailable,
-            colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-        ) {
-            if (saving) {
-                CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
-            } else {
-                Text("Continue to JaText", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+            }
+
+            JaWebInput(
+                value = displayName,
+                onValueChange = { displayName = it },
+                label = "Display name",
+                placeholder = "How friends see you",
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                JaWebInput(
+                    value = username,
+                    onValueChange = {
+                        username = it.lowercase().filter { ch -> ch.isLetterOrDigit() || ch == '.' || ch == '_' }.take(20)
+                    },
+                    label = "Username",
+                    leadingPrefix = "@",
+                    placeholder = "your-username",
+                )
+                if (!usernameHint.isNullOrBlank()) {
+                    Text(
+                        text = usernameHint!!,
+                        color = if (usernameAvailable) palette.success else Color(0xFFFCA5A5),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+
+            JaWebInput(
+                value = pronouns,
+                onValueChange = { pronouns = it.take(32) },
+                label = "Pronouns (optional)",
+                placeholder = "they/them, he/him, she/her…",
+            )
+
+            JaWebInput(
+                value = bio,
+                onValueChange = { bio = it.take(180) },
+                label = "Bio (optional)",
+                placeholder = "Tell people a little about yourself…",
+                singleLine = false,
+                minLines = 2,
+                maxLines = 4,
+            )
+
+            /* ==================== .color-fieldset / .color-grid ==================== */
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "Avatar & profile outline color",
+                    color = palette.textPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    maxItemsInEachRow = 3,
+                ) {
+                    AVATAR_COLOR_SPECS.forEach { spec ->
+                        val selected = avatarColor == spec.id
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(if (selected) palette.accentSoft else palette.bgTertiary)
+                                .border(
+                                    width = 2.dp,
+                                    color = if (selected) palette.accent else palette.border,
+                                    shape = RoundedCornerShape(14.dp),
+                                )
+                                .clickable { avatarColor = spec.id }
+                                .padding(horizontal = 8.dp, vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.linearGradient(
+                                            colors = spec.gradientStops,
+                                            start = Offset.Zero,
+                                            end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
+                                        )
+                                    )
+                                    .border(2.dp, spec.ringColor, CircleShape)
+                            )
+                            Text(
+                                text = spec.name,
+                                color = palette.textPrimary,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                            )
+                            if (!spec.note.isNullOrBlank()) {
+                                Text(
+                                    text = spec.note,
+                                    color = palette.textSecondary,
+                                    fontSize = 10.5.sp,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            JaWebPrimaryButton(
+                text = if (saving) "Saving…" else "Save & start chatting",
+                big = true,
+                enabled = !saving && username.length >= 3 && usernameAvailable,
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    saving = true
+                    scope.launch {
+                        try {
+                            vm.saveProfile(
+                                displayName = displayName.ifBlank { username },
+                                username = username,
+                                bio = bio,
+                                pronouns = pronouns,
+                                avatarColor = avatarColor,
+                                avatarUri = pickedAvatarUri,
+                                bannerUri = pickedBannerUri,
+                            )
+                        } catch (e: Throwable) {
+                            vm.showToast(e.message ?: "Failed to save profile")
+                        } finally {
+                            saving = false
+                        }
+                    }
+                },
+            )
+
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                JaWebGhostButton(
+                    text = "Sign out",
+                    onClick = { vm.signOutCurrentAccount() },
+                )
             }
         }
     }

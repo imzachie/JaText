@@ -15,10 +15,15 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.security.AlgorithmParameters;
 import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.spec.ECGenParameterSpec;
+import java.security.spec.ECParameterSpec;
+import java.security.spec.ECPrivateKeySpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
@@ -1283,7 +1288,15 @@ public final class JaTextE2EEDecryptor {
     /* ------------------------------------------------------------------ */
 
     private static byte[] b64UrlDecode(String input) {
-        return Base64.decode(input, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+        if (input == null) return new byte[0];
+        String clean = input
+            .trim()
+            .replace('+', '-')
+            .replace('/', '_')
+            .replace("=", "")
+            .replaceAll("\\s+", "");
+        if (clean.isEmpty()) return new byte[0];
+        return Base64.decode(clean, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
     }
 
     private static PublicKey importRawP256PublicKey(byte[] raw65) throws Exception {
@@ -1297,7 +1310,28 @@ public final class JaTextE2EEDecryptor {
     }
 
     private static PrivateKey importPkcs8PrivateKey(byte[] pkcs8) throws Exception {
-        return KeyFactory.getInstance("EC").generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
+        if (pkcs8 == null || pkcs8.length == 0) {
+            throw new IllegalArgumentException("Empty EC private key");
+        }
+        KeyFactory kf = KeyFactory.getInstance("EC");
+        try {
+            return kf.generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
+        } catch (Throwable primaryErr) {
+            for (int i = 0; i <= pkcs8.length - 34; i++) {
+                if (pkcs8[i] == 0x04 && pkcs8[i + 1] == 0x20) {
+                    byte[] scalar32 = Arrays.copyOfRange(pkcs8, i + 2, i + 34);
+                    BigInteger bi = new BigInteger(1, scalar32);
+                    if (bi.compareTo(BigInteger.ZERO) > 0) {
+                        AlgorithmParameters params = AlgorithmParameters.getInstance("EC");
+                        params.init(new ECGenParameterSpec("secp256r1"));
+                        ECParameterSpec ecSpec = params.getParameterSpec(ECParameterSpec.class);
+                        return kf.generatePrivate(new ECPrivateKeySpec(bi, ecSpec));
+                    }
+                }
+            }
+            if (primaryErr instanceof Exception) throw (Exception) primaryErr;
+            throw new RuntimeException(primaryErr);
+        }
     }
 
     private static byte[] ecdhSharedSecret(PrivateKey priv, PublicKey pub) throws Exception {

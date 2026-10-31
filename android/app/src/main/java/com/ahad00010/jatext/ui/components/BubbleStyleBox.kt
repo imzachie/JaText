@@ -121,11 +121,12 @@ fun StyledMessageBubbleContainer(
     content: @Composable BoxScope.(ResolvedBubbleColors) -> Unit,
 ) {
     val spec = resolveBubbleStyleSpec(styleId)
+    // Exact .bubble / .bubble.mine / .bubble.theirs geometry from src/index.css (20px radius, 6px tail corner)
     val shape = RoundedCornerShape(
-        topStart = 18.dp,
-        topEnd = 18.dp,
-        bottomStart = if (isMine) 18.dp else 5.dp,
-        bottomEnd = if (isMine) 5.dp else 18.dp,
+        topStart = 20.dp,
+        topEnd = 20.dp,
+        bottomStart = if (isMine) 20.dp else 6.dp,
+        bottomEnd = if (isMine) 6.dp else 20.dp,
     )
     val ink = resolveBubbleInkColors(styleId, isMine, palette)
 
@@ -140,7 +141,7 @@ fun StyledMessageBubbleContainer(
         }
         else -> {
             Modifier
-                .background(palette.surface, shape)
+                .background(palette.bgTertiary, shape)
                 .border(1.dp, palette.border, shape)
         }
     }
@@ -151,7 +152,6 @@ fun StyledMessageBubbleContainer(
             .then(bgMod)
             .drawBehind {
                 if (spec.id != "default" && spec.accentDecorColor != Color.Transparent) {
-                    // Subtle native GPU RenderThread motif accents (zero lag, zero allocations)
                     val r1 = size.minDimension * 0.22f
                     val r2 = size.minDimension * 0.14f
                     drawCircle(
@@ -189,50 +189,78 @@ val CHAT_WALLPAPER_PRESETS: List<WallpaperPresetSpec> = listOf(
     WallpaperPresetSpec("velvet-cosmos", "Velvet Cosmos", listOf(Color(0xFF13091F), Color(0xFF24123B), Color(0xFF331538))),
 )
 
+/**
+ * Exact 1:1 recreation of src/components/Avatar.tsx:
+ * - Outer ring (`box-shadow: 0 0 0 ${ringWidth}px ${color.hex}`) rendered cleanly outside the circle
+ * - 135deg gradient background behind the picture (`color.gradient`)
+ * - Single 900-weight initial letter (`size * 0.42`) when no avatarUrl is set
+ * - Exact `.activity-dot` (`#22c55e` online, `#f59e0b` away/idle, `#ef4444` dnd, `#626272` offline)
+ */
 @Composable
 fun JaAvatar(
     avatarUrl: String?,
     displayName: String,
     avatarColor: String?,
-    size: Dp = 42.dp,
-    presenceStatus: String? = null, // "online" | "idle" | "dnd" | "offline" | null
-    statusBorderColor: Color = Color(0xFF16171B),
+    size: Dp = 44.dp,
+    ringWidth: Dp = 3.dp,
+    presenceStatus: String? = null, // "online" | "away" | "idle" | "dnd" | "offline" | null
+    statusBorderColor: Color = Color(0xFF151519),
     modifier: Modifier = Modifier,
 ) {
-    val initials = displayName.trim().take(2).uppercase().ifBlank { "JT" }
-    val grad = JaTextThemeManager.avatarGradientColors(avatarColor)
+    val initial = displayName.trim().take(1).uppercase().ifBlank { "?" }
+    val colorSpec = JaTextThemeManager.avatarColorSpec(avatarColor)
 
-    Box(modifier = modifier.size(size)) {
+    Box(
+        modifier = modifier
+            .padding(ringWidth)
+            .size(size)
+            .drawBehind {
+                if (ringWidth > 0.dp) {
+                    drawCircle(
+                        color = colorSpec.ringColor,
+                        radius = (this.size.minDimension / 2f) + ringWidth.toPx(),
+                    )
+                }
+            }
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .clip(CircleShape)
-                .background(Brush.linearGradient(grad)),
+                .background(
+                    Brush.linearGradient(
+                        colors = colorSpec.gradientStops,
+                        start = Offset.Zero,
+                        end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
+                    )
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = initials,
+                text = initial,
                 color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = (size.value * 0.36f).sp,
+                fontWeight = FontWeight.Black,
+                fontSize = (size.value * 0.42f).sp,
             )
             if (!avatarUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = avatarUrl,
                     contentDescription = displayName,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape),
                 )
             }
         }
         if (presenceStatus != null) {
-            val dotColor = when (presenceStatus) {
+            val dotColor = when (presenceStatus.lowercase()) {
                 "online" -> Color(0xFF22C55E)
-                "idle" -> Color(0xFFF59E0B)
+                "away", "idle" -> Color(0xFFF59E0B)
                 "dnd" -> Color(0xFFEF4444)
-                else -> Color(0xFF6B7280)
+                else -> Color(0xFF626272)
             }
-            val dotSize = (size.value * 0.30f).coerceIn(10f, 15f).dp
+            val dotSize = (size.value * 0.31f).coerceIn(11f, 15f).dp
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)

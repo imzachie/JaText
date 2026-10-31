@@ -16,15 +16,19 @@ import androidx.compose.ui.graphics.luminance
 import com.ahad00010.jatext.data.SyncedCustomGradient
 import com.ahad00010.jatext.data.SyncedThemePayload
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.serialization.Serializable
 
 @Serializable
 data class CustomThemeData(
     val appearance: String = "dark", // "light" | "dark"
-    val colors: List<String> = listOf("#e8a87c", "#9b6b9e"),
-    val angle: Int = 180,
+    val colors: List<String> = listOf("#efb4aa", "#b6e0d3"),
+    val angle: Int = 45,
     val intensity: Int = 60,
 )
 
@@ -32,7 +36,7 @@ data class CustomThemeData(
 data class JaTextThemeConfig(
     val kind: String = "default", // "default" | "preset" | "custom"
     val defaultId: String = "dark", // "light" | "ash" | "dark" | "onyx" | "system"
-    val presetId: String = "sunset",
+    val presetId: String = "mint-meadow",
     val custom: CustomThemeData = CustomThemeData(),
     val syncAcrossDevices: Boolean = true,
     val updatedAt: Long = 0L,
@@ -44,52 +48,136 @@ data class ColourThemePreset(
     val mode: String, // "light" | "dark"
     val colors: List<String>,
     val angle: Int,
+    val intensity: Int,
     val accentHex: String,
 )
 
+/**
+ * Exact 1:1 Colour Theme presets from src/lib/themeEngine.ts (21 presets + Custom Theme tile = 22 tiles).
+ */
 val COLOUR_THEME_PRESETS: List<ColourThemePreset> = listOf(
-    ColourThemePreset("mint-meadow", "Mint Apple", "light", listOf("#dff7ea", "#bfead6", "#d8f0ff"), 145, "#1f9d6b"),
-    ColourThemePreset("citrus-sherbet", "Citrus Sherbet", "light", listOf("#fff3c4", "#ffd8a8", "#ffc9c9"), 140, "#e66a1f"),
-    ColourThemePreset("retro-raincloud", "Retro Raincloud", "light", listOf("#dfe7fd", "#cddafd", "#bee1e6"), 155, "#4f6df5"),
-    ColourThemePreset("hanami", "Hanami", "light", listOf("#fde2e4", "#fad2e1", "#e2ece9"), 135, "#d64d86"),
-    ColourThemePreset("sunrise", "Sunrise", "light", listOf("#ffecd2", "#fcb69f", "#ffdde1"), 130, "#e35d5b"),
-    ColourThemePreset("cotton-candy", "Cotton Candy", "light", listOf("#ffcbf2", "#e2afff", "#c0fdff"), 140, "#a84ad9"),
-    ColourThemePreset("lofi-vibes", "LoFi Vibes", "light", listOf("#e8dff5", "#fce1e4", "#fcf4dd"), 150, "#7c5cbf"),
-    ColourThemePreset("desert-khaki", "Desert Khaki", "light", listOf("#f4ebd9", "#e6d3b3", "#d8c3a5"), 155, "#9c6b3b"),
-    ColourThemePreset("sunset", "Sunset", "dark", listOf("#2b1331", "#5b1d3b", "#8c3b32"), 155, "#f06553"),
-    ColourThemePreset("chroma-glow", "Chroma Glow", "dark", listOf("#121638", "#2d1646", "#0f3a47"), 140, "#7c5cff"),
-    ColourThemePreset("forest", "Forest", "dark", listOf("#0d1f18", "#163528", "#1e2e1e"), 155, "#34b37c"),
-    ColourThemePreset("crimson-moon", "Crimson Moon", "dark", listOf("#1a090d", "#3d0e1a", "#260b1c"), 145, "#e03c5a"),
-    ColourThemePreset("midnight-blurple", "Midnight Blurple", "dark", listOf("#0d1026", "#1d1f4e", "#2b1947"), 145, "#6b73ff"),
-    ColourThemePreset("mars", "Mars", "dark", listOf("#240d0a", "#4a1b12", "#6b2b18"), 150, "#e8633a"),
-    ColourThemePreset("dusk", "Dusk", "dark", listOf("#18192c", "#2d2546", "#462c4c"), 155, "#9b72f2"),
-    ColourThemePreset("under-the-sea", "Under The Sea", "dark", listOf("#071e26", "#0d3847", "#114b47"), 150, "#24b8b8"),
-    ColourThemePreset("retro-storm", "Retro Storm", "dark", listOf("#161b24", "#232d3f", "#2e2438"), 145, "#5c8df6"),
-    ColourThemePreset("neon-nights", "Neon Nights", "dark", listOf("#120924", "#2e0f3d", "#0b2a3d"), 135, "#e040fb"),
-    ColourThemePreset("strawberry-lemonade", "Strawberry Lemonade", "dark", listOf("#2e101c", "#471c24", "#3d2e14"), 145, "#f45b7a"),
-    ColourThemePreset("aurora", "Aurora", "dark", listOf("#081c24", "#12382e", "#1d1a3d"), 140, "#2dd4a8"),
-    ColourThemePreset("sepia", "Sepia", "dark", listOf("#1c1612", "#2e231b", "#3b2c20"), 150, "#c8965a"),
-    ColourThemePreset("blurple-twilight", "Blurple Twilight", "dark", listOf("#141630", "#252152", "#38225c"), 150, "#7983f5"),
+    ColourThemePreset("mint-meadow", "Mint Apple", "light", listOf("#a8d9c7", "#afddad", "#c8e2af"), 180, 68, "#2b9468"),
+    ColourThemePreset("citrus-sherbet", "Citrus Sherbet", "light", listOf("#f9d796", "#f7caa0", "#f6bfa8"), 180, 68, "#d96b27"),
+    ColourThemePreset("retro-raincloud", "Retro Raincloud", "light", listOf("#a6bbd2", "#bbbcda", "#98bbce"), 135, 66, "#4f6df5"),
+    ColourThemePreset("hanami", "Hanami", "light", listOf("#f6d9d2", "#e6ebcb", "#d0ecce"), 45, 70, "#d64d86"),
+    ColourThemePreset("sunrise", "Sunrise", "light", listOf("#f7c4b4", "#f9dfc1", "#fceeb5"), 135, 68, "#e35d5b"),
+    ColourThemePreset("cotton-candy", "Cotton Candy", "light", listOf("#d2c4f6", "#f5c6ec", "#c4e7f7"), 135, 68, "#9b4de0"),
+    ColourThemePreset("lofi-vibes", "LoFi Vibes", "light", listOf("#d6d0f2", "#f2d5df", "#f4ebd0"), 145, 66, "#7c5cbf"),
+    ColourThemePreset("desert-khaki", "Desert Khaki", "light", listOf("#e9dec7", "#dcc8a9", "#cfb696"), 155, 66, "#9c6b3b"),
+    ColourThemePreset("sunset", "Sunset", "dark", listOf("#3c1d47", "#732645", "#a84438"), 145, 72, "#f06553"),
+    ColourThemePreset("chroma-glow", "Chroma Glow", "dark", listOf("#1a1f4e", "#3d1d5c", "#134e5e"), 135, 72, "#9b6cff"),
+    ColourThemePreset("forest", "Forest", "dark", listOf("#102920", "#1c4534", "#273d27"), 150, 72, "#34b37c"),
+    ColourThemePreset("crimson-moon", "Crimson Moon", "dark", listOf("#240b11", "#4f1222", "#330e26"), 145, 74, "#e03c5a"),
+    ColourThemePreset("midnight-blurple", "Midnight Blurple", "dark", listOf("#121636", "#262966", "#38215c"), 145, 74, "#7983f5"),
+    ColourThemePreset("mars", "Mars", "dark", listOf("#2e110d", "#5e2217", "#85361e"), 150, 72, "#e8633a"),
+    ColourThemePreset("dusk", "Dusk", "dark", listOf("#1f2038", "#3a3059", "#593861"), 155, 72, "#9b72f2"),
+    ColourThemePreset("under-the-sea", "Under The Sea", "dark", listOf("#092833", "#11495c", "#165e59"), 150, 72, "#24b8b8"),
+    ColourThemePreset("retro-storm", "Retro Storm", "dark", listOf("#1c222e", "#2d3950", "#3b2e47"), 145, 70, "#5c8df6"),
+    ColourThemePreset("neon-nights", "Neon Nights", "dark", listOf("#190c30", "#3d1452", "#0f3852"), 135, 74, "#e040fb"),
+    ColourThemePreset("strawberry-lemonade", "Strawberry Lemonade", "dark", listOf("#3d1525", "#5c242e", "#4f3b1a"), 145, 72, "#f45b7a"),
+    ColourThemePreset("aurora", "Aurora", "dark", listOf("#0b2630", "#174a3d", "#26224f"), 140, 72, "#2dd4a8"),
+    ColourThemePreset("sepia", "Sepia", "dark", listOf("#241c17", "#3b2d23", "#4c3929"), 150, 70, "#c8965a"),
+    ColourThemePreset("blurple-twilight", "Blurple Twilight", "dark", listOf("#1a1c3d", "#302b69", "#472c75"), 150, 74, "#9b6cff"),
+)
+
+/**
+ * Exact 1:1 Avatar Color definitions matching src/lib/colors.ts (`AVATAR_COLORS`).
+ */
+data class AvatarColorSpec(
+    val id: String,
+    val name: String,
+    val note: String? = null,
+    val ringColor: Color,
+    val softColor: Color,
+    val gradientStops: List<Color>,
+)
+
+val AVATAR_COLOR_SPECS: List<AvatarColorSpec> = listOf(
+    AvatarColorSpec(
+        id = "black",
+        name = "Default (Black)",
+        note = "if.. ur boring",
+        ringColor = Color(0xFF43434F),
+        softColor = Color(0xFF1C1C22),
+        gradientStops = listOf(Color(0xFF1C1C22), Color(0xFF33333F)),
+    ),
+    AvatarColorSpec(
+        id = "yellow",
+        name = "Yellow",
+        ringColor = Color(0xFFFFC61A),
+        softColor = Color(0xFF3A2E05),
+        gradientStops = listOf(Color(0xFFFFC61A), Color(0xFFFF9D00)),
+    ),
+    AvatarColorSpec(
+        id = "pink",
+        name = "Pink",
+        ringColor = Color(0xFFFF5D8F),
+        softColor = Color(0xFF3D1222),
+        gradientStops = listOf(Color(0xFFFF5D8F), Color(0xFFFF2E63)),
+    ),
+    AvatarColorSpec(
+        id = "purple",
+        name = "Purple",
+        ringColor = Color(0xFF8B5CF6),
+        softColor = Color(0xFF241543),
+        gradientStops = listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9)),
+    ),
+    AvatarColorSpec(
+        id = "blue",
+        name = "Blue",
+        ringColor = Color(0xFF3B82F6),
+        softColor = Color(0xFF10233F),
+        gradientStops = listOf(Color(0xFF3B82F6), Color(0xFF2563EB)),
+    ),
+    AvatarColorSpec(
+        id = "teal",
+        name = "Teal",
+        ringColor = Color(0xFF14B8A6),
+        softColor = Color(0xFF07332E),
+        gradientStops = listOf(Color(0xFF14B8A6), Color(0xFF0D9488)),
+    ),
+    AvatarColorSpec(
+        id = "green",
+        name = "Green",
+        ringColor = Color(0xFF22C55E),
+        softColor = Color(0xFF0C2B16),
+        gradientStops = listOf(Color(0xFF22C55E), Color(0xFF16A34A)),
+    ),
+    AvatarColorSpec(
+        id = "orange",
+        name = "Orange",
+        ringColor = Color(0xFFFB7C1E),
+        softColor = Color(0xFF3D1E05),
+        gradientStops = listOf(Color(0xFFFB7C1E), Color(0xFFEA580C)),
+    ),
+    AvatarColorSpec(
+        id = "red",
+        name = "Red",
+        ringColor = Color(0xFFEF4444),
+        softColor = Color(0xFF3A1010),
+        gradientStops = listOf(Color(0xFFEF4444), Color(0xFFDC2626)),
+    ),
 )
 
 @Immutable
 data class JaTextPalette(
     val isDark: Boolean,
-    val bgPrimary: Color,
-    val bgSecondary: Color,
-    val bgTertiary: Color,
-    val surface: Color,
+    val bgPrimary: Color,      // var(--bg)
+    val bgSecondary: Color,    // var(--panel)
+    val bgTertiary: Color,     // var(--panel-2)
+    val surface: Color,        // var(--panel-2) / card surface
     val surfaceElevated: Color,
-    val border: Color,
+    val border: Color,         // var(--border)
     val borderStrong: Color,
-    val textPrimary: Color,
-    val textSecondary: Color,
+    val textPrimary: Color,    // var(--text)
+    val textSecondary: Color,  // var(--muted)
     val textTertiary: Color,
-    val accent: Color,
+    val accent: Color,         // var(--accent) = #9b6cff default
+    val accentDark: Color,     // var(--accent-dark) = #170d2b in dark, #ffffff in light (used on .primary-btn & .tabs.active)
     val accentSoft: Color,
-    val onAccent: Color,
-    val success: Color,
-    val danger: Color,
+    val onAccent: Color,       // #ffffff on .bubble.mine & .send-btn
+    val success: Color,        // var(--ok) = #22c55e
+    val danger: Color,         // var(--danger) = #ef4444
     val warning: Color,
     val rootGradientBrush: Brush?,
 )
@@ -97,18 +185,19 @@ data class JaTextPalette(
 val LocalJaTextPalette = staticCompositionLocalOf {
     JaTextPalette(
         isDark = true,
-        bgPrimary = Color(0xFF0E0F12),
-        bgSecondary = Color(0xFF14161B),
-        bgTertiary = Color(0xFF1C1F26),
-        surface = Color(0xFF22252E),
-        surfaceElevated = Color(0xFF282C37),
-        border = Color(0x1FFFFFFF),
-        borderStrong = Color(0x33FFFFFF),
-        textPrimary = Color(0xFFF3F4F6),
-        textSecondary = Color(0xFF9CA3AF),
-        textTertiary = Color(0xFF6B7280),
-        accent = Color(0xFF10B981),
-        accentSoft = Color(0x2610B981),
+        bgPrimary = Color(0xFF0B0B10),
+        bgSecondary = Color(0xFF14141D),
+        bgTertiary = Color(0xFF1B1B26),
+        surface = Color(0xFF1B1B26),
+        surfaceElevated = Color(0xFF242533),
+        border = Color(0xFF262633),
+        borderStrong = Color(0xFF38384A),
+        textPrimary = Color(0xFFF2F2F7),
+        textSecondary = Color(0xFF9A9AAD),
+        textTertiary = Color(0xFF6E6E82),
+        accent = Color(0xFF9B6CFF),
+        accentDark = Color(0xFF170D2B),
+        accentSoft = Color(0x2E9B6CFF),
         onAccent = Color.White,
         success = Color(0xFF22C55E),
         danger = Color(0xFFEF4444),
@@ -119,10 +208,36 @@ val LocalJaTextPalette = staticCompositionLocalOf {
 
 object JaTextThemeManager {
 
-    fun parseHexColor(hex: String, fallback: Color = Color(0xFF10B981)): Color {
+    private const val META_DELIMITER = "|__JT_META__:"
+
+    fun stripProfileMetaFromColorId(rawColor: String?): String {
+        if (rawColor.isNullOrBlank()) return "black"
+        val idx = rawColor.indexOf(META_DELIMITER)
+        val clean = (if (idx >= 0) rawColor.substring(0, idx) else rawColor).trim().lowercase()
+        return clean.ifBlank { "black" }
+    }
+
+    fun avatarColorSpec(rawColor: String?): AvatarColorSpec {
+        val cleanId = stripProfileMetaFromColorId(rawColor)
+        return AVATAR_COLOR_SPECS.firstOrNull { it.id == cleanId } ?: AVATAR_COLOR_SPECS[0]
+    }
+
+    fun avatarGradientColors(avatarColor: String?): List<Color> =
+        avatarColorSpec(avatarColor).gradientStops
+
+    fun parseHexColor(hex: String, fallback: Color = Color(0xFF9B6CFF)): Color {
         val cleaned = hex.trim().removePrefix("#")
         return try {
             when (cleaned.length) {
+                3 -> {
+                    val expanded = buildString {
+                        for (ch in cleaned) {
+                            append(ch)
+                            append(ch)
+                        }
+                    }
+                    Color((0xFF000000L or expanded.toLong(16)).toInt())
+                }
                 6 -> Color((0xFF000000L or cleaned.toLong(16)).toInt())
                 8 -> Color(cleaned.toLong(16).toInt())
                 else -> fallback
@@ -133,9 +248,9 @@ object JaTextThemeManager {
     }
 
     fun colorToHex(color: Color): String {
-        val r = (color.red * 255f).toInt().coerceIn(0, 255)
-        val g = (color.green * 255f).toInt().coerceIn(0, 255)
-        val b = (color.blue * 255f).toInt().coerceIn(0, 255)
+        val r = (color.red * 255f).roundToInt().coerceIn(0, 255)
+        val g = (color.green * 255f).roundToInt().coerceIn(0, 255)
+        val b = (color.blue * 255f).roundToInt().coerceIn(0, 255)
         return "#%02x%02x%02x".format(r, g, b)
     }
 
@@ -162,17 +277,119 @@ object JaTextThemeManager {
         return Brush.linearGradient(colors = stops, start = start, end = end)
     }
 
-    fun avatarGradientColors(avatarColor: String?): List<Color> {
-        return when (avatarColor?.lowercase()) {
-            "blue" -> listOf(Color(0xFF3B82F6), Color(0xFF1D4ED8))
-            "green" -> listOf(Color(0xFF10B981), Color(0xFF047857))
-            "pink" -> listOf(Color(0xFFEC4899), Color(0xFFBE185D))
-            "orange" -> listOf(Color(0xFFF97316), Color(0xFFC2410C))
-            "teal" -> listOf(Color(0xFF14B8A6), Color(0xFF0F766E))
-            "red" -> listOf(Color(0xFFEF4444), Color(0xFFB91C1C))
-            "yellow" -> listOf(Color(0xFFEAB308), Color(0xFFA16207))
-            else -> listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9)) // purple default
+    /**
+     * Exact HSV accent computation matching computePreviewAccent() in src/lib/themeEngine.ts!
+     */
+    private fun computePreviewAccentColors(isDark: Boolean, firstStop: Color): Pair<Color, Color> {
+        val r = firstStop.red
+        val g = firstStop.green
+        val b = firstStop.blue
+        val cMax = max(r, max(g, b))
+        val cMin = min(r, min(g, b))
+        val d = cMax - cMin
+        var h = 0f
+        if (d != 0f) {
+            h = when (cMax) {
+                r -> ((g - b) / d) % 6f
+                g -> ((b - r) / d) + 2f
+                else -> ((r - g) / d) + 4f
+            } * 60f
+            if (h < 0f) h += 360f
         }
+        val s = if (cMax == 0f) 0f else d / cMax
+        val v = cMax
+
+        val outS: Float
+        val outV: Float
+        val accentDark: Color
+        if (!isDark) {
+            outS = (s + 0.28f).coerceIn(0.55f, 0.88f)
+            outV = (v * 0.78f).coerceIn(0.45f, 0.76f)
+            accentDark = Color.White
+        } else {
+            outS = (s + 0.14f).coerceIn(0.48f, 0.82f)
+            outV = (v + 0.18f).coerceIn(0.72f, 0.95f)
+            accentDark = Color(0xFF0F1018)
+        }
+        val c = outV * outS
+        val x = c * (1f - abs(((h / 60f) % 2f) - 1f))
+        val m = outV - c
+        val (r1, g1, b1) = when {
+            h < 60f -> Triple(c, x, 0f)
+            h < 120f -> Triple(x, c, 0f)
+            h < 180f -> Triple(0f, c, x)
+            h < 240f -> Triple(0f, x, c)
+            h < 300f -> Triple(x, 0f, c)
+            else -> Triple(c, 0f, x)
+        }
+        return Color(
+            red = (r1 + m).coerceIn(0f, 1f),
+            green = (g1 + m).coerceIn(0f, 1f),
+            blue = (b1 + m).coerceIn(0f, 1f),
+            alpha = 1f,
+        ) to accentDark
+    }
+
+    /**
+     * Exact gradient palette computation matching buildCssGradientFromSpec() in src/lib/themeEngine.ts!
+     */
+    private fun buildGradientPalette(
+        isDark: Boolean,
+        rawHexColors: List<String>,
+        angle: Int,
+        intensity: Int,
+    ): JaTextPalette {
+        val rawStops = rawHexColors.map { parseHexColor(it) }.ifEmpty { listOf(Color(0xFF9B6CFF)) }
+        val baseBg = if (!isDark) Color(0xFFFCFDFF) else Color(0xFF0D0E14)
+        val strength = (intensity.coerceIn(10, 100) / 100f)
+        val factor = if (!isDark) strength * 0.78f else strength * 0.72f
+        val blendedStops = rawStops.map { blendColors(baseBg, it, factor) }
+
+        val firstTint = blendedStops.first()
+        val midTint = blendedStops[blendedStops.size / 2]
+        val avgTint = blendColors(firstTint, midTint, 0.5f)
+        val (accent, accentDark) = computePreviewAccentColors(isDark, rawStops.first())
+
+        val panel = if (!isDark) {
+            blendColors(Color.White, avgTint, 0.42f).copy(alpha = 0.86f)
+        } else {
+            blendColors(Color(0xFF101118), avgTint, 0.46f).copy(alpha = 0.84f)
+        }
+        val panel2 = if (!isDark) {
+            blendColors(Color(0xFFF1F3F8), avgTint, 0.55f).copy(alpha = 0.90f)
+        } else {
+            blendColors(Color(0xFF1A1C26), avgTint, 0.52f).copy(alpha = 0.88f)
+        }
+        val border = if (!isDark) {
+            blendColors(Color(0xFFCCD2DE), avgTint, 0.42f).copy(alpha = 0.78f)
+        } else {
+            blendColors(Color(0xFF383C4E), avgTint, 0.48f).copy(alpha = 0.72f)
+        }
+
+        return JaTextPalette(
+            isDark = isDark,
+            bgPrimary = avgTint,
+            bgSecondary = panel,
+            bgTertiary = panel2,
+            surface = panel2,
+            surfaceElevated = blendColors(panel2, if (isDark) Color.White else Color.Black, 0.07f),
+            border = border,
+            borderStrong = if (isDark) Color(0x47FFFFFF) else Color(0x36000000),
+            textPrimary = if (!isDark) Color(0xFF12151C) else Color(0xFFF4F5FA),
+            textSecondary = if (!isDark) Color(0xFF4A5162) else Color(0xFFB4B8CB),
+            textTertiary = if (!isDark) Color(0xFF6B7280) else Color(0xFF85899E),
+            accent = accent,
+            accentDark = accentDark,
+            accentSoft = accent.copy(alpha = 0.20f),
+            onAccent = Color.White,
+            success = Color(0xFF22C55E),
+            danger = Color(0xFFEF4444),
+            warning = Color(0xFFF59E0B),
+            rootGradientBrush = angledLinearBrush(
+                if (blendedStops.size == 1) listOf(blendedStops[0], blendedStops[0]) else blendedStops,
+                angle,
+            ),
+        )
     }
 
     fun applyRemotePayload(current: JaTextThemeConfig, remote: SyncedThemePayload): JaTextThemeConfig {
@@ -189,9 +406,9 @@ object JaTextThemeManager {
                     custom = if (c != null) {
                         CustomThemeData(
                             appearance = if (c.a == "l" || c.a == "light") "light" else "dark",
-                            colors = c.cols.ifEmpty { listOf("#e8a87c", "#9b6b9e") },
+                            colors = c.cols.ifEmpty { listOf("#efb4aa", "#b6e0d3") },
                             angle = c.ang.toInt().coerceIn(0, 360),
-                            intensity = c.int.toInt().coerceIn(5, 100),
+                            intensity = c.int.toInt().coerceIn(10, 100),
                         )
                     } else {
                         current.custom
@@ -225,74 +442,27 @@ object JaTextThemeManager {
         }
     }
 
+    /**
+     * Exact 1:1 Default + Gradient Palettes matching applyThemeToDocument() in src/lib/themeEngine.ts!
+     */
     fun buildPalette(cfg: JaTextThemeConfig, systemDark: Boolean): JaTextPalette {
         return when (cfg.kind) {
             "preset" -> {
                 val preset = COLOUR_THEME_PRESETS.firstOrNull { it.id == cfg.presetId }
-                    ?: COLOUR_THEME_PRESETS.first { it.id == "sunset" }
-                val isDark = preset.mode == "dark"
-                val stops = preset.colors.map { parseHexColor(it) }
-                val avg = stops.reduce { acc, c -> blendColors(acc, c, 0.5f) }
-                val accent = parseHexColor(preset.accentHex)
-                val baseBg = if (isDark) Color(0xFF101116) else Color(0xFFF9FAFB)
-                val bgPrimary = blendColors(baseBg, avg, if (isDark) 0.58f else 0.52f)
-                val bgSecondary = blendColors(if (isDark) Color(0xFF161820) else Color(0xFFFFFFFF), avg, 0.42f)
-                val bgTertiary = blendColors(if (isDark) Color(0xFF1E212B) else Color(0xFFF3F4F6), avg, 0.36f)
-                val surface = blendColors(if (isDark) Color(0xFF252936) else Color(0xFFFFFFFF), avg, 0.28f)
-                JaTextPalette(
-                    isDark = isDark,
-                    bgPrimary = bgPrimary,
-                    bgSecondary = bgSecondary,
-                    bgTertiary = bgTertiary,
-                    surface = surface,
-                    surfaceElevated = blendColors(surface, if (isDark) Color.White else Color.Black, 0.06f),
-                    border = if (isDark) Color(0x24FFFFFF) else Color(0x1F000000),
-                    borderStrong = if (isDark) Color(0x3DFFFFFF) else Color(0x33000000),
-                    textPrimary = if (isDark) Color(0xFFF7F8FA) else Color(0xFF111827),
-                    textSecondary = if (isDark) Color(0xFFB8C0CC) else Color(0xFF4B5563),
-                    textTertiary = if (isDark) Color(0xFF858E9E) else Color(0xFF6B7280),
-                    accent = accent,
-                    accentSoft = accent.copy(alpha = 0.16f),
-                    onAccent = if (accent.luminance() > 0.62f) Color(0xFF111827) else Color.White,
-                    success = Color(0xFF22C55E),
-                    danger = Color(0xFFEF4444),
-                    warning = Color(0xFFF59E0B),
-                    rootGradientBrush = angledLinearBrush(stops, preset.angle),
+                    ?: COLOUR_THEME_PRESETS.first()
+                buildGradientPalette(
+                    isDark = preset.mode == "dark",
+                    rawHexColors = preset.colors,
+                    angle = preset.angle,
+                    intensity = preset.intensity,
                 )
             }
             "custom" -> {
-                val isDark = cfg.custom.appearance != "light"
-                val factor = (cfg.custom.intensity.coerceIn(5, 100) / 100f)
-                val rawStops = cfg.custom.colors.map { parseHexColor(it) }.ifEmpty {
-                    listOf(Color(0xFFE8A87C), Color(0xFF9B6B9E))
-                }
-                val baseBg = if (isDark) Color(0xFF121318) else Color(0xFFF8F9FB)
-                val tintedStops = rawStops.map { blendColors(baseBg, it, factor * 0.72f) }
-                val avg = tintedStops.reduce { acc, c -> blendColors(acc, c, 0.5f) }
-                val accent = rawStops.first()
-                val surface = blendColors(if (isDark) Color(0xFF222530) else Color(0xFFFFFFFF), avg, 0.35f)
-                JaTextPalette(
-                    isDark = isDark,
-                    bgPrimary = avg,
-                    bgSecondary = blendColors(if (isDark) Color(0xFF171922) else Color(0xFFFFFFFF), avg, 0.55f),
-                    bgTertiary = blendColors(if (isDark) Color(0xFF1F222E) else Color(0xFFF1F5F9), avg, 0.45f),
-                    surface = surface,
-                    surfaceElevated = blendColors(surface, if (isDark) Color.White else Color.Black, 0.06f),
-                    border = if (isDark) Color(0x24FFFFFF) else Color(0x1F000000),
-                    borderStrong = if (isDark) Color(0x3DFFFFFF) else Color(0x33000000),
-                    textPrimary = if (isDark) Color(0xFFF7F8FA) else Color(0xFF111827),
-                    textSecondary = if (isDark) Color(0xFFB8C0CC) else Color(0xFF4B5563),
-                    textTertiary = if (isDark) Color(0xFF858E9E) else Color(0xFF6B7280),
-                    accent = accent,
-                    accentSoft = accent.copy(alpha = 0.18f),
-                    onAccent = if (accent.luminance() > 0.62f) Color(0xFF111827) else Color.White,
-                    success = Color(0xFF22C55E),
-                    danger = Color(0xFFEF4444),
-                    warning = Color(0xFFF59E0B),
-                    rootGradientBrush = angledLinearBrush(
-                        if (tintedStops.size == 1) listOf(tintedStops[0], tintedStops[0]) else tintedStops,
-                        cfg.custom.angle
-                    ),
+                buildGradientPalette(
+                    isDark = cfg.custom.appearance != "light",
+                    rawHexColors = cfg.custom.colors,
+                    angle = cfg.custom.angle,
+                    intensity = cfg.custom.intensity,
                 )
             }
             else -> {
@@ -305,77 +475,81 @@ object JaTextThemeManager {
                     "light" -> JaTextPalette(
                         isDark = false,
                         bgPrimary = Color(0xFFFFFFFF),
-                        bgSecondary = Color(0xFFF7F8FA),
-                        bgTertiary = Color(0xFFEEF0F4),
-                        surface = Color(0xFFFFFFFF),
-                        surfaceElevated = Color(0xFFF3F4F6),
-                        border = Color(0x17000000),
-                        borderStrong = Color(0x2B000000),
-                        textPrimary = Color(0xFF111827),
-                        textSecondary = Color(0xFF4B5563),
-                        textTertiary = Color(0xFF9CA3AF),
-                        accent = Color(0xFF10B981),
-                        accentSoft = Color(0x1F10B981),
+                        bgSecondary = Color(0xFFF2F3F5),
+                        bgTertiary = Color(0xFFE6E8EC),
+                        surface = Color(0xFFE6E8EC),
+                        surfaceElevated = Color(0xFFDCE0E6),
+                        border = Color(0xFFD5D8E0),
+                        borderStrong = Color(0xFFB8BDC9),
+                        textPrimary = Color(0xFF111318),
+                        textSecondary = Color(0xFF585D6A),
+                        textTertiary = Color(0xFF7B8190),
+                        accent = Color(0xFF7C4DFF),
+                        accentDark = Color.White,
+                        accentSoft = Color(0x247C4DFF),
                         onAccent = Color.White,
-                        success = Color(0xFF16A34A),
-                        danger = Color(0xFFDC2626),
+                        success = Color(0xFF22C55E),
+                        danger = Color(0xFFEF4444),
                         warning = Color(0xFFD97706),
                         rootGradientBrush = null,
                     )
                     "ash" -> JaTextPalette(
                         isDark = true,
-                        bgPrimary = Color(0xFF313338),
+                        bgPrimary = Color(0xFF323339),
                         bgSecondary = Color(0xFF2B2D31),
-                        bgTertiary = Color(0xFF232428),
+                        bgTertiary = Color(0xFF383A40),
                         surface = Color(0xFF383A40),
-                        surfaceElevated = Color(0xFF404249),
-                        border = Color(0x1FFFFFFF),
-                        borderStrong = Color(0x33FFFFFF),
+                        surfaceElevated = Color(0xFF42444B),
+                        border = Color(0xFF43464F),
+                        borderStrong = Color(0xFF575B66),
                         textPrimary = Color(0xFFF2F3F5),
-                        textSecondary = Color(0xFFB5BAC1),
-                        textTertiary = Color(0xFF80848E),
-                        accent = Color(0xFF10B981),
-                        accentSoft = Color(0x2610B981),
-                        onAccent = Color.White,
-                        success = Color(0xFF23A55A),
-                        danger = Color(0xFFF23F43),
-                        warning = Color(0xFFF0B232),
-                        rootGradientBrush = null,
-                    )
-                    "onyx" -> JaTextPalette(
-                        isDark = true,
-                        bgPrimary = Color(0xFF000000),
-                        bgSecondary = Color(0xFF090A0D),
-                        bgTertiary = Color(0xFF111318),
-                        surface = Color(0xFF151820),
-                        surfaceElevated = Color(0xFF1D202A),
-                        border = Color(0x22FFFFFF),
-                        borderStrong = Color(0x38FFFFFF),
-                        textPrimary = Color(0xFFF9FAFB),
-                        textSecondary = Color(0xFF9CA3AF),
-                        textTertiary = Color(0xFF6B7280),
-                        accent = Color(0xFF10B981),
-                        accentSoft = Color(0x2610B981),
+                        textSecondary = Color(0xFFA9ADB8),
+                        textTertiary = Color(0xFF848996),
+                        accent = Color(0xFF9B6CFF),
+                        accentDark = Color(0xFF170D2B),
+                        accentSoft = Color(0x2E9B6CFF),
                         onAccent = Color.White,
                         success = Color(0xFF22C55E),
                         danger = Color(0xFFEF4444),
                         warning = Color(0xFFF59E0B),
                         rootGradientBrush = null,
                     )
-                    else -> JaTextPalette( // "dark" (#1d1d21 web default!)
+                    "onyx" -> JaTextPalette(
                         isDark = true,
-                        bgPrimary = Color(0xFF16171B),
-                        bgSecondary = Color(0xFF1D1E24),
-                        bgTertiary = Color(0xFF25272F),
-                        surface = Color(0xFF2A2D37),
-                        surfaceElevated = Color(0xFF323642),
-                        border = Color(0x1FFFFFFF),
-                        borderStrong = Color(0x33FFFFFF),
-                        textPrimary = Color(0xFFF3F4F6),
-                        textSecondary = Color(0xFFA1A8B5),
-                        textTertiary = Color(0xFF6E7685),
-                        accent = Color(0xFF10B981),
-                        accentSoft = Color(0x2610B981),
+                        bgPrimary = Color(0xFF000000),
+                        bgSecondary = Color(0xFF07070A),
+                        bgTertiary = Color(0xFF121218),
+                        surface = Color(0xFF121218),
+                        surfaceElevated = Color(0xFF1A1A22),
+                        border = Color(0xFF20202A),
+                        borderStrong = Color(0xFF323240),
+                        textPrimary = Color(0xFFF5F5FA),
+                        textSecondary = Color(0xFF8F90A3),
+                        textTertiary = Color(0xFF66677A),
+                        accent = Color(0xFF9B6CFF),
+                        accentDark = Color(0xFF170D2B),
+                        accentSoft = Color(0x2E9B6CFF),
+                        onAccent = Color.White,
+                        success = Color(0xFF22C55E),
+                        danger = Color(0xFFEF4444),
+                        warning = Color(0xFFF59E0B),
+                        rootGradientBrush = null,
+                    )
+                    else -> JaTextPalette( // Exact Web Dark Theme (#1d1d21 / #151519 / #24252b / #30323a / #9b6cff)
+                        isDark = true,
+                        bgPrimary = Color(0xFF1D1D21),
+                        bgSecondary = Color(0xFF151519),
+                        bgTertiary = Color(0xFF24252B),
+                        surface = Color(0xFF24252B),
+                        surfaceElevated = Color(0xFF2E3038),
+                        border = Color(0xFF30323A),
+                        borderStrong = Color(0xFF454854),
+                        textPrimary = Color(0xFFF2F2F7),
+                        textSecondary = Color(0xFF9A9AAD),
+                        textTertiary = Color(0xFF6E7082),
+                        accent = Color(0xFF9B6CFF),
+                        accentDark = Color(0xFF170D2B),
+                        accentSoft = Color(0x2E9B6CFF),
                         onAccent = Color.White,
                         success = Color(0xFF22C55E),
                         danger = Color(0xFFEF4444),
@@ -401,10 +575,10 @@ fun JaTextTheme(
         if (palette.isDark) {
             darkColorScheme(
                 primary = palette.accent,
-                onPrimary = palette.onAccent,
+                onPrimary = palette.accentDark,
                 background = palette.bgPrimary,
                 onBackground = palette.textPrimary,
-                surface = palette.surface,
+                surface = palette.bgSecondary,
                 onSurface = palette.textPrimary,
                 surfaceVariant = palette.bgTertiary,
                 onSurfaceVariant = palette.textSecondary,
@@ -414,10 +588,10 @@ fun JaTextTheme(
         } else {
             lightColorScheme(
                 primary = palette.accent,
-                onPrimary = palette.onAccent,
+                onPrimary = palette.accentDark,
                 background = palette.bgPrimary,
                 onBackground = palette.textPrimary,
-                surface = palette.surface,
+                surface = palette.bgSecondary,
                 onSurface = palette.textPrimary,
                 surfaceVariant = palette.bgTertiary,
                 onSurfaceVariant = palette.textSecondary,
