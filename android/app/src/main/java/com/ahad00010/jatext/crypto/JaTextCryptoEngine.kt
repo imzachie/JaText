@@ -1103,8 +1103,13 @@ object JaTextCryptoEngine {
         groupId: String,
         memberUserIds: List<String>,
         token: String,
+        forceRedistribute: Boolean = false,
+        rotateEpoch: Boolean = false,
     ): Pair<Int, String> = withContext(Dispatchers.Default) {
-        getLatestKnownGroupEpoch(groupId)?.let { return@withContext it }
+        val existing = getLatestKnownGroupEpoch(groupId)
+        if (existing != null && !forceRedistribute && !rotateEpoch) {
+            return@withContext existing
+        }
 
         val myIdentity = ensureOrCreatePrimaryIdentity(context, myUserId)
         val allIds = (memberUserIds + myUserId).distinct()
@@ -1123,11 +1128,20 @@ object JaTextCryptoEngine {
             }
         val allBundles = (bundleMap.values.flatten() + myLocalBundles).distinctBy { "${it.userId}:${it.keyId}" }
 
-        val epoch = 1
-        val secretBytes = randomBytes(32)
-        val secretB64 = b64UrlEncode(secretBytes)
-        addGroupEpochCandidateSecret(groupId, epoch, secretB64)
-        persistGroupEpochMap(context, myUserId)
+        val epoch: Int
+        val secretBytes: ByteArray
+        val secretB64: String
+        if (existing != null && !rotateEpoch) {
+            epoch = existing.first
+            secretB64 = existing.second
+            secretBytes = b64UrlDecode(secretB64)
+        } else {
+            epoch = (existing?.first ?: 0) + 1
+            secretBytes = randomBytes(32)
+            secretB64 = b64UrlEncode(secretBytes)
+            addGroupEpochCandidateSecret(groupId, epoch, secretB64)
+            persistGroupEpochMap(context, myUserId)
+        }
 
         if (allBundles.isNotEmpty()) {
             try {

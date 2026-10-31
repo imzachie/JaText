@@ -425,7 +425,7 @@ export function VoiceNotePlayer({
                   onToggleTranscript(false);
                 }}
               >
-                Hide
+                Hide transcribe
               </button>
             )}
           </div>

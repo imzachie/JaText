@@ -18,7 +18,7 @@ import { AccountSwitcherModal } from "./components/AccountSwitcherModal";
 import { closeTopmostAnimatedModal } from "./components/AnimatedModal";
 import { LockIcon } from "./components/E2EEModals";
 import { Sidebar } from "./components/Sidebar";
-import { MessageCircleIcon } from "./components/UiIcons";
+import { BellIcon, CloseIcon, MessageCircleIcon } from "./components/UiIcons";
 import {
   CallProvider,
   formatPreviewMessageText,
@@ -46,6 +46,7 @@ import { useJaText } from "./lib/store";
 import {
   loadNotificationPreferences,
   playMessageSound,
+  saveNotificationPreferences,
   syncSoundPreferencesToNative,
 } from "./lib/alerts";
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
@@ -144,6 +145,32 @@ function AppContent() {
   const [notificationWelcomeSeen, setNotificationWelcomeSeen] = useState(
     () => localStorage.getItem(NOTIFICATION_WELCOME_KEY) === "true",
   );
+  const [webNotifPromptVisible, setWebNotifPromptVisible] = useState<boolean>(() => {
+    if (Capacitor.isNativePlatform() || typeof window === "undefined") return false;
+    if (!("Notification" in window)) return false;
+    if (sessionStorage.getItem("jatext_web_notif_banner_dismissed") === "1") return false;
+    return Notification.permission === "default";
+  });
+
+  const enableDesktopBrowserNotifications = useCallback(async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    try {
+      const result = await Notification.requestPermission();
+      setWebNotifPromptVisible(false);
+      if (result === "granted") {
+        const cur = loadNotificationPreferences();
+        saveNotificationPreferences({
+          ...cur,
+          notificationsEnabled: true,
+          soundsEnabled: true,
+        });
+        store.setNotificationsEnabled(true);
+        playMessageSound("received");
+      }
+    } catch {
+      setWebNotifPromptVisible(false);
+    }
+  }, [store]);
   const isNativeActiveRef = useRef(true);
   const previousPreviews = useRef<Map<string, string> | null>(null);
   const previousGroups = useRef<Map<string, string> | null>(null);
@@ -389,26 +416,27 @@ function AppContent() {
       const friend = friends.find((user) => user.id === preview.friendId);
       if (!friend) continue;
 
-      const appInForeground = Capacitor.isNativePlatform()
+      const isNative = Capacitor.isNativePlatform();
+      const appInForeground = isNative
         ? isNativeActiveRef.current && document.visibilityState === "visible"
-        : document.visibilityState === "visible";
+        : document.visibilityState === "visible" && document.hasFocus();
 
-      if (soundsEnabled && appInForeground) {
+      // Play default JaText Notification-FIXED.mp3 on Desktop Web both in-app & unfocused/minimized!
+      if (soundsEnabled && (appInForeground || !isNative)) {
         playMessageSound("received");
       }
 
       const readableText = formatPreviewMessageText(preview.body);
 
-      // Only show system notifications when minimized/hidden, NEVER while in the app!
-      // On Android with FCM active, native JaTextFirebaseMessagingService handles background pushes directly.
+      // Show OS/browser notification when unfocused/minimized (or viewing another chat while unfocused)
       if (
         notificationsEnabled &&
         !appInForeground &&
-        (!Capacitor.isNativePlatform() || !firebasePushActiveRef.current)
+        (!isNative || !firebasePushActiveRef.current)
       ) {
         const dispatchDmNotification = (finalText: string) => {
           if (isPlaceholderNotificationText(finalText)) return;
-          if (Capacitor.isNativePlatform()) {
+          if (isNative) {
             void JaTextNative.showDecryptedNotification({
               tag: `dm:${friend.id}`,
               title: `New message from ${friend.displayName}`,
@@ -419,10 +447,14 @@ function AppContent() {
             try {
               const notification = new Notification(`Message from ${friend.displayName}`, {
                 body: finalText,
+                icon: "/jatext-logo-icon.png",
+                badge: "/jatext-logo-icon.png",
                 tag: `jatext-${friend.id}`,
+                silent: true,
               });
               notification.onclick = () => {
                 window.focus();
+                setActiveGroupId(null);
                 setActiveChatId(friend.id);
                 notification.close();
               };
@@ -509,11 +541,12 @@ function AppContent() {
         continue;
       }
 
-      const appInForeground = Capacitor.isNativePlatform()
+      const isNative = Capacitor.isNativePlatform();
+      const appInForeground = isNative
         ? isNativeActiveRef.current && document.visibilityState === "visible"
-        : document.visibilityState === "visible";
+        : document.visibilityState === "visible" && document.hasFocus();
 
-      if (soundsEnabled && appInForeground) {
+      if (soundsEnabled && (appInForeground || !isNative)) {
         playMessageSound("received");
       }
 
@@ -524,11 +557,11 @@ function AppContent() {
       if (
         notificationsEnabled &&
         !appInForeground &&
-        (!Capacitor.isNativePlatform() || !firebasePushActiveRef.current)
+        (!isNative || !firebasePushActiveRef.current)
       ) {
         const dispatchGroupNotification = (finalGroupBody: string) => {
           if (isPlaceholderNotificationText(finalGroupBody)) return;
-          if (Capacitor.isNativePlatform()) {
+          if (isNative) {
             void JaTextNative.showDecryptedNotification({
               tag: `group:${group.id}`,
               title,
@@ -539,10 +572,14 @@ function AppContent() {
             try {
               const notification = new Notification(title, {
                 body: finalGroupBody,
+                icon: "/jatext-logo-icon.png",
+                badge: "/jatext-logo-icon.png",
                 tag: `jatext-group-${group.id}`,
+                silent: true,
               });
               notification.onclick = () => {
                 window.focus();
+                setActiveChatId(null);
                 setActiveGroupId(group.id);
                 notification.close();
               };
@@ -876,6 +913,34 @@ function AppContent() {
       )}
       {Capacitor.isNativePlatform() && accountSwitcherOpen && (
         <AccountSwitcherModal onClose={() => setAccountSwitcherOpen(false)} />
+      )}
+      {webNotifPromptVisible && (
+        <div className="desktop-notif-banner" role="region" aria-label="Enable desktop notifications">
+          <span className="desktop-notif-banner-icon" aria-hidden="true">
+            <BellIcon size={16} />
+          </span>
+          <span className="desktop-notif-banner-text">
+            Turn on desktop notifications &amp; JaText alert sound for new messages
+          </span>
+          <button
+            type="button"
+            className="primary-btn desktop-notif-enable-btn"
+            onClick={() => void enableDesktopBrowserNotifications()}
+          >
+            <span>Enable</span>
+          </button>
+          <button
+            type="button"
+            className="icon-btn desktop-notif-close-btn"
+            aria-label="Dismiss notification prompt"
+            onClick={() => {
+              sessionStorage.setItem("jatext_web_notif_banner_dismissed", "1");
+              setWebNotifPromptVisible(false);
+            }}
+          >
+            <CloseIcon size={14} />
+          </button>
+        </div>
       )}
       <CallOverlay />
       <GroupCallOverlay />

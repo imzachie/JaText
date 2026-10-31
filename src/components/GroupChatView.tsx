@@ -105,6 +105,8 @@ import {
   subscribeMessageJumps,
 } from "../lib/forwardedContext";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
+import { DeleteForMeToast, type DeletedForMeUndoState } from "./DeleteForMeToast";
+import { triggerMessageThanosSnapById } from "../lib/thanosSnapEffect";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
@@ -1333,6 +1335,8 @@ export function GroupChatView({
   const [file, setFile] = useState<File | null>(null);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
+  const [deletedUndoState, setDeletedUndoState] = useState<DeletedForMeUndoState | null>(null);
+  const deletedSnapshotRef = useRef<Map<string, GroupMessage>>(new Map());
   const [replyTo, setReplyTo] = useState<GroupMessage | null>(null);
   const [editingMessage, setEditingMessage] = useState<GroupMessage | null>(null);
   const [forwardedMessage, setForwardedMessage] = useState<GroupMessage | null>(null);
@@ -2343,19 +2347,40 @@ export function GroupChatView({
   }
 
   async function deleteForMe(message: GroupMessage) {
+    closeMessageMenu();
+    deletedSnapshotRef.current.set(message.id, message);
+    setDeletedUndoState({
+      messageId: message.id,
+      nonce: Date.now(),
+      expiresAt: Date.now() + 5_000,
+    });
     try {
       await store.deleteGroupMessageForMe(message.id);
-      closeMessageMenu();
     } catch (err) {
+      setDeletedUndoState(null);
       setError(friendlyError(err, "Couldn't delete the message."));
     }
   }
 
-  async function unsend(message: GroupMessage) {
+  async function undoDeleteForMe(messageId: string) {
+    const snap = deletedSnapshotRef.current.get(messageId);
+    deletedSnapshotRef.current.delete(messageId);
+    setDeletedUndoState(null);
+    if (!snap || !store.restoreGroupMessageForMe) return;
     try {
+      await store.restoreGroupMessageForMe(snap);
+    } catch (err) {
+      setError(friendlyError(err, "Couldn't restore the message."));
+    }
+  }
+
+  async function unsend(message: GroupMessage) {
+    closeMessageMenu();
+    triggerMessageThanosSnapById(message.id);
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 260));
       const shouldShowWarning = await store.unsendGroupMessage(message.id);
       if (shouldShowWarning) setShowUnsendWarning(true);
-      closeMessageMenu();
     } catch (err) {
       setError(friendlyError(err, "Couldn't unsend the message."));
     }
@@ -2958,8 +2983,8 @@ export function GroupChatView({
                   <FileTextIcon size={15} />
                 </span>{" "}
                 {shownTranscriptIds[messageMenu.message.id]
-                  ? "Hide transcription"
-                  : "Show transcription"}
+                  ? "Hide transcribe"
+                  : "Transcribe"}
               </button>
             )}
           {!messageMenu.message.unsentAt && (
@@ -3845,6 +3870,13 @@ export function GroupChatView({
           onClose={() => setInspectingMessage(null)}
         />
       )}
+      <DeleteForMeToast
+        state={deletedUndoState}
+        onUndo={(id) => void undoDeleteForMe(id)}
+        onExpire={(nonce) =>
+          setDeletedUndoState((cur) => (cur?.nonce === nonce ? null : cur))
+        }
+      />
     </section>
   );
 }

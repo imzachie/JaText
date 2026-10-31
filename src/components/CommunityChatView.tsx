@@ -56,6 +56,8 @@ import {
   UsersIcon,
 } from "./UiIcons";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
+import { DeleteForMeToast, type DeletedForMeUndoState } from "./DeleteForMeToast";
+import { triggerMessageThanosSnapById } from "../lib/thanosSnapEffect";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
@@ -402,6 +404,8 @@ export function CommunityChatView({
   const [file, setFile] = useState<File | null>(null);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
+  const [deletedUndoState, setDeletedUndoState] = useState<DeletedForMeUndoState | null>(null);
+  const deletedSnapshotRef = useRef<Map<string, CommunityMessage>>(new Map());
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [showPoll, setShowPoll] = useState(false);
@@ -1078,18 +1082,38 @@ export function CommunityChatView({
     }
   }
   async function deleteForMe(message: CommunityMessage) {
+    closeMessageMenu();
+    deletedSnapshotRef.current.set(message.id, message);
+    setDeletedUndoState({
+      messageId: message.id,
+      nonce: Date.now(),
+      expiresAt: Date.now() + 5_000,
+    });
     try {
       await store.deleteCommunityMessageForMe(message.id);
-      closeMessageMenu();
     } catch (err) {
+      setDeletedUndoState(null);
       setError(friendlyError(err, "Couldn't delete the message."));
     }
   }
-  async function unsend(message: CommunityMessage) {
+  async function undoDeleteForMe(messageId: string) {
+    const snap = deletedSnapshotRef.current.get(messageId);
+    deletedSnapshotRef.current.delete(messageId);
+    setDeletedUndoState(null);
+    if (!snap || !store.restoreCommunityMessageForMe) return;
     try {
+      await store.restoreCommunityMessageForMe(snap);
+    } catch (err) {
+      setError(friendlyError(err, "Couldn't restore the message."));
+    }
+  }
+  async function unsend(message: CommunityMessage) {
+    closeMessageMenu();
+    triggerMessageThanosSnapById(message.id);
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 260));
       const shouldShowWarning = await store.unsendCommunityMessage(message.id);
       if (shouldShowWarning) setShowUnsendWarning(true);
-      closeMessageMenu();
     } catch (err) {
       setError(friendlyError(err, "Couldn't unsend the message."));
     }
@@ -1746,8 +1770,8 @@ export function CommunityChatView({
               >
                 <span><FileTextIcon size={15} /></span>{" "}
                 {shownTranscriptIds[messageMenu.message.id]
-                  ? "Hide transcription"
-                  : "Show transcription"}
+                  ? "Hide transcribe"
+                  : "Transcribe"}
               </button>
             )}
           {!messageMenu.message.unsentAt && (
@@ -1880,6 +1904,13 @@ export function CommunityChatView({
           <span className="media-lightbox-hint">Pinch to zoom · Drag to move · Click outside or press Esc to close</span>
         </div>
       )}
+      <DeleteForMeToast
+        state={deletedUndoState}
+        onUndo={(id) => void undoDeleteForMe(id)}
+        onExpire={(nonce) =>
+          setDeletedUndoState((cur) => (cur?.nonce === nonce ? null : cur))
+        }
+      />
     </section>
   );
 }

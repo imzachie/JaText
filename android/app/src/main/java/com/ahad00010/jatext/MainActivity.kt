@@ -21,6 +21,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -34,13 +36,23 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,9 +69,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import coil.Coil
+import coil.ImageLoader
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
 import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
 import com.ahad00010.jatext.state.JaTextSessionViewModel
+import com.ahad00010.jatext.ui.effects.LocalThanosSnapHost
+import com.ahad00010.jatext.ui.effects.ThanosSnapHostState
+import com.ahad00010.jatext.ui.effects.ThanosSnapOverlayHost
 import com.ahad00010.jatext.ui.screens.ChatThreadScreen
 import com.ahad00010.jatext.ui.screens.EnableCallAndAlertPermissionsModal
 import com.ahad00010.jatext.ui.screens.GroupMembersBottomModal
@@ -161,6 +180,20 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         activeActivityRef = WeakReference(this)
 
+        // Register global Coil GIF / Animated WebP decoder so all GIFs animate smoothly across the app
+        Coil.setImageLoader(
+            ImageLoader.Builder(applicationContext)
+                .components {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        add(ImageDecoderDecoder.Factory())
+                    } else {
+                        add(GifDecoder.Factory())
+                    }
+                }
+                .crossfade(true)
+                .build()
+        )
+
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -183,11 +216,17 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val uiState by sessionViewModel.state.collectAsState()
+            val thanosSnapHost = remember { ThanosSnapHostState() }
             JaTextTheme(config = uiState.themeConfig) {
-                JaTextRootHost(
-                    activity = this,
-                    vm = sessionViewModel,
-                )
+                CompositionLocalProvider(LocalThanosSnapHost provides thanosSnapHost) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        JaTextRootHost(
+                            activity = this@MainActivity,
+                            vm = sessionViewModel,
+                        )
+                        ThanosSnapOverlayHost(hostState = thanosSnapHost)
+                    }
+                }
             }
         }
     }
@@ -485,6 +524,78 @@ private fun JaTextRootHost(
                 onInstallClick = { vm.downloadAndInstallApkUpdate(activity) },
                 onLaterClick = { vm.dismissUpdatePrompt() },
             )
+        }
+
+        // 5-second "Deleted the message for me." bottom popup with Undo button
+        val undoBanner = state.deletedForMeUndo
+        val undoProgress = remember { Animatable(1f) }
+        LaunchedEffect(undoBanner?.nonce) {
+            if (undoBanner != null) {
+                undoProgress.snapTo(1f)
+                val remMs = (undoBanner.expiresAt - System.currentTimeMillis()).coerceIn(200L, 5_000L).toInt()
+                undoProgress.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(durationMillis = remMs, easing = LinearEasing),
+                )
+            }
+        }
+        AnimatedVisibility(
+            visible = undoBanner != null,
+            enter = slideInVertically(
+                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)
+            ) { it } + fadeIn(tween(150)),
+            exit = slideOutVertically(tween(150)) { it } + fadeOut(tween(140)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 74.dp, start = 18.dp, end = 18.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(min = 280.dp, max = 420.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xF214141D))
+                    .border(1.dp, palette.accent.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "Deleted the message for me.",
+                        color = Color.White,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(palette.accentSoft)
+                            .border(1.dp, palette.accent.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
+                            .clickable { vm.undoDeleteMessageForMe() }
+                            .padding(horizontal = 13.dp, vertical = 5.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Undo",
+                            color = palette.accent,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(undoProgress.value.coerceIn(0f, 1f))
+                        .height(3.dp)
+                        .background(palette.accent)
+                )
+            }
         }
 
         // Animated Native Toast Pill

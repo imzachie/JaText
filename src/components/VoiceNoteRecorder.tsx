@@ -10,25 +10,8 @@ import {
 import { PauseIcon, PlayIcon, SendIcon, TrashIcon } from "./UiIcons";
 
 interface WebSpeechRecognitionInstance {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
   stop: () => void;
   abort: () => void;
-}
-
-type WebSpeechRecognitionConstructor = new () => WebSpeechRecognitionInstance;
-
-function getWebSpeechRecognition(): WebSpeechRecognitionConstructor | null {
-  const win = window as unknown as {
-    SpeechRecognition?: WebSpeechRecognitionConstructor;
-    webkitSpeechRecognition?: WebSpeechRecognitionConstructor;
-  };
-  return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
 }
 
 function summarizePeaks(samples: number[], targetBars = 28): number[] {
@@ -61,7 +44,6 @@ export function VoiceNoteRecorder({
   const [elapsedSec, setElapsedSec] = useState(0);
   const [paused, setPaused] = useState(false);
   const [liveBars, setLiveBars] = useState<number[]>(() => Array.from({ length: 24 }, () => 16));
-  const [liveTranscript, setLiveTranscript] = useState("");
   const [sending, setSending] = useState(false);
 
   const streamRef = useRef<MediaStream | null>(null);
@@ -74,7 +56,6 @@ export function VoiceNoteRecorder({
   const startedAtRef = useRef<number>(0);
   const accumulatedMsRef = useRef<number>(0);
   const transcriptFinalRef = useRef<string>("");
-  const transcriptInterimRef = useRef<string>("");
   const webSpeechRef = useRef<WebSpeechRecognitionInstance | null>(null);
   const nativeSpeechListenerRef = useRef<PluginListenerHandle | null>(null);
   const activeRef = useRef(true);
@@ -93,7 +74,6 @@ export function VoiceNoteRecorder({
     }
     if (webSpeechRef.current) {
       try {
-        webSpeechRef.current.onend = null;
         webSpeechRef.current.stop();
       } catch {
         // Ignore stop errors.
@@ -224,50 +204,7 @@ export function VoiceNoteRecorder({
         } catch {
           // Waveform visualizer is non-critical if AudioContext fails.
         }
-
-        // Start live speech recognition on desktop browsers (on Android APK we keep
-        // exclusive mic focus on MediaRecorder so OEM audio HALs never mute the recording;
-        // Whisper WASM ASR transcribes Android-recorded voice notes on demand).
-        const SpeechCtor = !Capacitor.isNativePlatform() ? getWebSpeechRecognition() : null;
-        if (SpeechCtor) {
-          try {
-            const recognition = new SpeechCtor();
-            recognition.continuous = true;
-            recognition.interimResults = true;
-            recognition.lang = navigator.language || "en-US";
-            recognition.onresult = (event) => {
-              let interim = "";
-              for (let i = event.resultIndex; i < event.results.length; i++) {
-                const res = event.results[i];
-                const piece = res[0]?.transcript ?? "";
-                if (res.isFinal) {
-                  transcriptFinalRef.current = `${transcriptFinalRef.current} ${piece}`.trim();
-                } else {
-                  interim += piece;
-                }
-              }
-              transcriptInterimRef.current = interim.trim();
-              const combined = `${transcriptFinalRef.current} ${transcriptInterimRef.current}`.trim();
-              setLiveTranscript(combined);
-            };
-            recognition.onerror = () => {
-              // Non-fatal; Whisper fallback handles transcription if live capture is unavailable.
-            };
-            recognition.onend = () => {
-              if (activeRef.current && !pausedRef.current) {
-                try {
-                  recognition.start();
-                } catch {
-                  // Ignore restart race.
-                }
-              }
-            };
-            recognition.start();
-            webSpeechRef.current = recognition;
-          } catch {
-            // Ignore speech recognition startup errors.
-          }
-        }
+        // Transcription runs strictly on-demand when holding down a voice note and clicking "Transcribe".
       } catch (cause) {
         onError(
           cause instanceof Error && cause.name === "NotAllowedError"
@@ -305,11 +242,6 @@ export function VoiceNoteRecorder({
       startedAtRef.current = Date.now();
       pausedRef.current = false;
       setPaused(false);
-      try {
-        webSpeechRef.current?.start();
-      } catch {
-        // Ignore.
-      }
     }
   }
 
@@ -343,13 +275,10 @@ export function VoiceNoteRecorder({
 
     await cleanupAll();
 
-    const fullTranscript =
-      `${transcriptFinalRef.current} ${transcriptInterimRef.current}`.trim() || liveTranscript.trim();
     const waveform = summarizePeaks(peakSamplesRef.current, 28);
     const meta: VoiceNoteMeta = {
       durationSec,
       waveform,
-      ...(fullTranscript ? { transcript: fullTranscript } : {}),
     };
     const encodedMime = encodeVoiceNoteMime(stoppedBlob.type || "audio/webm", meta);
     const ext = mimeInfoRef.current.ext || "webm";
@@ -406,11 +335,6 @@ export function VoiceNoteRecorder({
             ))}
           </div>
         </div>
-        {liveTranscript && (
-          <span className="voice-rec-live-caption" title={liveTranscript}>
-            “{liveTranscript}”
-          </span>
-        )}
       </div>
 
       <button

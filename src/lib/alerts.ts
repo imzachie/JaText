@@ -56,7 +56,7 @@ export function loadNotificationPreferences(): NotificationPreferences {
     const raw = localStorage.getItem(PREFERENCES_KEY);
     if (!raw) {
       return {
-        notificationsEnabled: Capacitor.isNativePlatform(),
+        notificationsEnabled: true,
         soundsEnabled: true,
         notificationSound: defaultSoundSelection(),
         callRingtone: defaultSoundSelection(),
@@ -65,7 +65,7 @@ export function loadNotificationPreferences(): NotificationPreferences {
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") {
       return {
-        notificationsEnabled: Capacitor.isNativePlatform(),
+        notificationsEnabled: true,
         soundsEnabled: true,
         notificationSound: defaultSoundSelection(),
         callRingtone: defaultSoundSelection(),
@@ -76,14 +76,14 @@ export function loadNotificationPreferences(): NotificationPreferences {
       notificationsEnabled:
         preferences.notificationsEnabled !== undefined
           ? preferences.notificationsEnabled === true
-          : Capacitor.isNativePlatform(),
+          : true,
       soundsEnabled: preferences.soundsEnabled !== false,
       notificationSound: normalizeSoundSelection(preferences.notificationSound),
       callRingtone: normalizeSoundSelection(preferences.callRingtone),
     };
   } catch {
     return {
-      notificationsEnabled: Capacitor.isNativePlatform(),
+      notificationsEnabled: true,
       soundsEnabled: true,
       notificationSound: defaultSoundSelection(),
       callRingtone: defaultSoundSelection(),

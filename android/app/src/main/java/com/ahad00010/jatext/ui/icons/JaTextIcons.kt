@@ -517,6 +517,9 @@ enum class WebUiIconKind {
     Edit,
     Undo,
     SmilePlus,
+    Star,
+    Link,
+    Transcript,
 }
 
 @Composable
@@ -676,6 +679,25 @@ fun WebUiSvgIcon(
                 drawCircle(color = tint, radius = 1f * s, center = Offset(15f * s, 9f * s))
                 drawLine(tint, Offset(16f * s, 5f * s), Offset(22f * s, 5f * s), strokeWidth = sw, cap = StrokeCap.Round)
                 drawLine(tint, Offset(19f * s, 2f * s), Offset(19f * s, 8f * s), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            WebUiIconKind.Star -> {
+                strokeSvgPath("M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z")
+            }
+            WebUiIconKind.Link -> {
+                strokeSvgPath("M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71")
+                strokeSvgPath("M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71")
+            }
+            WebUiIconKind.Transcript -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(3f * s, 4f * s),
+                    size = Size(18f * s, 16f * s),
+                    cornerRadius = CornerRadius(3f * s, 3f * s),
+                    style = stroke,
+                )
+                drawLine(tint, Offset(7f * s, 9f * s), Offset(17f * s, 9f * s), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(tint, Offset(7f * s, 13f * s), Offset(17f * s, 13f * s), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(tint, Offset(7f * s, 16.5f * s), Offset(12.5f * s, 16.5f * s), strokeWidth = sw, cap = StrokeCap.Round)
             }
         }
     }

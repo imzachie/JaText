@@ -308,6 +308,7 @@ export interface JaTextStore {
   forwardDmToTarget?: (messageId: string, target: { userId?: string; groupId?: string }) => Promise<void>;
   toggleMessageReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteMessageForMe: (messageId: string) => Promise<void>;
+  restoreMessageForMe?: (message: ChatMessage) => Promise<void>;
   unsendMessage: (messageId: string) => Promise<boolean>;
   editMessage: (messageId: string, body: string) => Promise<void>;
   setConversationArchived: (friendId: string, archived: boolean) => Promise<void>;
@@ -335,6 +336,7 @@ export interface JaTextStore {
   deleteCommunityMessage: (messageId: string) => Promise<void>;
   toggleCommunityReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteCommunityMessageForMe: (messageId: string) => Promise<void>;
+  restoreCommunityMessageForMe?: (message: CommunityMessage) => Promise<void>;
   unsendCommunityMessage: (messageId: string) => Promise<boolean>;
   forwardCommunityMessage: (messageId: string, target: { groupId?: string; userId?: string; community?: boolean }) => Promise<void>;
   favoriteCommunityStickerFromMessage: (messageId: string) => Promise<void>;
@@ -347,6 +349,7 @@ export interface JaTextStore {
   setGroupTyping: (groupId: string, isTyping: boolean) => Promise<void>;
   toggleGroupReaction: (messageId: string, emoji: string) => Promise<void>;
   deleteGroupMessageForMe: (messageId: string) => Promise<void>;
+  restoreGroupMessageForMe?: (message: GroupMessage) => Promise<void>;
   unsendGroupMessage: (messageId: string) => Promise<boolean>;
   editGroupMessage: (messageId: string, body: string) => Promise<void>;
   forwardGroupMessage: (messageId: string, target: { groupId?: string; userId?: string; community?: boolean }) => Promise<void>;

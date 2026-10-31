@@ -516,17 +516,23 @@ fun ReplyQuoteBannerUi(
 
 /* ==================== Native Voice Note Player ==================== */
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NativeVoiceNoteBubblePlayer(
     attachmentUrl: String,
+    attachmentType: String? = null,
     encryptedAttachment: EncryptedBlobDescriptor?,
     ink: ResolvedBubbleColors,
+    showTranscript: Boolean = false,
+    onHideTranscript: (() -> Unit)? = null,
+    onLongPressMessage: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var resolvedFile by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf<File?>(null) }
     var loadingFile by remember(attachmentUrl) { mutableStateOf(true) }
     var bars by remember(attachmentUrl) { mutableStateOf(List(32) { i -> 0.24f + ((i * 5) % 6) * 0.12f }) }
     var transcriptLabel by remember(attachmentUrl) { mutableStateOf<String?>(null) }
+    var transcribing by remember(attachmentUrl) { mutableStateOf(false) }
 
     var isPlaying by remember { mutableStateOf(false) }
     var durationMs by remember { mutableIntStateOf(0) }
@@ -566,11 +572,19 @@ fun NativeVoiceNoteBubblePlayer(
             } catch (_: Throwable) {
             }
             bars = VoiceNoteMusicDetector.buildWaveformSamples(file, bars = 32)
-            val isMusic = VoiceNoteMusicDetector.analyzeAudioForMusic(file)
-            if (isMusic) {
-                transcriptLabel = "(Music)"
-            }
         }
+    }
+
+    // Strictly on-demand transcription ONLY when user holds down voice note -> clicks "Transcribe"
+    LaunchedEffect(showTranscript, resolvedFile) {
+        if (!showTranscript) return@LaunchedEffect
+        if (!transcriptLabel.isNullOrBlank()) return@LaunchedEffect
+        val file = resolvedFile ?: return@LaunchedEffect
+        if (!file.exists()) return@LaunchedEffect
+        transcribing = true
+        val rawHint = encryptedAttachment?.mt ?: attachmentType
+        transcriptLabel = VoiceNoteMusicDetector.transcribeVoiceNoteOnDemand(context, file, rawHint)
+        transcribing = false
     }
 
     LaunchedEffect(isPlaying, playerRef) {
@@ -609,6 +623,16 @@ fun NativeVoiceNoteBubblePlayer(
     Column(
         modifier = Modifier
             .widthIn(min = 215.dp, max = 275.dp)
+            .then(
+                if (onLongPressMessage != null) {
+                    Modifier.combinedClickable(
+                        onClick = {},
+                        onLongClick = onLongPressMessage,
+                    )
+                } else {
+                    Modifier
+                }
+            )
             .padding(vertical = 2.dp)
     ) {
         Row(
@@ -700,21 +724,60 @@ fun NativeVoiceNoteBubblePlayer(
             }
         }
 
-        if (!transcriptLabel.isNullOrBlank()) {
-            Spacer(Modifier.height(5.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Rounded.GraphicEq,
-                    contentDescription = null,
-                    tint = fgInk.copy(alpha = 0.8f),
-                    modifier = Modifier.size(13.dp),
-                )
-                Spacer(Modifier.width(4.dp))
+        if (showTranscript) {
+            Spacer(Modifier.height(7.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(fgInk.copy(alpha = 0.10f))
+                    .border(1.dp, fgInk.copy(alpha = 0.18f), RoundedCornerShape(11.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.GraphicEq,
+                            contentDescription = null,
+                            tint = fgInk.copy(alpha = 0.85f),
+                            modifier = Modifier.size(13.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "Transcription",
+                            color = fgInk.copy(alpha = 0.9f),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    if (onHideTranscript != null) {
+                        Text(
+                            text = "Hide transcribe",
+                            color = fgInk,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(fgInk.copy(alpha = 0.14f))
+                                .clickable { onHideTranscript() }
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                }
                 Text(
-                    text = transcriptLabel!!,
+                    text = when {
+                        transcribing || loadingFile -> "Transcribing voice note..."
+                        !transcriptLabel.isNullOrBlank() -> transcriptLabel!!
+                        else -> "No clear speech detected in this voice note."
+                    },
                     color = fgInk,
-                    fontSize = 12.sp,
-                    fontStyle = FontStyle.Italic,
+                    fontSize = 12.5.sp,
+                    fontStyle = if (transcribing) FontStyle.Italic else FontStyle.Normal,
                 )
             }
         }
@@ -955,6 +1018,35 @@ fun InlineVideoAttachmentPlayer(
 
 /* ==================== Unified Media Attachment Dispatcher ==================== */
 
+fun isMessageAudioVoiceNote(
+    attachmentUrl: String?,
+    attachmentName: String?,
+    attachmentType: String?,
+    encryptedAttachment: EncryptedBlobDescriptor?,
+): Boolean {
+    if (attachmentUrl.isNullOrBlank()) return false
+    val rawMime = (encryptedAttachment?.mt ?: attachmentType.orEmpty()).lowercase()
+    val cleanMime = rawMime.substringBefore(";").trim()
+    val hint = "${encryptedAttachment?.n.orEmpty()} ${attachmentName.orEmpty()} $attachmentUrl"
+    return cleanMime.startsWith("audio/") || AUDIO_EXT_REGEX.containsMatchIn(hint)
+}
+
+fun isMessageImageAttachment(
+    attachmentUrl: String?,
+    attachmentName: String?,
+    attachmentType: String?,
+    encryptedAttachment: EncryptedBlobDescriptor?,
+): Boolean {
+    if (attachmentUrl.isNullOrBlank()) return false
+    val rawMime = (encryptedAttachment?.mt ?: attachmentType.orEmpty()).lowercase()
+    val cleanMime = rawMime.substringBefore(";").trim()
+    val hint = "${encryptedAttachment?.n.orEmpty()} ${attachmentName.orEmpty()} $attachmentUrl"
+    val isAudio = cleanMime.startsWith("audio/") || AUDIO_EXT_REGEX.containsMatchIn(hint)
+    val isVideo = !isAudio && (cleanMime.startsWith("video/") || VIDEO_EXT_REGEX.containsMatchIn(hint))
+    return !isAudio && !isVideo && (cleanMime.startsWith("image/") || IMAGE_EXT_REGEX.containsMatchIn(hint))
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageMediaAttachmentView(
     attachmentUrl: String,
@@ -963,6 +1055,9 @@ fun MessageMediaAttachmentView(
     encryptedAttachment: EncryptedBlobDescriptor?,
     ink: ResolvedBubbleColors,
     onOpenImageFullscreen: (Any) -> Unit,
+    showTranscript: Boolean = false,
+    onHideTranscript: (() -> Unit)? = null,
+    onLongPressMessage: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val rawMime = (encryptedAttachment?.mt ?: attachmentType.orEmpty()).lowercase()
@@ -976,8 +1071,12 @@ fun MessageMediaAttachmentView(
     if (isAudio) {
         NativeVoiceNoteBubblePlayer(
             attachmentUrl = attachmentUrl,
+            attachmentType = attachmentType,
             encryptedAttachment = encryptedAttachment,
             ink = ink,
+            showTranscript = showTranscript,
+            onHideTranscript = onHideTranscript,
+            onLongPressMessage = onLongPressMessage,
         )
         return
     }
@@ -1017,9 +1116,11 @@ fun MessageMediaAttachmentView(
                 .heightIn(min = 96.dp, max = 285.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(Color(0x1F000000))
-                .clickable(enabled = modelState != null) {
-                    modelState?.let { onOpenImageFullscreen(it) }
-                },
+                .combinedClickable(
+                    enabled = modelState != null,
+                    onClick = { modelState?.let { onOpenImageFullscreen(it) } },
+                    onLongClick = { onLongPressMessage?.invoke() },
+                ),
             contentAlignment = Alignment.Center,
         ) {
             if (modelState == null) {

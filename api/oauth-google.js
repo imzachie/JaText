@@ -5,6 +5,7 @@ import {
   saveMobileOAuthHandoff,
   upsertGoogleOAuthAccount,
 } from "../server/tursoBackend.js";
+import { enforceHttpRateLimit } from "../server/rateLimiter.js";
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -233,6 +234,17 @@ export default async function handler(req, res) {
   const credentials = getGoogleCredentials();
   const { clientId, clientSecret, androidClientConfigured, configured } = credentials;
   const action = String(req.query?.action || "");
+
+  const oauthLimit = action === "poll" || action === "config" ? 90 : 20;
+  if (
+    enforceHttpRateLimit(req, res, {
+      scope: `oauth_${action || req.method}`,
+      limit: oauthLimit,
+      windowMs: 60_000,
+    })
+  ) {
+    return;
+  }
 
   if (req.method === "GET" && action === "config") {
     return res.status(200).json({
