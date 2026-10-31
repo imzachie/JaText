@@ -219,7 +219,7 @@ fun NativeCallOverlay(
         val req = callState.pendingPermissionRequest ?: return@LaunchedEffect
         val perms = buildList {
             add(Manifest.permission.RECORD_AUDIO)
-            if (req.needsCamera) add(Manifest.permission.CAMERA)
+            if (req.mode == "video" || req.withVideo) add(Manifest.permission.CAMERA)
         }
         callPermissionLauncher.launch(perms.toTypedArray())
     }

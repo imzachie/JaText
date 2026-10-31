@@ -102,7 +102,6 @@ import com.ahad00010.jatext.ui.theme.COLOUR_THEME_PRESETS
 import com.ahad00010.jatext.ui.theme.CustomThemeData
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
-import com.ahad00010.jatext.ui.theme.stripProfileMetaFromColorId
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -224,7 +223,9 @@ fun SettingsModalScreen(
                     var username by remember(me.id) { mutableStateOf(me.username) }
                     var pronouns by remember(me.id) { mutableStateOf(me.pronouns) }
                     var bio by remember(me.id) { mutableStateOf(me.bio) }
-                    var avatarColor by remember(me.id) { mutableStateOf(stripProfileMetaFromColorId(me.avatarColor)) }
+                    var avatarColor by remember(me.id) {
+                        mutableStateOf(JaTextThemeManager.stripProfileMetaFromColorId(me.avatarColor))
+                    }
                     var customStatus by remember(me.id) { mutableStateOf(me.customStatus.orEmpty()) }
                     var statusPref by remember(me.id) { mutableStateOf(me.statusPreference.orEmpty().ifBlank { "online" }) }
                     var avatarUri by remember { mutableStateOf<Uri?>(null) }

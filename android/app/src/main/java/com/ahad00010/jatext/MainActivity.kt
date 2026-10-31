@@ -438,13 +438,13 @@ private fun JaTextRootHost(
         }
 
         // Global Mobile-Only "Update your JaText version!" Modal — works on EVERY screen (including Login!)
-        val liveUpdate = state.updateManifest
-        if (liveUpdate != null && !state.updateDismissed) {
+        val liveUpdate = state.availableUpdate
+        if (liveUpdate != null) {
             MobileUpdatePromptModal(
                 manifest = liveUpdate,
-                downloadingProgress = state.downloadingApkProgress,
+                downloadingProgress = if (state.updateDownloading) (state.updateProgress * 100f).toInt() else null,
                 onInstallClick = { vm.downloadAndInstallApkUpdate(activity) },
-                onLaterClick = { vm.dismissUpdateBanner() },
+                onLaterClick = { vm.dismissUpdatePrompt() },
             )
         }
 
