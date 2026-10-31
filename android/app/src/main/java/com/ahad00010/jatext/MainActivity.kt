@@ -58,6 +58,7 @@ import com.ahad00010.jatext.ui.screens.ChatThreadScreen
 import com.ahad00010.jatext.ui.screens.EnableCallAndAlertPermissionsModal
 import com.ahad00010.jatext.ui.screens.GroupMembersBottomModal
 import com.ahad00010.jatext.ui.screens.JaTextLoadingScreen
+import com.ahad00010.jatext.ui.screens.MobileUpdatePromptModal
 import com.ahad00010.jatext.ui.screens.NativeCallOverlay
 import com.ahad00010.jatext.ui.screens.NativeLoginScreen
 import com.ahad00010.jatext.ui.screens.PeerProfileBottomModal
@@ -76,6 +77,9 @@ class MainActivity : ComponentActivity() {
 
         @Volatile
         private var activeActivityRef: WeakReference<MainActivity>? = null
+
+        @JvmStatic
+        fun peekActiveActivity(): MainActivity? = activeActivityRef?.get()
 
         @JvmStatic
         fun notifyRealtimeSyncWake() {
@@ -373,6 +377,7 @@ private fun JaTextRootHost(
                                 state = state,
                                 vm = vm,
                                 onOpenSettings = { showSettings = true },
+                                onOpenProfile = { peer -> viewingPeerProfile = peer },
                                 onInstallUpdate = { vm.downloadAndInstallApkUpdate(activity) },
                             )
                         }
@@ -430,6 +435,17 @@ private fun JaTextRootHost(
 
         if (state.showPostUpdateWelcome && state.isAuthenticated) {
             PostUpdateWelcomeDialog(onDismiss = { vm.dismissPostUpdateWelcome() })
+        }
+
+        // Global Mobile-Only "Update your JaText version!" Modal — works on EVERY screen (including Login!)
+        val liveUpdate = state.availableUpdate
+        if (liveUpdate != null) {
+            MobileUpdatePromptModal(
+                manifest = liveUpdate,
+                downloadingProgress = if (state.updateDownloading) (state.updateProgress * 100f).toInt() else null,
+                onInstallClick = { vm.downloadAndInstallApkUpdate(activity) },
+                onLaterClick = { vm.dismissUpdatePrompt() },
+            )
         }
 
         // Lightweight Native Toast Pill

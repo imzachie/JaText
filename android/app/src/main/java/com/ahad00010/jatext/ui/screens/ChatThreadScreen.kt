@@ -131,6 +131,9 @@ import com.ahad00010.jatext.ui.components.CHAT_WALLPAPER_PRESETS
 import com.ahad00010.jatext.ui.components.CommunityPollCardUi
 import com.ahad00010.jatext.ui.components.ForwardedContextCardUi
 import com.ahad00010.jatext.ui.components.JaAvatar
+import com.ahad00010.jatext.ui.components.JaOfficialBadge
+import com.ahad00010.jatext.ui.components.JaVerifiedBadge
+import com.ahad00010.jatext.ui.components.JaWebIconButton
 import com.ahad00010.jatext.ui.components.MessageMediaAttachmentView
 import com.ahad00010.jatext.ui.components.MessageReactionPillsRow
 import com.ahad00010.jatext.ui.components.ReplyQuoteBannerUi
@@ -374,21 +377,22 @@ fun ChatThreadScreen(
             .navigationBarsPadding()
             .imePadding() // Zero black gap between Android keyboard and message composer!
     ) {
-        /* ==================== Thread Header ==================== */
+        /* ==================== Thread Header (`.chat-header` 1:1) ==================== */
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(palette.bgSecondary)
-                .padding(horizontal = 8.dp, vertical = 10.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { vm.closeActiveChat() }) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "Back",
-                    tint = palette.textPrimary,
-                )
-            }
+            JaWebIconButton(
+                icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                contentDescription = "Back",
+                size = 38.dp,
+                iconSize = 18.dp,
+                onClick = { vm.closeActiveChat() },
+            )
+            Spacer(Modifier.width(10.dp))
 
             Row(
                 modifier = Modifier
@@ -400,7 +404,7 @@ fun ChatThreadScreen(
                             activeGroup != null -> onOpenGroupMembers()
                         }
                     }
-                    .padding(vertical = 2.dp, horizontal = 4.dp),
+                    .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 when {
@@ -409,19 +413,31 @@ fun ChatThreadScreen(
                             painter = painterResource(id = R.drawable.jatext_logo_icon),
                             contentDescription = "Community",
                             modifier = Modifier
-                                .size(38.dp)
-                                .clip(RoundedCornerShape(11.dp)),
+                                .size(40.dp)
+                                .clip(CircleShape),
                         )
                     }
                     activeGroup != null -> {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(palette.bgTertiary),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Rounded.Groups, contentDescription = null, tint = palette.accent)
+                        if (!activeGroup.avatarUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = activeGroup.avatarUrl,
+                                contentDescription = activeGroup.name,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape),
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.bgTertiary)
+                                    .border(1.dp, palette.border, CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(Icons.Rounded.Groups, contentDescription = null, tint = palette.textPrimary)
+                            }
                         }
                     }
                     activeFriend != null -> {
@@ -430,6 +446,7 @@ fun ChatThreadScreen(
                             displayName = activeFriend.displayName.ifBlank { activeFriend.username },
                             avatarColor = activeFriend.avatarColor,
                             size = 38.dp,
+                            ringWidth = 2.5.dp,
                             presenceStatus = if (friendActivity?.online == true) friendActivity.statusPreference else "offline",
                             statusBorderColor = palette.bgSecondary,
                         )
@@ -446,12 +463,18 @@ fun ChatThreadScreen(
                                 else -> "Chat"
                             },
                             color = palette.textPrimary,
-                            fontSize = 15.5.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
-                        if (activeFriend?.isOwner == true) {
+                        if (isCommunity) {
+                            Spacer(Modifier.width(6.dp))
+                            JaVerifiedBadge(size = 16.dp)
+                            Spacer(Modifier.width(5.dp))
+                            JaOfficialBadge()
+                        } else if (activeFriend?.isOwner == true) {
                             Spacer(Modifier.width(4.dp))
                             OwnerCrownVectorBadge(size = 13.dp)
                         }
@@ -461,26 +484,27 @@ fun ChatThreadScreen(
                             if (state.communityTypingUsers.isNotEmpty()) {
                                 "${state.communityTypingUsers.first().displayName} is typing…"
                             } else {
-                                "Official global channel"
+                                "Official JaText announcements"
                             }
                         }
                         activeGroup != null -> {
                             if (state.groupTypingUsers.isNotEmpty()) {
                                 "${state.groupTypingUsers.first().displayName} is typing…"
                             } else {
-                                "${state.groupDetails?.members?.size ?: activeGroup.memberCount} members • Encrypted"
+                                "${state.groupDetails?.members?.size ?: activeGroup.memberCount} members · End-to-End Encrypted"
                             }
                         }
                         friendActivity?.typingToMe == true -> "typing…"
                         friendActivity?.online == true -> {
-                            friendActivity.customStatus.ifBlank { "Online • End-to-End Encrypted" }
+                            friendActivity.customStatus.ifBlank { "Online · @${activeFriend?.username.orEmpty()}" }
                         }
+                        activeFriend != null -> "@${activeFriend.username} · End-to-End Encrypted"
                         else -> "End-to-End Encrypted"
                     }
                     Text(
                         text = subtitle,
                         color = if (subtitle.contains("typing")) palette.accent else palette.textSecondary,
-                        fontSize = 11.5.sp,
+                        fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -488,32 +512,43 @@ fun ChatThreadScreen(
             }
 
             if (!isCommunity) {
-                IconButton(
+                Spacer(Modifier.width(6.dp))
+                JaWebIconButton(
+                    icon = Icons.Rounded.Call,
+                    contentDescription = "Voice Call",
+                    size = 38.dp,
+                    iconSize = 17.dp,
                     onClick = {
                         if (activeFriend != null) vm.callEngine.startDmCall(me, activeFriend, "voice")
                         else if (activeGroup != null) vm.callEngine.startGroupCall(me, activeGroup, "voice")
-                    }
-                ) {
-                    Icon(Icons.Rounded.Call, contentDescription = "Voice Call", tint = palette.textPrimary)
-                }
-                IconButton(
+                    },
+                )
+                Spacer(Modifier.width(6.dp))
+                JaWebIconButton(
+                    icon = Icons.Rounded.Videocam,
+                    contentDescription = "Video Call",
+                    size = 38.dp,
+                    iconSize = 17.dp,
                     onClick = {
                         if (activeFriend != null) vm.callEngine.startDmCall(me, activeFriend, "video")
                         else if (activeGroup != null) vm.callEngine.startGroupCall(me, activeGroup, "video")
-                    }
-                ) {
-                    Icon(Icons.Rounded.Videocam, contentDescription = "Video Call", tint = palette.textPrimary)
-                }
+                    },
+                )
             }
 
+            Spacer(Modifier.width(6.dp))
             Box {
-                IconButton(onClick = { showOverflowMenu = true }) {
-                    Icon(Icons.Rounded.MoreVert, contentDescription = "More options", tint = palette.textPrimary)
-                }
+                JaWebIconButton(
+                    icon = Icons.Rounded.MoreVert,
+                    contentDescription = "More options",
+                    size = 38.dp,
+                    iconSize = 18.dp,
+                    onClick = { showOverflowMenu = true },
+                )
                 DropdownMenu(
                     expanded = showOverflowMenu,
                     onDismissRequest = { showOverflowMenu = false },
-                    modifier = Modifier.background(palette.surface),
+                    modifier = Modifier.background(palette.bgSecondary),
                 ) {
                     if (activeFriend != null) {
                         DropdownMenuItem(
@@ -746,19 +781,41 @@ fun ChatThreadScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(palette.bgSecondary)
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                IconButton(onClick = { attachmentLauncher.launch("*/*") }) {
-                    Icon(Icons.Rounded.Add, contentDescription = "Attach file", tint = palette.textSecondary)
-                }
-                IconButton(onClick = { showStickerSheet = true }) {
-                    Icon(Icons.Rounded.EmojiEmotions, contentDescription = "Stickers & GIFs", tint = palette.textSecondary)
+                JaWebIconButton(
+                    icon = Icons.Rounded.Add,
+                    contentDescription = "Attach file",
+                    size = 40.dp,
+                    iconSize = 18.dp,
+                    onClick = { attachmentLauncher.launch("*/*") },
+                )
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(palette.bgTertiary)
+                        .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+                        .clickable { showStickerSheet = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "GIF",
+                        color = palette.textPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                    )
                 }
                 if (isCommunity && state.communityPermissions.canCreatePolls) {
-                    IconButton(onClick = { showCreatePollModal = true }) {
-                        Icon(Icons.Rounded.Poll, contentDescription = "Create Poll", tint = palette.textSecondary)
-                    }
+                    JaWebIconButton(
+                        icon = Icons.Rounded.Poll,
+                        contentDescription = "Create Poll",
+                        size = 40.dp,
+                        iconSize = 18.dp,
+                        onClick = { showCreatePollModal = true },
+                    )
                 }
 
                 Box(

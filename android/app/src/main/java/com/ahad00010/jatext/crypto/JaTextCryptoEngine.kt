@@ -21,6 +21,7 @@ import com.ahad00010.jatext.data.StoredIdentityRecord
 import com.ahad00010.jatext.data.TursoApiClient
 import java.io.File
 import java.math.BigInteger
+import java.security.AlgorithmParameters
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -30,8 +31,11 @@ import java.security.SecureRandom
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
+import java.security.spec.ECParameterSpec
+import java.security.spec.ECPrivateKeySpec
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.KeyAgreement
@@ -127,6 +131,8 @@ object JaTextCryptoEngine {
     private val decryptedMediaFileCache = ConcurrentHashMap<String, File>()
     private val peerBundlesByUserId = ConcurrentHashMap<String, MutableList<PublicIdentityBundle>>()
     private val groupEpochSecrets = ConcurrentHashMap<String, String>()
+    private val publishedSessionKeyIds: MutableSet<String> =
+        Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /* ==================== Base64Url & Hash Helpers ==================== */
 
@@ -134,7 +140,13 @@ object JaTextCryptoEngine {
         Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 
     fun b64UrlDecode(str: String): ByteArray {
-        val clean = str.trim()
+        val clean = str
+            .trim()
+            .replace('+', '-')
+            .replace('/', '_')
+            .trimEnd('=')
+            .filterNot { it.isWhitespace() }
+        if (clean.isEmpty()) return ByteArray(0)
         return Base64.decode(clean, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
 
@@ -180,8 +192,33 @@ object JaTextCryptoEngine {
         return KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(spki))
     }
 
-    private fun importPkcs8Private(pkcs8: ByteArray): PrivateKey =
-        KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(pkcs8))
+    private fun importPkcs8Private(pkcs8: ByteArray): PrivateKey {
+        require(pkcs8.isNotEmpty()) { "Empty EC private key bytes" }
+        val kf = KeyFactory.getInstance("EC")
+        try {
+            return kf.generatePrivate(PKCS8EncodedKeySpec(pkcs8))
+        } catch (primaryErr: Throwable) {
+            // Fallback for WebCrypto RFC 5958 OneAsymmetricKey / SEC1 32-byte P-256 scalar
+            val scalar32 = extractP256PrivateScalar(pkcs8) ?: throw primaryErr
+            val params = AlgorithmParameters.getInstance("EC").apply {
+                init(ECGenParameterSpec("secp256r1"))
+            }.getParameterSpec(ECParameterSpec::class.java)
+            return kf.generatePrivate(ECPrivateKeySpec(BigInteger(1, scalar32), params))
+        }
+    }
+
+    private fun extractP256PrivateScalar(der: ByteArray): ByteArray? {
+        if (der.size == 32) return der
+        // Search for SEC1 OCTET STRING tag 0x04 length 0x20 (32-byte P-256 private scalar)
+        for (i in 0..(der.size - 34)) {
+            if (der[i] == 0x04.toByte() && der[i + 1] == 0x20.toByte()) {
+                val candidate = der.copyOfRange(i + 2, i + 34)
+                val bi = BigInteger(1, candidate)
+                if (bi > BigInteger.ZERO) return candidate
+            }
+        }
+        return null
+    }
 
     private fun derToP1363(der: ByteArray): ByteArray {
         if (der.size == 64 && der[0] != 0x30.toByte()) return der
@@ -328,31 +365,70 @@ object JaTextCryptoEngine {
         return ordered.joinToString(" ")
     }
 
+    private fun isUsablePrimaryIdentity(record: StoredIdentityRecord): Boolean {
+        if (record.keyId.isBlank() ||
+            record.dhPubB64.isBlank() ||
+            record.dhPrivPkcs8B64.isBlank() ||
+            record.sigPubB64.isBlank() ||
+            record.sigPrivPkcs8B64.isBlank() ||
+            record.selfSigB64.isBlank()
+        ) {
+            return false
+        }
+        return try {
+            importPkcs8Private(b64UrlDecode(record.dhPrivPkcs8B64))
+            importRawP256Public(b64UrlDecode(record.dhPubB64))
+            importPkcs8Private(b64UrlDecode(record.sigPrivPkcs8B64))
+            importRawP256Public(b64UrlDecode(record.sigPubB64))
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun isUsableDecryptKey(record: StoredIdentityRecord): Boolean {
+        if (record.keyId.isBlank() || record.dhPrivPkcs8B64.isBlank()) return false
+        return try {
+            importPkcs8Private(b64UrlDecode(record.dhPrivPkcs8B64))
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     fun loadLocalIdentities(context: Context, userId: String): List<StoredIdentityRecord> {
         val prefs = context.getSharedPreferences("jatext_e2ee_keystore", Context.MODE_PRIVATE)
+        val merged = LinkedHashMap<String, StoredIdentityRecord>()
+
         val raw = prefs.getString("identities:$userId", null)
         if (!raw.isNullOrBlank()) {
             try {
                 val parsed = JaTextJson.decodeFromString<List<StoredIdentityRecord>>(raw)
-                if (parsed.isNotEmpty()) return parsed
+                for (rec in parsed) {
+                    if (rec.keyId.isNotBlank() && isUsableDecryptKey(rec)) {
+                        merged[rec.keyId] = if (rec.userId.isBlank()) rec.copy(userId = userId) else rec
+                    }
+                }
             } catch (_: Throwable) {
             }
         }
-        // Check legacy JaTextE2EEDecryptor SharedPreferences if user upgraded from older APK!
+
+        // Also preserve legacy JaTextE2EEDecryptor decrypt-only keys if user upgraded from older APK
         val pushRaw = JaTextE2EEDecryptor.prefs(context).getString("identities_json", null)
         if (!pushRaw.isNullOrBlank()) {
             try {
                 val parsed = JaTextJson.decodeFromString<List<StoredIdentityRecord>>(pushRaw)
                     .filter { it.userId == userId || it.userId.isBlank() }
                     .map { if (it.userId.isBlank()) it.copy(userId = userId) else it }
-                if (parsed.isNotEmpty()) {
-                    saveLocalIdentities(context, userId, parsed)
-                    return parsed
+                for (rec in parsed) {
+                    if (rec.keyId.isNotBlank() && !merged.containsKey(rec.keyId) && isUsableDecryptKey(rec)) {
+                        merged[rec.keyId] = rec
+                    }
                 }
             } catch (_: Throwable) {
             }
         }
-        return emptyList()
+        return merged.values.toList()
     }
 
     fun saveLocalIdentities(context: Context, userId: String, records: List<StoredIdentityRecord>) {
@@ -362,7 +438,14 @@ object JaTextCryptoEngine {
 
     fun ensureOrCreatePrimaryIdentity(context: Context, userId: String): StoredIdentityRecord {
         val existing = loadLocalIdentities(context, userId)
-        if (existing.isNotEmpty()) return existing.first()
+        val validPrimary = existing.firstOrNull { isUsablePrimaryIdentity(it) }
+        if (validPrimary != null) {
+            if (existing.first().keyId != validPrimary.keyId) {
+                val reordered = listOf(validPrimary) + existing.filter { it.keyId != validPrimary.keyId }
+                saveLocalIdentities(context, userId, reordered)
+            }
+            return validPrimary
+        }
 
         val kpg = KeyPairGenerator.getInstance("EC")
         kpg.initialize(ECGenParameterSpec("secp256r1"), secureRandom)
@@ -387,8 +470,41 @@ object JaTextCryptoEngine {
             selfSigB64 = selfSigB64,
             createdAt = System.currentTimeMillis(),
         )
-        saveLocalIdentities(context, userId, listOf(created))
+        // Put the complete signing+DH identity first, while keeping any legacy DH-only keys after it for history decryption
+        val updatedList = listOf(created) + existing.filter { it.keyId != created.keyId }
+        saveLocalIdentities(context, userId, updatedList)
         return created
+    }
+
+    suspend fun ensurePrimaryIdentityPublished(identity: StoredIdentityRecord, token: String) {
+        if (token.isBlank() || identity.keyId.isBlank()) return
+        if (!publishedSessionKeyIds.add(identity.keyId)) return
+        try {
+            TursoApiClient.rpcRaw(
+                op = "publishE2EEIdentity",
+                args = mapOf(
+                    "keyId" to identity.keyId,
+                    "dhPubB64" to identity.dhPubB64,
+                    "sigPubB64" to identity.sigPubB64,
+                    "selfSigB64" to identity.selfSigB64,
+                    "deviceLabel" to "JaText Native Android",
+                ),
+                token = token
+            )
+            registerPeerBundles(
+                listOf(
+                    PublicIdentityBundle(
+                        userId = identity.userId,
+                        keyId = identity.keyId,
+                        dhPubB64 = identity.dhPubB64,
+                        sigPubB64 = identity.sigPubB64,
+                        selfSigB64 = identity.selfSigB64,
+                    )
+                )
+            )
+        } catch (_: Throwable) {
+            publishedSessionKeyIds.remove(identity.keyId)
+        }
     }
 
     fun loadGroupEpochMap(context: Context, userId: String) {
@@ -555,6 +671,7 @@ object JaTextCryptoEngine {
         silentSignal: Boolean = false,
     ): String? = withContext(Dispatchers.Default) {
         val myIdentity = ensureOrCreatePrimaryIdentity(context, myUserId)
+        ensurePrimaryIdentityPublished(myIdentity, token)
         val peerMap = ensurePeerBundles(listOf(receiverId, myUserId), token)
         val receiverBundles = peerMap[receiverId].orEmpty()
         if (receiverBundles.isEmpty()) {
@@ -973,6 +1090,7 @@ object JaTextCryptoEngine {
         silentSignal: Boolean = false,
     ): String = withContext(Dispatchers.Default) {
         val myIdentity = ensureOrCreatePrimaryIdentity(context, myUserId)
+        ensurePrimaryIdentityPublished(myIdentity, token)
         val (epoch, epochSecretB64) = ensureOrDistributeGroupEpoch(
             context,
             myUserId,

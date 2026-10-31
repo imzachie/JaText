@@ -399,19 +399,7 @@ class JaTextSessionViewModel(app: Application) :
     private suspend fun ensureE2EEPublishedAndSynced(me: JaUser, friends: List<JaUser>, token: String) {
         if (me.id.isBlank()) return
         val identity = JaTextCryptoEngine.ensureOrCreatePrimaryIdentity(appCtx, me.id)
-        try {
-            TursoApiClient.rpcRaw(
-                op = "publishE2EEIdentity",
-                args = mapOf(
-                    "keyId" to identity.keyId,
-                    "dhPubB64" to identity.dhPubB64,
-                    "sigPubB64" to identity.sigPubB64,
-                    "selfSigB64" to identity.selfSigB64,
-                ),
-                token = token
-            )
-        } catch (_: Throwable) {
-        }
+        JaTextCryptoEngine.ensurePrimaryIdentityPublished(identity, token)
         val peerIds = (friends.map { it.id } + me.id).distinct()
         JaTextCryptoEngine.ensurePeerBundles(peerIds, token)
         JaTextCryptoEngine.syncStateToNativePushDecryptor(
@@ -778,6 +766,19 @@ class JaTextSessionViewModel(app: Application) :
     }
 
     fun onActivityResumed() {
+        checkApkUpdate(manual = false)
+        // If user just granted "Install unknown apps" and we already downloaded the APK, auto-launch installer
+        val readyFile = pendingReadyApkFile
+        val act = MainActivity.peekActiveActivity()
+        if (readyFile != null && readyFile.exists() && act != null) {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O ||
+                act.packageManager.canRequestPackageInstalls()
+            ) {
+                pendingReadyApkFile = null
+                launchApkInstallerIntent(act, readyFile)
+            }
+        }
+
         val sessId = activeMobileOAuthSessionId ?: return
         val elapsed = System.currentTimeMillis() - mobileOAuthLaunchedAtMs
         if (elapsed < 1200L) return
@@ -2323,17 +2324,42 @@ class JaTextSessionViewModel(app: Application) :
 
     /* ==================== Native OTA APK Update Check & Installer ==================== */
 
-    private fun checkApkUpdate() {
+    private var lastUpdateCheckAtMs: Long = 0L
+    private var pendingReadyApkFile: File? = null
+
+    fun checkApkUpdate(manual: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!manual && now - lastUpdateCheckAtMs < 15_000L) return
+        lastUpdateCheckAtMs = now
         viewModelScope.launch {
-            val manifest = TursoApiClient.fetchLatestApkManifest() ?: return@launch
+            val manifest = TursoApiClient.fetchLatestApkManifest()
+            if (manifest == null) {
+                if (manual) showToast("Could not reach update server")
+                return@launch
+            }
             if (manifest.versionCode > BuildConfig.VERSION_CODE) {
                 _state.update { it.copy(availableUpdate = manifest) }
+            } else if (manual) {
+                showToast("You are on the latest JaText v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})")
             }
         }
     }
 
     fun dismissUpdatePrompt() {
         _state.update { it.copy(availableUpdate = null) }
+    }
+
+    private fun launchApkInstallerIntent(activity: Activity, apkFile: File) {
+        val apkUri = FileProvider.getUriForFile(
+            appCtx,
+            "${appCtx.packageName}.fileprovider",
+            apkFile
+        )
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(apkUri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        activity.startActivity(installIntent)
     }
 
     fun downloadAndInstallApkUpdate(activity: Activity) {
@@ -2347,16 +2373,20 @@ class JaTextSessionViewModel(app: Application) :
                     _state.update { it.copy(updateProgress = p) }
                 }
                 _state.update { it.copy(updateDownloading = false, availableUpdate = null) }
-                val apkUri = FileProvider.getUriForFile(
-                    appCtx,
-                    "${appCtx.packageName}.fileprovider",
-                    outFile
-                )
-                val installIntent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(apkUri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+                    !activity.packageManager.canRequestPackageInstalls()
+                ) {
+                    pendingReadyApkFile = outFile
+                    showToast("Allow 'Install unknown apps' for JaText to finish updating")
+                    val permIntent = Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${activity.packageName}")
+                    )
+                    activity.startActivity(permIntent)
+                    return@launch
                 }
-                activity.startActivity(installIntent)
+                pendingReadyApkFile = null
+                launchApkInstallerIntent(activity, outFile)
             } catch (e: Throwable) {
                 _state.update { it.copy(updateDownloading = false) }
                 showToast(e.message ?: "Update download failed")
@@ -2383,7 +2413,11 @@ class JaTextSessionViewModel(app: Application) :
         val me = _state.value.me ?: return
         val token = currentAuthToken() ?: return
         val payload = E2EEPlainPayload(v = 1, b = plainBody)
-        val wire = JaTextCryptoEngine.encryptDmMessage(appCtx, me.id, receiverId, payload, token, silentSignal = silent)
+        val wire = try {
+            JaTextCryptoEngine.encryptDmMessage(appCtx, me.id, receiverId, payload, token, silentSignal = silent)
+        } catch (_: Throwable) {
+            null
+        }
         val bodyToSend = wire ?: if (silent) "${JaTextCryptoEngine.E2EE_SIGNAL_PREFIX}$plainBody" else plainBody
         try {
             TursoApiClient.rpcRaw("sendMessage", mapOf("receiverId" to receiverId, "body" to bodyToSend), token)

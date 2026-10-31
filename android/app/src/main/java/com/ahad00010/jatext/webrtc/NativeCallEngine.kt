@@ -1,12 +1,15 @@
 package com.ahad00010.jatext.webrtc
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import com.ahad00010.jatext.CallKeepAliveService
 import com.ahad00010.jatext.JaTextSoundManager
 import com.ahad00010.jatext.NativeRuntimeBridge
@@ -22,6 +25,7 @@ import com.ahad00010.jatext.data.SdpPayload
 import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -61,7 +65,19 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoFrame
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import org.webrtc.audio.AudioDeviceModule
 import org.webrtc.audio.JavaAudioDeviceModule
+
+data class PendingCallPermissionRequest(
+    val id: Long = System.currentTimeMillis(),
+    val kind: String, // "dm" | "group" | "accept" | "join_group"
+    val me: JaUser,
+    val peer: JaUser? = null,
+    val group: GroupSummary? = null,
+    val mode: String = "voice",
+    val withVideo: Boolean = false,
+    val joinInvite: GroupCallInvitePayload? = null,
+)
 
 data class CallReactionBubble(
     val id: String,
@@ -100,6 +116,7 @@ data class NativeCallUiState(
     val participants: List<RemoteParticipantState> = emptyList(),
     val reactions: List<CallReactionBubble> = emptyList(),
     val statusBanner: String? = null, // e.g. "Call dismissed" or "GC VC Ended"
+    val pendingPermissionRequest: PendingCallPermissionRequest? = null,
 )
 
 class NativeCallEngine(
@@ -119,9 +136,11 @@ class NativeCallEngine(
 
     val eglBase: EglBase by lazy { EglBase.create() }
     private val deviceSessionId = "${System.currentTimeMillis().toString(36)}-${UUID.randomUUID().toString().take(6)}"
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val exceptionHandler = CoroutineExceptionHandler { _, _ -> }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + exceptionHandler)
 
     private var factoryInitialized = false
+    private var audioDeviceModule: AudioDeviceModule? = null
     private var peerConnectionFactory: PeerConnectionFactory? = null
 
     private var localAudioSource: AudioSource? = null
@@ -156,6 +175,32 @@ class NativeCallEngine(
         NativeRuntimeBridge.addScreenCaptureListener(this)
     }
 
+    private fun hasMicPermission(): Boolean =
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun hasCameraPermission(): Boolean =
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+
+    fun onCallPermissionsResult(micGranted: Boolean, cameraGranted: Boolean) {
+        val pending = _uiState.value.pendingPermissionRequest
+        _uiState.update { it.copy(pendingPermissionRequest = null) }
+        if (pending == null || !micGranted) return
+        val resolvedMode = if (pending.mode == "video" && !cameraGranted) "voice" else pending.mode
+        val resolvedVideo = pending.withVideo && cameraGranted
+        when (pending.kind) {
+            "dm" -> pending.peer?.let { startDmCall(pending.me, it, resolvedMode, skipPermPrompt = true) }
+            "group" -> pending.group?.let { startGroupCall(pending.me, it, resolvedMode, skipPermPrompt = true) }
+            "accept" -> acceptIncomingCall(pending.me, resolvedVideo, skipPermPrompt = true)
+            "join_group" -> {
+                if (pending.group != null && pending.joinInvite != null) {
+                    joinExistingGroupCall(pending.me, pending.group, pending.joinInvite, resolvedVideo, skipPermPrompt = true)
+                }
+            }
+        }
+    }
+
     private fun ensureFactory(): PeerConnectionFactory {
         peerConnectionFactory?.let { return it }
         if (!factoryInitialized) {
@@ -166,10 +211,11 @@ class NativeCallEngine(
             )
             factoryInitialized = true
         }
-        val adm = JavaAudioDeviceModule.builder(appContext)
+        val adm = audioDeviceModule ?: JavaAudioDeviceModule.builder(appContext)
             .setUseHardwareAcousticEchoCanceler(true)
             .setUseHardwareNoiseSuppressor(true)
             .createAudioDeviceModule()
+            .also { audioDeviceModule = it }
         val encoderFactory = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
         val decoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
         val created = PeerConnectionFactory.builder()
@@ -177,7 +223,6 @@ class NativeCallEngine(
             .setVideoEncoderFactory(encoderFactory)
             .setVideoDecoderFactory(decoderFactory)
             .createPeerConnectionFactory()
-        adm.release()
         peerConnectionFactory = created
         return created
     }
@@ -185,24 +230,28 @@ class NativeCallEngine(
     /* ==================== Local Audio / Camera / Screen Tracks ==================== */
 
     private fun ensureLocalMedia(withVideo: Boolean) {
-        val factory = ensureFactory()
-        if (localAudioTrack == null) {
-            val constraints = MediaConstraints().apply {
-                mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
-                mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-                mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+        try {
+            val factory = ensureFactory()
+            if (localAudioTrack == null && hasMicPermission()) {
+                val constraints = MediaConstraints().apply {
+                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+                }
+                localAudioSource = factory.createAudioSource(constraints)
+                localAudioTrack = factory.createAudioTrack("JATEXT_AUDIO_0", localAudioSource).apply {
+                    setEnabled(!_uiState.value.isMuted)
+                }
             }
-            localAudioSource = factory.createAudioSource(constraints)
-            localAudioTrack = factory.createAudioTrack("JATEXT_AUDIO_0", localAudioSource).apply {
-                setEnabled(!_uiState.value.isMuted)
+            if (withVideo && localVideoTrack == null && hasCameraPermission()) {
+                startCameraTrack(front = _uiState.value.frontCamera)
             }
-        }
-        if (withVideo && localVideoTrack == null) {
-            startCameraTrack(front = _uiState.value.frontCamera)
+        } catch (_: Throwable) {
         }
     }
 
     private fun startCameraTrack(front: Boolean) {
+        if (!hasCameraPermission()) return
         try {
             val factory = ensureFactory()
             val enumerator = Camera2Enumerator(appContext)
@@ -239,10 +288,28 @@ class NativeCallEngine(
 
     /* ==================== 1:1 Outgoing / Incoming Calls ==================== */
 
-    fun startDmCall(me: JaUser, peer: JaUser, mode: String) {
+    fun startDmCall(me: JaUser, peer: JaUser, mode: String, skipPermPrompt: Boolean = false) {
         if (_uiState.value.active && _uiState.value.phase != "dismissed") return
+        val needMic = !hasMicPermission()
+        val needCam = mode == "video" && !hasCameraPermission()
+        if (!skipPermPrompt && (needMic || needCam)) {
+            _uiState.update {
+                it.copy(
+                    pendingPermissionRequest = PendingCallPermissionRequest(
+                        kind = "dm",
+                        me = me,
+                        peer = peer,
+                        mode = mode,
+                        withVideo = mode == "video",
+                    )
+                )
+            }
+            return
+        }
+        if (needMic) return
+        val resolvedMode = if (mode == "video" && !hasCameraPermission()) "voice" else mode
         val callId = "call-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(6)}"
-        val withVideo = mode == "video"
+        val withVideo = resolvedMode == "video"
         configureCallAudioMode(active = true, speakerphone = true)
         startKeepAliveService(peer.displayName.ifBlank { peer.username }, withVideo)
         ensureLocalMedia(withVideo)
@@ -252,7 +319,7 @@ class NativeCallEngine(
             isGroup = false,
             callId = callId,
             peer = peer,
-            mode = mode,
+            mode = resolvedMode,
             phase = "outgoing",
             isCameraOff = !withVideo,
             isSpeakerphone = true,
@@ -260,14 +327,14 @@ class NativeCallEngine(
             participants = listOf(RemoteParticipantState(user = peer, cameraOff = !withVideo)),
         )
 
-        recordCallHistory(peer, null, mode, "outgoing", "ringing", 0)
+        recordCallHistory(peer, null, resolvedMode, "outgoing", "ringing", 0)
         armOneMinuteUnansweredTimeout()
 
         scope.launch {
             val invite = CallInvitePayload(
                 v = 1,
                 callId = callId,
-                mode = mode,
+                mode = resolvedMode,
                 state = "ringing",
                 ts = System.currentTimeMillis(),
             )
@@ -281,7 +348,7 @@ class NativeCallEngine(
                 callId = callId,
                 type = "offer",
                 deviceSessionId = deviceSessionId,
-                mode = mode,
+                mode = resolvedMode,
                 sdp = SdpPayload(type = "offer", sdp = sdp.description),
                 cameraOff = !withVideo,
                 ts = System.currentTimeMillis(),
@@ -290,23 +357,40 @@ class NativeCallEngine(
         }
     }
 
-    fun acceptIncomingCall(me: JaUser, withVideo: Boolean) {
+    fun acceptIncomingCall(me: JaUser, withVideo: Boolean, skipPermPrompt: Boolean = false) {
         val cur = _uiState.value
         if (!cur.active || cur.phase != "incoming") return
+        val needMic = !hasMicPermission()
+        val needCam = withVideo && !hasCameraPermission()
+        if (!skipPermPrompt && (needMic || needCam)) {
+            _uiState.update {
+                it.copy(
+                    pendingPermissionRequest = PendingCallPermissionRequest(
+                        kind = "accept",
+                        me = me,
+                        mode = if (withVideo) "video" else "voice",
+                        withVideo = withVideo,
+                    )
+                )
+            }
+            return
+        }
+        if (needMic) return
+        val actualVideo = withVideo && hasCameraPermission()
         JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
         ringTimeoutJob?.cancel()
 
         configureCallAudioMode(active = true, speakerphone = true)
         if (cur.isGroup && cur.group != null) {
-            startKeepAliveService(cur.group.name, withVideo)
-            ensureLocalMedia(withVideo)
+            startKeepAliveService(cur.group.name, actualVideo)
+            ensureLocalMedia(actualVideo)
             myJoinSeq = System.currentTimeMillis()
             _uiState.update {
                 it.copy(
                     phase = "connected",
                     startedAtMs = System.currentTimeMillis(),
-                    isCameraOff = !withVideo,
-                    localVideoTrack = if (withVideo) localVideoTrack else null,
+                    isCameraOff = !actualVideo,
+                    localVideoTrack = if (actualVideo) localVideoTrack else null,
                 )
             }
             scope.launch {
@@ -327,20 +411,20 @@ class NativeCallEngine(
                 )
                 sendGroupWireSignal(cur.group.id, "$GROUP_CALL_SIGNAL_PREFIX${JaTextJson.encodeToString(claimSig)}", true)
 
-                val joinSig = claimSig.copy(toId = "*", type = "join", cameraOff = !withVideo)
+                val joinSig = claimSig.copy(toId = "*", type = "join", cameraOff = !actualVideo)
                 sendGroupWireSignal(cur.group.id, "$GROUP_CALL_SIGNAL_PREFIX${JaTextJson.encodeToString(joinSig)}", true)
             }
             return
         }
 
         val peer = cur.peer ?: return
-        startKeepAliveService(peer.displayName.ifBlank { peer.username }, withVideo)
-        ensureLocalMedia(withVideo)
+        startKeepAliveService(peer.displayName.ifBlank { peer.username }, actualVideo)
+        ensureLocalMedia(actualVideo)
         _uiState.update {
             it.copy(
                 phase = "connecting",
-                isCameraOff = !withVideo,
-                localVideoTrack = if (withVideo) localVideoTrack else null,
+                isCameraOff = !actualVideo,
+                localVideoTrack = if (actualVideo) localVideoTrack else null,
             )
         }
         scope.launch {
@@ -355,7 +439,7 @@ class NativeCallEngine(
 
             val pendingOffer = pendingOffersByPeer[peer.id]
             if (pendingOffer != null) {
-                answerDmOffer(peer, cur.callId, pendingOffer, withVideo)
+                answerDmOffer(peer, cur.callId, pendingOffer, actualVideo)
             }
         }
     }
@@ -509,10 +593,28 @@ class NativeCallEngine(
 
     /* ==================== Group Calls ==================== */
 
-    fun startGroupCall(me: JaUser, group: GroupSummary, mode: String) {
+    fun startGroupCall(me: JaUser, group: GroupSummary, mode: String, skipPermPrompt: Boolean = false) {
         if (_uiState.value.active && _uiState.value.phase != "dismissed") return
+        val needMic = !hasMicPermission()
+        val needCam = mode == "video" && !hasCameraPermission()
+        if (!skipPermPrompt && (needMic || needCam)) {
+            _uiState.update {
+                it.copy(
+                    pendingPermissionRequest = PendingCallPermissionRequest(
+                        kind = "group",
+                        me = me,
+                        group = group,
+                        mode = mode,
+                        withVideo = mode == "video",
+                    )
+                )
+            }
+            return
+        }
+        if (needMic) return
+        val resolvedMode = if (mode == "video" && !hasCameraPermission()) "voice" else mode
         val callId = "grpcall-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(6)}"
-        val withVideo = mode == "video"
+        val withVideo = resolvedMode == "video"
         myJoinSeq = System.currentTimeMillis()
         configureCallAudioMode(active = true, speakerphone = true)
         startKeepAliveService(group.name, withVideo)
@@ -523,7 +625,7 @@ class NativeCallEngine(
             isGroup = true,
             callId = callId,
             group = group,
-            mode = mode,
+            mode = resolvedMode,
             phase = "connected",
             startedAtMs = System.currentTimeMillis(),
             isCameraOff = !withVideo,
@@ -538,7 +640,7 @@ class NativeCallEngine(
                 callId = callId,
                 groupId = group.id,
                 groupName = group.name,
-                mode = mode,
+                mode = resolvedMode,
                 hostId = me.id,
                 hostName = me.displayName.ifBlank { me.username },
                 state = "active",
@@ -565,12 +667,37 @@ class NativeCallEngine(
         }
     }
 
-    fun joinExistingGroupCall(me: JaUser, group: GroupSummary, invite: GroupCallInvitePayload, withVideo: Boolean) {
+    fun joinExistingGroupCall(
+        me: JaUser,
+        group: GroupSummary,
+        invite: GroupCallInvitePayload,
+        withVideo: Boolean,
+        skipPermPrompt: Boolean = false,
+    ) {
+        val needMic = !hasMicPermission()
+        val needCam = withVideo && !hasCameraPermission()
+        if (!skipPermPrompt && (needMic || needCam)) {
+            _uiState.update {
+                it.copy(
+                    pendingPermissionRequest = PendingCallPermissionRequest(
+                        kind = "join_group",
+                        me = me,
+                        group = group,
+                        mode = invite.mode,
+                        withVideo = withVideo,
+                        joinInvite = invite,
+                    )
+                )
+            }
+            return
+        }
+        if (needMic) return
+        val actualVideo = withVideo && hasCameraPermission()
         JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
         myJoinSeq = System.currentTimeMillis()
         configureCallAudioMode(active = true, speakerphone = true)
-        startKeepAliveService(group.name, withVideo)
-        ensureLocalMedia(withVideo)
+        startKeepAliveService(group.name, actualVideo)
+        ensureLocalMedia(actualVideo)
         _uiState.value = NativeCallUiState(
             active = true,
             isGroup = true,
@@ -579,9 +706,9 @@ class NativeCallEngine(
             mode = invite.mode,
             phase = "connected",
             startedAtMs = System.currentTimeMillis(),
-            isCameraOff = !withVideo,
+            isCameraOff = !actualVideo,
             isSpeakerphone = true,
-            localVideoTrack = if (withVideo) localVideoTrack else null,
+            localVideoTrack = if (actualVideo) localVideoTrack else null,
         )
         scope.launch {
             val joinSig = GroupSignalEnvelope(
@@ -596,7 +723,7 @@ class NativeCallEngine(
                 type = "join",
                 deviceSessionId = deviceSessionId,
                 joinSeq = myJoinSeq,
-                cameraOff = !withVideo,
+                cameraOff = !actualVideo,
                 ts = System.currentTimeMillis(),
             )
             sendGroupWireSignal(group.id, "$GROUP_CALL_SIGNAL_PREFIX${JaTextJson.encodeToString(joinSig)}", true)
@@ -1379,11 +1506,12 @@ class NativeCallEngine(
     }
 
     private fun startKeepAliveService(title: String, withVideo: Boolean) {
+        if (!hasMicPermission()) return
         try {
             val intent = Intent(appContext, CallKeepAliveService::class.java).apply {
                 action = CallKeepAliveService.ACTION_START
                 putExtra(CallKeepAliveService.EXTRA_TITLE, title)
-                putExtra(CallKeepAliveService.EXTRA_VIDEO, withVideo)
+                putExtra(CallKeepAliveService.EXTRA_VIDEO, withVideo && hasCameraPermission())
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 appContext.startForegroundService(intent)
@@ -1396,6 +1524,14 @@ class NativeCallEngine(
 
     private fun teardownAllResources() {
         ringTimeoutJob?.cancel()
+        // Detach video tracks from UI state FIRST so Compose SurfaceViewRenderers remove sinks cleanly before native dispose!
+        _uiState.update { st ->
+            st.copy(
+                localVideoTrack = null,
+                localScreenPreview = null,
+                participants = st.participants.map { p -> p.copy(videoTrack = null) },
+            )
+        }
         if (_uiState.value.isScreenSharing) {
             try {
                 appContext.startService(
@@ -1417,7 +1553,9 @@ class NativeCallEngine(
 
         dataChannels.values.forEach {
             try {
+                it.unregisterObserver()
                 it.close()
+                it.dispose()
             } catch (_: Throwable) {
             }
         }
@@ -1426,6 +1564,7 @@ class NativeCallEngine(
         peerConnections.values.forEach {
             try {
                 it.close()
+                it.dispose()
             } catch (_: Throwable) {
             }
         }
@@ -1447,19 +1586,37 @@ class NativeCallEngine(
         }
         surfaceTextureHelper = null
 
-        localVideoTrack?.dispose()
+        try {
+            localVideoTrack?.dispose()
+        } catch (_: Throwable) {
+        }
         localVideoTrack = null
-        localVideoSource?.dispose()
+        try {
+            localVideoSource?.dispose()
+        } catch (_: Throwable) {
+        }
         localVideoSource = null
 
-        screenVideoTrack?.dispose()
+        try {
+            screenVideoTrack?.dispose()
+        } catch (_: Throwable) {
+        }
         screenVideoTrack = null
-        screenVideoSource?.dispose()
+        try {
+            screenVideoSource?.dispose()
+        } catch (_: Throwable) {
+        }
         screenVideoSource = null
 
-        localAudioTrack?.dispose()
+        try {
+            localAudioTrack?.dispose()
+        } catch (_: Throwable) {
+        }
         localAudioTrack = null
-        localAudioSource?.dispose()
+        try {
+            localAudioSource?.dispose()
+        } catch (_: Throwable) {
+        }
         localAudioSource = null
 
         configureCallAudioMode(active = false, speakerphone = false)
