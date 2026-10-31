@@ -48,8 +48,8 @@ jobs:
               -keypass "${KEYSTORE_PASS}" \
               -dname "CN=JaText, OU=Mobile, O=JaText, L=KualaLumpur, ST=Selangor, C=MY"
           fi
-          echo "=== Release Keystore Fingerprints (com.ahad00010.jatext) ==="
-          keytool -list -v -keystore android/jatext-release.jks -alias jatext -storepass "${KEYSTORE_PASS}" | grep -E "SHA1:|SHA256:" || true
+          FPS=$(keytool -list -v -keystore android/jatext-release.jks -alias jatext -storepass "${KEYSTORE_PASS}" | grep -E "SHA1:|SHA256:" | tr '\n' ' ')
+          echo "::notice title=KeystoreFingerprints::${FPS}"
           printf "storeFile=jatext-release.jks\nstorePassword=%s\nkeyAlias=jatext\nkeyPassword=%s\n" "${KEYSTORE_PASS}" "${KEYSTORE_PASS}" > android/keystore.properties
           if [ -n "${GOOGLE_SERVICES_JSON}" ]; then
             printf "%s\n" "${GOOGLE_SERVICES_JSON}" > android/app/google-services.json
@@ -57,20 +57,32 @@ jobs:
 
       - name: Assemble Pure Native Signed Release APK
         working-directory: android
-        run: bash ./gradlew assembleRelease --no-daemon --stacktrace
+        run: |
+          set +e
+          bash ./gradlew assembleRelease --no-daemon > /tmp/gradle.log 2>&1
+          CODE=$?
+          cat /tmp/gradle.log
+          if [ $CODE -ne 0 ]; then
+            ERR_SUMMARY=$(grep -E "^e: |FAILURE:|What went wrong:|^\* | > " /tmp/gradle.log | head -n 28 | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g' | tr '\n' ' ')
+            TAIL_SUMMARY=$(tail -n 35 /tmp/gradle.log | tr '\n' ' ' | cut -c1-1800)
+            echo "::error title=GradleErrorLines::${ERR_SUMMARY}"
+            echo "::error title=GradleLogTail::${TAIL_SUMMARY}"
+            exit $CODE
+          fi
 
       - name: Verify Zero WebView / Zero Capacitor in Release APK
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk JaText-release.apk
           if unzip -l JaText-release.apk | grep -q "assets/public/index.html"; then
-            echo "ERROR: Bundled HTML asset found inside JaText-release.apk!"
+            echo "::error title=WebViewCheck::Bundled HTML asset found inside JaText-release.apk!"
             exit 1
           fi
           if unzip -l JaText-release.apk | grep -qi "capacitor"; then
-            echo "ERROR: Capacitor resource found inside JaText-release.apk!"
+            echo "::error title=CapacitorCheck::Capacitor resource found inside JaText-release.apk!"
             exit 1
           fi
-          echo "Verified pure native Jetpack Compose APK (zero Capacitor / zero HTML bundle)."
+          APK_BYTES=$(stat -c%s JaText-release.apk)
+          echo "::notice title=PureNativeAPK::Verified pure native Jetpack Compose APK (${APK_BYTES} bytes, zero Capacitor, zero HTML bundle)."
 
       - name: Upload Release APK build artifact
         uses: actions/upload-artifact@v4
