@@ -77,7 +77,6 @@ export const Avatar = memo(function Avatar({
             alt=""
             referrerPolicy="no-referrer"
             decoding="async"
-            loading="lazy"
             onError={handleImgError}
           />
         ) : (

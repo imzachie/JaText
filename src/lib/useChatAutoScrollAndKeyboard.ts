@@ -81,16 +81,28 @@ export function useChatAutoScrollAndKeyboard({
     };
   }, [pinToBottomNow]);
 
-  // Track user manual scroll position so reading far-up history isn't hijacked unless a new message arrives near bottom or user taps composer
+  // Track user manual scroll position via rAF-coalesced passive listener so reading far-up history
+  // isn't hijacked AND fling scrolling never runs synchronous layout reads on every 120Hz touch tick.
   useEffect(() => {
     const el = messagesRef.current;
     if (!el) return;
+    let scrollRaf = 0;
     const handleScroll = () => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      updatePinned(distanceFromBottom <= NEAR_BOTTOM_THRESHOLD_PX);
+      if (scrollRaf) return;
+      scrollRaf = window.requestAnimationFrame(() => {
+        scrollRaf = 0;
+        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        const nextPinned = distanceFromBottom <= NEAR_BOTTOM_THRESHOLD_PX;
+        if (wasPinnedRef.current !== nextPinned) {
+          updatePinned(nextPinned);
+        }
+      });
     };
     el.addEventListener("scroll", handleScroll, { passive: true });
-    return () => el.removeEventListener("scroll", handleScroll);
+    return () => {
+      if (scrollRaf) window.cancelAnimationFrame(scrollRaf);
+      el.removeEventListener("scroll", handleScroll);
+    };
   }, [conversationKey, messagesReady, messagesRef, updatePinned]);
 
   // Auto-scroll when opening conversation or when new tail messages appear

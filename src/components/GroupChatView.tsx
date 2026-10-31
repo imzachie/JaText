@@ -193,25 +193,57 @@ function detectMentionQuery(text: string, cursor: number): { start: number; quer
 function getConversationMessages(
   pendingMessages: GroupMessage[],
   activeMessages: GroupMessage[],
+  myUserId?: string,
 ) {
   const conversationPendingMessages = [...pendingMessages];
   const matchedPendingIds = new Set<string>();
-  const confirmedMessages = activeMessages.map((message) => {
+  const now = Date.now();
+  const confirmedMessages: GroupMessage[] = [];
+
+  for (const message of activeMessages) {
+    const isUndecryptedEcho = Boolean(message.e2ee && !message.e2ee.decrypted);
     const pendingIndex = conversationPendingMessages.findIndex(
       (pendingMessage) =>
         pendingMessage.senderId === message.senderId &&
-        message.createdAt >= pendingMessage.createdAt - 1_000 &&
+        message.createdAt >= pendingMessage.createdAt - 60_000 &&
         message.createdAt <= pendingMessage.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
         (message.unsentAt ||
           Boolean(message.editedAt) ||
+          isUndecryptedEcho ||
           (message.body === pendingMessage.body &&
             message.attachmentName === pendingMessage.attachmentName)),
     );
-    if (pendingIndex === -1) return message;
+    if (pendingIndex === -1) {
+      if (
+        isUndecryptedEcho &&
+        myUserId &&
+        message.senderId === myUserId &&
+        now - message.createdAt < 30_000
+      ) {
+        continue;
+      }
+      confirmedMessages.push(message);
+      continue;
+    }
     const [pendingMessage] = conversationPendingMessages.splice(pendingIndex, 1);
     matchedPendingIds.add(pendingMessage.id);
-    return { ...message, renderKey: pendingMessage.id };
-  });
+    confirmedMessages.push(
+      isUndecryptedEcho
+        ? {
+            ...message,
+            body: pendingMessage.body,
+            bubbleStyle: pendingMessage.bubbleStyle ?? message.bubbleStyle,
+            attachmentUrl: pendingMessage.attachmentUrl ?? message.attachmentUrl,
+            attachmentName: pendingMessage.attachmentName ?? message.attachmentName,
+            attachmentType: pendingMessage.attachmentType ?? message.attachmentType,
+            stickerUrl: pendingMessage.stickerUrl ?? message.stickerUrl,
+            stickerName: pendingMessage.stickerName ?? message.stickerName,
+            renderKey: pendingMessage.id,
+          }
+        : { ...message, renderKey: pendingMessage.id },
+    );
+  }
+
   return {
     messages: [...confirmedMessages, ...conversationPendingMessages].sort(
       (a, b) => a.createdAt - b.createdAt,
@@ -333,7 +365,8 @@ const GroupChatHistory = memo(function GroupChatHistory({
     }
   };
 
-  const [visibleCount, setVisibleCount] = useState(50);
+  const [visibleCount, setVisibleCount] = useState(120);
+  const scrollSettleTimerRef = useRef<number | null>(null);
   const [highlightedJumpId, setHighlightedJumpId] = useState<string | null>(null);
   const prependAnchorRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
   const firstMsgKey = messages[0]?.id ?? "";
@@ -418,13 +451,28 @@ const GroupChatHistory = memo(function GroupChatHistory({
     }
   };
 
+  useEffect(
+    () => () => {
+      if (scrollSettleTimerRef.current !== null) {
+        window.clearTimeout(scrollSettleTimerRef.current);
+      }
+    },
+    [],
+  );
+
   const handleGroupScroll = (event: React.UIEvent<HTMLDivElement>) => {
     onScroll(event);
-    const el = messagesRef.current;
-    if (!el) return;
-    if (el.scrollTop < 260) {
-      triggerRevealOrFetchOlder();
+    if (!canLoadOlderAny) return;
+    if (scrollSettleTimerRef.current !== null) {
+      window.clearTimeout(scrollSettleTimerRef.current);
     }
+    scrollSettleTimerRef.current = window.setTimeout(() => {
+      scrollSettleTimerRef.current = null;
+      const el = messagesRef.current;
+      if (el && el.scrollTop < 120) {
+        triggerRevealOrFetchOlder();
+      }
+    }, 140);
   };
 
   return (
@@ -527,6 +575,10 @@ const GroupChatHistory = memo(function GroupChatHistory({
                 )),
           );
 
+        const isJustArrived =
+          message.id.startsWith("pending-") ||
+          Date.now() - message.createdAt < 2_500;
+
         return (
           <Fragment key={message.renderKey ?? message.id}>
             {showDay && <div className="day-divider">{day}</div>}
@@ -537,6 +589,8 @@ const GroupChatHistory = memo(function GroupChatHistory({
             )}
             <div
               className={`msg-row group-msg-row ${mine ? "mine" : "theirs"} ${
+                isJustArrived ? "msg-just-arrived" : ""
+              } ${
                 highlightedJumpId === message.id ? "jump-highlight-pulse" : ""
               }`}
               id={`group-message-${message.id}`}
@@ -1674,8 +1728,8 @@ export function GroupChatView({
   const isMuted = group?.members.find((member) => member.id === store.me?.id)?.muted ?? false;
 
   const { messages: displayedMessages, matchedPendingIds } = useMemo(
-    () => getConversationMessages(pendingMessages, conversationMessages),
-    [conversationMessages, pendingMessages],
+    () => getConversationMessages(pendingMessages, conversationMessages, store.me?.id),
+    [conversationMessages, pendingMessages, store.me?.id],
   );
   const lastDisplayedKey = displayedMessages.at(-1)?.id ?? "";
   const lastDisplayedSenderId = displayedMessages.at(-1)?.senderId ?? "";
@@ -1724,10 +1778,8 @@ export function GroupChatView({
     pinToBottomBurst();
   }, [pinToBottomBurst]);
 
-  const handleMessagesScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
-    const element = event.currentTarget;
-    wasPinnedRef.current =
-      element.scrollHeight - element.scrollTop - element.clientHeight < 280;
+  const handleMessagesScroll = useCallback((_event: UIEvent<HTMLDivElement>) => {
+    // `useChatAutoScrollAndKeyboard` already updates `wasPinnedRef` via a single rAF-coalesced listener.
   }, []);
 
   const openImagePreview = useCallback((url: string) => {
@@ -2336,6 +2388,28 @@ export function GroupChatView({
     [closeMessageMenu, toggleGroupReaction],
   );
 
+  const handleOpenReactionPicker = useCallback(
+    (x: number, y: number, message: GroupMessage) => {
+      setReactionTarget({ x, y, message });
+    },
+    [],
+  );
+
+  const handleSwipeReply = useCallback((msg: GroupMessage) => {
+    setEditingMessage(null);
+    setForwardedMessage(null);
+    setReplyTo(msg);
+    window.setTimeout(() => composerRef.current?.focus(), 40);
+  }, []);
+
+  const joinGroupCallFn = groupCall.joinGroupCall;
+  const handleJoinGroupCall = useCallback(
+    (invite: NonNullable<ReturnType<typeof parseGroupCallInvite>>, messageId: string) => {
+      void joinGroupCallFn(invite, invite.mode === "video", messageId);
+    },
+    [joinGroupCallFn],
+  );
+
   async function favoriteSticker(message: GroupMessage) {
     try {
       await store.favoriteGroupStickerFromMessage(message.id);
@@ -2723,16 +2797,9 @@ export function GroupChatView({
         onOpenMessageMenu={openMessageMenu}
         onOpenMessageMenuAt={openMessageMenuAt}
         onReactToMessage={reactToMessage}
-        onOpenReactionPicker={(x, y, message) => setReactionTarget({ x, y, message })}
-        onSwipeReply={(msg) => {
-          setEditingMessage(null);
-          setForwardedMessage(null);
-          setReplyTo(msg);
-          window.setTimeout(() => composerRef.current?.focus(), 40);
-        }}
-        onJoinGroupCall={(invite, messageId) =>
-          void groupCall.joinGroupCall(invite, invite.mode === "video", messageId)
-        }
+        onOpenReactionPicker={handleOpenReactionPicker}
+        onSwipeReply={handleSwipeReply}
+        onJoinGroupCall={handleJoinGroupCall}
         activeCallId={activeGroupCallId}
         groupCallStatesById={groupCallStatesById}
         seenByMessageId={groupSeenData.seenByMessageId}

@@ -990,11 +990,43 @@ export interface CachedDecryptedResult {
 }
 
 const decryptedMessageCache = new Map<string, CachedDecryptedResult>();
+const decryptedByWireCache = new Map<string, CachedDecryptedResult>();
 const failedDecryptRetryAt = new Map<string, { res: CachedDecryptedResult; retryAt: number }>();
 const inFlightDecryptions = new Map<string, Promise<CachedDecryptedResult>>();
 const decryptedMediaUrlCache = new Map<string, string>();
+const preseededMediaUrlByHash = new Map<string, string>();
 const decryptedMediaBlobCache = new Map<string, Blob>();
 const inFlightMediaDecrypts = new Map<string, Promise<string>>();
+
+function buildWireContentCacheKey(rawBody: string): string {
+  return `${rawBody.length}:${rawBody.slice(0, 96)}:${rawBody.slice(-96)}`;
+}
+
+export function seedOutgoingDecryptedWire(
+  rawBody: string,
+  payload: E2EEPlainPayload,
+  proof: MessageE2EEProof,
+): void {
+  if (!rawBody) return;
+  const res: CachedDecryptedResult = { payload, proof };
+  decryptedByWireCache.set(buildWireContentCacheKey(rawBody), res);
+  if (decryptedByWireCache.size > 2000) {
+    const oldestKey = decryptedByWireCache.keys().next().value;
+    if (oldestKey !== undefined) decryptedByWireCache.delete(oldestKey);
+  }
+}
+
+export function seedOutgoingDecryptedMedia(
+  descriptor: EncryptedBlobDescriptor,
+  plainBytes: Uint8Array<ArrayBuffer>,
+): void {
+  if (!descriptor?.h || preseededMediaUrlByHash.has(descriptor.h)) return;
+  const cleanMime = (descriptor.t || "application/octet-stream").replace(/;jbs=[a-z0-9-]+/gi, "");
+  const blob = new Blob([plainBytes], { type: cleanMime });
+  const objUrl = URL.createObjectURL(blob);
+  preseededMediaUrlByHash.set(descriptor.h, objUrl);
+  decryptedMediaBlobCache.set(descriptor.h, blob);
+}
 
 function clearFailedDecryptionEntries(): void {
   failedDecryptRetryAt.clear();
@@ -1005,9 +1037,19 @@ function clearFailedDecryptionEntries(): void {
   }
 }
 
-export function getCachedDecryptedMessage(cacheKey: string): CachedDecryptedResult | undefined {
+export function getCachedDecryptedMessage(
+  cacheKey: string,
+  rawBody?: string,
+): CachedDecryptedResult | undefined {
   const hit = decryptedMessageCache.get(cacheKey);
   if (hit) return hit;
+  if (rawBody) {
+    const wireHit = decryptedByWireCache.get(buildWireContentCacheKey(rawBody));
+    if (wireHit) {
+      decryptedMessageCache.set(cacheKey, wireHit);
+      return wireHit;
+    }
+  }
   const failed = failedDecryptRetryAt.get(cacheKey);
   if (failed && Date.now() < failed.retryAt) {
     return failed.res;
@@ -1035,6 +1077,14 @@ export async function decryptWireMessageCached(params: {
 }): Promise<CachedDecryptedResult> {
   const hit = decryptedMessageCache.get(params.cacheKey);
   if (hit) return hit;
+
+  if (params.rawBody) {
+    const wireHit = decryptedByWireCache.get(buildWireContentCacheKey(params.rawBody));
+    if (wireHit) {
+      decryptedMessageCache.set(params.cacheKey, wireHit);
+      return wireHit;
+    }
+  }
 
   const inflight = inFlightDecryptions.get(params.cacheKey);
   if (inflight) return inflight;
@@ -1112,6 +1162,7 @@ export async function decryptWireMessageCached(params: {
           },
         };
         decryptedMessageCache.set(params.cacheKey, res);
+        decryptedByWireCache.set(buildWireContentCacheKey(rawBody), res);
         notifyListeners();
         return res;
       } else {
@@ -1168,6 +1219,7 @@ export async function decryptWireMessageCached(params: {
           },
         };
         decryptedMessageCache.set(params.cacheKey, res);
+        decryptedByWireCache.set(buildWireContentCacheKey(rawBody), res);
         notifyListeners();
         return res;
       }
@@ -1219,7 +1271,15 @@ export function getCachedDecryptedMediaUrl(
   cipherUrl: string,
   descriptor: EncryptedBlobDescriptor,
 ): string | undefined {
-  return decryptedMediaUrlCache.get(`${descriptor.h}:${descriptor.k}:${cipherUrl}`);
+  const key = `${descriptor.h}:${descriptor.k}:${cipherUrl}`;
+  const direct = decryptedMediaUrlCache.get(key);
+  if (direct) return direct;
+  const preseeded = preseededMediaUrlByHash.get(descriptor.h);
+  if (preseeded) {
+    decryptedMediaUrlCache.set(key, preseeded);
+    return preseeded;
+  }
+  return undefined;
 }
 
 export function getCachedDecryptedMediaBlob(
@@ -1233,7 +1293,7 @@ export async function decryptRemoteAttachmentToObjectUrl(
   descriptor: EncryptedBlobDescriptor,
 ): Promise<string> {
   const key = `${descriptor.h}:${descriptor.k}:${cipherUrl}`;
-  const cached = decryptedMediaUrlCache.get(key);
+  const cached = getCachedDecryptedMediaUrl(cipherUrl, descriptor);
   if (cached) return cached;
 
   const inflight = inFlightMediaDecrypts.get(key);
@@ -1261,7 +1321,11 @@ export async function decryptRemoteAttachmentToObjectUrl(
 
 export function clearDecryptedSessionCaches(): void {
   decryptedMessageCache.clear();
-  for (const url of decryptedMediaUrlCache.values()) {
+  decryptedByWireCache.clear();
+  for (const url of new Set([
+    ...decryptedMediaUrlCache.values(),
+    ...preseededMediaUrlByHash.values(),
+  ])) {
     try {
       URL.revokeObjectURL(url);
     } catch {
@@ -1269,5 +1333,6 @@ export function clearDecryptedSessionCaches(): void {
     }
   }
   decryptedMediaUrlCache.clear();
+  preseededMediaUrlByHash.clear();
   decryptedMediaBlobCache.clear();
 }

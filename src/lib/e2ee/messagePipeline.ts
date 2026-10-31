@@ -39,9 +39,29 @@ import {
   parseGroupKeySignal,
   parseIdentitySignal,
   parseVerifySignal,
+  seedOutgoingDecryptedMedia,
+  seedOutgoingDecryptedWire,
   setPeerVerifiedState,
   type MessageE2EEProof,
 } from "./keystore";
+
+function isSilentEncryptedControlPayload(body: string): boolean {
+  return (
+    body.startsWith("__JATEXT_CALL_SIG__:") ||
+    body.startsWith("__JATEXT_GC_SIG__:") ||
+    body.startsWith("__JATEXT_REACT__:") ||
+    body.startsWith("__JATEXT_SEEN__:") ||
+    body.startsWith("__JATEXT_GROUP_SEEN_V1__:") ||
+    body.startsWith("__JATEXT_E2EE_VER__:") ||
+    body.startsWith("__JATEXT_IK_V1__:") ||
+    body.startsWith("__JATEXT_GK_V1__:") ||
+    body.startsWith("__JATEXT_E2EE_IK__:") ||
+    body.startsWith("__JATEXT_E2EE_GK__:") ||
+    body.startsWith(E2EE_BUBBLE_PREF_PREFIX) ||
+    body.startsWith(E2EE_DEVSYNC_REQ_PREFIX) ||
+    body.startsWith(E2EE_DEVSYNC_RES_PREFIX)
+  );
+}
 
 export function isInternalE2EEStickerName(name?: string | null): boolean {
   if (!name) return false;
@@ -162,6 +182,7 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
       file.name || "attachment",
       file.type || "application/octet-stream",
     );
+    seedOutgoingDecryptedMedia(descriptor, plainBytes);
     const encFile = new File([ciphertextBytes], "encrypted.jatext", {
       type: "application/octet-stream",
     });
@@ -185,6 +206,7 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
         sticker.name || "sticker.png",
         mime,
       );
+      seedOutgoingDecryptedMedia(descriptor, plainBytes);
       const encFile = new File([ciphertextBytes], "encrypted.jatext", {
         type: "application/octet-stream",
       });
@@ -229,8 +251,7 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
     };
   }
 
-  const silentSignal =
-    wireBody.startsWith("__JATEXT_CALL_SIG__:") || wireBody.startsWith("__JATEXT_REACT__:");
+  const silentSignal = isSilentEncryptedControlPayload(wireBody);
 
   const additionalDeviceBundles = [
     ...getAllMyIdentities(state).map((i) => ({ keyId: i.keyId, dhPubB64: i.dhPubB64 })),
@@ -296,6 +317,21 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
     }
   }
 
+  const dmPreseedPayload: E2EEPlainPayload = payload.msgBlob
+    ? { ...payload, b: wireBody, msgBlob: undefined }
+    : payload;
+  seedOutgoingDecryptedWire(finalDmWire, dmPreseedPayload, {
+    encrypted: true,
+    decrypted: true,
+    signatureVerified: true,
+    algorithm: "ECDH P-256 + HKDF-SHA-256 + AES-256-GCM + ECDSA P-256",
+    channel: "dm",
+    senderKeyId: state.primaryIdentity.keyId,
+    receiverKeyId: peerEntry.bundle.keyId,
+    rawWireBody: finalDmWire,
+    attachmentEncrypted: Boolean(payload.att || payload.stk?.att),
+  });
+
   return {
     encrypted: true,
     wireBody: finalDmWire,
@@ -334,6 +370,7 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
       file.name || "attachment",
       file.type || "application/octet-stream",
     );
+    seedOutgoingDecryptedMedia(descriptor, plainBytes);
     const encFile = new File([ciphertextBytes], "encrypted.jatext", {
       type: "application/octet-stream",
     });
@@ -357,6 +394,7 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
         sticker.name || "sticker.png",
         mime,
       );
+      seedOutgoingDecryptedMedia(descriptor, plainBytes);
       const encFile = new File([ciphertextBytes], "encrypted.jatext", {
         type: "application/octet-stream",
       });
@@ -400,8 +438,7 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
     };
   }
 
-  const silentSignal =
-    wireBody.startsWith("__JATEXT_CALL_SIG__:") || wireBody.startsWith("__JATEXT_REACT__:");
+  const silentSignal = isSilentEncryptedControlPayload(wireBody);
 
   const encryptedWire = await encryptGroupPayload({
     groupId,
@@ -453,6 +490,21 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
       }
     }
   }
+
+  const grpPreseedPayload: E2EEPlainPayload = payload.msgBlob
+    ? { ...payload, b: wireBody, msgBlob: undefined }
+    : payload;
+  seedOutgoingDecryptedWire(finalWire, grpPreseedPayload, {
+    encrypted: true,
+    decrypted: true,
+    signatureVerified: true,
+    algorithm: "Group Epoch HKDF-SHA-256 + AES-256-GCM + ECDSA P-256",
+    channel: "grp",
+    senderKeyId: state.primaryIdentity.keyId,
+    groupEpoch: epochEntry.epoch,
+    rawWireBody: finalWire,
+    attachmentEncrypted: Boolean(payload.att || payload.stk?.att),
+  });
 
   return {
     encrypted: true,
@@ -512,7 +564,7 @@ function resolveReplyBody(
 
   const state = getActiveE2EEState();
   const cacheKey = buildMessageDecryptCacheKey(`reply:${reply.id}`, reply.body, 0);
-  const cached = getCachedDecryptedMessage(cacheKey);
+  const cached = getCachedDecryptedMessage(cacheKey, reply.body);
   if (cached) {
     if (cached.payload) {
       return cached.payload.b || cached.payload.att?.n || cached.payload.stk?.n || "Attachment";
@@ -587,7 +639,7 @@ export function hydrateDecryptedDmMessage(
   const isSilentWire = raw.body.startsWith("__JATEXT_CALL_SIG__:");
   const fallbackControlBody = isSilentWire ? extractFallbackCallControlSignal(raw.body) : null;
   const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
-  const cached = getCachedDecryptedMessage(cacheKey);
+  const cached = getCachedDecryptedMessage(cacheKey, raw.body);
   if (!cached) {
     void decryptWireMessageCached({
       cacheKey,
@@ -803,7 +855,7 @@ export function hydrateDecryptedGroupMessage(
 
   const isSilentWire = raw.body.startsWith("__JATEXT_CALL_SIG__:");
   const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
-  const cached = getCachedDecryptedMessage(cacheKey);
+  const cached = getCachedDecryptedMessage(cacheKey, raw.body);
   if (!cached) {
     void decryptWireMessageCached({
       cacheKey,
@@ -946,7 +998,7 @@ export function hydrateDecryptedChatPreview(
     preview.body,
     0,
   );
-  const cached = getCachedDecryptedMessage(cacheKey);
+  const cached = getCachedDecryptedMessage(cacheKey, preview.body);
   if (!cached) {
     void decryptWireMessageCached({
       cacheKey,
@@ -1027,7 +1079,7 @@ export function hydrateDecryptedGroupSummary(
     group.lastMessage,
     0,
   );
-  const cached = getCachedDecryptedMessage(cacheKey);
+  const cached = getCachedDecryptedMessage(cacheKey, group.lastMessage);
   if (!cached) {
     void decryptWireMessageCached({
       cacheKey,
@@ -1144,4 +1196,60 @@ export async function hydrateDecryptedGroupMessageAsync(
   }
   return hydrateDecryptedGroupMessage(raw, groupId, groupDetails, triggerRerender);
 }
+
+export async function prewarmDecryptedDmBatch(
+  rows: ChatMessage[],
+  maxWaitMs = 140,
+): Promise<void> {
+  if (!rows.length || !getActiveE2EEState()) return;
+  await scanDmRowsForE2EESignalsAsync(rows);
+  const tasks: Promise<unknown>[] = [];
+  for (const raw of rows) {
+    if (raw.unsentAt || !isEncryptedWireBody(raw.body)) continue;
+    const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
+    if (getCachedDecryptedMessage(cacheKey, raw.body)) continue;
+    tasks.push(
+      decryptWireMessageCached({
+        cacheKey,
+        rawBody: raw.body,
+        senderId: raw.senderId,
+        receiverId: raw.receiverId,
+      }),
+    );
+  }
+  if (!tasks.length) return;
+  await Promise.race([
+    Promise.allSettled(tasks),
+    new Promise<void>((resolve) => setTimeout(resolve, maxWaitMs)),
+  ]);
+}
+
+export async function prewarmDecryptedGroupBatch(
+  rows: GroupMessage[],
+  groupId: string,
+  maxWaitMs = 140,
+): Promise<void> {
+  if (!rows.length || !getActiveE2EEState()) return;
+  await scanGroupRowsForE2EESignalsAsync(rows);
+  const tasks: Promise<unknown>[] = [];
+  for (const raw of rows) {
+    if (raw.unsentAt || !isEncryptedWireBody(raw.body)) continue;
+    const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
+    if (getCachedDecryptedMessage(cacheKey, raw.body)) continue;
+    tasks.push(
+      decryptWireMessageCached({
+        cacheKey,
+        rawBody: raw.body,
+        senderId: raw.senderId,
+        groupId,
+      }),
+    );
+  }
+  if (!tasks.length) return;
+  await Promise.race([
+    Promise.allSettled(tasks),
+    new Promise<void>((resolve) => setTimeout(resolve, maxWaitMs)),
+  ]);
+}
+
 

@@ -357,13 +357,45 @@ export function saveSlotBootstrapCache(
   };
 
   memoryBootstrap.set(slotId, next);
-  if (typeof window !== "undefined") {
-    try {
-      window.localStorage.setItem(getBootstrapStorageKey(slotId), JSON.stringify(next));
-    } catch {
-      // Ignore storage quota issues; memoryBootstrap remains active.
-    }
+  schedulePersistBootstrapToStorage(slotId);
+}
+
+const bootstrapWriteTimers = new Map<string, number>();
+
+function flushBootstrapToStorage(slotId: string): void {
+  if (typeof window === "undefined") return;
+  const current = memoryBootstrap.get(slotId);
+  if (!current) return;
+  try {
+    window.localStorage.setItem(getBootstrapStorageKey(slotId), JSON.stringify(current));
+  } catch {
+    // Ignore storage quota issues; memoryBootstrap remains active.
   }
+}
+
+function schedulePersistBootstrapToStorage(slotId: string): void {
+  if (typeof window === "undefined") return;
+  const prev = bootstrapWriteTimers.get(slotId);
+  if (prev !== undefined) window.clearTimeout(prev);
+  const timer = window.setTimeout(() => {
+    bootstrapWriteTimers.delete(slotId);
+    flushBootstrapToStorage(slotId);
+  }, 400);
+  bootstrapWriteTimers.set(slotId, timer);
+}
+
+if (typeof window !== "undefined") {
+  const flushAllPendingBootstraps = () => {
+    for (const [slotId, timer] of bootstrapWriteTimers.entries()) {
+      window.clearTimeout(timer);
+      bootstrapWriteTimers.delete(slotId);
+      flushBootstrapToStorage(slotId);
+    }
+  };
+  window.addEventListener("pagehide", flushAllPendingBootstraps);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) flushAllPendingBootstraps();
+  });
 }
 
 /* ------------------------------------------------------------------ */

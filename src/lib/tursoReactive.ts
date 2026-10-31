@@ -19,6 +19,10 @@ import {
   tursoRpc,
   uploadMediaToTurso,
 } from "./tursoClient";
+import {
+  prewarmDecryptedDmBatch,
+  prewarmDecryptedGroupBatch,
+} from "./e2ee/messagePipeline";
 import { OAUTH_RETURN_CHATS_FLAG } from "./webRoute";
 import { OFFICIAL_COMMUNITY_ID } from "./types";
 import type {
@@ -77,15 +81,42 @@ interface SyncResponse {
   communityTypingUsers: ChatTypingUser[];
 }
 
+function sameJsonValue<T>(prev: T, next: T): boolean {
+  if (Object.is(prev, next)) return true;
+  if (prev == null || next == null) return false;
+  if (Array.isArray(prev) && Array.isArray(next)) {
+    if (prev.length === 0 && next.length === 0) return true;
+    if (prev.length !== next.length) return false;
+  }
+  try {
+    return JSON.stringify(prev) === JSON.stringify(next);
+  } catch {
+    return false;
+  }
+}
+
 function mergeMessagesById<T extends { id: string; createdAt: number }>(
   prev: T[] | undefined,
   incoming: T[],
 ): T[] {
   if (!incoming.length) return prev ?? [];
-  const map = new Map<string, T>();
-  for (const m of prev ?? []) {
-    map.set(m.id, m);
+  if (prev && prev.length > 0) {
+    const map = new Map<string, T>();
+    for (const m of prev) {
+      map.set(m.id, m);
+    }
+    let anyChanged = false;
+    for (const m of incoming) {
+      const existing = map.get(m.id);
+      if (!existing || !sameJsonValue(existing, m)) {
+        map.set(m.id, m);
+        anyChanged = true;
+      }
+    }
+    if (!anyChanged) return prev;
+    return [...map.values()].sort((a, b) => a.createdAt - b.createdAt);
   }
+  const map = new Map<string, T>();
   for (const m of incoming) {
     map.set(m.id, m);
   }
@@ -335,7 +366,9 @@ export function useTursoReactiveSession(
       { otherId: activeChatId },
       { slotId },
     )
-      .then((res) => {
+      .then(async (res) => {
+        if (cancelled) return;
+        await prewarmDecryptedDmBatch(res.messages ?? []);
         if (!cancelled) {
           setActiveMessagesQuery(res.messages);
           setHasMoreOlderMessages(Boolean(res.hasMore));
@@ -374,7 +407,9 @@ export function useTursoReactiveSession(
         { slotId },
       ),
     ])
-      .then(([detRes, msgRes]) => {
+      .then(async ([detRes, msgRes]) => {
+        if (cancelled) return;
+        await prewarmDecryptedGroupBatch(msgRes.messages ?? [], activeGroupId);
         if (cancelled) return;
         setGroupDetailsQuery(detRes.details);
         setGroupMessagesQuery(msgRes.messages);
@@ -407,6 +442,8 @@ export function useTursoReactiveSession(
       const incomingOlder = res.messages ?? [];
       setHasMoreOlderMessages(Boolean(res.hasMore));
       if (!incomingOlder.length) return 0;
+      await prewarmDecryptedDmBatch(incomingOlder);
+      if (activeChatRef.current !== curChat) return 0;
       const beforeCount = (activeMessagesRef.current ?? []).length;
       const merged = mergeMessagesById(incomingOlder, activeMessagesRef.current ?? []);
       setActiveMessagesQuery(merged);
@@ -441,6 +478,8 @@ export function useTursoReactiveSession(
       const incomingOlder = res.messages ?? [];
       setHasMoreOlderGroupMessages(Boolean(res.hasMore));
       if (!incomingOlder.length) return 0;
+      await prewarmDecryptedGroupBatch(incomingOlder, curGroup);
+      if (activeGroupRef.current !== curGroup) return 0;
       const beforeCount = (groupMessagesRef.current ?? []).length;
       const merged = mergeMessagesById(incomingOlder, groupMessagesRef.current ?? []);
       setGroupMessagesQuery(merged);
@@ -519,14 +558,34 @@ export function useTursoReactiveSession(
       if (slotIdRef.current !== targetSlot) return;
       sinceTsRef.current = res.serverTime || Date.now();
 
-      if (res.me) setMeQuery(res.me);
+      if (res.changedDmMessages?.length && activeChatRef.current === curChat) {
+        await prewarmDecryptedDmBatch(res.changedDmMessages);
+      }
+      if (res.changedGroupMessages?.length && curGroup && activeGroupRef.current === curGroup) {
+        await prewarmDecryptedGroupBatch(res.changedGroupMessages, curGroup);
+      }
+      if (slotIdRef.current !== targetSlot) return;
+
+      if (res.me) {
+        const nextMe = res.me;
+        setMeQuery((prev) => (prev && sameJsonValue(prev, nextMe) ? prev : nextMe));
+      }
       if (res.social) {
-        setRawFriendsQuery(res.social.friends);
-        setIncoming(res.social.incoming);
-        setOutgoing(res.social.outgoing);
-        setBlockedUserIds(res.social.blockedUserIds);
-        setPreviewsQuery(res.social.previews);
-        setFriendActivities(res.social.friendActivities);
+        const soc = res.social;
+        setRawFriendsQuery((prev) =>
+          prev && sameJsonValue(prev, soc.friends) ? prev : soc.friends,
+        );
+        setIncoming((prev) => (sameJsonValue(prev, soc.incoming) ? prev : soc.incoming));
+        setOutgoing((prev) => (sameJsonValue(prev, soc.outgoing) ? prev : soc.outgoing));
+        setBlockedUserIds((prev) =>
+          sameJsonValue(prev, soc.blockedUserIds) ? prev : soc.blockedUserIds,
+        );
+        setPreviewsQuery((prev) =>
+          prev && sameJsonValue(prev, soc.previews) ? prev : soc.previews,
+        );
+        setFriendActivities((prev) =>
+          sameJsonValue(prev, soc.friendActivities) ? prev : soc.friendActivities,
+        );
       }
       if (res.changedDmMessages?.length && activeChatRef.current === curChat) {
         setActiveMessagesQuery((prev) => mergeMessagesById(prev, res.changedDmMessages!));
@@ -540,10 +599,19 @@ export function useTursoReactiveSession(
         );
       }
       if (res.groups) {
-        setGroupsQuery(res.groups);
+        const nextGroups = res.groups;
+        setGroupsQuery((prev) =>
+          prev && sameJsonValue(prev, nextGroups) ? prev : nextGroups,
+        );
       }
-      setGroupTypingUsers(res.groupTypingUsers ?? []);
-      setCommunityTypingUsers(res.communityTypingUsers ?? []);
+      const nextGrpTyping = res.groupTypingUsers ?? [];
+      setGroupTypingUsers((prev) =>
+        sameJsonValue(prev, nextGrpTyping) ? prev : nextGrpTyping,
+      );
+      const nextCommTyping = res.communityTypingUsers ?? [];
+      setCommunityTypingUsers((prev) =>
+        sameJsonValue(prev, nextCommTyping) ? prev : nextCommTyping,
+      );
     } catch {
       // transient network hiccup; keep cached state intact
     } finally {
@@ -740,7 +808,7 @@ export function useTursoReactiveSession(
       },
 
       forwardMessageMut: async (args: { messageId: string; receiverId: string }) => {
-        const msg = activeMessagesQuery?.find((m) => m.id === args.messageId);
+        const msg = activeMessagesRef.current?.find((m) => m.id === args.messageId);
         await tursoRpc(
           "sendMessage",
           {
@@ -907,7 +975,7 @@ export function useTursoReactiveSession(
       },
 
       favoriteStickerFromMessageMut: async (args: { messageId: string }) => {
-        const msg = activeMessagesQuery?.find((m) => m.id === args.messageId);
+        const msg = activeMessagesRef.current?.find((m) => m.id === args.messageId);
         if (!msg?.attachmentUrl) return;
         const key = msg.stickerKey || `upload:${msg.attachmentUrl}`;
         const lib = await tursoRpc<{
@@ -931,7 +999,7 @@ export function useTursoReactiveSession(
       },
 
       favoriteGroupStickerFromMessageMut: async (args: { messageId: string }) => {
-        const msg = groupMessagesQuery?.find((m) => m.id === args.messageId);
+        const msg = groupMessagesRef.current?.find((m) => m.id === args.messageId);
         const url = msg?.stickerUrl || msg?.attachmentUrl;
         if (!url) return;
         const key = msg?.stickerKey || `upload:${url}`;
@@ -956,7 +1024,7 @@ export function useTursoReactiveSession(
       },
 
       favoriteCommunityStickerFromMessageMut: async (args: { messageId: string }) => {
-        const msg = communityMessagesQuery?.find((m) => m.id === args.messageId);
+        const msg = communityMessagesRef.current?.find((m) => m.id === args.messageId);
         const url = msg?.stickerUrl || msg?.attachmentUrl;
         if (!url) return;
         const key = msg?.stickerKey || `upload:${url}`;
@@ -1176,7 +1244,7 @@ export function useTursoReactiveSession(
         targetUserId?: string;
         targetCommunity?: boolean;
       }) => {
-        const src = communityMessagesQuery?.find((m) => m.id === args.messageId);
+        const src = communityMessagesRef.current?.find((m) => m.id === args.messageId);
         if (!src) return;
         const url = src.stickerUrl || src.attachmentUrl;
         if (args.targetUserId) {
@@ -1334,7 +1402,7 @@ export function useTursoReactiveSession(
         targetGroupId?: string;
         targetUserId?: string;
       }) => {
-        const src = groupMessagesQuery?.find((m) => m.id === args.messageId);
+        const src = groupMessagesRef.current?.find((m) => m.id === args.messageId);
         if (!src) return;
         const url = src.stickerUrl || src.attachmentUrl;
         if (args.targetUserId) {
@@ -1568,7 +1636,7 @@ export function useTursoReactiveSession(
         return res.vault;
       },
     }),
-    [activeMessagesQuery, communityMessagesQuery, groupMessagesQuery, slotId],
+    [slotId],
   );
 
   return {

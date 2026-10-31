@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
 import { Capacitor } from "@capacitor/core";
 import { ReplyIcon } from "./UiIcons";
 
@@ -43,10 +43,176 @@ function getMobileCapableSnapshot(): boolean {
   return cachedMobileCapable;
 }
 
+interface SwipeRegistration {
+  badgeEl: HTMLDivElement | null;
+  trackEl: HTMLDivElement | null;
+  onReply: () => void;
+}
+
+const swipeRegistry = new Map<HTMLElement, SwipeRegistration>();
+let globalSwipeInstalled = false;
+
+function ensureGlobalSwipeDelegator(): void {
+  if (globalSwipeInstalled || typeof window === "undefined") return;
+  globalSwipeInstalled = true;
+
+  let activeWrap: HTMLElement | null = null;
+  let activeReg: SwipeRegistration | null = null;
+  let startX = 0;
+  let startY = 0;
+  let lockedAxis: "x" | "y" | null = null;
+  let currentOffset = 0;
+  let armed = false;
+  let rafId = 0;
+  let hideTimerId = 0;
+
+  const applyVisual = (reg: SwipeRegistration, px: number, snapping: boolean) => {
+    const track = reg.trackEl;
+    const badge = reg.badgeEl;
+    if (track) {
+      track.style.transition = snapping
+        ? "transform 210ms cubic-bezier(0.22, 1, 0.36, 1)"
+        : "none";
+      track.style.transform = px > 0 ? `translate3d(${px}px, 0, 0)` : "";
+    }
+    if (badge) {
+      if (px > 2) {
+        if (hideTimerId) {
+          window.clearTimeout(hideTimerId);
+          hideTimerId = 0;
+        }
+        badge.style.display = "flex";
+        const progress = Math.min(1, px / TRIGGER_PX);
+        badge.style.opacity = String(progress);
+        badge.style.transform = `translate3d(0, -50%, 0) scale(${0.55 + progress * 0.45})`;
+        badge.classList.toggle("armed", px >= TRIGGER_PX);
+      } else {
+        badge.style.opacity = "0";
+        badge.style.transform = "translate3d(0, -50%, 0) scale(0.55)";
+        badge.classList.remove("armed");
+        if (snapping) {
+          if (hideTimerId) window.clearTimeout(hideTimerId);
+          hideTimerId = window.setTimeout(() => {
+            badge.style.display = "none";
+            hideTimerId = 0;
+          }, 215);
+        } else {
+          badge.style.display = "none";
+        }
+      }
+    }
+  };
+
+  const resetActive = (cancelled: boolean) => {
+    if (!activeReg) {
+      activeWrap = null;
+      lockedAxis = null;
+      currentOffset = 0;
+      armed = false;
+      return;
+    }
+    const reg = activeReg;
+    const shouldTrigger = !cancelled && lockedAxis === "x" && currentOffset >= TRIGGER_PX;
+    activeWrap = null;
+    activeReg = null;
+    lockedAxis = null;
+    const hadOffset = currentOffset > 0;
+    currentOffset = 0;
+    armed = false;
+    if (rafId) {
+      window.cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+    if (hadOffset) {
+      applyVisual(reg, 0, true);
+    }
+    if (shouldTrigger) {
+      reg.onReply();
+    }
+  };
+
+  const onTouchStart = (e: TouchEvent) => {
+    if (e.touches.length !== 1) return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest("input, textarea, [data-no-swipe-reply='true']")) {
+      return;
+    }
+    const wrap = target.closest(".swipe-reply-wrap") as HTMLElement | null;
+    if (!wrap) return;
+    const reg = swipeRegistry.get(wrap);
+    if (!reg) return;
+
+    const t = e.touches[0];
+    activeWrap = wrap;
+    activeReg = reg;
+    startX = t.clientX;
+    startY = t.clientY;
+    lockedAxis = null;
+    currentOffset = 0;
+    armed = false;
+  };
+
+  const onTouchMove = (e: TouchEvent) => {
+    if (!activeReg || !activeWrap || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+
+    if (!lockedAxis) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      if (dx > 10 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        lockedAxis = "x";
+      } else {
+        lockedAxis = "y";
+        activeWrap = null;
+        activeReg = null;
+        return;
+      }
+    }
+
+    if (lockedAxis !== "x") return;
+
+    const clamped = Math.max(0, dx - 6);
+    const damped =
+      clamped <= TRIGGER_PX
+        ? clamped
+        : Math.min(MAX_PULL_PX, TRIGGER_PX + (clamped - TRIGGER_PX) * 0.35);
+
+    if (damped >= TRIGGER_PX && !armed) {
+      armed = true;
+      try {
+        navigator.vibrate?.(10);
+      } catch {
+        // Ignore unsupported vibrate API
+      }
+    } else if (damped < TRIGGER_PX - 6 && armed) {
+      armed = false;
+    }
+
+    currentOffset = damped;
+    const reg = activeReg;
+    if (!rafId && reg) {
+      rafId = window.requestAnimationFrame(() => {
+        rafId = 0;
+        applyVisual(reg, currentOffset, false);
+      });
+    }
+  };
+
+  const onTouchEnd = () => resetActive(false);
+  const onTouchCancel = () => resetActive(true);
+
+  document.addEventListener("touchstart", onTouchStart, { passive: true });
+  document.addEventListener("touchmove", onTouchMove, { passive: true });
+  document.addEventListener("touchend", onTouchEnd, { passive: true });
+  document.addEventListener("touchcancel", onTouchCancel, { passive: true });
+}
+
 /**
- * Mobile-only left-to-right swipe wrapper for message bubbles using 100% passive native
- * touch listeners and direct GPU transforms (zero React re-renders during gesture and zero
- * main-thread scroll blocking on Android/iOS).
+ * Mobile-only left-to-right swipe wrapper for message bubbles using a single delegated
+ * passive listener on `document` and zero idle GPU layers (`badge` stays `display: none`
+ * until an actual horizontal swipe locks in).
  */
 export function SwipeToReply({
   disabled = false,
@@ -66,129 +232,23 @@ export function SwipeToReply({
   const badgeRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const onReplyRef = useRef(onReply);
-  onReplyRef.current = onReply;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    onReplyRef.current = onReply;
+  });
+
+  useLayoutEffect(() => {
     if (!isMobile || disabled) return;
-    const el = wrapRef.current;
-    if (!el) return;
-
-    let active = false;
-    let startX = 0;
-    let startY = 0;
-    let lockedAxis: "x" | "y" | null = null;
-    let currentOffset = 0;
-    let armed = false;
-    let rafId = 0;
-
-    const applyVisual = (px: number, snapping: boolean) => {
-      const track = trackRef.current;
-      const badge = badgeRef.current;
-      if (track) {
-        track.style.transition = snapping
-          ? "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)"
-          : "none";
-        track.style.transform = px > 0 ? `translate3d(${px}px, 0, 0)` : "";
-      }
-      if (badge) {
-        const progress = Math.min(1, px / TRIGGER_PX);
-        badge.style.opacity = px > 2 ? String(progress) : "0";
-        badge.style.transform = `translateY(-50%) scale(${0.55 + progress * 0.45})`;
-        badge.classList.toggle("armed", px >= TRIGGER_PX);
-      }
-    };
-
-    const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea, [data-no-swipe-reply='true']")) {
-        return;
-      }
-      const t = e.touches[0];
-      active = true;
-      startX = t.clientX;
-      startY = t.clientY;
-      lockedAxis = null;
-      currentOffset = 0;
-      armed = false;
-    };
-
-    const onTouchMove = (e: TouchEvent) => {
-      if (!active || e.touches.length !== 1) return;
-      const t = e.touches[0];
-      const dx = t.clientX - startX;
-      const dy = t.clientY - startY;
-
-      if (!lockedAxis) {
-        if (Math.abs(dx) < 9 && Math.abs(dy) < 9) return;
-        if (dx > 9 && Math.abs(dx) > Math.abs(dy) * 1.35) {
-          lockedAxis = "x";
-        } else {
-          lockedAxis = "y";
-          active = false;
-          return;
-        }
-      }
-
-      if (lockedAxis !== "x") return;
-
-      const clamped = Math.max(0, dx - 6);
-      const damped =
-        clamped <= TRIGGER_PX
-          ? clamped
-          : Math.min(MAX_PULL_PX, TRIGGER_PX + (clamped - TRIGGER_PX) * 0.35);
-
-      if (damped >= TRIGGER_PX && !armed) {
-        armed = true;
-        try {
-          navigator.vibrate?.(10);
-        } catch {
-          // Ignore unsupported vibrate API
-        }
-      } else if (damped < TRIGGER_PX - 6 && armed) {
-        armed = false;
-      }
-
-      currentOffset = damped;
-      if (!rafId) {
-        rafId = window.requestAnimationFrame(() => {
-          rafId = 0;
-          applyVisual(currentOffset, false);
-        });
-      }
-    };
-
-    const finishGesture = (cancelled: boolean) => {
-      if (!active && currentOffset === 0) return;
-      const shouldTrigger = !cancelled && lockedAxis === "x" && currentOffset >= TRIGGER_PX;
-      active = false;
-      lockedAxis = null;
-      currentOffset = 0;
-      armed = false;
-      if (rafId) {
-        window.cancelAnimationFrame(rafId);
-        rafId = 0;
-      }
-      applyVisual(0, true);
-      if (shouldTrigger) {
-        onReplyRef.current();
-      }
-    };
-
-    const onTouchEnd = () => finishGesture(false);
-    const onTouchCancel = () => finishGesture(true);
-
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: true });
-    el.addEventListener("touchend", onTouchEnd, { passive: true });
-    el.addEventListener("touchcancel", onTouchCancel, { passive: true });
-
+    ensureGlobalSwipeDelegator();
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    swipeRegistry.set(wrap, {
+      badgeEl: badgeRef.current,
+      trackEl: trackRef.current,
+      onReply: () => onReplyRef.current(),
+    });
     return () => {
-      if (rafId) window.cancelAnimationFrame(rafId);
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", onTouchEnd);
-      el.removeEventListener("touchcancel", onTouchCancel);
+      swipeRegistry.delete(wrap);
     };
   }, [disabled, isMobile]);
 
@@ -201,7 +261,7 @@ export function SwipeToReply({
       <div
         ref={badgeRef}
         className="swipe-reply-badge"
-        style={{ opacity: 0, transform: "translateY(-50%) scale(0.55)" }}
+        style={{ display: "none" }}
         aria-hidden="true"
       >
         <ReplyIcon size={15} />
