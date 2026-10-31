@@ -23,7 +23,7 @@ object GoogleNativeSignIn {
 
     private const val PREFS_NAME = "jatext_google_auth_prefs"
     private const val KEY_CM_SHA1_MISSING_AT = "cm_sha1_missing_at"
-    private const val SHA1_RETRY_COOLDOWN_MS = 6L * 60L * 60L * 1000L // 6 hours
+    private const val SHA1_RETRY_COOLDOWN_MS = 10L * 60L * 1000L // 10 minutes
 
     private val secureRandom = SecureRandom()
 
@@ -120,9 +120,9 @@ object GoogleNativeSignIn {
         }
         if (serverClientId.isBlank()) return null
 
-        val androidClientConfigured =
+        val androidClientExplicit =
             hasBundledAndroidOAuthResource(appCtx) || (serverConfig?.androidClientConfigured == true)
-        if (!androidClientConfigured || isSha1RecentlyMarkedMissing(appCtx)) {
+        if (!androidClientExplicit && isSha1RecentlyMarkedMissing(appCtx)) {
             return null
         }
 

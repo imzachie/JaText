@@ -1,5 +1,10 @@
 package com.ahad00010.jatext.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -85,6 +90,7 @@ import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.state.SessionUiState
 import com.ahad00010.jatext.ui.components.JaAvatar
+import com.ahad00010.jatext.ui.components.JaGroupAvatar
 import com.ahad00010.jatext.ui.components.JaOfficialBadge
 import com.ahad00010.jatext.ui.components.JaTabItem
 import com.ahad00010.jatext.ui.components.JaVerifiedBadge
@@ -94,7 +100,6 @@ import com.ahad00010.jatext.ui.components.JaWebIconButton
 import com.ahad00010.jatext.ui.components.JaWebInput
 import com.ahad00010.jatext.ui.components.JaWebPrimaryButton
 import com.ahad00010.jatext.ui.components.JaWebTabs
-import com.ahad00010.jatext.ui.icons.OwnerCrownVectorBadge
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -301,10 +306,6 @@ fun SidebarScreen(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
-                        if (me.isOwner) {
-                            Spacer(Modifier.width(5.dp))
-                            OwnerCrownVectorBadge(size = 14.dp)
-                        }
                     }
                     Spacer(Modifier.height(2.dp))
                     Row(
@@ -394,7 +395,21 @@ fun SidebarScreen(
         )
 
         /* ==================== 4. Tab Panes ==================== */
-        when (activeTab) {
+        AnimatedContent(
+            targetState = activeTab,
+            transitionSpec = {
+                fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(130))
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            label = "sidebarTabPane",
+        ) { currentTab ->
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                when (currentTab) {
             "chats" -> {
                 JaWebInput(
                     value = searchQuery,
@@ -898,6 +913,8 @@ fun SidebarScreen(
                         }
                     }
                 }
+            }
+        }
             }
         }
     }
@@ -1490,32 +1507,12 @@ private fun GroupSidebarRow(
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (!group.avatarUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = group.avatarUrl,
-                contentDescription = group.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape),
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(palette.bgTertiary)
-                    .border(1.dp, palette.border, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Groups,
-                    contentDescription = group.name,
-                    tint = palette.textPrimary,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        }
+        JaGroupAvatar(
+            avatarUrl = group.avatarUrl,
+            name = group.name,
+            size = 46.dp,
+            ringWidth = 2.5.dp,
+        )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(

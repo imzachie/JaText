@@ -1,10 +1,16 @@
 package com.ahad00010.jatext.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,10 +37,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -45,6 +53,37 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
 
+/**
+ * 120 FPS tactile spring press-scale clickable modifier for buttons, tiles, and chips across JaText.
+ */
+fun Modifier.jaBouncyClick(
+    enabled: Boolean = true,
+    pressedScale: Float = 0.96f,
+    onClick: () -> Unit,
+): Modifier = composed {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) pressedScale else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "jaPressScale",
+    )
+    this
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            enabled = enabled,
+            onClick = onClick,
+        )
+}
+
 data class JaTabItem(
     val id: String,
     val label: String,
@@ -53,7 +92,7 @@ data class JaTabItem(
 )
 
 /**
- * Exact 1:1 recreation of `.tabs` / `.tabs button.active` from src/index.css.
+ * Exact 1:1 recreation of `.tabs` / `.tabs button.active` from src/index.css with animated pill transitions.
  */
 @Composable
 fun JaWebTabs(
@@ -68,19 +107,29 @@ fun JaWebTabs(
             .fillMaxWidth()
             .clip(RoundedCornerShape(999.dp))
             .background(palette.bgTertiary)
+            .border(1.dp, palette.border.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         tabs.forEach { tab ->
             val active = tab.id == selectedId
-            val fg = if (active) palette.accentDark else palette.textSecondary
+            val pillBg by animateColorAsState(
+                targetValue = if (active) palette.accent else Color.Transparent,
+                animationSpec = tween(durationMillis = 200),
+                label = "tabBg",
+            )
+            val fg by animateColorAsState(
+                targetValue = if (active) palette.accentDark else palette.textSecondary,
+                animationSpec = tween(durationMillis = 180),
+                label = "tabFg",
+            )
             Row(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(if (active) palette.accent else Color.Transparent)
-                    .clickable { onSelect(tab.id) }
+                    .background(pillBg)
+                    .jaBouncyClick(pressedScale = 0.95f) { onSelect(tab.id) }
                     .padding(horizontal = 8.dp, vertical = 9.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
@@ -97,7 +146,7 @@ fun JaWebTabs(
                 Text(
                     text = tab.label,
                     color = fg,
-                    fontSize = 14.sp,
+                    fontSize = 13.5.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -147,7 +196,12 @@ fun JaWebInput(
     val palette = LocalJaTextPalette.current
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
-    val shape = RoundedCornerShape(12.dp)
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) palette.accent else palette.border,
+        animationSpec = tween(durationMillis = 160),
+        label = "inputBorder",
+    )
+    val shape = RoundedCornerShape(14.dp)
 
     Column(modifier = modifier.fillMaxWidth()) {
         if (!label.isNullOrBlank()) {
@@ -164,8 +218,8 @@ fun JaWebInput(
                 .fillMaxWidth()
                 .clip(shape)
                 .background(palette.bgTertiary)
-                .border(1.dp, if (focused) palette.accent else palette.border, shape)
-                .padding(horizontal = 13.dp, vertical = 11.dp),
+                .border(1.2.dp, borderColor, shape)
+                .padding(horizontal = 14.dp, vertical = 11.dp),
             verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top,
         ) {
             if (leadingIcon != null) {
@@ -226,7 +280,7 @@ fun JaWebInput(
 }
 
 /**
- * Exact 1:1 recreation of `.primary-btn` from src/index.css.
+ * Exact 1:1 recreation of `.primary-btn` from src/index.css with tactile spring scale.
  */
 @Composable
 fun JaWebPrimaryButton(
@@ -241,9 +295,9 @@ fun JaWebPrimaryButton(
     Row(
         modifier = modifier
             .alpha(if (enabled) 1f else 0.45f)
+            .jaBouncyClick(enabled = enabled, pressedScale = 0.97f, onClick = onClick)
             .clip(RoundedCornerShape(999.dp))
             .background(palette.accent)
-            .clickable(enabled = enabled, onClick = onClick)
             .padding(
                 horizontal = if (big) 24.dp else 20.dp,
                 vertical = if (big) 14.dp else 11.dp,
@@ -265,7 +319,7 @@ fun JaWebPrimaryButton(
 }
 
 /**
- * Exact 1:1 recreation of `.ghost-btn` from src/index.css.
+ * Exact 1:1 recreation of `.ghost-btn` from src/index.css with tactile spring scale.
  */
 @Composable
 fun JaWebGhostButton(
@@ -279,10 +333,10 @@ fun JaWebGhostButton(
     Row(
         modifier = modifier
             .alpha(if (enabled) 1f else 0.45f)
+            .jaBouncyClick(enabled = enabled, pressedScale = 0.96f, onClick = onClick)
             .clip(RoundedCornerShape(999.dp))
-            .background(Color.Transparent)
+            .background(palette.bgTertiary.copy(alpha = 0.35f))
             .border(1.dp, palette.border, RoundedCornerShape(999.dp))
-            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 9.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -319,10 +373,10 @@ fun JaWebDangerButton(
     Row(
         modifier = modifier
             .alpha(if (enabled) 1f else 0.45f)
+            .jaBouncyClick(enabled = enabled, pressedScale = 0.96f, onClick = onClick)
             .clip(RoundedCornerShape(999.dp))
-            .background(Color.Transparent)
+            .background(palette.danger.copy(alpha = 0.08f))
             .border(1.dp, palette.danger, RoundedCornerShape(999.dp))
-            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -349,22 +403,25 @@ fun JaWebIconButton(
     iconSize: Dp = 18.dp,
     active: Boolean = false,
     badgeCount: Int = 0,
+    containerColor: Color? = null,
+    borderColor: Color? = null,
+    iconTint: Color? = null,
 ) {
     val palette = LocalJaTextPalette.current
     Box(modifier = modifier) {
         Box(
             modifier = Modifier
                 .size(size)
+                .jaBouncyClick(pressedScale = 0.92f, onClick = onClick)
                 .clip(CircleShape)
-                .background(palette.bgTertiary)
-                .border(1.dp, if (active) palette.accent else palette.border, CircleShape)
-                .clickable(onClick = onClick),
+                .background(containerColor ?: palette.bgTertiary)
+                .border(1.dp, borderColor ?: (if (active) palette.accent else palette.border), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                tint = if (active) palette.accent else palette.textPrimary,
+                tint = iconTint ?: (if (active) palette.accent else palette.textPrimary),
                 modifier = Modifier.size(iconSize),
             )
         }

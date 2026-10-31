@@ -16,6 +16,7 @@ import { useJaText } from "../lib/store";
 import type { ActivityStatus, JaUser } from "../lib/types";
 import { Avatar } from "./Avatar";
 import { LockIcon } from "./E2EEModals";
+import { MessageMarkdown } from "./MessageMarkdown";
 import {
   ExternalArrowIcon,
   SocialBrandIcon,
@@ -97,13 +98,16 @@ function LiveUserProfileHydrator({
 export function ProfileCard({
   user,
   status,
+  wallpaperUrl,
 }: {
   user: JaUser;
   status?: ActivityStatus;
+  wallpaperUrl?: string | null;
 }) {
   const unpacked = unpackAvatarColorWithMeta(user.avatarColor, user.socials, user.website);
   const color = colorById(unpacked.avatarColor);
   const bannerSrc = normalizeAvatarSrc(user.bannerUrl);
+  const effectiveWallpaper = wallpaperUrl?.trim() ? wallpaperUrl.trim() : null;
   const [copiedDiscordIdx, setCopiedDiscordIdx] = useState<number | null>(null);
   const socials = unpacked.socials ?? [];
   const website =
@@ -113,15 +117,24 @@ export function ProfileCard({
 
   return (
     <div
-      className="profile-card"
+      className={`profile-card ${effectiveWallpaper ? "has-chat-wallpaper" : ""}`}
       style={{ "--profile-outline": color.hex } as CSSProperties}
     >
+      {effectiveWallpaper && (
+        <div
+          className="profile-card-wallpaper-ambient"
+          style={{ backgroundImage: `url(${effectiveWallpaper})` }}
+          aria-hidden="true"
+        />
+      )}
       <div
         className="profile-banner"
         style={
           bannerSrc
             ? { backgroundImage: `url(${bannerSrc})` }
-            : { background: color.gradient }
+            : effectiveWallpaper
+              ? { backgroundImage: `url(${effectiveWallpaper})` }
+              : { background: color.gradient }
         }
       />
       <div className="profile-body">
@@ -135,7 +148,11 @@ export function ProfileCard({
             {user.pronouns ? <span className="profile-pronouns"> · {user.pronouns}</span> : null}
           </div>
         </div>
-        {user.bio ? <p className="profile-bio">{user.bio}</p> : null}
+        {user.bio ? (
+          <div className="profile-bio">
+            <MessageMarkdown text={user.bio} />
+          </div>
+        ) : null}
 
         {(socials.length > 0 || website) && (
           <div className="profile-links-section">
@@ -388,7 +405,13 @@ export function ProfileModal({
                   : friends.find((f) => f.id === user.id) ?? user
               }
             >
-              {(resolvedUser) => <ProfileCard user={resolvedUser} status={status} />}
+              {(resolvedUser) => (
+                <ProfileCard
+                  user={resolvedUser}
+                  status={status}
+                  wallpaperUrl={currentDmWallpaperUrl}
+                />
+              )}
             </LiveUserProfileHydrator>
           ) : (
             <ProfileCard
@@ -398,6 +421,7 @@ export function ProfileModal({
                   : friends.find((f) => f.id === user.id) ?? user
               }
               status={status}
+              wallpaperUrl={currentDmWallpaperUrl}
             />
           )}
 

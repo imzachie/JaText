@@ -154,8 +154,8 @@ export function LegalModal({
               <ul>
                 <li>
                   <strong>Account information.</strong> When you register with an email address and
-                  password, we store your email address and authentication credentials handled by
-                  Convex Auth; your password is not visible to other users.
+                  password, we store your email address and encrypted authentication credentials;
+                  your password is never stored in plain text or visible to other users.
                 </li>
                 <li>
                   <strong>Google sign-in information.</strong> If you choose &ldquo;Continue with
@@ -200,7 +200,7 @@ export function LegalModal({
               <h3>4. Service providers</h3>
               <ul>
                 <li>
-                  <strong>Convex</strong>: hosts database, authentication, and file storage.
+                  <strong>Turso</strong>: hosts encrypted database, authentication, and media chunk storage.
                 </li>
                 <li>
                   <strong>Vercel</strong>: hosts the JaText website.

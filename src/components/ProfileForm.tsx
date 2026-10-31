@@ -8,6 +8,7 @@ import {
   type UserSocialLink,
 } from "../lib/types";
 import { Avatar } from "./Avatar";
+import { MessageMarkdown } from "./MessageMarkdown";
 import {
   SOCIAL_PLATFORMS,
   SocialBrandIcon,
@@ -344,7 +345,7 @@ export function ProfileForm({
                   @{previewUser.username}
                   {pronouns ? ` · ${pronouns}` : ""}
                 </span>
-                {bio && <span className="pf-preview-bio">{bio}</span>}
+                {bio && <MessageMarkdown text={bio} className="pf-preview-bio" />}
                 <span className="muted small">
                   This is how your profile looks when someone clicks your profile picture
                 </span>

@@ -124,10 +124,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.5.3",
+    date: "October 31, 2026",
+    headline: "24 Vector Mascot Bubble Styles, Wallpaper-Tinted Contact Cards, Rich Media & Full Web UI Parity",
+    latest: true,
+    bullets: [
+      "Ported all 24 Web vector mascot and illustrated bubble styles, real shared chat wallpapers that tint contact headers and profile cards, Markdown bios on both Web and Android, and 1:1 Customise Theme, Socials, Legal Policies, and JaText Community announcement layouts.",
+      "Fixed mobile image, inline video, and voice note attachments, decrypted quoted reply previews, added Sent / Delivered / Read text receipts, Group Seen by avatars, Group PFP uploads, Sticker & Emoji Favourites and Most Used tabs, OpenGraph link embed images, Call event cards, and a freely draggable floating call bubble.",
+    ],
+  },
+  {
     version: "v3.5.2",
     date: "October 31, 2026",
     headline: "1:1 Web UI Parity Overhaul, Fixed Google Sign-In Sheet, Legacy E2EE Repair & Crash-Proof Calls",
-    latest: true,
     bullets: [
       "Rebuilt the Android UI to match jatext.vercel.app 1:1 with the #9B6CFF web purple palette, 3px ringed 9-colour avatars, 2.5px profile card outlines, greeting banner, pill tabs, and verified JaText Community badges.",
       "Fixed the AndroidX Browser CustomTab toolbar cornerRadiusDp crash on Sign in with Google, repaired legacy incomplete E2EE identity slots causing error parsing private key on send, added runtime mic/camera permission guards for calls, and mounted a global Update your JaText version! prompt across all screens.",

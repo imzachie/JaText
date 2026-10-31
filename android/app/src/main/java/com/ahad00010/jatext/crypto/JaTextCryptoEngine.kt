@@ -12,11 +12,14 @@ import com.ahad00010.jatext.data.ForwardedMessageContext
 import com.ahad00010.jatext.data.GroupEncryptedEnvelope
 import com.ahad00010.jatext.data.GroupEpochWrapEntry
 import com.ahad00010.jatext.data.GroupKeySignalPacket
+import com.ahad00010.jatext.data.GroupMember
 import com.ahad00010.jatext.data.GroupMessage
+import com.ahad00010.jatext.data.GroupSeenReader
 import com.ahad00010.jatext.data.JaTextJson
 import com.ahad00010.jatext.data.MessageE2EEProof
 import com.ahad00010.jatext.data.OverflowDescriptor
 import com.ahad00010.jatext.data.PublicIdentityBundle
+import com.ahad00010.jatext.data.ReplySummary
 import com.ahad00010.jatext.data.StoredIdentityRecord
 import com.ahad00010.jatext.data.TursoApiClient
 import java.io.File
@@ -57,6 +60,7 @@ import org.json.JSONObject
 object JaTextCryptoEngine {
     const val E2EE_WIRE_MARKER = "__JATEXT_E2EE_V1__:"
     const val E2EE_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:"
+    const val GROUP_SEEN_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:SEEN:"
     const val FORWARD_METADATA_PREFIX = "__JATEXT_FWD_V1__:"
     const val WALLPAPER_PREFIX = "__JATEXT_WP__:"
     const val CALL_INVITE_PREFIX = "__JATEXT_CALL__:"
@@ -1305,20 +1309,101 @@ object JaTextCryptoEngine {
 
     /* ==================== Batch Hydration of DM & Group Threads ==================== */
 
+    private fun summarizeAttachmentFallback(
+        attachmentType: String?,
+        attachmentName: String?,
+        isSticker: Boolean,
+    ): String {
+        if (isSticker) return "Sticker"
+        val mime = attachmentType?.lowercase().orEmpty()
+        return when {
+            mime.startsWith("audio/") -> "Voice message"
+            mime.startsWith("image/") -> "Photo"
+            mime.startsWith("video/") -> "Video"
+            !attachmentName.isNullOrBlank() -> attachmentName
+            else -> "Attachment"
+        }
+    }
+
+    private fun cleanReplySnippetText(
+        body: String,
+        attachmentType: String? = null,
+        attachmentName: String? = null,
+        isSticker: Boolean = false,
+    ): String {
+        val (noZw, _) = extractMessageBubbleStyle(body, attachmentType)
+        val (_, noFwd) = extractForwardedContext(noZw)
+        val trimmed = noFwd.trim()
+        if (trimmed.startsWith(CALL_INVITE_PREFIX)) {
+            return if (trimmed.contains("\"video\"")) "Video call" else "Voice call"
+        }
+        if (trimmed.startsWith(GROUP_CALL_INVITE_PREFIX)) {
+            return if (trimmed.contains("\"ended\"")) "GC VC Ended" else "Group call"
+        }
+        if (trimmed.startsWith(WALLPAPER_PREFIX)) {
+            return "Updated chat wallpaper"
+        }
+        if (trimmed.isNotEmpty() && !isEncryptedWireBody(trimmed) && !isSilentControlPayload(trimmed)) {
+            return trimmed
+        }
+        return summarizeAttachmentFallback(attachmentType, attachmentName, isSticker)
+    }
+
+    data class ParsedGroupSeenCursor(
+        val messageId: String,
+        val seenUpToTs: Long,
+        val ts: Long,
+    )
+
+    data class GroupHydrationOutcome(
+        val messages: List<GroupMessage>,
+        val seenByMessageId: Map<String, List<GroupSeenReader>>,
+        val myCursorMessageId: String?,
+        val mySeenUpToTs: Long,
+    )
+
+    fun parseGroupSeenSignal(rawBody: String?): ParsedGroupSeenCursor? {
+        if (rawBody.isNullOrBlank() || !rawBody.startsWith(GROUP_SEEN_SIGNAL_PREFIX)) return null
+        return try {
+            val obj = JaTextJson.parseToJsonElement(rawBody.removePrefix(GROUP_SEEN_SIGNAL_PREFIX)).jsonObject
+            val msgId = obj["messageId"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val seenUpTo = obj["seenUpToTs"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L
+            val ts = obj["ts"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: seenUpTo
+            if (msgId.isEmpty() || seenUpTo <= 0L) null else ParsedGroupSeenCursor(msgId, seenUpTo, ts)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    fun serializeGroupSeenSignal(messageId: String, seenUpToTs: Long): String {
+        val obj = JsonObject(
+            mapOf(
+                "v" to JsonPrimitive(1),
+                "messageId" to JsonPrimitive(messageId),
+                "seenUpToTs" to JsonPrimitive(seenUpToTs),
+                "ts" to JsonPrimitive(System.currentTimeMillis()),
+            )
+        )
+        return "$GROUP_SEEN_SIGNAL_PREFIX$obj"
+    }
+
     suspend fun hydrateDmMessages(
         context: Context,
         myUserId: String,
         rawMessages: List<ChatMessage>,
         token: String,
     ): List<ChatMessage> {
-        val peerIds = rawMessages.flatMap { listOf(it.senderId, it.receiverId) }.filter { it.isNotBlank() && it != myUserId }.distinct()
+        val peerIds = rawMessages
+            .flatMap { listOf(it.senderId, it.receiverId) }
+            .filter { it.isNotBlank() && it != myUserId }
+            .distinct()
         if (peerIds.isNotEmpty()) {
             ensurePeerBundles(peerIds, token)
         }
-        val out = ArrayList<ChatMessage>(rawMessages.size)
+        val firstPass = ArrayList<ChatMessage>(rawMessages.size)
         for (m in rawMessages) {
             if (m.unsentAt != null) {
-                out.add(m.copy(body = ""))
+                firstPass.add(m.copy(body = ""))
                 continue
             }
             val wire = m.rawWireBody ?: m.body
@@ -1331,10 +1416,18 @@ object JaTextCryptoEngine {
                     val (fwdCtx, strippedBody) = extractForwardedContext(cleanBody)
                     val bubble = p.bs?.takeIf { BUBBLE_STYLE_IDS.contains(it) } ?: zwBubble
                     val attDescJson = (p.att ?: p.stk?.att)?.let { JaTextJson.encodeToString(it) }
-                    val effectiveAttUrl = p.stk?.url ?: p.stk?.storageId ?: m.attachmentUrl
+                    val rawAttUrl = p.stk?.url ?: p.stk?.storageId ?: m.attachmentUrl
+                    val effectiveAttUrl = rawAttUrl?.takeIf { it.isNotBlank() }?.let {
+                        TursoApiClient.resolveAbsoluteMediaUrl(it)
+                    }
+                    val effectiveStickerUrl = p.stk?.let { stk ->
+                        (stk.url ?: stk.storageId ?: m.attachmentUrl)?.takeIf { it.isNotBlank() }?.let {
+                            TursoApiClient.resolveAbsoluteMediaUrl(it)
+                        }
+                    }
                     val effectiveAttName = p.att?.n ?: p.stk?.n ?: m.attachmentName
-                    val effectiveAttType = p.att?.t ?: m.attachmentType
-                    out.add(
+                    val effectiveAttType = p.att?.t ?: (if (p.stk != null) "sticker" else m.attachmentType)
+                    firstPass.add(
                         m.copy(
                             body = strippedBody,
                             rawWireBody = wire,
@@ -1344,14 +1437,14 @@ object JaTextCryptoEngine {
                             attachmentName = effectiveAttName,
                             attachmentType = effectiveAttType,
                             stickerKey = p.stk?.key ?: m.stickerKey,
+                            explicitStickerUrl = effectiveStickerUrl,
                             e2ee = dec.proof,
                             encryptedAttachmentJson = attDescJson,
                         )
                     )
                 } else {
-                    // Never show raw wire text or transient "Decrypting message" on own outgoing self-echoes!
                     if (m.senderId == myUserId) continue
-                    out.add(
+                    firstPass.add(
                         m.copy(
                             body = "Encrypted message",
                             rawWireBody = wire,
@@ -1363,16 +1456,376 @@ object JaTextCryptoEngine {
                 if (isSilentControlPayload(m.body)) continue
                 val (cleanBody, bubble) = extractMessageBubbleStyle(m.body, m.attachmentType)
                 val (fwdCtx, strippedBody) = extractForwardedContext(cleanBody)
-                out.add(
+                val resolvedUrl = m.attachmentUrl?.takeIf { it.isNotBlank() }?.let {
+                    TursoApiClient.resolveAbsoluteMediaUrl(it)
+                }
+                firstPass.add(
                     m.copy(
                         body = strippedBody,
+                        attachmentUrl = resolvedUrl,
                         bubbleStyle = m.bubbleStyle ?: bubble,
                         forwardedContext = fwdCtx ?: m.forwardedContext,
                     )
                 )
             }
         }
-        return out
+
+        // Second pass: 2-tier decryption of quoted `replyTo` previews so replies NEVER show "Encrypted message"!
+        val byId = firstPass.associateBy { it.id }
+        val peerIdFallback = peerIds.firstOrNull().orEmpty()
+        val finalOut = ArrayList<ChatMessage>(firstPass.size)
+        for (m in firstPass) {
+            val r = m.replyTo
+            if (r == null) {
+                finalOut.add(m)
+                continue
+            }
+            val matched = byId[r.id]
+            val resolvedReplyBody: String = when {
+                matched != null -> {
+                    if (matched.unsentAt != null) {
+                        "Original message was unsent"
+                    } else {
+                        cleanReplySnippetText(
+                            body = matched.body,
+                            attachmentType = matched.attachmentType,
+                            attachmentName = matched.attachmentName,
+                            isSticker = matched.encryptedSticker != null,
+                        )
+                    }
+                }
+                isEncryptedWireBody(r.body) -> {
+                    val peer = if (m.senderId == myUserId) m.receiverId else m.senderId.ifBlank { peerIdFallback }
+                    val decReply = decryptDmWire(context, myUserId, r.id, myUserId, peer, r.body, token)
+                        ?: decryptDmWire(context, myUserId, r.id, peer, myUserId, r.body, token)
+                    if (decReply != null) {
+                        val rp = decReply.payload
+                        cleanReplySnippetText(
+                            body = rp.b,
+                            attachmentType = rp.att?.t ?: r.attachmentName,
+                            attachmentName = rp.att?.n ?: rp.stk?.n ?: r.attachmentName,
+                            isSticker = rp.stk != null,
+                        )
+                    } else {
+                        r.attachmentName?.takeIf { it.isNotBlank() } ?: "Message"
+                    }
+                }
+                else -> cleanReplySnippetText(
+                    body = r.body,
+                    attachmentName = r.attachmentName,
+                    isSticker = false,
+                )
+            }
+            finalOut.add(m.copy(replyTo = r.copy(body = resolvedReplyBody)))
+        }
+        return finalOut
+    }
+
+    suspend fun hydrateGroupMessagesWithSeen(
+        context: Context,
+        myUserId: String,
+        groupId: String,
+        rawMessages: List<GroupMessage>,
+        members: List<GroupMember> = emptyList(),
+    ): GroupHydrationOutcome {
+        for (m in rawMessages) {
+            val raw = m.rawWireBody ?: m.body
+            if (raw.startsWith(E2EE_SIGNAL_PREFIX)) {
+                tryIngestGroupEpochSignal(context, myUserId, m.senderId, raw)
+            }
+        }
+
+        data class CursorMeta(
+            val userId: String,
+            val seenUpToTs: Long,
+            val seenAt: Long,
+            val fallbackName: String,
+            val fallbackUsername: String,
+            val fallbackAvatarColor: String,
+            val fallbackAvatarUrl: String?,
+        )
+
+        val cursorsByUser = HashMap<String, CursorMeta>()
+        var myCursorMsgId: String? = null
+        var myCursorMsgCreatedAt = -1L
+        var mySeenUpToTs = 0L
+
+        fun recordSeenCursor(
+            uid: String,
+            seenUpToTs: Long,
+            seenAt: Long,
+            name: String,
+            username: String,
+            color: String,
+            avatarUrl: String?,
+        ) {
+            if (uid.isBlank() || seenUpToTs <= 0L) return
+            val existing = cursorsByUser[uid]
+            if (existing == null || seenUpToTs >= existing.seenUpToTs) {
+                cursorsByUser[uid] = CursorMeta(
+                    userId = uid,
+                    seenUpToTs = seenUpToTs,
+                    seenAt = maxOf(seenAt, existing?.seenAt ?: 0L),
+                    fallbackName = name,
+                    fallbackUsername = username,
+                    fallbackAvatarColor = color,
+                    fallbackAvatarUrl = avatarUrl,
+                )
+            }
+        }
+
+        val firstPass = ArrayList<GroupMessage>(rawMessages.size)
+        val rawSenderById = rawMessages.associate { it.id to it.senderId }
+
+        for (m in rawMessages) {
+            if (m.unsentAt != null) {
+                firstPass.add(m.copy(body = ""))
+                continue
+            }
+            val wire = m.rawWireBody ?: m.body
+            if (wire.startsWith(E2EE_SIGNAL_PREFIX) && !wire.contains(E2EE_WIRE_MARKER)) {
+                parseGroupSeenSignal(wire)?.let { sig ->
+                    if (m.senderId == myUserId && m.createdAt >= myCursorMsgCreatedAt) {
+                        myCursorMsgCreatedAt = m.createdAt
+                        myCursorMsgId = m.id
+                        mySeenUpToTs = maxOf(mySeenUpToTs, sig.seenUpToTs)
+                    }
+                    recordSeenCursor(
+                        uid = m.senderId,
+                        seenUpToTs = sig.seenUpToTs,
+                        seenAt = sig.ts,
+                        name = m.senderName,
+                        username = m.senderUsername,
+                        color = m.senderAvatarColor,
+                        avatarUrl = m.senderAvatarUrl,
+                    )
+                }
+                continue
+            }
+            if (isEncryptedWireBody(wire)) {
+                val dec = decryptGroupWire(groupId, m.id, m.senderId, wire)
+                if (dec != null) {
+                    val p = dec.payload
+                    parseGroupSeenSignal(p.b)?.let { sig ->
+                        if (m.senderId == myUserId && m.createdAt >= myCursorMsgCreatedAt) {
+                            myCursorMsgCreatedAt = m.createdAt
+                            myCursorMsgId = m.id
+                            mySeenUpToTs = maxOf(mySeenUpToTs, sig.seenUpToTs)
+                        }
+                        recordSeenCursor(
+                            uid = m.senderId,
+                            seenUpToTs = sig.seenUpToTs,
+                            seenAt = sig.ts,
+                            name = m.senderName,
+                            username = m.senderUsername,
+                            color = m.senderAvatarColor,
+                            avatarUrl = m.senderAvatarUrl,
+                        )
+                        continue
+                    }
+                    if (isSilentControlPayload(p.b)) continue
+                    val (cleanBody, zwBubble) = extractMessageBubbleStyle(p.b, m.attachmentType)
+                    val (fwdCtx, strippedBody) = extractForwardedContext(cleanBody)
+                    val bubble = p.bs?.takeIf { BUBBLE_STYLE_IDS.contains(it) } ?: zwBubble
+                    val attDescJson = (p.att ?: p.stk?.att)?.let { JaTextJson.encodeToString(it) }
+                    val rawAttUrl = p.stk?.url ?: p.stk?.storageId ?: m.attachmentUrl
+                    val effectiveAttUrl = rawAttUrl?.takeIf { it.isNotBlank() }?.let {
+                        TursoApiClient.resolveAbsoluteMediaUrl(it)
+                    }
+                    val effectiveStickerUrl = p.stk?.let { stk ->
+                        (stk.url ?: stk.storageId ?: m.stickerUrl ?: m.attachmentUrl)?.takeIf { it.isNotBlank() }?.let {
+                            TursoApiClient.resolveAbsoluteMediaUrl(it)
+                        }
+                    }
+                    // Implicit seen cursor: sending a visible message proves they read up to createdAt!
+                    recordSeenCursor(
+                        uid = m.senderId,
+                        seenUpToTs = m.createdAt,
+                        seenAt = m.createdAt,
+                        name = m.senderName,
+                        username = m.senderUsername,
+                        color = m.senderAvatarColor,
+                        avatarUrl = m.senderAvatarUrl,
+                    )
+                    if (m.senderId == myUserId) {
+                        mySeenUpToTs = maxOf(mySeenUpToTs, m.createdAt)
+                    }
+                    firstPass.add(
+                        m.copy(
+                            body = strippedBody,
+                            rawWireBody = wire,
+                            bubbleStyle = bubble,
+                            forwardedContext = fwdCtx ?: m.forwardedContext,
+                            attachmentUrl = effectiveAttUrl,
+                            attachmentName = p.att?.n ?: p.stk?.n ?: m.attachmentName,
+                            attachmentType = p.att?.t ?: (if (p.stk != null) "sticker" else m.attachmentType),
+                            stickerKey = p.stk?.key ?: m.stickerKey,
+                            explicitStickerUrl = effectiveStickerUrl,
+                            e2ee = dec.proof,
+                            encryptedAttachmentJson = attDescJson,
+                        )
+                    )
+                } else {
+                    if (m.senderId == myUserId) continue
+                    firstPass.add(
+                        m.copy(
+                            body = "Encrypted message",
+                            rawWireBody = wire,
+                            e2ee = MessageE2EEProof(encrypted = true),
+                        )
+                    )
+                }
+            } else {
+                parseGroupSeenSignal(m.body)?.let { sig ->
+                    if (m.senderId == myUserId && m.createdAt >= myCursorMsgCreatedAt) {
+                        myCursorMsgCreatedAt = m.createdAt
+                        myCursorMsgId = m.id
+                        mySeenUpToTs = maxOf(mySeenUpToTs, sig.seenUpToTs)
+                    }
+                    recordSeenCursor(
+                        uid = m.senderId,
+                        seenUpToTs = sig.seenUpToTs,
+                        seenAt = sig.ts,
+                        name = m.senderName,
+                        username = m.senderUsername,
+                        color = m.senderAvatarColor,
+                        avatarUrl = m.senderAvatarUrl,
+                    )
+                    continue
+                }
+                if (isSilentControlPayload(m.body)) continue
+                val (cleanBody, bubble) = extractMessageBubbleStyle(m.body, m.attachmentType)
+                val (fwdCtx, strippedBody) = extractForwardedContext(cleanBody)
+                val resolvedUrl = m.attachmentUrl?.takeIf { it.isNotBlank() }?.let {
+                    TursoApiClient.resolveAbsoluteMediaUrl(it)
+                }
+                val resolvedStickerUrl = m.stickerUrl?.takeIf { it.isNotBlank() }?.let {
+                    TursoApiClient.resolveAbsoluteMediaUrl(it)
+                }
+                recordSeenCursor(
+                    uid = m.senderId,
+                    seenUpToTs = m.createdAt,
+                    seenAt = m.createdAt,
+                    name = m.senderName,
+                    username = m.senderUsername,
+                    color = m.senderAvatarColor,
+                    avatarUrl = m.senderAvatarUrl,
+                )
+                if (m.senderId == myUserId) {
+                    mySeenUpToTs = maxOf(mySeenUpToTs, m.createdAt)
+                }
+                firstPass.add(
+                    m.copy(
+                        body = strippedBody,
+                        attachmentUrl = resolvedUrl,
+                        stickerUrl = resolvedStickerUrl,
+                        bubbleStyle = m.bubbleStyle ?: bubble,
+                        forwardedContext = fwdCtx ?: m.forwardedContext,
+                    )
+                )
+            }
+        }
+
+        // Second pass: decrypt quoted `replyTo` previews in Group chats!
+        val byId = firstPass.associateBy { it.id }
+        val finalMessages = ArrayList<GroupMessage>(firstPass.size)
+        for (m in firstPass) {
+            val r = m.replyTo
+            if (r == null) {
+                finalMessages.add(m)
+                continue
+            }
+            val matched = byId[r.id]
+            val resolvedReplyBody: String = when {
+                matched != null -> {
+                    if (matched.unsentAt != null) {
+                        "Original message was unsent"
+                    } else {
+                        cleanReplySnippetText(
+                            body = matched.body,
+                            attachmentType = matched.attachmentType,
+                            attachmentName = matched.attachmentName,
+                            isSticker = matched.encryptedSticker != null,
+                        )
+                    }
+                }
+                isEncryptedWireBody(r.body) -> {
+                    val replySenderCandidates = buildList {
+                        rawSenderById[r.id]?.takeIf { it.isNotBlank() }?.let { add(it) }
+                        members.firstOrNull { it.displayName == r.senderName || it.username == r.senderName }?.id?.let {
+                            if (!contains(it)) add(it)
+                        }
+                        for (mem in members) {
+                            if (!contains(mem.id)) add(mem.id)
+                        }
+                    }
+                    var decReply: DecryptedWireResult? = null
+                    for (candSender in replySenderCandidates) {
+                        decReply = decryptGroupWire(groupId, r.id, candSender, r.body)
+                        if (decReply != null) break
+                    }
+                    if (decReply != null) {
+                        val rp = decReply.payload
+                        cleanReplySnippetText(
+                            body = rp.b,
+                            attachmentType = rp.att?.t,
+                            attachmentName = rp.att?.n ?: rp.stk?.n ?: r.attachmentName,
+                            isSticker = rp.stk != null,
+                        )
+                    } else {
+                        r.attachmentName?.takeIf { it.isNotBlank() } ?: "Message"
+                    }
+                }
+                else -> cleanReplySnippetText(
+                    body = r.body,
+                    attachmentName = r.attachmentName,
+                    isSticker = false,
+                )
+            }
+            finalMessages.add(m.copy(replyTo = r.copy(body = resolvedReplyBody)))
+        }
+
+        // Compute `seenByMessageId` (1:1 port of src/lib/groupSeenSignals.ts)
+        val memberById = members.associateBy { it.id }
+        val seenByMessageId = HashMap<String, MutableList<GroupSeenReader>>()
+        val candidateVisible = finalMessages.filter {
+            it.unsentAt == null && !it.id.startsWith("pending-") && parseWallpaperSignal(it.body, it.attachmentUrl) == null
+        }
+
+        if (candidateVisible.isNotEmpty()) {
+            for ((uid, cursor) in cursorsByUser) {
+                if (uid == myUserId) continue
+                var targetMsg: GroupMessage? = null
+                for (i in candidateVisible.indices.reversed()) {
+                    val cand = candidateVisible[i]
+                    if (cand.createdAt <= cursor.seenUpToTs) {
+                        targetMsg = cand
+                        break
+                    }
+                }
+                if (targetMsg == null || targetMsg.senderId == uid) continue
+                val mem = memberById[uid]
+                val reader = GroupSeenReader(
+                    id = uid,
+                    displayName = mem?.displayName?.ifBlank { null } ?: cursor.fallbackName.ifBlank { "Member" },
+                    username = mem?.username?.ifBlank { null } ?: cursor.fallbackUsername.ifBlank { "member" },
+                    avatarColor = mem?.avatarColor?.ifBlank { null } ?: cursor.fallbackAvatarColor.ifBlank { "black" },
+                    avatarUrl = (mem?.avatarUrl ?: cursor.fallbackAvatarUrl)?.takeIf { it.isNotBlank() },
+                    seenAt = cursor.seenAt,
+                )
+                seenByMessageId.getOrPut(targetMsg.id) { mutableListOf() }.add(reader)
+            }
+            for ((_, list) in seenByMessageId) {
+                list.sortByDescending { it.seenAt }
+            }
+        }
+
+        return GroupHydrationOutcome(
+            messages = finalMessages,
+            seenByMessageId = seenByMessageId,
+            myCursorMessageId = myCursorMsgId,
+            mySeenUpToTs = mySeenUpToTs,
+        )
     }
 
     suspend fun hydrateGroupMessages(
@@ -1381,69 +1834,13 @@ object JaTextCryptoEngine {
         groupId: String,
         rawMessages: List<GroupMessage>,
     ): List<GroupMessage> {
-        for (m in rawMessages) {
-            val raw = m.rawWireBody ?: m.body
-            if (raw.startsWith(E2EE_SIGNAL_PREFIX)) {
-                tryIngestGroupEpochSignal(context, myUserId, m.senderId, raw)
-            }
-        }
-        val out = ArrayList<GroupMessage>(rawMessages.size)
-        for (m in rawMessages) {
-            if (m.unsentAt != null) {
-                out.add(m.copy(body = ""))
-                continue
-            }
-            val wire = m.rawWireBody ?: m.body
-            if (wire.startsWith(E2EE_SIGNAL_PREFIX) && !wire.contains(E2EE_WIRE_MARKER)) {
-                continue
-            }
-            if (isEncryptedWireBody(wire)) {
-                val dec = decryptGroupWire(groupId, m.id, m.senderId, wire)
-                if (dec != null) {
-                    val p = dec.payload
-                    if (isSilentControlPayload(p.b)) continue
-                    val (cleanBody, zwBubble) = extractMessageBubbleStyle(p.b, m.attachmentType)
-                    val (fwdCtx, strippedBody) = extractForwardedContext(cleanBody)
-                    val bubble = p.bs?.takeIf { BUBBLE_STYLE_IDS.contains(it) } ?: zwBubble
-                    val attDescJson = (p.att ?: p.stk?.att)?.let { JaTextJson.encodeToString(it) }
-                    out.add(
-                        m.copy(
-                            body = strippedBody,
-                            rawWireBody = wire,
-                            bubbleStyle = bubble,
-                            forwardedContext = fwdCtx ?: m.forwardedContext,
-                            attachmentUrl = p.stk?.url ?: p.stk?.storageId ?: m.attachmentUrl,
-                            attachmentName = p.att?.n ?: p.stk?.n ?: m.attachmentName,
-                            attachmentType = p.att?.t ?: m.attachmentType,
-                            stickerKey = p.stk?.key ?: m.stickerKey,
-                            e2ee = dec.proof,
-                            encryptedAttachmentJson = attDescJson,
-                        )
-                    )
-                } else {
-                    if (m.senderId == myUserId) continue
-                    out.add(
-                        m.copy(
-                            body = "Encrypted message",
-                            rawWireBody = wire,
-                            e2ee = MessageE2EEProof(encrypted = true),
-                        )
-                    )
-                }
-            } else {
-                if (isSilentControlPayload(m.body)) continue
-                val (cleanBody, bubble) = extractMessageBubbleStyle(m.body, m.attachmentType)
-                val (fwdCtx, strippedBody) = extractForwardedContext(cleanBody)
-                out.add(
-                    m.copy(
-                        body = strippedBody,
-                        bubbleStyle = m.bubbleStyle ?: bubble,
-                        forwardedContext = fwdCtx ?: m.forwardedContext,
-                    )
-                )
-            }
-        }
-        return out
+        return hydrateGroupMessagesWithSeen(
+            context = context,
+            myUserId = myUserId,
+            groupId = groupId,
+            rawMessages = rawMessages,
+            members = emptyList(),
+        ).messages
     }
 
     suspend fun decryptPreviewText(

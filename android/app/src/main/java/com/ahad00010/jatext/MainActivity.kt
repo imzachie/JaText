@@ -20,11 +20,17 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -319,77 +325,110 @@ private fun JaTextRootHost(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        when {
-            state.loading -> {
-                JaTextLoadingScreen()
-            }
-            !state.isAuthenticated -> {
-                NativeLoginScreen(
-                    vm = vm,
-                    isAddingAnotherAccount = state.addingAccountReturnSlotId != null,
-                    onCancelAddAccount = { vm.cancelAddAnotherAccount() },
-                )
-            }
-            state.me?.needsProfileSetup == true -> {
-                ProfileSetupOnboardingScreen(me = state.me!!, vm = vm)
-            }
-            else -> {
-                val screenKey = when {
-                    showSettings -> "settings"
-                    state.activeChatId != null || state.activeGroupId != null -> "thread"
-                    else -> "sidebar"
-                }
+    val authStage = when {
+        state.loading -> "loading"
+        !state.isAuthenticated -> "login"
+        state.me?.needsProfileSetup == true -> "onboarding"
+        else -> "app"
+    }
 
-                AnimatedContent(
-                    targetState = screenKey,
-                    transitionSpec = {
-                        if (targetState == "thread" || targetState == "settings") {
-                            (slideInHorizontally(tween(200)) { it / 4 } + fadeIn(tween(180)))
-                                .togetherWith(fadeOut(tween(150)))
-                        } else {
-                            fadeIn(tween(170)).togetherWith(
-                                slideOutHorizontally(tween(190)) { it / 4 } + fadeOut(tween(150))
-                            )
+    Box(modifier = Modifier.fillMaxSize()) {
+        AnimatedContent(
+            targetState = authStage,
+            transitionSpec = {
+                (fadeIn(tween(220)) + scaleIn(initialScale = 0.98f, animationSpec = tween(220)))
+                    .togetherWith(fadeOut(tween(160)))
+            },
+            label = "JaTextAuthStage",
+        ) { stage ->
+            when (stage) {
+                "loading" -> {
+                    JaTextLoadingScreen()
+                }
+                "login" -> {
+                    NativeLoginScreen(
+                        vm = vm,
+                        isAddingAnotherAccount = state.addingAccountReturnSlotId != null,
+                        onCancelAddAccount = { vm.cancelAddAnotherAccount() },
+                    )
+                }
+                "onboarding" -> {
+                    state.me?.let { me ->
+                        ProfileSetupOnboardingScreen(me = me, vm = vm)
+                    } ?: JaTextLoadingScreen()
+                }
+                else -> {
+                    val screenKey = when {
+                        showSettings -> "settings"
+                        state.activeChatId != null || state.activeGroupId != null -> "thread"
+                        else -> "sidebar"
+                    }
+
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AnimatedContent(
+                            targetState = screenKey,
+                            transitionSpec = {
+                                if (targetState == "thread" || targetState == "settings") {
+                                    (slideInHorizontally(
+                                        animationSpec = spring(
+                                            dampingRatio = Spring.DampingRatioNoBouncy,
+                                            stiffness = Spring.StiffnessMediumLow,
+                                        )
+                                    ) { (it * 0.28f).toInt() } + fadeIn(tween(180)))
+                                        .togetherWith(
+                                            slideOutHorizontally(tween(180)) { -(it * 0.10f).toInt() } + fadeOut(tween(150))
+                                        )
+                                } else {
+                                    (slideInHorizontally(
+                                        animationSpec = spring(
+                                            dampingRatio = Spring.DampingRatioNoBouncy,
+                                            stiffness = Spring.StiffnessMediumLow,
+                                        )
+                                    ) { -(it * 0.12f).toInt() } + fadeIn(tween(170)))
+                                        .togetherWith(
+                                            slideOutHorizontally(tween(190)) { (it * 0.28f).toInt() } + fadeOut(tween(150))
+                                        )
+                                }
+                            },
+                            label = "JaTextRootNav",
+                        ) { target ->
+                            when (target) {
+                                "settings" -> {
+                                    SettingsModalScreen(
+                                        state = state,
+                                        vm = vm,
+                                        onClose = { showSettings = false },
+                                    )
+                                }
+                                "thread" -> {
+                                    ChatThreadScreen(
+                                        state = state,
+                                        vm = vm,
+                                        onOpenPeerProfile = { peer -> viewingPeerProfile = peer },
+                                        onOpenSecurityCode = { peer -> verifyingPeerCode = peer },
+                                        onOpenGroupMembers = { showGroupMembers = true },
+                                    )
+                                }
+                                else -> {
+                                    SidebarScreen(
+                                        state = state,
+                                        vm = vm,
+                                        onOpenSettings = { showSettings = true },
+                                        onOpenProfile = { peer -> viewingPeerProfile = peer },
+                                        onInstallUpdate = { vm.downloadAndInstallApkUpdate(activity) },
+                                    )
+                                }
+                            }
                         }
-                    },
-                    label = "JaTextRootNav",
-                ) { target ->
-                    when (target) {
-                        "settings" -> {
-                            SettingsModalScreen(
-                                state = state,
-                                vm = vm,
-                                onClose = { showSettings = false },
-                            )
-                        }
-                        "thread" -> {
-                            ChatThreadScreen(
-                                state = state,
-                                vm = vm,
-                                onOpenPeerProfile = { peer -> viewingPeerProfile = peer },
-                                onOpenSecurityCode = { peer -> verifyingPeerCode = peer },
-                                onOpenGroupMembers = { showGroupMembers = true },
-                            )
-                        }
-                        else -> {
-                            SidebarScreen(
-                                state = state,
-                                vm = vm,
-                                onOpenSettings = { showSettings = true },
-                                onOpenProfile = { peer -> viewingPeerProfile = peer },
-                                onInstallUpdate = { vm.downloadAndInstallApkUpdate(activity) },
+
+                        // Native WebRTC Call Stage & Draggable PIP Overlay
+                        state.me?.let { me ->
+                            NativeCallOverlay(
+                                me = me,
+                                callEngine = vm.callEngine,
                             )
                         }
                     }
-                }
-
-                // Native WebRTC Call Stage & PIP Overlay
-                state.me?.let { me ->
-                    NativeCallOverlay(
-                        me = me,
-                        callEngine = vm.callEngine,
-                    )
                 }
             }
         }
@@ -448,19 +487,30 @@ private fun JaTextRootHost(
             )
         }
 
-        // Lightweight Native Toast Pill
-        state.toastMessage?.let { msg ->
+        // Animated Native Toast Pill
+        var lastToastText by remember { mutableStateOf("") }
+        if (!state.toastMessage.isNullOrBlank()) {
+            lastToastText = state.toastMessage!!
+        }
+        AnimatedVisibility(
+            visible = !state.toastMessage.isNullOrBlank(),
+            enter = slideInVertically(
+                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)
+            ) { it } + fadeIn(tween(150)),
+            exit = slideOutVertically(tween(150)) { it } + fadeOut(tween(140)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 72.dp, start = 20.dp, end = 20.dp),
+        ) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 72.dp, start = 20.dp, end = 20.dp)
                     .clip(RoundedCornerShape(999.dp))
                     .background(Color(0xEE181A22))
                     .border(1.dp, palette.borderStrong, RoundedCornerShape(999.dp))
                     .padding(horizontal = 18.dp, vertical = 10.dp)
             ) {
-                Text(text = msg, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(text = lastToastText, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
