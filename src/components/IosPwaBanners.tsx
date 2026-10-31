@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   IosCheckCircleIcon,
   IosCloseIcon,
@@ -22,18 +22,16 @@ import {
   useIosPwaState,
 } from "../lib/iosPwaUpdater";
 
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-}
-
 const DISMISS_INSTALL_SESSION_KEY = "jatext:ios_pwa_install_banner_dismissed";
+const IOS_PWA_DEMO_LOCAL_SRC = "/ios-pwa-demo.mp4";
+const IOS_PWA_DEMO_FALLBACK_SRC =
+  "https://github.com/Ahad00010/JaText-Essential-Stuff/raw/refs/heads/main/iOS%20Demo%20on%20JaText.mp4";
 
 export function IosPwaBanners() {
   const isIosRuntime = isAuthorizedIosChatsRuntime();
   const pwaState = useIosPwaState();
+  const demoVideoRef = useRef<HTMLVideoElement | null>(null);
   const [standalone, setStandalone] = useState<boolean>(() => isRunningAsStandalonePwa());
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [installBannerDismissed, setInstallBannerDismissed] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     try {
@@ -50,20 +48,27 @@ export function IosPwaBanners() {
     const mql = window.matchMedia?.("(display-mode: standalone)");
     const onDisplayChange = () => setStandalone(isRunningAsStandalonePwa());
     mql?.addEventListener?.("change", onDisplayChange);
-
-    const onBeforeInstallPrompt = (event: Event) => {
-      event.preventDefault();
-      setDeferredPrompt(event as BeforeInstallPromptEvent);
-    };
-    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
     window.addEventListener("appinstalled", onDisplayChange);
 
     return () => {
       mql?.removeEventListener?.("change", onDisplayChange);
-      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
       window.removeEventListener("appinstalled", onDisplayChange);
     };
   }, [isIosRuntime]);
+
+  // Ensure iOS WebKit starts and loops the demo video inline immediately when opened
+  useEffect(() => {
+    if (!pwaState.installSheetOpen) return;
+    const vid = demoVideoRef.current;
+    if (!vid) return;
+    vid.defaultMuted = true;
+    vid.muted = true;
+    vid.loop = true;
+    vid.playsInline = true;
+    vid.setAttribute("webkit-playsinline", "true");
+    vid.currentTime = 0;
+    void vid.play().catch(() => undefined);
+  }, [pwaState.installSheetOpen]);
 
   if (!isIosRuntime) return null;
 
@@ -79,20 +84,7 @@ export function IosPwaBanners() {
     }
   };
 
-  const handleInstallClick = async () => {
-    if (deferredPrompt) {
-      try {
-        await deferredPrompt.prompt();
-        const choice = await deferredPrompt.userChoice;
-        if (choice.outcome === "accepted") {
-          setDeferredPrompt(null);
-          setStandalone(true);
-          return;
-        }
-      } catch {
-        // fall through to guided iOS sheet
-      }
-    }
+  const handleInstallClick = () => {
     openIosPwaInstallSheet();
   };
 
@@ -148,7 +140,7 @@ export function IosPwaBanners() {
             <button
               type="button"
               className="jt-ios-pwa-banner-cta"
-              onClick={() => void handleInstallClick()}
+              onClick={handleInstallClick}
             >
               <IosDownloadIcon size={14} strokeWidth={2.4} />
               <span>Install</span>
@@ -180,7 +172,7 @@ export function IosPwaBanners() {
             <div className="jt-ios-sheet-grabber" aria-hidden="true" />
             <div className="jt-ios-install-sheet-head">
               <div className="jt-ios-install-app-badge">
-                <img src="/jatext-logo-icon.png" alt="JaText" width={48} height={48} />
+                <img src="/jatext-logo-icon.png" alt="JaText" width={44} height={44} />
                 <div>
                   <span className="jt-ios-install-pill">{browserLabel}</span>
                   <h3 id="jt-ios-install-sheet-title">Install JaText iOS as a PWA!</h3>
@@ -196,45 +188,62 @@ export function IosPwaBanners() {
               </button>
             </div>
 
-            <p className="jt-ios-install-lead">
-              Install JaText directly onto your iOS Home Screen for instant 0ms launch, edge-to-edge
-              Liquid Glass animations, notifications, and automatic live updates.
-            </p>
+            <div className="jt-ios-demo-video-stage">
+              <div className="jt-ios-demo-video-frame">
+                <video
+                  ref={demoVideoRef}
+                  className="jt-ios-demo-video"
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  preload="auto"
+                  onEnded={(e) => {
+                    const el = e.currentTarget;
+                    el.currentTime = 0;
+                    void el.play().catch(() => undefined);
+                  }}
+                >
+                  <source src={IOS_PWA_DEMO_LOCAL_SRC} type="video/mp4" />
+                  <source src={IOS_PWA_DEMO_FALLBACK_SRC} type="video/mp4" />
+                </video>
+              </div>
+            </div>
 
             <div className="jt-ios-install-steps">
               <div className="jt-ios-install-step">
                 <div className="jt-ios-step-icon">
-                  <IosShareIcon size={18} />
+                  <IosShareIcon size={17} />
                 </div>
                 <div>
                   <strong>
                     1. Tap the Share button{" "}
                     {browserKind === "chrome"
-                      ? "(top-right of the Chrome address bar)"
-                      : "(bottom centre of Safari)"}
+                      ? "(top-right of Chrome)"
+                      : "(bottom bar of Safari)"}
                   </strong>
-                  <span>Look for the square icon with an upward arrow in {browserLabel}.</span>
+                  <span>Tap the square icon with an upward arrow in {browserLabel}.</span>
                 </div>
               </div>
 
               <div className="jt-ios-install-step">
                 <div className="jt-ios-step-icon">
-                  <IosPlusSquareIcon size={18} />
+                  <IosPlusSquareIcon size={17} />
                 </div>
                 <div>
                   <strong>2. Tap &ldquo;Add to Home Screen&rdquo;</strong>
-                  <span>Scroll slightly down in the iOS share sheet and select Add to Home Screen.</span>
+                  <span>Scroll down in the share menu and choose Add to Home Screen.</span>
                 </div>
               </div>
 
               <div className="jt-ios-install-step">
                 <div className="jt-ios-step-icon">
-                  <IosCheckCircleIcon size={18} />
+                  <IosCheckCircleIcon size={17} />
                 </div>
                 <div>
                   <strong>3. Tap &ldquo;Add&rdquo; in the top-right corner</strong>
                   <span>
-                    Open <strong>JaText</strong> from your Home Screen anytime just like a native app!
+                    Launch <strong>JaText</strong> right from your Home Screen anytime!
                   </span>
                 </div>
               </div>

@@ -42,8 +42,11 @@ self.addEventListener("fetch", (event) => {
 
   if (url.origin !== self.location.origin) return;
 
-  // Never intercept API calls, version manifests, or APK downloads
+  // Never intercept API calls, byte-range media streams (required by iOS Safari <video>),
+  // version manifests, or APK downloads
   if (
+    req.headers.has("range") ||
+    url.pathname.endsWith(".mp4") ||
     url.pathname.startsWith("/api/") ||
     url.pathname === "/web-version.json" ||
     url.pathname === "/apk-version.json" ||

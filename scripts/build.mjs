@@ -31,7 +31,7 @@ try {
 
 const publishedAt = new Date().toISOString();
 const webVersionManifest = {
-  version: "3.8.0",
+  version: pkgVersion,
   packageVersion: pkgVersion,
   buildId: `${commitSha}-${Date.now()}`,
   commitSha,
