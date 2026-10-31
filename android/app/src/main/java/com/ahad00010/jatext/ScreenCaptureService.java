@@ -61,7 +61,7 @@ public class ScreenCaptureService extends Service {
     private volatile boolean audioCapturing = false;
     private PowerManager.WakeLock wakeLock;
     private volatile long lastFrameSentAt = 0L;
-    private volatile String lastFrameBase64 = null;
+    private volatile Bitmap lastFrameBitmap = null;
     private int captureWidth = 540;
     private int captureHeight = 960;
     private int captureDpi = 240;
@@ -72,10 +72,13 @@ public class ScreenCaptureService extends Service {
             if (!capturing) return;
             try {
                 long now = System.currentTimeMillis();
-                String cached = lastFrameBase64;
-                if (cached != null && now - lastFrameSentAt >= STATIC_FRAME_HEARTBEAT_MS) {
+                Bitmap cached = lastFrameBitmap;
+                if (cached != null && !cached.isRecycled() && now - lastFrameSentAt >= STATIC_FRAME_HEARTBEAT_MS) {
                     lastFrameSentAt = now;
-                    JaTextNativePlugin.emitScreenFrame(cached, captureWidth, captureHeight);
+                    Bitmap copy = cached.copy(Bitmap.Config.ARGB_8888, false);
+                    if (copy != null) {
+                        NativeRuntimeBridge.emitScreenBitmap(copy, captureWidth, captureHeight);
+                    }
                 }
             } catch (Throwable ignored) {}
             Handler h = workerHandler;
@@ -284,8 +287,7 @@ public class ScreenCaptureService extends Service {
                                     }
                                 }
                                 if (nonZero) {
-                                    String b64 = Base64.encodeToString(pcmBuf, 0, read, Base64.NO_WRAP);
-                                    JaTextNativePlugin.emitScreenAudio(b64, AUDIO_SAMPLE_RATE);
+                                    NativeRuntimeBridge.emitScreenAudioPcm(pcmBuf, read, AUDIO_SAMPLE_RATE);
                                 }
                             } else if (read < 0) {
                                 break;
@@ -324,13 +326,14 @@ public class ScreenCaptureService extends Service {
             rawBitmap.recycle();
         }
 
-        ByteArrayOutputStream baos = new ByteArrayOutputStream(40960);
-        cleanBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos);
-        cleanBitmap.recycle();
-
-        String base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
-        lastFrameBase64 = base64;
-        JaTextNativePlugin.emitScreenFrame(base64, captureWidth, captureHeight);
+        Bitmap prev = lastFrameBitmap;
+        lastFrameBitmap = cleanBitmap.copy(Bitmap.Config.ARGB_8888, false);
+        if (prev != null && !prev.isRecycled()) {
+            try {
+                prev.recycle();
+            } catch (Throwable ignored) {}
+        }
+        NativeRuntimeBridge.emitScreenBitmap(cleanBitmap, captureWidth, captureHeight);
     }
 
     @SuppressWarnings("deprecation")
@@ -418,7 +421,13 @@ public class ScreenCaptureService extends Service {
     private void cleanupProjectionResources() {
         capturing = false;
         audioCapturing = false;
-        lastFrameBase64 = null;
+        Bitmap prev = lastFrameBitmap;
+        lastFrameBitmap = null;
+        if (prev != null && !prev.isRecycled()) {
+            try {
+                prev.recycle();
+            } catch (Throwable ignored) {}
+        }
         try {
             if (workerHandler != null) {
                 workerHandler.removeCallbacks(staticFrameHeartbeat);
@@ -467,11 +476,11 @@ public class ScreenCaptureService extends Service {
         } catch (Throwable ignored) {}
     }
 
-    private void stopCaptureAndSelf(boolean notifyJs) {
+    private void stopCaptureAndSelf(boolean notifyListeners) {
         boolean wasCapturing = capturing;
         cleanupProjectionResources();
-        if (notifyJs && wasCapturing) {
-            JaTextNativePlugin.emitScreenCaptureStopped();
+        if (notifyListeners && wasCapturing) {
+            NativeRuntimeBridge.emitScreenCaptureStopped();
         }
         try {
             stopForeground(STOP_FOREGROUND_REMOVE);

@@ -6,22 +6,22 @@ import android.os.Bundle;
 import android.os.Looper;
 import android.os.PowerManager;
 import androidx.annotation.NonNull;
-import com.capacitorjs.plugins.pushnotifications.MessagingService;
+import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Intercepts ALL Firebase Cloud Messaging events (`com.google.firebase.MESSAGING_EVENT`)
- * BEFORE Firebase's default system-tray renderer can ever display raw E2EE ciphertext:
- * - Suppresses popups when JaText is actively visible on an unlocked, interactive screen.
+ * Pure native Android FirebaseMessagingService.
+ * Intercepts all FCM events before Firebase's default tray renderer can show ciphertext:
+ * - Suppresses popups when JaText is actively visible on an unlocked screen.
  * - Immediately wakes the phone screen, opens MainActivity over lock screen / minimized state,
  *   and loops the call ringtone whenever an incoming voice or video call arrives.
- * - Decrypts E2EE messages on-device in Java using ECDH P-256 + AES-256-GCM (fetching full
- *   untruncated wire envelopes from Convex when needed) so notifications ALWAYS show real text!
+ * - Decrypts E2EE messages on-device in Java using ECDH P-256 + AES-256-GCM so notifications
+ *   always display readable message text.
  */
-public class JaTextFirebaseMessagingService extends MessagingService {
+public class JaTextFirebaseMessagingService extends FirebaseMessagingService {
 
     private static final ExecutorService PUSH_EXECUTOR = Executors.newCachedThreadPool();
 
@@ -34,6 +34,12 @@ public class JaTextFirebaseMessagingService extends MessagingService {
             }
         }
         return null;
+    }
+
+    @Override
+    public void onNewToken(@NonNull String token) {
+        super.onNewToken(token);
+        NativeRuntimeBridge.dispatchFcmToken(token);
     }
 
     @Override
@@ -62,7 +68,6 @@ public class JaTextFirebaseMessagingService extends MessagingService {
             return;
         }
 
-        // Wake the Capacitor WebView Turso sync immediately (< 15ms) whenever any FCM message arrives
         MainActivity.notifyRealtimeSyncWake();
 
         boolean hasNotificationPayload =
@@ -95,7 +100,6 @@ public class JaTextFirebaseMessagingService extends MessagingService {
             (rawBody != null && rawBody.contains("__JATEXT_E2EE_V1__:"));
         final String msgId = firstNonEmpty(extras, "google.message_id", "message_id");
 
-        // Never post OS banners when the user is actively looking at JaText on an unlocked screen!
         if (MainActivity.isActivelyVisibleUnlocked(appCtx)) {
             if (!hasNotificationPayload) {
                 super.handleIntent(intent);
@@ -103,8 +107,6 @@ public class JaTextFirebaseMessagingService extends MessagingService {
             return;
         }
 
-        // Intercept BOTH legacy `notification` pushes AND `data`-only pushes here so Firebase's
-        // built-in DisplayNotification NEVER posts raw `__JATEXT_E2EE_V1__:` ciphertext!
         if (
             hasNotificationPayload ||
             rawBody != null ||

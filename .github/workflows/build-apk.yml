@@ -19,12 +19,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
@@ -54,22 +48,29 @@ jobs:
               -keypass "${KEYSTORE_PASS}" \
               -dname "CN=JaText, OU=Mobile, O=JaText, L=KualaLumpur, ST=Selangor, C=MY"
           fi
+          echo "=== Release Keystore Fingerprints (com.ahad00010.jatext) ==="
+          keytool -list -v -keystore android/jatext-release.jks -alias jatext -storepass "${KEYSTORE_PASS}" | grep -E "SHA1:|SHA256:" || true
           printf "storeFile=jatext-release.jks\nstorePassword=%s\nkeyAlias=jatext\nkeyPassword=%s\n" "${KEYSTORE_PASS}" "${KEYSTORE_PASS}" > android/keystore.properties
           if [ -n "${GOOGLE_SERVICES_JSON}" ]; then
             printf "%s\n" "${GOOGLE_SERVICES_JSON}" > android/app/google-services.json
           fi
 
-      - name: Install dependencies and sync Capacitor Android
-        run: |
-          npm install --legacy-peer-deps
-          npm run android:sync
-
-      - name: Assemble Signed Release APK
+      - name: Assemble Pure Native Signed Release APK
         working-directory: android
-        run: bash ./gradlew assembleRelease --no-daemon
+        run: bash ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Prepare Release APK artifact
-        run: cp android/app/build/outputs/apk/release/app-release.apk JaText-release.apk
+      - name: Verify Zero WebView / Zero Capacitor in Release APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk JaText-release.apk
+          if unzip -l JaText-release.apk | grep -q "assets/public/index.html"; then
+            echo "ERROR: Bundled HTML asset found inside JaText-release.apk!"
+            exit 1
+          fi
+          if unzip -l JaText-release.apk | grep -qi "capacitor"; then
+            echo "ERROR: Capacitor resource found inside JaText-release.apk!"
+            exit 1
+          fi
+          echo "Verified pure native Jetpack Compose APK (zero Capacitor / zero HTML bundle)."
 
       - name: Upload Release APK build artifact
         uses: actions/upload-artifact@v4
@@ -82,8 +83,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION_CODE=$(grep -oP 'versionCode\s+\K\d+' android/app/build.gradle | head -n 1)
-          VERSION_NAME=$(grep -oP 'versionName\s+"\K[^"]+' android/app/build.gradle | head -n 1)
+          VERSION_CODE=$(grep -oP 'versionCode\s*=\s*\K\d+|versionCode\s+\K\d+' android/app/build.gradle | head -n 1)
+          VERSION_NAME=$(grep -oP 'versionName\s*=?\s*"\K[^"]+' android/app/build.gradle | head -n 1)
           cp JaText-release.apk /tmp/JaText-release.apk
           base64 -w 0 /tmp/JaText-release.apk > apk.b64
           jq -Rs '{content: ., encoding: "base64"}' apk.b64 > blob_payload.json
@@ -91,7 +92,7 @@ jobs:
           gh release delete apk-latest --cleanup-tag --yes || true
           gh release create apk-latest /tmp/JaText-release.apk \
             --title "JaText v${VERSION_NAME} (build ${VERSION_CODE})" \
-            --notes "Signed Release APK built from commit ${GITHUB_SHA}. VersionName: ${VERSION_NAME}. VersionCode: ${VERSION_CODE}. Backend: Turso. Blob: ${BLOB_SHA}"
+            --notes "Pure Native Kotlin + Jetpack Compose Signed Release APK built from commit ${GITHUB_SHA}. VersionName: ${VERSION_NAME}. VersionCode: ${VERSION_CODE}. Backend: Turso. Blob: ${BLOB_SHA}"
 
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
             AUTHOR_NAME=$(git log -1 --format='%an')

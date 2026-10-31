@@ -1,7 +1,7 @@
 {
   "name": "jatext",
   "private": true,
-  "version": "3.4.4",
+  "version": "3.5.0",
   "packageManager": "pnpm@9.15.9",
   "type": "module",
   "scripts": {
@@ -9,11 +9,8 @@
     "build": "node scripts/build.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
-    "android:build": "tsc -b && vite build --mode android",
-    "android:sync": "npm run android:build && cap sync android",
-    "android:open": "cap open android",
-    "android:apk": "npm run android:build && cap sync android && cd android && gradlew.bat assembleDebug",
-    "android:release": "npm run android:build && cap sync android && cd android && gradlew.bat assembleRelease",
+    "android:apk": "cd android && ./gradlew assembleDebug",
+    "android:release": "cd android && ./gradlew assembleRelease",
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy"
   },
