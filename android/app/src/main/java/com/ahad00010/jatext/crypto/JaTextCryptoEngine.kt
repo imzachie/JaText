@@ -7,6 +7,8 @@ import com.ahad00010.jatext.JaTextE2EEDecryptor
 import com.ahad00010.jatext.data.ChatMessage
 import com.ahad00010.jatext.data.DMEncryptedEnvelope
 import com.ahad00010.jatext.data.E2EEPlainPayload
+import com.ahad00010.jatext.data.E2EEVaultContents
+import com.ahad00010.jatext.data.E2EEVaultGroupEpoch
 import com.ahad00010.jatext.data.EncryptedBlobDescriptor
 import com.ahad00010.jatext.data.ForwardedMessageContext
 import com.ahad00010.jatext.data.GroupEncryptedEnvelope
@@ -20,6 +22,9 @@ import com.ahad00010.jatext.data.MessageE2EEProof
 import com.ahad00010.jatext.data.OverflowDescriptor
 import com.ahad00010.jatext.data.PublicIdentityBundle
 import com.ahad00010.jatext.data.ReplySummary
+import com.ahad00010.jatext.data.SealedAutoSyncKeyring
+import com.ahad00010.jatext.data.SealedE2EEVault
+import com.ahad00010.jatext.data.StickerMedia
 import com.ahad00010.jatext.data.StoredIdentityRecord
 import com.ahad00010.jatext.data.TursoApiClient
 import java.io.File
@@ -43,7 +48,9 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.KeyAgreement
 import javax.crypto.Mac
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -65,8 +72,23 @@ object JaTextCryptoEngine {
     const val WALLPAPER_PREFIX = "__JATEXT_WP__:"
     const val CALL_INVITE_PREFIX = "__JATEXT_CALL__:"
     const val GROUP_CALL_INVITE_PREFIX = "__JATEXT_CALL_GRP__:"
+    const val E2EE_VAULT_STICKER_NAME = "__jatext_e2ee_vault_v1__"
+    const val E2EE_AUTOSYNC_STICKER_NAME = "__jatext_e2ee_autosync_v1__"
+    const val E2EE_BUBBLE_PREF_PREFIX = "__jatext_pref_bubble_v1__:"
+    const val E2EE_DEVSYNC_REQ_PREFIX = "__jatext_e2ee_devreq_v1__:"
+    const val E2EE_DEVSYNC_RES_PREFIX = "__jatext_e2ee_devres_v1__:"
     private const val MAX_INLINE_WIRE_CHARS = 3500
     private const val SAFETY_NUMBER_ROUNDS = 5200
+    private val lastPeerForceRefreshAt = ConcurrentHashMap<String, Long>()
+
+    fun isInternalSyncSticker(item: StickerMedia): Boolean {
+        val n = item.name.trim()
+        return n == E2EE_VAULT_STICKER_NAME ||
+            n == E2EE_AUTOSYNC_STICKER_NAME ||
+            n.startsWith(E2EE_BUBBLE_PREF_PREFIX) ||
+            n.startsWith(E2EE_DEVSYNC_REQ_PREFIX) ||
+            n.startsWith(E2EE_DEVSYNC_RES_PREFIX)
+    }
 
     private val P256_SPKI_PREFIX = byteArrayOf(
         0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86.toByte(),
@@ -682,7 +704,23 @@ object JaTextCryptoEngine {
             return@withContext null
         }
         val receiverPrimary = receiverBundles.first()
-        val extraBundles = (receiverBundles.drop(1) + peerMap[myUserId].orEmpty().filter { it.keyId != myIdentity.keyId })
+        val myLocalOtherDevices = loadLocalIdentities(context, myUserId)
+            .filter { it.keyId != myIdentity.keyId && it.dhPubB64.isNotBlank() }
+            .map {
+                PublicIdentityBundle(
+                    userId = myUserId,
+                    keyId = it.keyId,
+                    dhPubB64 = it.dhPubB64,
+                    sigPubB64 = it.sigPubB64,
+                    selfSigB64 = it.selfSigB64,
+                    ts = it.createdAt,
+                )
+            }
+        val extraBundles = (
+            myLocalOtherDevices +
+                receiverBundles.drop(1) +
+                peerMap[myUserId].orEmpty().filter { it.keyId != myIdentity.keyId }
+            )
 
         val senderDhPriv = importPkcs8Private(b64UrlDecode(myIdentity.dhPrivPkcs8B64))
         val senderDhPub = importRawP256Public(b64UrlDecode(myIdentity.dhPubB64))
@@ -829,7 +867,16 @@ object JaTextCryptoEngine {
             listOf(ensureOrCreatePrimaryIdentity(context, myUserId))
         }
         val peerId = if (senderId == myUserId) receiverId else senderId
-        val peerBundles = ensurePeerBundles(listOf(peerId), token)[peerId].orEmpty()
+        var peerBundles = ensurePeerBundles(listOf(peerId), token)[peerId].orEmpty()
+        if (peerId.isNotBlank() && peerBundles.none { it.keyId == env.sk || it.keyId == env.rk }) {
+            val nowMs = System.currentTimeMillis()
+            val lastRefresh = lastPeerForceRefreshAt[peerId] ?: 0L
+            if (nowMs - lastRefresh > 8_000L) {
+                lastPeerForceRefreshAt[peerId] = nowMs
+                refreshPeerBundles(listOf(peerId), token)
+                peerBundles = getCachedPeerBundles(peerId)
+            }
+        }
 
         val epkRaw = b64UrlDecode(env.epk)
         val epkPub = importRawP256Public(epkRaw)
@@ -937,6 +984,57 @@ object JaTextCryptoEngine {
 
     /* ==================== Group Epoch E2EE Encrypt & Decrypt ==================== */
 
+    private fun addGroupEpochCandidateSecret(groupId: String, epoch: Int, secretB64: String): Boolean {
+        val clean = secretB64.trim()
+        if (groupId.isBlank() || epoch <= 0 || clean.isEmpty()) return false
+        val mapKey = "$groupId:$epoch"
+        val existingRaw = groupEpochSecrets[mapKey].orEmpty()
+        val existingList = existingRaw
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (existingList.contains(clean)) return false
+        val merged = (listOf(clean) + existingList).distinct().joinToString(",")
+        groupEpochSecrets[mapKey] = merged
+        return true
+    }
+
+    private fun tryIngestIdentitySignal(senderId: String, rawBody: String) {
+        if (senderId.isBlank() || !rawBody.startsWith(E2EE_SIGNAL_PREFIX)) return
+        val after = rawBody.removePrefix(E2EE_SIGNAL_PREFIX).trim()
+        if (!after.contains("\"e2ee_ik\"")) return
+        try {
+            val obj = JaTextJson.parseToJsonElement(after).jsonObject
+            if (obj["kind"]?.jsonPrimitive?.contentOrNull != "e2ee_ik") return
+            val kid = obj["kid"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val dh = obj["dh"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val sk = obj["sk"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val sig = obj["sig"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val ts = obj["ts"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L
+            if (kid.isEmpty() || dh.isEmpty() || sk.isEmpty() || sig.isEmpty()) return
+            val sigPayload = "JaText-IK-v1|$senderId|$kid|$dh|$sk".toByteArray(Charsets.UTF_8)
+            val verified = ecdsaVerifyP1363(
+                importRawP256Public(b64UrlDecode(sk)),
+                sigPayload,
+                b64UrlDecode(sig)
+            )
+            if (!verified) return
+            registerPeerBundles(
+                listOf(
+                    PublicIdentityBundle(
+                        userId = senderId,
+                        keyId = kid,
+                        dhPubB64 = dh,
+                        sigPubB64 = sk,
+                        selfSigB64 = sig,
+                        ts = ts,
+                    )
+                )
+            )
+        } catch (_: Throwable) {
+        }
+    }
+
     private fun tryIngestGroupEpochSignal(context: Context, myUserId: String, senderId: String, rawBody: String) {
         if (!rawBody.startsWith(E2EE_SIGNAL_PREFIX)) return
         val after = rawBody.removePrefix(E2EE_SIGNAL_PREFIX).trim()
@@ -969,8 +1067,9 @@ object JaTextCryptoEngine {
                         "JaText-GK-Wrap-v1|${pkt.gid}|${pkt.ep}|$senderId|$myUserId|${id.keyId}"
                     )
                     val secretBytes = aesGcmDecrypt(kwk, b64UrlDecode(wrap.iv), aad, b64UrlDecode(wrap.ct))
-                    groupEpochSecrets["${pkt.gid}:${pkt.ep}"] = b64UrlEncode(secretBytes)
-                    persistGroupEpochMap(context, myUserId)
+                    if (addGroupEpochCandidateSecret(pkt.gid, pkt.ep, b64UrlEncode(secretBytes))) {
+                        persistGroupEpochMap(context, myUserId)
+                    }
                     return
                 } catch (_: Throwable) {
                 }
@@ -986,9 +1085,10 @@ object JaTextCryptoEngine {
         for ((k, v) in groupEpochSecrets.entries) {
             if (k.startsWith(prefix)) {
                 val ep = k.removePrefix(prefix).toIntOrNull() ?: 0
-                if (ep > bestEp) {
+                val primaryCandidate = v.substringBefore(",").trim()
+                if (ep > bestEp && primaryCandidate.isNotEmpty()) {
                     bestEp = ep
-                    bestSecret = v
+                    bestSecret = primaryCandidate
                 }
             }
         }
@@ -1007,12 +1107,24 @@ object JaTextCryptoEngine {
         val myIdentity = ensureOrCreatePrimaryIdentity(context, myUserId)
         val allIds = (memberUserIds + myUserId).distinct()
         val bundleMap = ensurePeerBundles(allIds, token)
-        val allBundles = bundleMap.values.flatten()
+        val myLocalBundles = loadLocalIdentities(context, myUserId)
+            .filter { it.keyId.isNotBlank() && it.dhPubB64.isNotBlank() }
+            .map {
+                PublicIdentityBundle(
+                    userId = myUserId,
+                    keyId = it.keyId,
+                    dhPubB64 = it.dhPubB64,
+                    sigPubB64 = it.sigPubB64,
+                    selfSigB64 = it.selfSigB64,
+                    ts = it.createdAt,
+                )
+            }
+        val allBundles = (bundleMap.values.flatten() + myLocalBundles).distinctBy { "${it.userId}:${it.keyId}" }
 
         val epoch = 1
         val secretBytes = randomBytes(32)
         val secretB64 = b64UrlEncode(secretBytes)
-        groupEpochSecrets["$groupId:$epoch"] = secretB64
+        addGroupEpochCandidateSecret(groupId, epoch, secretB64)
         persistGroupEpochMap(context, myUserId)
 
         if (allBundles.isNotEmpty()) {
@@ -1181,7 +1293,13 @@ object JaTextCryptoEngine {
             return@withContext null
         }
         if (env.v != 1 || env.c != "grp") return@withContext null
-        val secretB64 = groupEpochSecrets["$groupId:${env.ep}"] ?: return@withContext null
+        val rawSecretEntry = groupEpochSecrets["$groupId:${env.ep}"] ?: return@withContext null
+        val candidateSecrets = rawSecretEntry
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        if (candidateSecrets.isEmpty()) return@withContext null
 
         val ctBytes = when {
             !env.ct.isNullOrBlank() -> b64UrlDecode(env.ct)
@@ -1193,31 +1311,42 @@ object JaTextCryptoEngine {
             else -> return@withContext null
         }
 
-        return@withContext try {
-            val epochSecret = b64UrlDecode(secretB64)
-            val salt = b64UrlDecode(env.s)
-            val iv = b64UrlDecode(env.iv)
-            val msgKey = hkdfSha256(epochSecret, salt, "JaText-Grp-Msg-v1|$groupId|${env.ep}|$senderId|${env.sk}")
-            val aad = "JaText-Grp-AAD-v1|$groupId|${env.ep}|$senderId|${env.sk}|${env.s}".toByteArray(Charsets.UTF_8)
-            val plain = aesGcmDecrypt(msgKey, iv, aad, ctBytes)
-            val payload = JaTextJson.decodeFromString<E2EEPlainPayload>(String(plain, Charsets.UTF_8))
-            val res = DecryptedWireResult(
-                payload = payload,
-                proof = MessageE2EEProof(
-                    encrypted = true,
-                    algorithm = "GroupEpoch-HKDF-SHA256 + AES-256-GCM",
-                    senderKeyId = env.sk,
-                    epoch = env.ep,
-                    signatureVerified = true,
-                    ciphertextPreview = (env.ct ?: "").take(48),
-                )
-            )
-            decryptedByWireCache[trimmed] = res
-            if (messageId.isNotBlank()) decryptedByMsgIdCache[messageId] = res
-            res
+        val salt = try {
+            b64UrlDecode(env.s)
         } catch (_: Throwable) {
-            null
+            return@withContext null
         }
+        val iv = try {
+            b64UrlDecode(env.iv)
+        } catch (_: Throwable) {
+            return@withContext null
+        }
+        val aad = "JaText-Grp-AAD-v1|$groupId|${env.ep}|$senderId|${env.sk}|${env.s}".toByteArray(Charsets.UTF_8)
+
+        for (secretCandidate in candidateSecrets) {
+            try {
+                val epochSecret = b64UrlDecode(secretCandidate)
+                val msgKey = hkdfSha256(epochSecret, salt, "JaText-Grp-Msg-v1|$groupId|${env.ep}|$senderId|${env.sk}")
+                val plain = aesGcmDecrypt(msgKey, iv, aad, ctBytes)
+                val payload = JaTextJson.decodeFromString<E2EEPlainPayload>(String(plain, Charsets.UTF_8))
+                val res = DecryptedWireResult(
+                    payload = payload,
+                    proof = MessageE2EEProof(
+                        encrypted = true,
+                        algorithm = "GroupEpoch-HKDF-SHA256 + AES-256-GCM",
+                        senderKeyId = env.sk,
+                        epoch = env.ep,
+                        signatureVerified = true,
+                        ciphertextPreview = (env.ct ?: "").take(48),
+                    )
+                )
+                decryptedByWireCache[trimmed] = res
+                if (messageId.isNotBlank()) decryptedByMsgIdCache[messageId] = res
+                return@withContext res
+            } catch (_: Throwable) {
+            }
+        }
+        null
     }
 
     /* ==================== Encrypted Media Attachments ==================== */
@@ -1397,6 +1526,12 @@ object JaTextCryptoEngine {
             .flatMap { listOf(it.senderId, it.receiverId) }
             .filter { it.isNotBlank() && it != myUserId }
             .distinct()
+        for (m in rawMessages) {
+            val rawSig = m.rawWireBody ?: m.body
+            if (rawSig.startsWith(E2EE_SIGNAL_PREFIX) && !rawSig.contains(E2EE_WIRE_MARKER)) {
+                tryIngestIdentitySignal(m.senderId, rawSig)
+            }
+        }
         if (peerIds.isNotEmpty()) {
             ensurePeerBundles(peerIds, token)
         }
@@ -1443,10 +1578,14 @@ object JaTextCryptoEngine {
                         )
                     )
                 } else {
-                    if (m.senderId == myUserId) continue
+                    if (wire.startsWith(E2EE_SIGNAL_PREFIX)) continue
                     firstPass.add(
                         m.copy(
-                            body = "Encrypted message",
+                            body = if (m.senderId == myUserId) {
+                                "Syncing message from your other device…"
+                            } else {
+                                "Waiting for this message…"
+                            },
                             rawWireBody = wire,
                             e2ee = MessageE2EEProof(encrypted = true),
                         )
@@ -1531,6 +1670,9 @@ object JaTextCryptoEngine {
         for (m in rawMessages) {
             val raw = m.rawWireBody ?: m.body
             if (raw.startsWith(E2EE_SIGNAL_PREFIX)) {
+                if (!raw.contains(E2EE_WIRE_MARKER)) {
+                    tryIngestIdentitySignal(m.senderId, raw)
+                }
                 tryIngestGroupEpochSignal(context, myUserId, m.senderId, raw)
             }
         }
@@ -1667,10 +1809,14 @@ object JaTextCryptoEngine {
                         )
                     )
                 } else {
-                    if (m.senderId == myUserId) continue
+                    if (wire.startsWith(E2EE_SIGNAL_PREFIX)) continue
                     firstPass.add(
                         m.copy(
-                            body = "Encrypted message",
+                            body = if (m.senderId == myUserId) {
+                                "Syncing message from your other device…"
+                            } else {
+                                "Waiting for this message…"
+                            },
                             rawWireBody = wire,
                             e2ee = MessageE2EEProof(encrypted = true),
                         )
@@ -2005,5 +2151,409 @@ object JaTextCryptoEngine {
         if (!presetId.isNullOrBlank()) map["presetId"] = JsonPrimitive(presetId)
         if (!actorName.isNullOrBlank()) map["actorName"] = JsonPrimitive(actorName)
         return "$WALLPAPER_PREFIX${JsonObject(map)}"
+    }
+
+    /* ==================== Multi-Device Automatic Keyring Sync & E2EE Vault Restore ==================== */
+
+    data class KeyringMergeOutcome(
+        val changedLocal: Boolean,
+        val needsRemotePush: Boolean,
+        val primaryIdentity: StoredIdentityRecord,
+    )
+
+    fun clearDecryptedCaches() {
+        decryptedByWireCache.clear()
+        decryptedByMsgIdCache.clear()
+        lastPeerForceRefreshAt.clear()
+    }
+
+    private fun isCompleteSigningAndDhIdentity(record: StoredIdentityRecord): Boolean {
+        if (
+            record.keyId.isBlank() ||
+            record.dhPubB64.isBlank() ||
+            record.dhPrivPkcs8B64.isBlank() ||
+            record.sigPubB64.isBlank() ||
+            record.sigPrivPkcs8B64.isBlank()
+        ) {
+            return false
+        }
+        return try {
+            importPkcs8Private(b64UrlDecode(record.dhPrivPkcs8B64))
+            importRawP256Public(b64UrlDecode(record.dhPubB64))
+            importPkcs8Private(b64UrlDecode(record.sigPrivPkcs8B64))
+            importRawP256Public(b64UrlDecode(record.sigPubB64))
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun isUsableDhIdentity(record: StoredIdentityRecord): Boolean {
+        if (record.keyId.isBlank() || record.dhPrivPkcs8B64.isBlank()) return false
+        return try {
+            importPkcs8Private(b64UrlDecode(record.dhPrivPkcs8B64))
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun derivePbkdf2KeyBytes(
+        algorithm: String,
+        password: String,
+        salt: ByteArray,
+        iterations: Int,
+        keyBits: Int = 256,
+    ): ByteArray {
+        val spec = PBEKeySpec(password.toCharArray(), salt, iterations, keyBits)
+        return try {
+            SecretKeyFactory.getInstance(algorithm).generateSecret(spec).encoded
+        } finally {
+            spec.clearPassword()
+        }
+    }
+
+    private fun deriveAutoSyncKeyBytes(userId: String): ByteArray {
+        return derivePbkdf2KeyBytes(
+            algorithm = "PBKDF2WithHmacSHA256",
+            password = "JaText-AutoKeyring-v1|$userId",
+            salt = "JaText-AutoKeyring-Salt-v1|$userId".toByteArray(Charsets.UTF_8),
+            iterations = 64_000,
+            keyBits = 256,
+        )
+    }
+
+    fun exportVaultContents(context: Context, userId: String): E2EEVaultContents {
+        val primary = ensureOrCreatePrimaryIdentity(context, userId)
+        val allLocal = loadLocalIdentities(context, userId)
+        val previous = allLocal.filter { it.keyId != primary.keyId && isCompleteSigningAndDhIdentity(it) }
+        val exportedEpochs = mutableListOf<E2EEVaultGroupEpoch>()
+        for ((k, rawSecrets) in groupEpochSecrets.entries) {
+            val sep = k.lastIndexOf(':')
+            if (sep <= 0) continue
+            val gid = k.substring(0, sep)
+            val ep = k.substring(sep + 1).toIntOrNull() ?: continue
+            if (gid.isBlank() || ep <= 0) continue
+            val candidates = rawSecrets.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            for (secret in candidates) {
+                exportedEpochs.add(
+                    E2EEVaultGroupEpoch(
+                        groupId = gid,
+                        epoch = ep,
+                        secretB64 = secret,
+                        createdAt = System.currentTimeMillis(),
+                    )
+                )
+            }
+        }
+        return E2EEVaultContents(
+            v = 1,
+            userId = userId,
+            primaryIdentity = primary,
+            previousIdentities = previous.take(32),
+            groupEpochs = exportedEpochs,
+            exportedAt = System.currentTimeMillis(),
+        )
+    }
+
+    fun sealAutoSyncKeyring(contents: E2EEVaultContents): SealedAutoSyncKeyring {
+        val keyBytes = deriveAutoSyncKeyBytes(contents.userId)
+        val iv = randomBytes(12)
+        val aad = "JaText-AutoKeyring-AAD-v1|${contents.userId}".toByteArray(Charsets.UTF_8)
+        val plainBytes = JaTextJson.encodeToString(contents).toByteArray(Charsets.UTF_8)
+        val ct = aesGcmEncrypt(keyBytes, iv, aad, plainBytes)
+        val keyIds = buildList {
+            if (contents.primaryIdentity.keyId.isNotBlank()) add(contents.primaryIdentity.keyId)
+            for (p in contents.previousIdentities) {
+                if (p.keyId.isNotBlank() && !contains(p.keyId)) add(p.keyId)
+            }
+        }
+        return SealedAutoSyncKeyring(
+            v = 1,
+            userId = contents.userId,
+            keyIds = keyIds,
+            iv = b64UrlEncode(iv),
+            ct = b64UrlEncode(ct),
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
+    fun openAutoSyncKeyring(sealed: SealedAutoSyncKeyring, expectedUserId: String): E2EEVaultContents? {
+        if (sealed.v != 1 || sealed.userId != expectedUserId || sealed.iv.isBlank() || sealed.ct.isBlank()) {
+            return null
+        }
+        return try {
+            val keyBytes = deriveAutoSyncKeyBytes(expectedUserId)
+            val aad = "JaText-AutoKeyring-AAD-v1|$expectedUserId".toByteArray(Charsets.UTF_8)
+            val plain = aesGcmDecrypt(keyBytes, b64UrlDecode(sealed.iv), aad, b64UrlDecode(sealed.ct))
+            val parsed = JaTextJson.decodeFromString<E2EEVaultContents>(String(plain, Charsets.UTF_8))
+            if (parsed.userId == expectedUserId && parsed.primaryIdentity.keyId.isNotBlank()) parsed else null
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    fun mergeAutoSyncedKeyring(
+        context: Context,
+        userId: String,
+        remote: E2EEVaultContents?,
+    ): KeyringMergeOutcome {
+        loadGroupEpochMap(context, userId)
+        val currentPrimary = ensureOrCreatePrimaryIdentity(context, userId)
+        val localIdentities = loadLocalIdentities(context, userId).ifEmpty { listOf(currentPrimary) }
+
+        if (remote == null || remote.userId != userId) {
+            return KeyringMergeOutcome(
+                changedLocal = false,
+                needsRemotePush = true,
+                primaryIdentity = currentPrimary,
+            )
+        }
+
+        val completeByKeyId = LinkedHashMap<String, StoredIdentityRecord>()
+        val legacyDhOnlyByKeyId = LinkedHashMap<String, StoredIdentityRecord>()
+
+        val remoteAll = listOf(remote.primaryIdentity) + remote.previousIdentities
+        for (item in remoteAll) {
+            val fixed = if (item.userId.isBlank()) item.copy(userId = userId) else item
+            if (isCompleteSigningAndDhIdentity(fixed)) {
+                completeByKeyId[fixed.keyId] = fixed
+            } else if (isUsableDhIdentity(fixed)) {
+                legacyDhOnlyByKeyId[fixed.keyId] = fixed
+            }
+        }
+        for (item in localIdentities) {
+            val fixed = if (item.userId.isBlank()) item.copy(userId = userId) else item
+            if (isCompleteSigningAndDhIdentity(fixed)) {
+                if (!completeByKeyId.containsKey(fixed.keyId)) {
+                    completeByKeyId[fixed.keyId] = fixed
+                }
+            } else if (isUsableDhIdentity(fixed) && !completeByKeyId.containsKey(fixed.keyId)) {
+                legacyDhOnlyByKeyId[fixed.keyId] = fixed
+            }
+        }
+
+        val sortedComplete = completeByKeyId.values.sortedWith { a, b ->
+            val ta = if (a.createdAt > 0L) a.createdAt else Long.MAX_VALUE
+            val tb = if (b.createdAt > 0L) b.createdAt else Long.MAX_VALUE
+            if (ta != tb) ta.compareTo(tb) else a.keyId.compareTo(b.keyId)
+        }
+
+        val canonicalPrimary = sortedComplete.firstOrNull() ?: currentPrimary
+        val canonicalPrevious = sortedComplete.drop(1).take(32)
+        val mergedLocalList = buildList {
+            add(canonicalPrimary)
+            addAll(canonicalPrevious)
+            for (legacy in legacyDhOnlyByKeyId.values) {
+                if (none { it.keyId == legacy.keyId }) add(legacy)
+            }
+        }
+
+        val localCompleteKeySet = localIdentities
+            .filter { isCompleteSigningAndDhIdentity(it) }
+            .map { it.keyId }
+            .toSet()
+        val remoteCompleteKeySet = remoteAll
+            .filter { isCompleteSigningAndDhIdentity(it) }
+            .map { it.keyId }
+            .toSet()
+
+        var epochsAddedLocally = false
+        var localHasExtraEpoch = false
+        val remoteEpochPairs = HashSet<String>()
+        for (ep in remote.groupEpochs) {
+            if (ep.groupId.isNotBlank() && ep.epoch > 0 && ep.secretB64.isNotBlank()) {
+                remoteEpochPairs.add("${ep.groupId}:${ep.epoch}:${ep.secretB64.trim()}")
+                if (addGroupEpochCandidateSecret(ep.groupId, ep.epoch, ep.secretB64)) {
+                    epochsAddedLocally = true
+                }
+            }
+        }
+        for ((k, rawSecrets) in groupEpochSecrets.entries) {
+            val sep = k.lastIndexOf(':')
+            if (sep <= 0) continue
+            val gid = k.substring(0, sep)
+            val ep = k.substring(sep + 1).toIntOrNull() ?: continue
+            val candidates = rawSecrets.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            for (secret in candidates) {
+                if (!remoteEpochPairs.contains("$gid:$ep:$secret")) {
+                    localHasExtraEpoch = true
+                }
+            }
+        }
+
+        val primaryChanged = currentPrimary.keyId != canonicalPrimary.keyId
+        val gainedNewIdentity = sortedComplete.any { !localCompleteKeySet.contains(it.keyId) }
+        val changedLocal = primaryChanged || gainedNewIdentity || epochsAddedLocally
+
+        val remoteMissingIdentity = sortedComplete.any { !remoteCompleteKeySet.contains(it.keyId) }
+        val remotePrimaryDiffers = remote.primaryIdentity.keyId != canonicalPrimary.keyId
+        val needsRemotePush = remoteMissingIdentity || remotePrimaryDiffers || localHasExtraEpoch
+
+        if (changedLocal) {
+            saveLocalIdentities(context, userId, mergedLocalList)
+            persistGroupEpochMap(context, userId)
+            publishedSessionKeyIds.remove(canonicalPrimary.keyId)
+            registerPeerBundles(
+                mergedLocalList.filter { it.dhPubB64.isNotBlank() }.map {
+                    PublicIdentityBundle(
+                        userId = userId,
+                        keyId = it.keyId,
+                        dhPubB64 = it.dhPubB64,
+                        sigPubB64 = it.sigPubB64,
+                        selfSigB64 = it.selfSigB64,
+                        ts = it.createdAt,
+                    )
+                }
+            )
+            clearDecryptedCaches()
+        }
+
+        return KeyringMergeOutcome(
+            changedLocal = changedLocal,
+            needsRemotePush = needsRemotePush,
+            primaryIdentity = canonicalPrimary,
+        )
+    }
+
+    suspend fun syncAccountKeyringWithServer(
+        context: Context,
+        userId: String,
+        stickerItems: List<StickerMedia>,
+        token: String,
+        forcePush: Boolean = false,
+    ): KeyringMergeOutcome? = withContext(Dispatchers.Default) {
+        if (userId.isBlank() || token.isBlank()) return@withContext null
+        try {
+            val autoSyncEntry = stickerItems
+                .filter { it.name.trim() == E2EE_AUTOSYNC_STICKER_NAME && it.url.isNotBlank() }
+                .maxByOrNull { it.lastUsedAt }
+
+            var remoteContents: E2EEVaultContents? = null
+            if (autoSyncEntry != null) {
+                try {
+                    val rawBytes = TursoApiClient.fetchMediaBytesSmart(autoSyncEntry.url)
+                    val sealed = JaTextJson.decodeFromString<SealedAutoSyncKeyring>(
+                        String(rawBytes, Charsets.UTF_8)
+                    )
+                    remoteContents = openAutoSyncKeyring(sealed, userId)
+                } catch (_: Throwable) {
+                }
+            }
+
+            val outcome = mergeAutoSyncedKeyring(context, userId, remoteContents)
+            ensurePrimaryIdentityPublished(outcome.primaryIdentity, token)
+
+            if (outcome.needsRemotePush || forcePush) {
+                try {
+                    val exported = exportVaultContents(context, userId)
+                    val sealed = sealAutoSyncKeyring(exported)
+                    val jsonBytes = JaTextJson.encodeToString(sealed).toByteArray(Charsets.UTF_8)
+                    val uploadedUrl = TursoApiClient.uploadMediaBytes(
+                        bytes = jsonBytes,
+                        fileName = "e2ee-autosync.json",
+                        mimeType = "application/json",
+                        token = token,
+                    )
+                    if (uploadedUrl.isNotBlank()) {
+                        TursoApiClient.rpcRaw(
+                            op = "upsertSticker",
+                            args = mapOf(
+                                "sticker" to mapOf(
+                                    "key" to "upload:$uploadedUrl",
+                                    "url" to uploadedUrl,
+                                    "name" to E2EE_AUTOSYNC_STICKER_NAME,
+                                    "mediaType" to "sticker",
+                                    "source" to "upload",
+                                ),
+                                "isFavorite" to true,
+                            ),
+                            token = token,
+                        )
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+            outcome
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun normalizeRecoveryKey(input: String): String =
+        input.uppercase().replace(Regex("[^A-Z0-9]"), "")
+
+    fun openSealedE2EEVault(
+        sealed: SealedE2EEVault,
+        secretInput: String,
+        useRecoveryKey: Boolean,
+    ): E2EEVaultContents {
+        val wrap = if (useRecoveryKey) sealed.recoveryWrap else sealed.pinWrap
+        val formattedSecret = if (useRecoveryKey) {
+            "rec:${sealed.userId}:${normalizeRecoveryKey(secretInput)}"
+        } else {
+            "pin:${sealed.userId}:$secretInput"
+        }
+        val vaultMasterBytes = try {
+            val kwk = derivePbkdf2KeyBytes(
+                algorithm = "PBKDF2WithHmacSHA512",
+                password = formattedSecret,
+                salt = b64UrlDecode(wrap.salt),
+                iterations = wrap.iterations.coerceAtLeast(10_000),
+                keyBits = 256,
+            )
+            aesGcmDecrypt(kwk, b64UrlDecode(wrap.iv), null, b64UrlDecode(wrap.ct))
+        } catch (_: Throwable) {
+            throw IllegalArgumentException(
+                if (useRecoveryKey) "Incorrect E2EE Recovery Key." else "Incorrect E2EE backup PIN / passphrase."
+            )
+        }
+        val aad = "JaText-Vault-v1|${sealed.userId}|${sealed.keyId}".toByteArray(Charsets.UTF_8)
+        val plain = aesGcmDecrypt(
+            vaultMasterBytes,
+            b64UrlDecode(sealed.vaultIv),
+            aad,
+            b64UrlDecode(sealed.vaultCt),
+        )
+        return JaTextJson.decodeFromString<E2EEVaultContents>(String(plain, Charsets.UTF_8))
+    }
+
+    suspend fun restoreVaultFromServer(
+        context: Context,
+        userId: String,
+        secretInput: String,
+        useRecoveryKey: Boolean,
+        stickerItems: List<StickerMedia>,
+        token: String,
+    ): StoredIdentityRecord = withContext(Dispatchers.Default) {
+        var sealedVault: SealedE2EEVault? = null
+        try {
+            val root = TursoApiClient.rpcRaw("getMyE2EEVault", emptyMap(), token).jsonObject
+            val vaultJsonStr = root["vaultJson"]?.jsonPrimitive?.contentOrNull
+                ?: root["vault"]?.jsonObject?.get("vaultJson")?.jsonPrimitive?.contentOrNull
+            if (!vaultJsonStr.isNullOrBlank()) {
+                sealedVault = JaTextJson.decodeFromString<SealedE2EEVault>(vaultJsonStr)
+            } else if (root["vault"] is JsonObject) {
+                sealedVault = JaTextJson.decodeFromJsonElement(SealedE2EEVault.serializer(), root["vault"]!!)
+            }
+        } catch (_: Throwable) {
+        }
+        if (sealedVault == null) {
+            val vaultSticker = stickerItems
+                .filter { it.name.trim() == E2EE_VAULT_STICKER_NAME && it.url.isNotBlank() }
+                .maxByOrNull { it.lastUsedAt }
+            if (vaultSticker != null) {
+                val raw = TursoApiClient.fetchMediaBytesSmart(vaultSticker.url)
+                sealedVault = JaTextJson.decodeFromString<SealedE2EEVault>(String(raw, Charsets.UTF_8))
+            }
+        }
+        val resolvedSealed = sealedVault
+            ?: throw IllegalStateException("No encrypted E2EE Vault backup found for this account yet.")
+        val opened = openSealedE2EEVault(resolvedSealed, secretInput, useRecoveryKey)
+        val merged = mergeAutoSyncedKeyring(context, userId, opened)
+        publishedSessionKeyIds.remove(merged.primaryIdentity.keyId)
+        ensurePrimaryIdentityPublished(merged.primaryIdentity, token)
+        syncAccountKeyringWithServer(context, userId, stickerItems, token, forcePush = true)
+        merged.primaryIdentity
     }
 }

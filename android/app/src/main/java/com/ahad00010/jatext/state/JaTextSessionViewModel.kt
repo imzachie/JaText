@@ -113,6 +113,9 @@ data class SessionUiState(
     val soundsEnabled: Boolean = true,
     val myKeyId: String = "",
     val myKeyFingerprint: String = "",
+    val hasRemoteE2EEVault: Boolean = false,
+    val isSyncingKeysAndMessages: Boolean = false,
+    val lastKeySyncAt: Long = 0L,
     val themeConfig: JaTextThemeConfig = JaTextThemeConfig(),
     val availableUpdate: ApkVersionManifest? = null,
     val updateDownloading: Boolean = false,
@@ -131,6 +134,7 @@ class JaTextSessionViewModel(app: Application) :
 
     private val appCtx = app.applicationContext
     val cache = LocalCacheStore(appCtx)
+    private var rawStickerItemsCache: List<StickerMedia> = emptyList()
 
     private val _state = MutableStateFlow(
         SessionUiState(
@@ -334,6 +338,15 @@ class JaTextSessionViewModel(app: Application) :
 
         loadThemeForScope(myId.ifBlank { "global" }, boot.me.syncedTheme)
 
+        val combinedRawStickers = (boot.stickerFavorites + boot.recentStickers).distinctBy { "${it.key}|${it.url}" }
+        rawStickerItemsCache = combinedRawStickers
+        val syncedBubble = extractSyncedBubbleStyle(combinedRawStickers)
+        if (syncedBubble != null) {
+            cache.setOutgoingBubbleStyle(slotId, syncedBubble)
+        }
+        val cleanFavorites = boot.stickerFavorites.filterNot { JaTextCryptoEngine.isInternalSyncSticker(it) }
+        val cleanRecents = boot.recentStickers.filterNot { JaTextCryptoEngine.isInternalSyncSticker(it) }
+
         _state.update { prev ->
             prev.copy(
                 loading = false,
@@ -355,12 +368,15 @@ class JaTextSessionViewModel(app: Application) :
                 communityMuted = boot.communityMuted,
                 communityMessages = hydrateCommunityList(boot.communityMessages),
                 communityHasMore = boot.communityHasMore,
-                stickerFavorites = boot.stickerFavorites,
-                recentStickers = boot.recentStickers,
-                outgoingBubbleStyle = cache.getOutgoingBubbleStyle(slotId),
+                stickerFavorites = cleanFavorites,
+                recentStickers = cleanRecents,
+                outgoingBubbleStyle = syncedBubble ?: cache.getOutgoingBubbleStyle(slotId),
                 callHistory = cache.getCallHistory(slotId),
                 myKeyId = myIdent?.keyId.orEmpty(),
                 myKeyFingerprint = fp,
+                hasRemoteE2EEVault = boot.hasRemoteE2EEVault || combinedRawStickers.any {
+                    it.name.trim() == JaTextCryptoEngine.E2EE_VAULT_STICKER_NAME
+                },
             )
         }
         syncPushSuppressionState()
@@ -403,12 +419,146 @@ class JaTextSessionViewModel(app: Application) :
         _state.update { it.copy(previews = hydratedPreviews, groups = hydratedGroups) }
     }
 
+    private fun extractSyncedBubbleStyle(items: List<StickerMedia>): String? {
+        val entry = items
+            .filter { it.name.trim().startsWith(JaTextCryptoEngine.E2EE_BUBBLE_PREF_PREFIX) }
+            .maxByOrNull { it.lastUsedAt } ?: return null
+        val styleId = entry.name.trim().removePrefix(JaTextCryptoEngine.E2EE_BUBBLE_PREF_PREFIX).trim()
+        return styleId.takeIf { JaTextCryptoEngine.BUBBLE_STYLE_IDS.contains(it) }
+    }
+
+    private fun syncWallpaperFromDmMessages(friendId: String, msgs: List<ChatMessage>) {
+        if (friendId.isBlank() || friendId == OFFICIAL_COMMUNITY_ID || msgs.isEmpty()) return
+        for (i in msgs.indices.reversed()) {
+            val m = msgs[i]
+            if (m.unsentAt != null) continue
+            val parsed = JaTextCryptoEngine.parseWallpaperSignal(m.body, m.attachmentUrl) ?: continue
+            val scopeKey = "dm:$friendId"
+            val current = cache.getWallpaperUrl(scopeKey)
+            if (current != parsed.url) {
+                cache.setWallpaperUrl(scopeKey, parsed.url)
+                _state.update { it.copy(wallpaperNonce = it.wallpaperNonce + 1) }
+            }
+            return
+        }
+    }
+
+    private fun syncWallpaperFromGroupMessages(groupId: String, msgs: List<GroupMessage>) {
+        if (groupId.isBlank() || msgs.isEmpty()) return
+        for (i in msgs.indices.reversed()) {
+            val m = msgs[i]
+            if (m.unsentAt != null) continue
+            val parsed = JaTextCryptoEngine.parseWallpaperSignal(m.body, m.attachmentUrl) ?: continue
+            val scopeKey = "grp:$groupId"
+            val current = cache.getWallpaperUrl(scopeKey)
+            if (current != parsed.url) {
+                cache.setWallpaperUrl(scopeKey, parsed.url)
+                _state.update { it.copy(wallpaperNonce = it.wallpaperNonce + 1) }
+            }
+            return
+        }
+    }
+
+    private suspend fun rehydrateActiveThreadAfterKeySync(myId: String, token: String) {
+        val st = _state.value
+        val activeFriend = st.activeChatId?.takeIf { it != OFFICIAL_COMMUNITY_ID }
+        val activeGrp = st.activeGroupId
+        if (activeFriend != null) {
+            try {
+                val root = TursoApiClient.rpcRaw("listMessages", mapOf("otherId" to activeFriend), token).jsonObject
+                val rawList = root["messages"]?.let {
+                    JaTextJson.decodeFromJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(ChatMessage.serializer()),
+                        it
+                    )
+                }.orEmpty()
+                val hasMore = root["hasMore"]?.jsonPrimitive?.booleanOrNull == true
+                val hydrated = JaTextCryptoEngine.hydrateDmMessages(appCtx, myId, rawList, token)
+                syncWallpaperFromDmMessages(activeFriend, hydrated)
+                cache.saveDmMessagesCache(st.slotId, activeFriend, hydrated)
+                if (_state.value.activeChatId == activeFriend) {
+                    _state.update { it.copy(dmMessages = hydrated, dmHasMore = hasMore) }
+                }
+            } catch (_: Throwable) {
+            }
+        } else if (activeGrp != null) {
+            try {
+                val msgRoot = TursoApiClient.rpcRaw("listGroupMessages", mapOf("groupId" to activeGrp), token).jsonObject
+                val rawMsgs = msgRoot["messages"]?.let {
+                    JaTextJson.decodeFromJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(GroupMessage.serializer()),
+                        it
+                    )
+                }.orEmpty()
+                val hasMore = msgRoot["hasMore"]?.jsonPrimitive?.booleanOrNull == true
+                val members = _state.value.groupDetails?.members.orEmpty()
+                val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(appCtx, myId, activeGrp, rawMsgs, members)
+                syncWallpaperFromGroupMessages(activeGrp, outcome.messages)
+                cache.saveGroupMessagesCache(st.slotId, activeGrp, outcome.messages)
+                if (_state.value.activeGroupId == activeGrp) {
+                    _state.update {
+                        it.copy(
+                            groupMessages = outcome.messages,
+                            groupSeenByMessageId = outcome.seenByMessageId,
+                            groupHasMore = hasMore,
+                        )
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private suspend fun reconcileMultiDeviceKeyringAndRehydrate(
+        me: JaUser,
+        rawStickers: List<StickerMedia>,
+        token: String,
+        forcePush: Boolean = false,
+        forceRehydrate: Boolean = false,
+    ) {
+        if (me.id.isBlank() || token.isBlank()) return
+        val outcome = JaTextCryptoEngine.syncAccountKeyringWithServer(
+            context = appCtx,
+            userId = me.id,
+            stickerItems = rawStickers,
+            token = token,
+            forcePush = forcePush,
+        ) ?: return
+        val fp = JaTextCryptoEngine.computeKeyFingerprint(
+            outcome.primaryIdentity.dhPubB64,
+            outcome.primaryIdentity.sigPubB64
+        )
+        _state.update {
+            it.copy(
+                myKeyId = outcome.primaryIdentity.keyId,
+                myKeyFingerprint = fp,
+                lastKeySyncAt = System.currentTimeMillis(),
+            )
+        }
+        JaTextCryptoEngine.syncStateToNativePushDecryptor(
+            context = appCtx,
+            userId = me.id,
+            token = token,
+            notificationsEnabled = _state.value.notificationsEnabled,
+            isDnd = me.statusPreference == "dnd",
+        )
+        if (outcome.changedLocal || forceRehydrate) {
+            rehydrateActiveThreadAfterKeySync(me.id, token)
+            try {
+                val boot = TursoApiClient.rpc<BootstrapResponse>(op = "bootstrap", token = token)
+                decryptSidebarPreviewsAsync(me.id, boot.previews, boot.groups, token)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     private suspend fun ensureE2EEPublishedAndSynced(me: JaUser, friends: List<JaUser>, token: String) {
         if (me.id.isBlank()) return
         val identity = JaTextCryptoEngine.ensureOrCreatePrimaryIdentity(appCtx, me.id)
         JaTextCryptoEngine.ensurePrimaryIdentityPublished(identity, token)
         val peerIds = (friends.map { it.id } + me.id).distinct()
-        JaTextCryptoEngine.ensurePeerBundles(peerIds, token)
+        JaTextCryptoEngine.refreshPeerBundles(peerIds, token)
+        reconcileMultiDeviceKeyringAndRehydrate(me, rawStickerItemsCache, token)
         JaTextCryptoEngine.syncStateToNativePushDecryptor(
             context = appCtx,
             userId = me.id,
@@ -512,6 +662,29 @@ class JaTextSessionViewModel(app: Application) :
                 }
             }
 
+            if (sync.stickers != null) {
+                val combinedStickers = (sync.stickers.stickerFavorites + sync.stickers.recentStickers)
+                    .distinctBy { "${it.key}|${it.url}" }
+                rawStickerItemsCache = combinedStickers
+                val cleanFavs = sync.stickers.stickerFavorites.filterNot { JaTextCryptoEngine.isInternalSyncSticker(it) }
+                val cleanRecs = sync.stickers.recentStickers.filterNot { JaTextCryptoEngine.isInternalSyncSticker(it) }
+                val remoteBubble = extractSyncedBubbleStyle(combinedStickers)
+                if (remoteBubble != null && remoteBubble != _state.value.outgoingBubbleStyle) {
+                    cache.setOutgoingBubbleStyle(_state.value.slotId, remoteBubble)
+                }
+                _state.update { cur ->
+                    cur.copy(
+                        stickerFavorites = cleanFavs,
+                        recentStickers = cleanRecs,
+                        outgoingBubbleStyle = remoteBubble ?: cur.outgoingBubbleStyle,
+                        hasRemoteE2EEVault = cur.hasRemoteE2EEVault || combinedStickers.any {
+                            it.name.trim() == JaTextCryptoEngine.E2EE_VAULT_STICKER_NAME
+                        },
+                    )
+                }
+                reconcileMultiDeviceKeyringAndRehydrate(myUser, combinedStickers, token)
+            }
+
             // Inspect incoming call signals & pre-decrypt active DM/Group deltas before state update!
             val hydratedDmDelta = if (!sync.changedDmMessages.isNullOrEmpty()) {
                 for (raw in sync.changedDmMessages) {
@@ -600,6 +773,14 @@ class JaTextSessionViewModel(app: Application) :
                     groupTypingUsers = sync.groupTypingUsers,
                     communityTypingUsers = sync.communityTypingUsers,
                 )
+            }
+            if (hydratedDmDelta.isNotEmpty() && activeFriend != null && _state.value.activeChatId == activeFriend) {
+                syncWallpaperFromDmMessages(activeFriend, _state.value.dmMessages)
+                cache.saveDmMessagesCache(st.slotId, activeFriend, _state.value.dmMessages)
+            }
+            if (hydratedGrpDelta.isNotEmpty() && st.activeGroupId != null && _state.value.activeGroupId == st.activeGroupId) {
+                syncWallpaperFromGroupMessages(st.activeGroupId, _state.value.groupMessages)
+                cache.saveGroupMessagesCache(st.slotId, st.activeGroupId, _state.value.groupMessages)
             }
             syncPushSuppressionState()
         } catch (_: Throwable) {
@@ -923,6 +1104,7 @@ class JaTextSessionViewModel(app: Application) :
                 }.orEmpty()
                 val hasMore = root["hasMore"]?.jsonPrimitive?.booleanOrNull == true
                 val hydrated = JaTextCryptoEngine.hydrateDmMessages(appCtx, myId, rawList, token)
+                syncWallpaperFromDmMessages(friendId, hydrated)
                 cache.saveDmMessagesCache(slot, friendId, hydrated)
                 if (_state.value.activeChatId == friendId) {
                     _state.update { it.copy(dmMessages = hydrated, dmHasMore = hasMore) }
@@ -1044,6 +1226,7 @@ class JaTextSessionViewModel(app: Application) :
                     rawMsgs,
                     effectiveMembers
                 )
+                syncWallpaperFromGroupMessages(groupId, outcome.messages)
                 cache.saveGroupMessagesCache(slot, groupId, outcome.messages)
                 if (_state.value.activeGroupId == groupId) {
                     _state.update {
@@ -1577,7 +1760,7 @@ class JaTextSessionViewModel(app: Application) :
                         kotlinx.serialization.builtins.ListSerializer(StickerMedia.serializer()),
                         it
                     )
-                }
+                }?.filterNot { JaTextCryptoEngine.isInternalSyncSticker(it) }
                 _state.update { it.copy(stickerFavorites = favs ?: it.stickerFavorites) }
                 showToast("Custom sticker saved!")
             } catch (e: Throwable) {
@@ -1633,13 +1816,13 @@ class JaTextSessionViewModel(app: Application) :
                         kotlinx.serialization.builtins.ListSerializer(StickerMedia.serializer()),
                         it
                     )
-                }
+                }?.filterNot { JaTextCryptoEngine.isInternalSyncSticker(it) }
                 val recs = libRoot["recentStickers"]?.let {
                     JaTextJson.decodeFromJsonElement(
                         kotlinx.serialization.builtins.ListSerializer(StickerMedia.serializer()),
                         it
                     )
-                }
+                }?.filterNot { JaTextCryptoEngine.isInternalSyncSticker(it) }
                 _state.update { cur ->
                     cur.copy(
                         stickerFavorites = favs ?: cur.stickerFavorites,
@@ -2528,6 +2711,113 @@ class JaTextSessionViewModel(app: Application) :
     fun setOutgoingBubbleStyle(styleId: String) {
         cache.setOutgoingBubbleStyle(_state.value.slotId, styleId)
         _state.update { it.copy(outgoingBubbleStyle = styleId) }
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            try {
+                TursoApiClient.rpcRaw(
+                    op = "upsertSticker",
+                    args = mapOf(
+                        "sticker" to mapOf(
+                            "key" to "pref:bubble:v1",
+                            "url" to "https://jatext.vercel.app/favicon.ico",
+                            "name" to "${JaTextCryptoEngine.E2EE_BUBBLE_PREF_PREFIX}$styleId",
+                            "mediaType" to "sticker",
+                            "source" to "upload",
+                        ),
+                        "isFavorite" to false,
+                    ),
+                    token = token,
+                )
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    fun syncMessagesAndKeysNow() {
+        val me = _state.value.me ?: return
+        val token = currentAuthToken() ?: return
+        if (_state.value.isSyncingKeysAndMessages) return
+        _state.update { it.copy(isSyncingKeysAndMessages = true) }
+        viewModelScope.launch {
+            try {
+                JaTextCryptoEngine.clearDecryptedCaches()
+                val boot = TursoApiClient.rpc<BootstrapResponse>(
+                    op = "bootstrap",
+                    token = token,
+                    onRefreshedToken = { refreshed ->
+                        cache.upsertSlotSession(_state.value.slotId, refreshed, me)
+                    }
+                )
+                val effectiveToken = boot.refreshedToken ?: token
+                val combinedStickers = (boot.stickerFavorites + boot.recentStickers)
+                    .distinctBy { "${it.key}|${it.url}" }
+                rawStickerItemsCache = combinedStickers
+                val peerIds = (boot.friends.map { it.id } + boot.me.id).distinct()
+                JaTextCryptoEngine.refreshPeerBundles(peerIds, effectiveToken)
+                reconcileMultiDeviceKeyringAndRehydrate(
+                    me = boot.me,
+                    rawStickers = combinedStickers,
+                    token = effectiveToken,
+                    forcePush = true,
+                    forceRehydrate = true,
+                )
+                applyBootstrapState(_state.value.slotId, effectiveToken, boot, fromCache = false)
+                cache.saveBootstrapCache(_state.value.slotId, boot)
+                rehydrateActiveThreadAfterKeySync(boot.me.id, effectiveToken)
+                showToast("Synced messages & encryption keys!")
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Could not sync messages & keys")
+            } finally {
+                _state.update {
+                    it.copy(
+                        isSyncingKeysAndMessages = false,
+                        lastKeySyncAt = System.currentTimeMillis(),
+                    )
+                }
+            }
+        }
+    }
+
+    fun restoreE2EEVault(secretInput: String, useRecoveryKey: Boolean, onSuccess: () -> Unit = {}) {
+        val me = _state.value.me ?: return
+        val token = currentAuthToken() ?: return
+        if (secretInput.trim().isEmpty()) {
+            showToast(if (useRecoveryKey) "Enter your 24-character Recovery Key" else "Enter your E2EE Vault PIN")
+            return
+        }
+        _state.update { it.copy(isSyncingKeysAndMessages = true) }
+        viewModelScope.launch {
+            try {
+                val restoredPrimary = JaTextCryptoEngine.restoreVaultFromServer(
+                    context = appCtx,
+                    userId = me.id,
+                    secretInput = secretInput.trim(),
+                    useRecoveryKey = useRecoveryKey,
+                    stickerItems = rawStickerItemsCache,
+                    token = token,
+                )
+                val fp = JaTextCryptoEngine.computeKeyFingerprint(
+                    restoredPrimary.dhPubB64,
+                    restoredPrimary.sigPubB64
+                )
+                _state.update {
+                    it.copy(
+                        myKeyId = restoredPrimary.keyId,
+                        myKeyFingerprint = fp,
+                        lastKeySyncAt = System.currentTimeMillis(),
+                    )
+                }
+                rehydrateActiveThreadAfterKeySync(me.id, token)
+                val boot = TursoApiClient.rpc<BootstrapResponse>(op = "bootstrap", token = token)
+                decryptSidebarPreviewsAsync(me.id, boot.previews, boot.groups, token)
+                showToast("E2EE Vault unlocked & messages synced!")
+                onSuccess()
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Failed to unlock E2EE Vault")
+            } finally {
+                _state.update { it.copy(isSyncingKeysAndMessages = false) }
+            }
+        }
     }
 
     fun setWallpaperForCurrentScope(kind: String, url: String?, presetId: String? = null, customImageUri: Uri? = null) {
@@ -2559,6 +2849,7 @@ class JaTextSessionViewModel(app: Application) :
                 } else if (st.activeGroupId != null) {
                     sendInternalGroupSignal(st.activeGroupId, sigText, silent = false)
                 }
+                triggerImmediateSync(burst = true)
                 showToast(if (kind == "none") "Wallpaper cleared" else "Chat wallpaper updated!")
             } catch (_: Throwable) {
             }

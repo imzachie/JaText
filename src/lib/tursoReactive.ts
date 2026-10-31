@@ -77,6 +77,10 @@ interface SyncResponse {
   changedGroupMessages?: GroupMessage[];
   changedCommunityMessages?: CommunityMessage[];
   groups?: GroupSummary[];
+  stickers?: {
+    stickerFavorites: StickerMedia[];
+    recentStickers: StickerMedia[];
+  };
   groupTypingUsers: ChatTypingUser[];
   communityTypingUsers: ChatTypingUser[];
 }
@@ -602,6 +606,15 @@ export function useTursoReactiveSession(
         const nextGroups = res.groups;
         setGroupsQuery((prev) =>
           prev && sameJsonValue(prev, nextGroups) ? prev : nextGroups,
+        );
+      }
+      if (res.stickers) {
+        const nextStickers = {
+          favorites: res.stickers.stickerFavorites,
+          recent: res.stickers.recentStickers,
+        };
+        setStickerLibrary((prev) =>
+          prev && sameJsonValue(prev, nextStickers) ? prev : nextStickers,
         );
       }
       const nextGrpTyping = res.groupTypingUsers ?? [];

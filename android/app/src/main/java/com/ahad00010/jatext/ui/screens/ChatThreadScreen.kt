@@ -17,6 +17,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -122,6 +123,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import com.ahad00010.jatext.ui.icons.WebUiIconKind
+import com.ahad00010.jatext.ui.icons.WebUiSvgIcon
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -371,6 +374,8 @@ fun ChatThreadScreen(
     var showCreatePollModal by remember { mutableStateOf(false) }
     var pollVotersTarget by remember { mutableStateOf<CommunityPoll?>(null) }
     var showModeratorsModal by remember { mutableStateOf(false) }
+    var confirmUnfriendTarget by remember { mutableStateOf<JaUser?>(null) }
+    var confirmDeleteGroupTarget by remember { mutableStateOf<GroupSummary?>(null) }
 
     // Voice Note Recorder
     val recorder = remember { VoiceNoteRecorderController(context) }
@@ -686,76 +691,216 @@ fun ChatThreadScreen(
 
                 Spacer(Modifier.width(6.dp))
                 Box {
-                    JaWebIconButton(
-                        icon = Icons.Rounded.MoreVert,
-                        contentDescription = "More options",
-                        size = 38.dp,
-                        iconSize = 18.dp,
-                        containerColor = headerIconBg,
-                        borderColor = headerIconBorder,
-                        iconTint = headerTitleColor,
-                        onClick = { showOverflowMenu = true },
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .jaBouncyClick(pressedScale = 0.88f) { showOverflowMenu = true }
+                            .clip(CircleShape)
+                            .background(headerIconBg)
+                            .border(1.dp, headerIconBorder, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        WebUiSvgIcon(
+                            kind = WebUiIconKind.MoreVertical,
+                            tint = headerTitleColor,
+                            size = 18.dp,
+                        )
+                    }
+                    val activePreview = activeFriend?.let { fr ->
+                        state.previews.firstOrNull { it.friendId == fr.id }
+                    }
+                    val isFriendBlocked = activeFriend != null && state.blockedUserIds.contains(activeFriend.id)
                     DropdownMenu(
                         expanded = showOverflowMenu,
                         onDismissRequest = { showOverflowMenu = false },
-                        modifier = Modifier.background(palette.bgSecondary),
+                        containerColor = palette.bgSecondary,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, palette.border),
+                        modifier = Modifier.widthIn(min = 232.dp),
                     ) {
                         if (activeFriend != null) {
-                            DropdownMenuItem(
-                                text = { Text("View profile", color = palette.textPrimary) },
-                                leadingIcon = { Icon(Icons.Rounded.Person, null, tint = palette.textSecondary) },
+                            ChatOverflowSvgItem(
+                                icon = WebUiIconKind.User,
+                                label = "View profile",
+                                iconTint = palette.textSecondary,
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenPeerProfile(activeFriend)
-                                }
+                                },
                             )
-                            DropdownMenuItem(
-                                text = { Text("Verify security code", color = palette.textPrimary) },
-                                leadingIcon = { Icon(Icons.Rounded.VerifiedUser, null, tint = palette.accent) },
+                            ChatOverflowSvgItem(
+                                icon = WebUiIconKind.ShieldCheck,
+                                label = "Verify security code",
+                                iconTint = palette.accent,
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenSecurityCode(activeFriend)
-                                }
+                                },
                             )
                         }
                         if (activeGroup != null) {
-                            DropdownMenuItem(
-                                text = { Text("Group members & info", color = palette.textPrimary) },
-                                leadingIcon = { Icon(Icons.Rounded.Groups, null, tint = palette.textSecondary) },
+                            ChatOverflowSvgItem(
+                                icon = WebUiIconKind.Settings,
+                                label = "Group settings & members",
+                                iconTint = palette.textSecondary,
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenGroupMembers()
-                                }
+                                },
                             )
                         }
-                        DropdownMenuItem(
-                            text = { Text("Bubble style", color = palette.textPrimary) },
-                            leadingIcon = { Icon(Icons.Rounded.Palette, null, tint = palette.accent) },
+                        ChatOverflowSvgItem(
+                            icon = WebUiIconKind.BubblePalette,
+                            label = "Bubble style",
+                            iconTint = palette.accent,
                             onClick = {
                                 showOverflowMenu = false
                                 showBubbleStyleModal = true
-                            }
+                            },
                         )
                         if (!isCommunity) {
-                            DropdownMenuItem(
-                                text = { Text("Chat wallpaper", color = palette.textPrimary) },
-                                leadingIcon = { Icon(Icons.Rounded.Wallpaper, null, tint = palette.accent) },
+                            ChatOverflowSvgItem(
+                                icon = WebUiIconKind.Image,
+                                label = if (activeGroup != null) "Group wallpaper" else "Chat wallpaper",
+                                iconTint = palette.accent,
                                 onClick = {
                                     showOverflowMenu = false
                                     showWallpaperModal = true
-                                }
+                                },
                             )
                         }
-                        if (isCommunity && state.communityPermissions.isOwner) {
-                            DropdownMenuItem(
-                                text = { Text("Elect moderators", color = palette.textPrimary) },
-                                leadingIcon = { Icon(Icons.Rounded.HowToReg, null, tint = palette.accent) },
+                        ChatOverflowSvgItem(
+                            icon = WebUiIconKind.RefreshSync,
+                            label = if (state.isSyncingKeysAndMessages) "Syncing chat & keys…" else "Sync chat & keys",
+                            iconTint = palette.accent,
+                            onClick = {
+                                showOverflowMenu = false
+                                vm.syncMessagesAndKeysNow()
+                            },
+                        )
+                        if (activeFriend != null) {
+                            val isMuted = activePreview?.isMuted == true
+                            val isArchived = activePreview?.isArchived == true
+                            ChatOverflowSvgItem(
+                                icon = if (isMuted) WebUiIconKind.Bell else WebUiIconKind.BellOff,
+                                label = if (isMuted) "Unmute chat" else "Mute chat",
+                                iconTint = palette.textSecondary,
                                 onClick = {
                                     showOverflowMenu = false
-                                    showModeratorsModal = true
-                                }
+                                    vm.setDmConversationPrefs(activeFriend.id, muted = !isMuted)
+                                },
                             )
+                            ChatOverflowSvgItem(
+                                icon = WebUiIconKind.Archive,
+                                label = if (isArchived) "Unarchive chat" else "Archive chat",
+                                iconTint = palette.textSecondary,
+                                onClick = {
+                                    showOverflowMenu = false
+                                    vm.setDmConversationPrefs(activeFriend.id, archived = !isArchived)
+                                },
+                            )
+                            HorizontalDivider(
+                                color = palette.border,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                            ChatOverflowSvgItem(
+                                icon = WebUiIconKind.Trash,
+                                label = "Remove chat",
+                                textTint = palette.danger,
+                                iconTint = palette.danger,
+                                onClick = {
+                                    showOverflowMenu = false
+                                    vm.setDmConversationPrefs(activeFriend.id, removeChatHistory = true)
+                                },
+                            )
+                            ChatOverflowSvgItem(
+                                icon = WebUiIconKind.UserMinus,
+                                label = "Unfriend",
+                                textTint = palette.danger,
+                                iconTint = palette.danger,
+                                onClick = {
+                                    showOverflowMenu = false
+                                    confirmUnfriendTarget = activeFriend
+                                },
+                            )
+                            ChatOverflowSvgItem(
+                                icon = if (isFriendBlocked) WebUiIconKind.Unlock else WebUiIconKind.Ban,
+                                label = if (isFriendBlocked) "Unblock" else "Block",
+                                textTint = if (isFriendBlocked) palette.textPrimary else palette.danger,
+                                iconTint = if (isFriendBlocked) palette.ok else palette.danger,
+                                onClick = {
+                                    showOverflowMenu = false
+                                    vm.setBlockedUser(activeFriend.id, !isFriendBlocked)
+                                },
+                            )
+                        }
+                        if (activeGroup != null) {
+                            ChatOverflowSvgItem(
+                                icon = if (activeGroup.isSilenced) WebUiIconKind.Bell else WebUiIconKind.BellOff,
+                                label = if (activeGroup.isSilenced) "Unsilence group" else "Silence group",
+                                iconTint = palette.textSecondary,
+                                onClick = {
+                                    showOverflowMenu = false
+                                    vm.setGroupPrefs(activeGroup.id, silenced = !activeGroup.isSilenced)
+                                },
+                            )
+                            ChatOverflowSvgItem(
+                                icon = WebUiIconKind.Archive,
+                                label = if (activeGroup.isArchived) "Unarchive group" else "Archive group",
+                                iconTint = palette.textSecondary,
+                                onClick = {
+                                    showOverflowMenu = false
+                                    vm.setGroupPrefs(activeGroup.id, archived = !activeGroup.isArchived)
+                                },
+                            )
+                            HorizontalDivider(
+                                color = palette.border,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                            ChatOverflowSvgItem(
+                                icon = WebUiIconKind.Trash,
+                                label = "Remove chat",
+                                textTint = palette.danger,
+                                iconTint = palette.danger,
+                                onClick = {
+                                    showOverflowMenu = false
+                                    vm.removeGroupChatWithoutLeaving(activeGroup.id)
+                                },
+                            )
+                            if (activeGroup.myRole == "owner") {
+                                ChatOverflowSvgItem(
+                                    icon = WebUiIconKind.Trash,
+                                    label = "Delete group",
+                                    textTint = palette.danger,
+                                    iconTint = palette.danger,
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        confirmDeleteGroupTarget = activeGroup
+                                    },
+                                )
+                            }
+                        }
+                        if (isCommunity) {
+                            ChatOverflowSvgItem(
+                                icon = if (state.communityMuted) WebUiIconKind.Bell else WebUiIconKind.BellOff,
+                                label = if (state.communityMuted) "Unmute" else "Mute",
+                                iconTint = palette.textSecondary,
+                                onClick = {
+                                    showOverflowMenu = false
+                                    vm.setCommunityMuted(!state.communityMuted)
+                                },
+                            )
+                            if (state.communityPermissions.isOwner) {
+                                ChatOverflowSvgItem(
+                                    icon = WebUiIconKind.Settings,
+                                    label = "Elect moderators",
+                                    iconTint = palette.accent,
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        showModeratorsModal = true
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -829,54 +974,76 @@ fun ChatThreadScreen(
                             )
                         } else {
                             val isMine = msg.senderId == me.id
-                            val seenReaders = if (activeGroup != null) {
-                                state.groupSeenByMessageId[msg.id].orEmpty()
-                            } else {
-                                emptyList()
+                            val wpEvent = remember(msg.body, msg.attachmentUrl, msg.unsentAt) {
+                                if (msg.unsentAt != null) null
+                                else JaTextCryptoEngine.parseWallpaperSignal(msg.body, msg.attachmentUrl)
                             }
-                            SwipeableMessageRow(
-                                msg = msg,
-                                isMine = isMine,
-                                isGroupThread = activeGroup != null,
-                                hasWallpaper = hasWallpaper,
-                                showSenderHeader = !isMine && activeGroup != null,
-                                myUserId = me.id,
-                                activeCallId = callUiState.callId.takeIf { callUiState.active },
-                                seenReaders = seenReaders,
-                                knownGroupIds = knownGroupIds,
-                                knownFriendIds = knownFriendIds,
-                                onSwipeReply = {
-                                    if (msg.unsentAt == null) {
-                                        replyingTo = ReplySummary(
-                                            id = msg.id,
-                                            senderId = msg.senderId,
-                                            senderName = msg.senderName,
-                                            body = msg.body.ifBlank { "Attachment" },
-                                        )
-                                    }
-                                },
-                                onLongPress = {
-                                    if (msg.unsentAt == null) contextMenuMessage = msg
-                                },
-                                onToggleReaction = { emoji -> vm.toggleReaction(msg.id, emoji) },
-                                onOpenEmojiPicker = { emojiPickerTargetMessageId = msg.id },
-                                onJumpToReply = { replyId ->
-                                    val idx = reversedItems.indexOfFirst { it.id == replyId }
-                                    if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
-                                },
-                                onJumpToForwarded = { fwd -> vm.jumpToForwardedSource(fwd) },
-                                onOpenFullscreenImage = { model -> fullscreenImageModel = model },
-                                onClickSenderOrReader = { user -> onOpenPeerProfile(user) },
-                                onCallAction = { mode ->
-                                    if (callUiState.active) {
-                                        vm.callEngine.setMinimized(false)
-                                    } else if (activeFriend != null) {
-                                        vm.callEngine.startDmCall(me, activeFriend, mode)
-                                    } else if (activeGroup != null) {
-                                        vm.callEngine.startGroupCall(me, activeGroup, mode)
-                                    }
-                                },
-                            )
+                            if (wpEvent != null) {
+                                val actorLabel = if (isMine) {
+                                    "You"
+                                } else {
+                                    wpEvent.actorName?.takeIf { it.isNotBlank() }
+                                        ?: msg.senderName.ifBlank { "Someone" }
+                                }
+                                val actionLabel = if (wpEvent.kind == "none") {
+                                    "cleared the chat wallpaper"
+                                } else {
+                                    "changed the chat wallpaper"
+                                }
+                                WallpaperEventPillRow(
+                                    label = "$actorLabel $actionLabel",
+                                    hasWallpaper = hasWallpaper,
+                                )
+                            } else {
+                                val seenReaders = if (activeGroup != null) {
+                                    state.groupSeenByMessageId[msg.id].orEmpty()
+                                } else {
+                                    emptyList()
+                                }
+                                SwipeableMessageRow(
+                                    msg = msg,
+                                    isMine = isMine,
+                                    isGroupThread = activeGroup != null,
+                                    hasWallpaper = hasWallpaper,
+                                    showSenderHeader = !isMine && activeGroup != null,
+                                    myUserId = me.id,
+                                    activeCallId = callUiState.callId.takeIf { callUiState.active },
+                                    seenReaders = seenReaders,
+                                    knownGroupIds = knownGroupIds,
+                                    knownFriendIds = knownFriendIds,
+                                    onSwipeReply = {
+                                        if (msg.unsentAt == null) {
+                                            replyingTo = ReplySummary(
+                                                id = msg.id,
+                                                senderId = msg.senderId,
+                                                senderName = msg.senderName,
+                                                body = msg.body.ifBlank { "Attachment" },
+                                            )
+                                        }
+                                    },
+                                    onLongPress = {
+                                        if (msg.unsentAt == null) contextMenuMessage = msg
+                                    },
+                                    onToggleReaction = { emoji -> vm.toggleReaction(msg.id, emoji) },
+                                    onOpenEmojiPicker = { emojiPickerTargetMessageId = msg.id },
+                                    onJumpToReply = { replyId ->
+                                        val idx = reversedItems.indexOfFirst { it.id == replyId }
+                                        if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                                    },
+                                    onJumpToForwarded = { fwd -> vm.jumpToForwardedSource(fwd) },
+                                    onOpenFullscreenImage = { model -> fullscreenImageModel = model },
+                                    onClickSenderOrReader = { user -> onOpenPeerProfile(user) },
+                                    onCallAction = { mode ->
+                                        if (callUiState.active) {
+                                            vm.callEngine.setMinimized(false)
+                                        } else if (activeFriend != null) {
+                                            vm.callEngine.startDmCall(me, activeFriend, mode)
+                                        } else if (activeGroup != null) {
+                                            vm.callEngine.startGroupCall(me, activeGroup, mode)
+                                        }
+                                    },
+                                )
+                            }
                         }
                     }
 
@@ -1248,11 +1415,10 @@ fun ChatThreadScreen(
                             .border(1.dp, palette.border, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.AddReaction,
-                            contentDescription = "All emojis",
+                        WebUiSvgIcon(
+                            kind = WebUiIconKind.SmilePlus,
                             tint = palette.textPrimary,
-                            modifier = Modifier.size(18.dp),
+                            size = 18.dp,
                         )
                     }
                 }
@@ -1260,7 +1426,7 @@ fun ChatThreadScreen(
                 Spacer(Modifier.height(12.dp))
 
                 if (!isCommunity || state.communityPermissions.canPost) {
-                    MessageSheetAction(Icons.AutoMirrored.Rounded.Reply, "Reply") {
+                    MessageSheetAction(WebUiIconKind.Reply, "Reply") {
                         replyingTo = ReplySummary(
                             id = msg.id,
                             senderId = msg.senderId,
@@ -1270,12 +1436,12 @@ fun ChatThreadScreen(
                         contextMenuMessage = null
                     }
                 }
-                MessageSheetAction(Icons.AutoMirrored.Rounded.Forward, "Forward") {
+                MessageSheetAction(WebUiIconKind.Forward, "Forward") {
                     forwardingItem = msg
                     contextMenuMessage = null
                 }
                 if (msg.body.isNotBlank()) {
-                    MessageSheetAction(Icons.Rounded.ContentCopy, "Copy text") {
+                    MessageSheetAction(WebUiIconKind.Copy, "Copy text") {
                         val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                         cb?.setPrimaryClip(ClipData.newPlainText("JaText message", msg.body))
                         vm.showToast("Copied to clipboard")
@@ -1283,20 +1449,20 @@ fun ChatThreadScreen(
                     }
                 }
                 if (isMine && msg.body.isNotBlank()) {
-                    MessageSheetAction(Icons.Rounded.Edit, "Edit message") {
+                    MessageSheetAction(WebUiIconKind.Edit, "Edit message") {
                         editingTarget = msg
                         draftText = msg.body
                         contextMenuMessage = null
                     }
                 }
                 if ((isMine && withinUnsendWindow) || canModerateCommunity) {
-                    MessageSheetAction(Icons.Rounded.Undo, "Unsend for everyone", tint = palette.danger) {
+                    MessageSheetAction(WebUiIconKind.Undo, "Unsend for everyone", tint = palette.danger) {
                         vm.unsendMessage(msg.id)
                         contextMenuMessage = null
                     }
                 }
                 if (!isCommunity) {
-                    MessageSheetAction(Icons.Rounded.DeleteOutline, "Delete for me", tint = palette.danger) {
+                    MessageSheetAction(WebUiIconKind.Trash, "Delete for me", tint = palette.danger) {
                         vm.deleteMessageForMe(msg.id)
                         contextMenuMessage = null
                     }
@@ -1471,6 +1637,92 @@ fun ChatThreadScreen(
                 }
             }
         }
+    }
+
+    confirmUnfriendTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { confirmUnfriendTarget = null },
+            containerColor = palette.bgSecondary,
+            title = {
+                Text(
+                    text = "Unfriend ${target.displayName.ifBlank { target.username }}?",
+                    color = palette.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Text(
+                    text = "You will need to send a new friend request to chat again.",
+                    color = palette.textSecondary,
+                    fontSize = 14.sp,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.removeFriend(target.id)
+                        confirmUnfriendTarget = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.danger),
+                ) {
+                    Text("Unfriend", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUnfriendTarget = null }) {
+                    Text("Cancel", color = palette.textSecondary)
+                }
+            },
+        )
+    }
+
+    confirmDeleteGroupTarget?.let { grp ->
+        var typedName by remember(grp.id) { mutableStateOf("") }
+        val exactMatch = typedName.trim() == grp.name.trim()
+        AlertDialog(
+            onDismissRequest = { confirmDeleteGroupTarget = null },
+            containerColor = palette.bgSecondary,
+            title = {
+                Text(
+                    text = "Delete group permanently?",
+                    color = palette.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "This permanently deletes \"${grp.name}\" and all messages for every member. Type the exact group name below to confirm:",
+                        color = palette.textSecondary,
+                        fontSize = 13.5.sp,
+                    )
+                    OutlinedTextField(
+                        value = typedName,
+                        onValueChange = { typedName = it },
+                        placeholder = { Text(grp.name, color = palette.textMuted) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.deleteGroupPermanentlyAsOwner(grp.id)
+                        confirmDeleteGroupTarget = null
+                    },
+                    enabled = exactMatch,
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.danger),
+                ) {
+                    Text("Delete group", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteGroupTarget = null }) {
+                    Text("Cancel", color = palette.textSecondary)
+                }
+            },
+        )
     }
 
     /* ==================== 1:1 Sticker & Klipy GIF Sheet (`Klipy` | `Favourites` | `Top used` | `Upload`) ==================== */
@@ -2849,8 +3101,86 @@ private fun MessageMetaTimestampAndReceiptRow(
 }
 
 @Composable
+private fun ChatOverflowSvgItem(
+    icon: WebUiIconKind,
+    label: String,
+    textTint: Color? = null,
+    iconTint: Color? = null,
+    onClick: () -> Unit,
+) {
+    val palette = LocalJaTextPalette.current
+    val resolvedText = textTint ?: palette.textPrimary
+    val resolvedIcon = iconTint ?: resolvedText
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        WebUiSvgIcon(
+            kind = icon,
+            tint = resolvedIcon,
+            size = 17.dp,
+            strokeWidth = 1.9f,
+        )
+        Spacer(Modifier.width(11.dp))
+        Text(
+            text = label,
+            color = resolvedText,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun WallpaperEventPillRow(
+    label: String,
+    hasWallpaper: Boolean,
+) {
+    val palette = LocalJaTextPalette.current
+    val pillBg = if (hasWallpaper) Color(0x8C10121B) else palette.bgSecondary
+    val pillBorder = if (hasWallpaper) Color(0x30FFFFFF) else palette.border
+    val pillText = if (hasWallpaper) Color(0xFFE5E7EB) else palette.textSecondary
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(pillBg)
+                .border(1.dp, pillBorder, CircleShape)
+                .padding(horizontal = 13.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            WebUiSvgIcon(
+                kind = WebUiIconKind.Image,
+                tint = palette.accent,
+                size = 13.5.dp,
+                strokeWidth = 1.9f,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = label,
+                color = pillText,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
 private fun MessageSheetAction(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: WebUiIconKind,
     label: String,
     tint: Color? = null,
     onClick: () -> Unit,
@@ -2865,7 +3195,7 @@ private fun MessageSheetAction(
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = c, modifier = Modifier.size(20.dp))
+        WebUiSvgIcon(kind = icon, tint = c, size = 19.dp, strokeWidth = 1.9f)
         Spacer(Modifier.width(14.dp))
         Text(label, color = c, fontSize = 15.sp, fontWeight = FontWeight.Medium)
     }

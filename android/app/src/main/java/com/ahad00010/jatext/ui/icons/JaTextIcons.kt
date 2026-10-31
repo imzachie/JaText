@@ -491,3 +491,192 @@ fun ExternalArrowVectorIcon(size: Dp = 13.dp, tint: Color = Color.White) {
         drawPath(corner, color = tint, style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
+
+/* ==================== 1:1 Web Stroked UI SVG Icons (`src/components/UiIcons.tsx`) ==================== */
+
+enum class WebUiIconKind {
+    MoreVertical,
+    User,
+    Users,
+    ShieldCheck,
+    BubblePalette,
+    Image,
+    RefreshSync,
+    Bell,
+    BellOff,
+    Archive,
+    UserMinus,
+    Ban,
+    LockClosed,
+    Unlock,
+    Settings,
+    Trash,
+    Reply,
+    Forward,
+    Copy,
+    Edit,
+    Undo,
+    SmilePlus,
+}
+
+@Composable
+fun WebUiSvgIcon(
+    kind: WebUiIconKind,
+    tint: Color,
+    size: Dp = 18.dp,
+    strokeWidth: Float = 1.9f,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(size)) {
+        val s = this.size.width / 24f
+        val sw = strokeWidth * s
+        val stroke = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val mat = Matrix().apply { scale(s, s) }
+        fun strokeSvgPath(d: String) {
+            val p = PathParser().parsePathString(d).toPath()
+            p.transform(mat)
+            drawPath(p, color = tint, style = stroke)
+        }
+
+        when (kind) {
+            WebUiIconKind.MoreVertical -> {
+                val r = 1.35f * s
+                drawCircle(color = tint, radius = r, center = Offset(12f * s, 5f * s))
+                drawCircle(color = tint, radius = r, center = Offset(12f * s, 12f * s))
+                drawCircle(color = tint, radius = r, center = Offset(12f * s, 19f * s))
+            }
+            WebUiIconKind.User -> {
+                drawCircle(color = tint, radius = 4f * s, center = Offset(12f * s, 8f * s), style = stroke)
+                strokeSvgPath("M5 20a7 7 0 0 1 14 0")
+            }
+            WebUiIconKind.Users -> {
+                strokeSvgPath("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2")
+                drawCircle(color = tint, radius = 4f * s, center = Offset(9f * s, 7f * s), style = stroke)
+                strokeSvgPath("M22 21v-2a4 4 0 0 0-3-3.87")
+                strokeSvgPath("M16 3.13a4 4 0 0 1 0 7.75")
+            }
+            WebUiIconKind.ShieldCheck -> {
+                strokeSvgPath("M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z")
+                strokeSvgPath("m9 12 2 2 4-4")
+            }
+            WebUiIconKind.BubblePalette -> {
+                strokeSvgPath("M21 11.5a8.4 8.4 0 0 1-9 8.4 8.7 8.7 0 0 1-3.6-.8L3 20.5l1.5-4.7A8.4 8.4 0 1 1 21 11.5Z")
+                drawCircle(color = tint, radius = 1.1f * s, center = Offset(9f * s, 11.5f * s))
+                drawCircle(color = tint, radius = 1.1f * s, center = Offset(12.5f * s, 9.5f * s))
+                drawCircle(color = tint, radius = 1.1f * s, center = Offset(15.5f * s, 12f * s))
+            }
+            WebUiIconKind.Image -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(3f * s, 3f * s),
+                    size = Size(18f * s, 18f * s),
+                    cornerRadius = CornerRadius(2.5f * s, 2.5f * s),
+                    style = stroke,
+                )
+                drawCircle(color = tint, radius = 1.5f * s, center = Offset(8.5f * s, 8.5f * s), style = stroke)
+                strokeSvgPath("m21 15-5-5L5 21")
+            }
+            WebUiIconKind.RefreshSync -> {
+                strokeSvgPath("M3 12a9 9 0 0 1 15-6.7L21 8")
+                strokeSvgPath("M21 3v5h-5")
+                strokeSvgPath("M21 12a9 9 0 0 1-15 6.7L3 16")
+                strokeSvgPath("M8 16H3v5")
+            }
+            WebUiIconKind.Bell -> {
+                strokeSvgPath("M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9")
+                strokeSvgPath("M10.3 21a1.94 1.94 0 0 0 3.4 0")
+            }
+            WebUiIconKind.BellOff -> {
+                strokeSvgPath("M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5")
+                strokeSvgPath("M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7")
+                strokeSvgPath("M10.3 21a1.94 1.94 0 0 0 3.4 0")
+                drawLine(tint, Offset(2f * s, 2f * s), Offset(22f * s, 22f * s), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            WebUiIconKind.Archive -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(2f * s, 3f * s),
+                    size = Size(20f * s, 5f * s),
+                    cornerRadius = CornerRadius(1.5f * s, 1.5f * s),
+                    style = stroke,
+                )
+                strokeSvgPath("M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8")
+                drawLine(tint, Offset(10f * s, 12f * s), Offset(14f * s, 12f * s), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            WebUiIconKind.UserMinus -> {
+                strokeSvgPath("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2")
+                drawCircle(color = tint, radius = 4f * s, center = Offset(9f * s, 7f * s), style = stroke)
+                drawLine(tint, Offset(16f * s, 11f * s), Offset(22f * s, 11f * s), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            WebUiIconKind.Ban -> {
+                drawCircle(color = tint, radius = 9.5f * s, center = Offset(12f * s, 12f * s), style = stroke)
+                drawLine(tint, Offset(5.3f * s, 5.3f * s), Offset(18.7f * s, 18.7f * s), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            WebUiIconKind.LockClosed -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(4f * s, 11f * s),
+                    size = Size(16f * s, 10f * s),
+                    cornerRadius = CornerRadius(2.5f * s, 2.5f * s),
+                    style = stroke,
+                )
+                strokeSvgPath("M8 11V7a4 4 0 0 1 8 0v4")
+            }
+            WebUiIconKind.Unlock -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(4f * s, 11f * s),
+                    size = Size(16f * s, 10f * s),
+                    cornerRadius = CornerRadius(2.5f * s, 2.5f * s),
+                    style = stroke,
+                )
+                strokeSvgPath("M8 11V7a4 4 0 0 1 7.8-1.2")
+            }
+            WebUiIconKind.Settings -> {
+                drawCircle(color = tint, radius = 3.1f * s, center = Offset(12f * s, 12f * s), style = stroke)
+                strokeSvgPath("M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1.02 1.42 1.09H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z")
+            }
+            WebUiIconKind.Trash -> {
+                drawLine(tint, Offset(3f * s, 6f * s), Offset(21f * s, 6f * s), strokeWidth = sw, cap = StrokeCap.Round)
+                strokeSvgPath("M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6")
+                strokeSvgPath("M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2")
+                drawLine(tint, Offset(10f * s, 11f * s), Offset(10f * s, 17f * s), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(tint, Offset(14f * s, 11f * s), Offset(14f * s, 17f * s), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            WebUiIconKind.Reply -> {
+                strokeSvgPath("M9 17 4 12 9 7")
+                strokeSvgPath("M20 18v-2a4 4 0 0 0-4-4H4")
+            }
+            WebUiIconKind.Forward -> {
+                strokeSvgPath("M15 17 20 12 15 7")
+                strokeSvgPath("M4 18v-2a4 4 0 0 1 4-4h12")
+            }
+            WebUiIconKind.Copy -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(9f * s, 9f * s),
+                    size = Size(13f * s, 13f * s),
+                    cornerRadius = CornerRadius(2f * s, 2f * s),
+                    style = stroke,
+                )
+                strokeSvgPath("M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1")
+            }
+            WebUiIconKind.Edit -> {
+                drawLine(tint, Offset(12f * s, 20f * s), Offset(21f * s, 20f * s), strokeWidth = sw, cap = StrokeCap.Round)
+                strokeSvgPath("M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z")
+            }
+            WebUiIconKind.Undo -> {
+                strokeSvgPath("M3 7v6h6")
+                strokeSvgPath("M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.7 3L3 13")
+            }
+            WebUiIconKind.SmilePlus -> {
+                strokeSvgPath("M22 11v1a10 10 0 1 1-9-10")
+                strokeSvgPath("M8 14s1.5 2 4 2 4-2 4-2")
+                drawCircle(color = tint, radius = 1f * s, center = Offset(9f * s, 9f * s))
+                drawCircle(color = tint, radius = 1f * s, center = Offset(15f * s, 9f * s))
+                drawLine(tint, Offset(16f * s, 5f * s), Offset(22f * s, 5f * s), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(tint, Offset(19f * s, 2f * s), Offset(19f * s, 8f * s), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+        }
+    }
+}
