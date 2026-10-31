@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { Capacitor } from "@capacitor/core";
 import { clearActiveE2EESession, clearDecryptedSessionCaches } from "./e2ee/keystore";
+import { isPrimaryMobileAppRuntime } from "./iosDetection";
 import { JaTextNative } from "./nativeBridge";
 import type { JaUser, StatusPreference } from "./types";
 
@@ -112,7 +113,7 @@ function readStateFromStorage(): MultiAccountState {
         }
       }
     }
-    const activeSlotId = !Capacitor.isNativePlatform()
+    const activeSlotId = !isPrimaryMobileAppRuntime()
       ? DEFAULT_ACCOUNT_SLOT_ID
       : typeof parsed?.activeSlotId === "string" && parsed.activeSlotId
         ? parsed.activeSlotId
@@ -225,13 +226,37 @@ function isWebLinkedTokenValid(token: string | null | undefined): boolean {
   }
 }
 
+function isJwtUnexpired(token: string | null | undefined): boolean {
+  if (!token || typeof token !== "string") return false;
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const clean = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = clean.length % 4 === 0 ? "" : "=".repeat(4 - (clean.length % 4));
+    const json = atob(clean + pad);
+    const parsed = JSON.parse(json) as { sub?: string; exp?: number };
+    if (!parsed?.sub) return false;
+    if (parsed.exp && parsed.exp * 1000 < Date.now()) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getTursoTokenForSlotSync(slotId = getActiveAccountSlotId()): string | null {
   if (typeof window === "undefined") return null;
   try {
     const key = getTursoTokenKeyForSlot(slotId);
     const raw = window.localStorage.getItem(key);
     if (!raw) return null;
-    if (!Capacitor.isNativePlatform() && !isWebLinkedTokenValid(raw)) {
+    if (isPrimaryMobileAppRuntime()) {
+      if (!Capacitor.isNativePlatform() && !isJwtUnexpired(raw)) {
+        window.localStorage.removeItem(key);
+        return null;
+      }
+      return raw;
+    }
+    if (!isWebLinkedTokenValid(raw)) {
       window.localStorage.removeItem(key);
       return null;
     }

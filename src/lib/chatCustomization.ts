@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { ACCOUNT_SLOT_CHANGE_EVENT, getScopedStorageKey } from "./accountManager";
+import { isPrimaryMobileAppRuntime } from "./iosDetection";
 
 export type BubbleStyleId =
   | "default"
@@ -320,9 +321,19 @@ export function saveCachedWallpaper(scopeKey: string, url: string | null): void 
   }
 }
 
+export function exportAllCachedWallpapers(): Record<string, string | null> {
+  const map = readWallpaperCache();
+  const clean: Record<string, string | null> = {};
+  for (const [key, val] of Object.entries(map)) {
+    if (typeof val === "string" && val.startsWith("blob:")) continue;
+    clean[key] = val;
+  }
+  return clean;
+}
+
 function checkIsMobileWallpaperViewport(): boolean {
   if (typeof window === "undefined") return false;
-  if (Capacitor.isNativePlatform()) return true;
+  if (isPrimaryMobileAppRuntime()) return true;
   return Boolean(window.matchMedia?.("(max-width: 820px)")?.matches);
 }
 

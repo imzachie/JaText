@@ -1,7 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
+import { IosDownloadIcon, IosLaptopIcon, IosRefreshIcon } from "./IosVectorIcons";
 import { useMultiAccountState } from "../lib/accountManager";
+import {
+  isAuthorizedIosChatsRuntime,
+  isRunningAsStandalonePwa,
+} from "../lib/iosDetection";
+import {
+  applyIosPwaUpdateAndReload,
+  checkForIosPwaUpdatesNow,
+  openIosPwaInstallSheet,
+  useIosPwaState,
+} from "../lib/iosPwaUpdater";
 import {
   DEFAULT_SOUND_LABEL,
   defaultSoundSelection,
@@ -30,6 +41,7 @@ import { AnimatedModal } from "./AnimatedModal";
 import { Avatar } from "./Avatar";
 import { Phone } from "./CallIcons";
 import { LockIcon } from "./E2EEModals";
+import { IosDevicesSection } from "./IosDevicesSection";
 import { LegalModal, type LegalTab } from "./LegalModal";
 import { triggerManualMobileUpdateCheck } from "./MobileUpdateGate";
 import { ProfileForm } from "./ProfileForm";
@@ -55,6 +67,7 @@ import {
 export type SettingsCategory =
   | "profile"
   | "appearance"
+  | "devices"
   | "socials"
   | "notifications"
   | "security"
@@ -123,6 +136,10 @@ export function SettingsModal({
   const notifFileInputRef = useRef<HTMLInputElement | null>(null);
   const ringtoneFileInputRef = useRef<HTMLInputElement | null>(null);
   const isNative = Capacitor.isNativePlatform();
+  const isIosChats = isAuthorizedIosChatsRuntime();
+  const isPrimaryMobile = isNative || isIosChats;
+  const iosPwaState = useIosPwaState();
+  const [iosUpdateNotice, setIosUpdateNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isNative) return;
@@ -311,7 +328,13 @@ export function SettingsModal({
       return;
     }
     if (!("Notification" in window)) {
-      setNotificationError("This browser does not support desktop notifications.");
+      if (isIosChats && !isRunningAsStandalonePwa()) {
+        setNotificationError(
+          "Install JaText iOS as a PWA to your Home Screen first (Share -> Add to Home Screen) to unlock iOS notifications.",
+        );
+      } else {
+        setNotificationError("This browser does not support notifications.");
+      }
       return;
     }
     try {
@@ -349,6 +372,16 @@ export function SettingsModal({
       subtitle: "Light, Ash, Dark, Onyx & custom colour themes",
       icon: <BubblePaletteIcon size={17} />,
     },
+    ...(isIosChats
+      ? [
+          {
+            id: "devices" as SettingsCategory,
+            label: "Devices",
+            subtitle: "Scan Web QR code & manage linked browsers",
+            icon: <IosLaptopIcon size={17} />,
+          },
+        ]
+      : []),
     {
       id: "socials",
       label: "Socials",
@@ -464,7 +497,7 @@ export function SettingsModal({
                     void signOut();
                   }}
                 >
-                  {isNative
+                  {isPrimaryMobile
                     ? accounts.length > 1
                       ? `Sign out of @${currentUser.username}`
                       : "Sign out"
@@ -695,7 +728,21 @@ export function SettingsModal({
                 </section>
               )}
 
-              {/* === 3. SOCIALS === */}
+              {/* === 2B. LINKED DEVICES (iOS PRIMARY MOBILE) === */}
+              {activeCategory === "devices" && isIosChats && (
+                <section className="settings-pane-section">
+                  <div className="settings-pane-head">
+                    <h3>Linked Devices</h3>
+                    <p className="muted small">
+                      Scan a QR code on <strong>jatext.vercel.app/chats</strong> to sign in on your
+                      computer with zero-knowledge E2EE key sync, or disconnect any session below.
+                    </p>
+                  </div>
+                  <IosDevicesSection />
+                </section>
+              )}
+
+              {/* === 3. SOCIALS === === */}
               {activeCategory === "socials" && (
                 <section className="settings-pane-section">
                   <div className="settings-pane-head">
@@ -1044,7 +1091,7 @@ export function SettingsModal({
                     <div className="settings-inline-legal-card" style={{ marginTop: 4 }}>
                       <h4>App Version &amp; Updates</h4>
                       <p className="muted small">
-                        Installed release: <strong>JaText v3.7.1 (Build 49)</strong>. JaText checks
+                        Installed release: <strong>JaText v3.8.0 (Build 50)</strong>. JaText checks
                         for updates automatically on launch, or you can check manually below.
                       </p>
                       <button
@@ -1057,6 +1104,81 @@ export function SettingsModal({
                       >
                         Check for App Updates
                       </button>
+                    </div>
+                  )}
+
+                  {isIosChats && (
+                    <div className="settings-inline-legal-card" style={{ marginTop: 8 }}>
+                      <h4>JaText iOS Liquid Glass PWA</h4>
+                      <p className="muted small">
+                        Active release: <strong>JaText v3.8.0</strong> (
+                        {isRunningAsStandalonePwa()
+                          ? "Installed on Home Screen"
+                          : "Browser Mode"}
+                        ). JaText automatically notifies you to refresh whenever new changes are
+                        deployed.
+                      </p>
+                      {iosUpdateNotice && (
+                        <p
+                          className="small"
+                          style={{ color: "var(--accent)", marginBottom: 10, fontWeight: 600 }}
+                        >
+                          {iosUpdateNotice}
+                        </p>
+                      )}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {!isRunningAsStandalonePwa() && (
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                            onClick={() => {
+                              requestClose();
+                              openIosPwaInstallSheet();
+                            }}
+                          >
+                            <IosDownloadIcon size={14} />
+                            <span>Install JaText iOS as a PWA!</span>
+                          </button>
+                        )}
+                        {iosPwaState.updateAvailable ? (
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                            onClick={() => void applyIosPwaUpdateAndReload()}
+                          >
+                            <IosRefreshIcon size={14} />
+                            <span>Refresh PWA Now</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="ghost-btn"
+                            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                            disabled={iosPwaState.checking}
+                            onClick={async () => {
+                              setIosUpdateNotice(null);
+                              const found = await checkForIosPwaUpdatesNow();
+                              if (!found) {
+                                setIosUpdateNotice(
+                                  "You are running the newest JaText iOS build!",
+                                );
+                              }
+                            }}
+                          >
+                            <IosRefreshIcon
+                              size={14}
+                              className={iosPwaState.checking ? "jt-spin-icon" : undefined}
+                            />
+                            <span>
+                              {iosPwaState.checking
+                                ? "Checking..."
+                                : "Check for PWA Updates"}
+                            </span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </section>

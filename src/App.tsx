@@ -6,6 +6,7 @@ import { CallOverlay } from "./components/CallOverlay";
 import { GroupCallOverlay } from "./components/GroupCallOverlay";
 import { CommunityChatView } from "./components/CommunityChatView";
 import { GroupChatView } from "./components/GroupChatView";
+import { IosMobileLoginPage } from "./components/IosMobileLoginPage";
 import { LoginPage } from "./components/LoginPage";
 import { MobileUpdateGate } from "./components/MobileUpdateGate";
 import { StartupPermissionsModal } from "./components/StartupPermissionsModal";
@@ -41,6 +42,7 @@ import {
 import { GroupCallProvider, useGroupCall } from "./lib/groupCalling";
 import { getActiveAccountSlotId, getTursoTokenForSlotSync } from "./lib/accountManager";
 import { PUBLIC_TURSO_API_ORIGIN } from "./lib/tursoClient";
+import { isAuthorizedIosChatsRuntime, isPrimaryMobileAppRuntime } from "./lib/iosDetection";
 import { JaTextNative } from "./lib/nativeBridge";
 import { useJaText } from "./lib/store";
 import {
@@ -805,7 +807,12 @@ function AppContent() {
     );
   }
 
-  if (!store.me) return <LoginPage />;
+  const isIosChats = isAuthorizedIosChatsRuntime();
+  const isPrimaryMobile = isPrimaryMobileAppRuntime();
+
+  if (!store.me) {
+    return isIosChats ? <IosMobileLoginPage /> : <LoginPage />;
+  }
 
   if (!store.me.onboardingComplete) return <Onboarding />;
 
@@ -869,7 +876,7 @@ function AppContent() {
           setSettingsOpen(true);
         }}
         onOpenAccountSwitcher={
-          Capacitor.isNativePlatform() ? () => setAccountSwitcherOpen(true) : undefined
+          isPrimaryMobile ? () => setAccountSwitcherOpen(true) : undefined
         }
       />
       <main className="main-pane">{renderMainPaneContent()}</main>
@@ -887,7 +894,7 @@ function AppContent() {
           openCategoryDirectlyOnMobile={settingsDirectMobile}
           onClose={() => setSettingsOpen(false)}
           onOpenAccountSwitcher={
-            Capacitor.isNativePlatform()
+            isPrimaryMobile
               ? () => {
                   setSettingsOpen(false);
                   setAccountSwitcherOpen(true);
@@ -911,10 +918,10 @@ function AppContent() {
           }}
         />
       )}
-      {Capacitor.isNativePlatform() && accountSwitcherOpen && (
+      {isPrimaryMobile && accountSwitcherOpen && (
         <AccountSwitcherModal onClose={() => setAccountSwitcherOpen(false)} />
       )}
-      {webNotifPromptVisible && (
+      {webNotifPromptVisible && !isIosChats && (
         <div className="desktop-notif-banner" role="region" aria-label="Enable desktop notifications">
           <span className="desktop-notif-banner-icon" aria-hidden="true">
             <BellIcon size={16} />

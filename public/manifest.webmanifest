@@ -1,0 +1,27 @@
+{
+  "id": "/ios/chats",
+  "name": "JaText",
+  "short_name": "JaText",
+  "description": "Zero-knowledge end-to-end encrypted chat, voice notes, custom themes, and HD calls for iOS.",
+  "start_url": "/ios/chats",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0b10",
+  "theme_color": "#0b0b10",
+  "categories": ["social", "communication"],
+  "icons": [
+    {
+      "src": "/jatext-logo-icon.png",
+      "sizes": "500x500",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/jatext-logo-icon.png",
+      "sizes": "500x500",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

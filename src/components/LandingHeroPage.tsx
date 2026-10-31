@@ -1,5 +1,7 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
-import { navigateToChats } from "../lib/webRoute";
+import { isGenuineIosDevice } from "../lib/iosDetection";
+import { navigateToChats, navigateToIosChats } from "../lib/webRoute";
+import { IosWelcomeGate } from "./IosWelcomeGate";
 import "../landingHero.css";
 
 type SketchTab = "chat" | "calls" | "e2ee";
@@ -32,7 +34,11 @@ function handleStartChattingClick(event: MouseEvent<HTMLAnchorElement>) {
     return;
   }
   event.preventDefault();
-  navigateToChats();
+  if (isGenuineIosDevice()) {
+    navigateToIosChats();
+  } else {
+    navigateToChats();
+  }
 }
 
 const FEATURES: FeatureItem[] = [
@@ -124,10 +130,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.8.0",
+    date: "October 31, 2026",
+    headline: "JaText iOS Web & Liquid Glass PWA (/ios/chats) with 1:1 Mobile Parity & Live Updates",
+    latest: true,
+    bullets: [
+      "Launched jatext.vercel.app/ios/chats exclusively for iOS Safari and Chrome users with an instant On iOS? welcome screen, standalone Home Screen PWA installation, and automatic live PWA refresh notifications on every deploy.",
+      "Delivered 1:1 JaText mobile parity on iOS including Google and Email sign-in, multi-account switching, Settings -> Devices rear-camera QR scanning to link Desktop Web, mobile chat wallpapers, and iOS 26 Liquid Glass animations across Settings and chat surfaces.",
+    ],
+  },
+  {
     version: "v3.7.2",
     date: "October 31, 2026",
     headline: "Instant Desktop Delete-for-Me, Strict Keyboard Focus Control & Mobile-Only Chat Wallpapers",
-    latest: true,
     bullets: [
       "Made Desktop Delete for me instantaneous and permanent across 1:1 DMs, Groups, and Community while keeping 5-second Undo restoration seamless.",
       "Stopped soft keyboards from ever opening on their own after being dismissed, and restored Chat Wallpapers strictly to mobile devices.",
@@ -348,6 +363,9 @@ const UPDATE_LOGS: UpdateLogEntry[] = [
 
 export function LandingHeroPage() {
   const [activeTab, setActiveTab] = useState<SketchTab>("chat");
+  const [isIosVisitor] = useState<boolean>(() => isGenuineIosDevice());
+  const [showIosGate, setShowIosGate] = useState<boolean>(() => isGenuineIosDevice());
+  const chatsHref = isIosVisitor ? "/ios/chats" : "/chats";
 
   useEffect(() => {
     document.documentElement.classList.add("jatext-landing-route");
@@ -380,6 +398,9 @@ export function LandingHeroPage() {
 
   return (
     <div className="jt-sketch-page">
+      {isIosVisitor && showIosGate && (
+        <IosWelcomeGate onDismissForReading={() => setShowIosGate(false)} />
+      )}
       <svg className="jt-sketch-svg-defs" aria-hidden="true">
         <defs>
           <filter id="jt-pencil-wobble" x="-5%" y="-5%" width="110%" height="110%">
@@ -402,7 +423,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.7.1 · Live
+                v3.8.0 · Live
               </span>
             </span>
           </a>
@@ -411,12 +432,18 @@ export function LandingHeroPage() {
             <a href="#features">Features</a>
             <a href="#security">Zero-Knowledge E2EE</a>
             <a href="#updates">Update Logs</a>
-            <a href="/downloads/JaText-release.apk">Android APK</a>
+            {isIosVisitor ? (
+              <a href={chatsHref} onClick={handleStartChattingClick}>
+                Open Web App (/ios/chats)
+              </a>
+            ) : (
+              <a href="/downloads/JaText-release.apk">Android APK</a>
+            )}
           </div>
 
           <div className="jt-nav-actions">
             <a
-              href="/chats"
+              href={chatsHref}
               onClick={handleStartChattingClick}
               className="jt-btn-primary jt-btn-sm"
             >
@@ -472,7 +499,7 @@ export function LandingHeroPage() {
 
                 <div className="jt-hero-cta-row">
                   <a
-                    href="/chats"
+                    href={chatsHref}
                     onClick={handleStartChattingClick}
                     className="jt-btn-primary jt-btn-lg"
                   >
@@ -483,17 +510,27 @@ export function LandingHeroPage() {
                     </svg>
                   </a>
 
-                  <a
-                    href="/downloads/JaText-release.apk"
-                    className="jt-btn-secondary jt-btn-lg"
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="7 10 12 15 17 10" />
-                      <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                    Download Android APK
-                  </a>
+                  {isIosVisitor ? (
+                    <a
+                      href="/ios/chats"
+                      onClick={handleStartChattingClick}
+                      className="jt-btn-secondary jt-btn-lg"
+                    >
+                      Open Web App (/ios/chats)
+                    </a>
+                  ) : (
+                    <a
+                      href="/downloads/JaText-release.apk"
+                      className="jt-btn-secondary jt-btn-lg"
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                      </svg>
+                      Download Android APK
+                    </a>
+                  )}
                 </div>
 
                 <div className="jt-hero-handnote">
@@ -508,7 +545,11 @@ export function LandingHeroPage() {
                       strokeLinejoin="round"
                     />
                   </svg>
-                  <span>Opens jatext.vercel.app/chats right in your browser, no install needed.</span>
+                  <span>
+                    {isIosVisitor
+                      ? "Opens jatext.vercel.app/ios/chats right in your iOS browser, no install needed."
+                      : "Opens jatext.vercel.app/chats right in your browser, no install needed."}
+                  </span>
                 </div>
 
                 <div className="jt-hero-stats">
@@ -521,8 +562,8 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.7.1 (Build 49)</strong>
-                    <span>Web &amp; Signed APK</span>
+                    <strong>v3.8.0 (Build 50)</strong>
+                    <span>{isIosVisitor ? "iOS Web & Liquid Glass PWA" : "Web & Signed APK"}</span>
                   </div>
                 </div>
               </div>
@@ -727,13 +768,17 @@ export function LandingHeroPage() {
                     )}
 
                     <div className="jt-window-composer">
-                      <span>Write an encrypted message in /chats…</span>
+                      <span>
+                        {isIosVisitor
+                          ? "Write an encrypted message in /ios/chats..."
+                          : "Write an encrypted message in /chats..."}
+                      </span>
                       <a
-                        href="/chats"
+                        href={chatsHref}
                         onClick={handleStartChattingClick}
                         className="jt-composer-go"
                       >
-                        Open /chats →
+                        {isIosVisitor ? "Open Web App (/ios/chats)" : "Open /chats →"}
                       </a>
                     </div>
                   </div>
@@ -890,13 +935,23 @@ export function LandingHeroPage() {
             <div>
               <h2>Ready to jump into your chats?</h2>
               <p>
-                Launch the full JaText web app at <strong>jatext.vercel.app/chats</strong> or grab
-                the latest signed Android Release APK (v3.7.1).
+                {isIosVisitor ? (
+                  <>
+                    Launch JaText for iOS instantly at{" "}
+                    <strong>jatext.vercel.app/ios/chats</strong> with zero installation required.
+                  </>
+                ) : (
+                  <>
+                    Launch the full JaText web app at{" "}
+                    <strong>jatext.vercel.app/chats</strong> or grab the latest signed Android
+                    Release APK (v3.8.0).
+                  </>
+                )}
               </p>
             </div>
             <div className="jt-cta-banner-actions">
               <a
-                href="/chats"
+                href={chatsHref}
                 onClick={handleStartChattingClick}
                 className="jt-btn-primary jt-btn-lg"
               >
@@ -906,12 +961,22 @@ export function LandingHeroPage() {
                   <path d="m13 6 6 6-6 6" />
                 </svg>
               </a>
-              <a
-                href="/downloads/JaText-release.apk"
-                className="jt-btn-secondary jt-btn-lg"
-              >
-                Get Android APK (v3.7.1)
-              </a>
+              {isIosVisitor ? (
+                <a
+                  href="/ios/chats"
+                  onClick={handleStartChattingClick}
+                  className="jt-btn-secondary jt-btn-lg"
+                >
+                  Open Web App (/ios/chats)
+                </a>
+              ) : (
+                <a
+                  href="/downloads/JaText-release.apk"
+                  className="jt-btn-secondary jt-btn-lg"
+                >
+                  Get Android APK (v3.8.0)
+                </a>
+              )}
             </div>
           </div>
         </section>
@@ -922,17 +987,17 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.7.1</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.8.0</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">
-            <a href="/chats" onClick={handleStartChattingClick}>
-              Open Web App (/chats)
+            <a href={chatsHref} onClick={handleStartChattingClick}>
+              {isIosVisitor ? "Open Web App (/ios/chats)" : "Open Web App (/chats)"}
             </a>
             <a href="#features">Features</a>
             <a href="#security">Security</a>
             <a href="#updates">Update Logs</a>
-            <a href="/downloads/JaText-release.apk">Download APK</a>
+            {!isIosVisitor && <a href="/downloads/JaText-release.apk">Download APK</a>}
           </div>
         </div>
       </footer>

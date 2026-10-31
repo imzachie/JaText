@@ -1,0 +1,1216 @@
+/* ============================================================================
+   JaText iOS 26 Liquid Glass Design System (/ios/chats & Standalone PWA)
+   Scoped strictly to html.jatext-ios-liquid-glass so Desktop /chats and
+   Native Android remain 100% untouched.
+   ============================================================================ */
+
+@keyframes jtLiquidSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes jtLiquidPaneSpring {
+  0% {
+    opacity: 0;
+    transform: translate3d(18px, 6px, 0) scale(0.985);
+  }
+  65% {
+    opacity: 1;
+    transform: translate3d(-2px, 0, 0) scale(1.004);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes jtLiquidModalSpring {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 26px, 0) scale(0.93);
+  }
+  68% {
+    opacity: 1;
+    transform: translate3d(0, -3px, 0) scale(1.012);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes jtLiquidBannerDrop {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -24px, 0) scale(0.94);
+  }
+  70% {
+    opacity: 1;
+    transform: translate3d(0, 3px, 0) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes jtLiquidSheetUp {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 44px, 0) scale(0.96);
+  }
+  72% {
+    opacity: 1;
+    transform: translate3d(0, -3px, 0) scale(1.006);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes jtQrLaserSweep {
+  0%, 100% {
+    top: 14%;
+    opacity: 0.65;
+  }
+  50% {
+    top: 84%;
+    opacity: 1;
+  }
+}
+
+.jt-spin-icon {
+  animation: jtLiquidSpin 850ms linear infinite;
+}
+
+html.jatext-ios-liquid-glass {
+  --ios-spring: cubic-bezier(0.22, 1.26, 0.36, 1);
+  --ios-glass-border: rgba(255, 255, 255, 0.22);
+  --ios-glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -0.5px 0 rgba(255, 255, 255, 0.08);
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.jatext-ios-liquid-glass[data-theme-mode="light"] {
+  --ios-glass-border: rgba(255, 255, 255, 0.68);
+  --ios-glass-rim: inset 0 1.5px 0 rgba(255, 255, 255, 0.88),
+    inset 0 -0.5px 0 rgba(15, 23, 42, 0.06);
+}
+
+/* Safe-area support for iOS Standalone Home Screen PWA */
+html.jatext-ios-liquid-glass .sidebar {
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+}
+
+html.jatext-ios-liquid-glass .chat-header {
+  padding-top: max(10px, env(safe-area-inset-top));
+  background: color-mix(in srgb, var(--bg-elevated, #151621) 68%, transparent) !important;
+  backdrop-filter: blur(28px) saturate(195%);
+  -webkit-backdrop-filter: blur(28px) saturate(195%);
+  border-bottom: 1px solid var(--ios-glass-border);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.14), var(--ios-glass-rim);
+}
+
+html.jatext-ios-liquid-glass .composer-wrap {
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--bg, #0d0e15) 78%, transparent),
+    transparent
+  );
+}
+
+html.jatext-ios-liquid-glass .composer {
+  border-radius: 26px;
+  background: color-mix(in srgb, var(--bg-elevated, #181926) 72%, transparent);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  border: 1px solid var(--ios-glass-border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), var(--ios-glass-rim);
+  transition: transform 240ms var(--ios-spring), box-shadow 220ms ease, border-color 200ms ease;
+}
+
+html.jatext-ios-liquid-glass .composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent, #9b6cff) 62%, rgba(255, 255, 255, 0.4));
+  box-shadow:
+    0 14px 36px rgba(124, 58, 237, 0.22),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.42);
+}
+
+/* Liquid Glass Pill Tabs & Interactive Press Physics */
+html.jatext-ios-liquid-glass .sidebar-tabs {
+  border-radius: 999px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--bg-elevated, #171824) 74%, transparent);
+  border: 1px solid var(--ios-glass-border);
+  box-shadow: var(--ios-glass-rim);
+  backdrop-filter: blur(22px) saturate(185%);
+  -webkit-backdrop-filter: blur(22px) saturate(185%);
+}
+
+html.jatext-ios-liquid-glass .sidebar-tabs button {
+  border-radius: 999px;
+  transition:
+    transform 240ms var(--ios-spring),
+    background 220ms ease,
+    box-shadow 220ms ease;
+}
+
+html.jatext-ios-liquid-glass .sidebar-tabs button:active,
+html.jatext-ios-liquid-glass .icon-btn:active,
+html.jatext-ios-liquid-glass .ghost-btn:active,
+html.jatext-ios-liquid-glass .primary-btn:active,
+html.jatext-ios-liquid-glass .btn-primary:active,
+html.jatext-ios-liquid-glass .danger-btn:active,
+html.jatext-ios-liquid-glass .mini-btn:active {
+  transform: scale(0.955);
+}
+
+/* ============================================================================
+   iOS 26 Liquid Glass Settings Shell, Category Rows & Section Animations
+   ============================================================================ */
+
+html.jatext-ios-liquid-glass .modal-card {
+  border-radius: 30px;
+  background: color-mix(in srgb, var(--bg-elevated, #151622) 76%, transparent);
+  backdrop-filter: blur(36px) saturate(205%);
+  -webkit-backdrop-filter: blur(36px) saturate(205%);
+  border: 1px solid var(--ios-glass-border);
+  box-shadow:
+    0 30px 70px rgba(0, 0, 0, 0.48),
+    var(--ios-glass-rim);
+  animation: jtLiquidModalSpring 420ms var(--ios-spring) both;
+}
+
+html.jatext-ios-liquid-glass .context-menu {
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--bg-elevated, #171826) 76%, transparent);
+  backdrop-filter: blur(32px) saturate(210%);
+  -webkit-backdrop-filter: blur(32px) saturate(210%);
+  border: 1px solid var(--ios-glass-border);
+  box-shadow:
+    0 22px 48px rgba(0, 0, 0, 0.44),
+    var(--ios-glass-rim);
+}
+
+html.jatext-ios-liquid-glass .settings-shell-modal {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+html.jatext-ios-liquid-glass .settings-user-summary {
+  border-radius: 20px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--ios-glass-border);
+  box-shadow: var(--ios-glass-rim);
+}
+
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .settings-user-summary {
+  background: rgba(255, 255, 255, 0.56);
+}
+
+html.jatext-ios-liquid-glass .settings-nav-item {
+  border-radius: 18px;
+  border: 1px solid transparent;
+  transition:
+    transform 260ms var(--ios-spring),
+    background 200ms ease,
+    border-color 200ms ease,
+    box-shadow 220ms ease;
+}
+
+html.jatext-ios-liquid-glass .settings-nav-item:active {
+  transform: scale(0.972);
+}
+
+html.jatext-ios-liquid-glass .settings-nav-item.active {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent, #9b6cff) 24%, rgba(255, 255, 255, 0.1)),
+    color-mix(in srgb, var(--accent, #9b6cff) 10%, rgba(255, 255, 255, 0.04))
+  );
+  border-color: color-mix(in srgb, var(--accent, #9b6cff) 45%, rgba(255, 255, 255, 0.3));
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34);
+}
+
+html.jatext-ios-liquid-glass .settings-nav-icon {
+  border-radius: 12px;
+  transition: transform 260ms var(--ios-spring), background 200ms ease;
+}
+
+html.jatext-ios-liquid-glass .settings-nav-item:active .settings-nav-icon {
+  transform: scale(0.9) rotate(-3deg);
+}
+
+html.jatext-ios-liquid-glass .settings-pane-section {
+  animation: jtLiquidPaneSpring 380ms var(--ios-spring) both;
+}
+
+html.jatext-ios-liquid-glass .appearance-block,
+html.jatext-ios-liquid-glass .settings-inline-legal-card,
+html.jatext-ios-liquid-glass .profile-e2ee-card {
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--ios-glass-border);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12), var(--ios-glass-rim);
+  transition: transform 240ms var(--ios-spring), box-shadow 220ms ease;
+}
+
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .appearance-block,
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .settings-inline-legal-card {
+  background: rgba(255, 255, 255, 0.62);
+}
+
+html.jatext-ios-liquid-glass .default-theme-card,
+html.jatext-ios-liquid-glass .colour-swatch-btn {
+  transition: transform 250ms var(--ios-spring), box-shadow 200ms ease;
+}
+
+html.jatext-ios-liquid-glass .default-theme-card:active,
+html.jatext-ios-liquid-glass .colour-swatch-btn:active {
+  transform: scale(0.92);
+}
+
+html.jatext-ios-liquid-glass .settings-mobile-detail-bar {
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--ios-glass-border);
+  box-shadow: var(--ios-glass-rim);
+  backdrop-filter: blur(22px) saturate(185%);
+  -webkit-backdrop-filter: blur(22px) saturate(185%);
+}
+
+/* ============================================================================
+   Floating PWA Install & Live Update Notification Banners
+   ============================================================================ */
+
+.jt-ios-pwa-float-wrap {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 12px;
+  right: 12px;
+  z-index: 9500;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  animation: jtLiquidBannerDrop 440ms cubic-bezier(0.22, 1.25, 0.36, 1) both;
+}
+
+.jt-ios-pwa-banner {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border-radius: 22px;
+  background: linear-gradient(
+    135deg,
+    rgba(24, 24, 38, 0.82) 0%,
+    rgba(36, 26, 58, 0.78) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 18px 42px rgba(0, 0, 0, 0.45),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.38);
+  backdrop-filter: blur(30px) saturate(210%);
+  -webkit-backdrop-filter: blur(30px) saturate(210%);
+  color: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
+}
+
+.jt-ios-pwa-banner-update {
+  background: linear-gradient(
+    135deg,
+    rgba(20, 32, 38, 0.86) 0%,
+    rgba(46, 26, 78, 0.84) 100%
+  );
+  border-color: rgba(167, 139, 250, 0.48);
+}
+
+.jt-ios-pwa-banner-logo {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  flex: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+}
+
+.jt-ios-pwa-banner-icon.is-update {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(155, 108, 255, 0.25);
+  border: 1px solid rgba(196, 181, 253, 0.4);
+  color: #e9d5ff;
+}
+
+.jt-ios-pwa-banner-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.jt-ios-pwa-banner-copy strong {
+  font-size: 13.5px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.jt-ios-pwa-banner-copy span {
+  font-size: 11.8px;
+  line-height: 1.3;
+  color: rgba(226, 232, 240, 0.84);
+}
+
+.jt-ios-pwa-banner-cta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  background: linear-gradient(135deg, #9b6cff, #7c3aed);
+  box-shadow: 0 6px 16px rgba(124, 58, 237, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 200ms cubic-bezier(0.22, 1.3, 0.36, 1);
+}
+
+.jt-ios-pwa-banner-cta:active {
+  transform: scale(0.94);
+}
+
+.jt-ios-pwa-banner-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(248, 250, 252, 0.8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* ============================================================================
+   Guided PWA Install Sheet & QR Scanner Sheet
+   ============================================================================ */
+
+.jt-ios-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9800;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px 12px max(16px, env(safe-area-inset-bottom));
+  background: rgba(6, 7, 12, 0.66);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+}
+
+.jt-ios-install-sheet,
+.jt-ios-qr-modal {
+  width: 100%;
+  max-width: 440px;
+  padding: 16px 20px 22px;
+  border-radius: 30px;
+  background: linear-gradient(
+    155deg,
+    rgba(32, 32, 48, 0.88) 0%,
+    rgba(18, 18, 28, 0.92) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 28px 68px rgba(0, 0, 0, 0.58),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.38);
+  backdrop-filter: blur(36px) saturate(210%);
+  -webkit-backdrop-filter: blur(36px) saturate(210%);
+  color: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
+  animation: jtLiquidSheetUp 420ms cubic-bezier(0.22, 1.24, 0.36, 1) both;
+}
+
+.jt-ios-sheet-grabber {
+  width: 40px;
+  height: 4.5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  margin: 0 auto 14px;
+}
+
+.jt-ios-install-sheet-head,
+.jt-ios-qr-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.jt-ios-install-app-badge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.jt-ios-install-app-badge img {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.34);
+}
+
+.jt-ios-install-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(155, 108, 255, 0.22);
+  border: 1px solid rgba(196, 181, 253, 0.38);
+  color: #e9d5ff;
+  margin-bottom: 4px;
+}
+
+.jt-ios-install-app-badge h3,
+.jt-ios-qr-modal-head h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.jt-ios-qr-modal-head span {
+  display: block;
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: rgba(226, 232, 240, 0.78);
+}
+
+.jt-ios-sheet-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.jt-ios-install-lead {
+  margin: 0 0 16px;
+  font-size: 13.5px;
+  line-height: 1.48;
+  color: rgba(226, 232, 240, 0.88);
+}
+
+.jt-ios-install-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.jt-ios-install-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 13px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.065);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.jt-ios-step-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(155, 108, 255, 0.22);
+  border: 1px solid rgba(196, 181, 253, 0.36);
+  color: #d8b4fe;
+}
+
+.jt-ios-install-step strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 2px;
+}
+
+.jt-ios-install-step span {
+  display: block;
+  font-size: 12.2px;
+  line-height: 1.4;
+  color: rgba(226, 232, 240, 0.8);
+}
+
+.jt-ios-install-done-btn {
+  width: 100%;
+  padding: 13.5px 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  background: linear-gradient(135deg, #9b6cff, #7c3aed);
+  box-shadow: 0 12px 26px rgba(124, 58, 237, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  color: #ffffff;
+  font-size: 14.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ============================================================================
+   iOS Primary Mobile Login Screen (/ios/chats)
+   ============================================================================ */
+
+.jt-ios-login-screen {
+  position: relative;
+  min-height: 100dvh;
+  width: 100%;
+  background: radial-gradient(circle at 50% 0%, #241942 0%, #0d0d15 58%, #08080d 100%);
+  color: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+.jt-ios-login-orb {
+  position: fixed;
+  border-radius: 999px;
+  filter: blur(64px);
+  pointer-events: none;
+}
+
+.jt-ios-login-orb-1 {
+  width: 280px;
+  height: 280px;
+  top: 6%;
+  left: -60px;
+  background: rgba(155, 108, 255, 0.34);
+}
+
+.jt-ios-login-orb-2 {
+  width: 260px;
+  height: 260px;
+  bottom: 4%;
+  right: -50px;
+  background: rgba(56, 189, 248, 0.25);
+}
+
+.jt-ios-login-scroll {
+  position: relative;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(68px, calc(env(safe-area-inset-top) + 52px)) 18px
+    max(28px, env(safe-area-inset-bottom));
+}
+
+.jt-ios-login-card {
+  width: 100%;
+  max-width: 410px;
+  padding: 28px 22px 22px;
+  border-radius: 32px;
+  background: linear-gradient(
+    150deg,
+    rgba(255, 255, 255, 0.13) 0%,
+    rgba(255, 255, 255, 0.05) 55%,
+    rgba(155, 108, 255, 0.09) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  box-shadow:
+    0 28px 64px rgba(0, 0, 0, 0.52),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.38);
+  backdrop-filter: blur(34px) saturate(205%);
+  -webkit-backdrop-filter: blur(34px) saturate(205%);
+  animation: jtLiquidModalSpring 460ms cubic-bezier(0.22, 1.24, 0.36, 1) both;
+}
+
+.jt-ios-login-back-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  margin-bottom: 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1f5f9;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.jt-ios-login-header {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.jt-ios-login-logo-shell {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 12px;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.jt-ios-login-logo-shell img {
+  width: 56px;
+  height: 56px;
+  border-radius: 15px;
+}
+
+.jt-ios-login-badge {
+  display: inline-block;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: rgba(155, 108, 255, 0.2);
+  border: 1px solid rgba(196, 181, 253, 0.36);
+  color: #e9d5ff;
+  font-size: 11.5px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.jt-ios-login-header h1 {
+  margin: 0 0 6px;
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  color: #ffffff;
+}
+
+.jt-ios-login-header p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: rgba(226, 232, 240, 0.82);
+}
+
+.jt-ios-google-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 13.5px 16px;
+  border-radius: 17px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  color: #111827;
+  font-size: 14.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 200ms cubic-bezier(0.22, 1.3, 0.36, 1);
+}
+
+.jt-ios-google-btn:active {
+  transform: scale(0.968);
+}
+
+.jt-ios-login-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  color: rgba(226, 232, 240, 0.58);
+  font-size: 12px;
+}
+
+.jt-ios-login-divider::before,
+.jt-ios-login-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.jt-ios-login-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 15px;
+  background: rgba(10, 12, 20, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  margin-bottom: 14px;
+}
+
+.jt-ios-login-tabs button {
+  padding: 9px 10px;
+  border-radius: 11px;
+  border: none;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.jt-ios-login-tabs button.active {
+  background: rgba(255, 255, 255, 0.15);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  color: #ffffff;
+}
+
+.jt-ios-login-error {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 14px;
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: #fecaca;
+  font-size: 12.8px;
+  line-height: 1.4;
+}
+
+.jt-ios-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.jt-ios-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.jt-ios-input-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(226, 232, 240, 0.85);
+}
+
+.jt-ios-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  height: 46px;
+  border-radius: 15px;
+  background: rgba(8, 10, 18, 0.46);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.jt-ios-input-wrap:focus-within {
+  border-color: rgba(167, 139, 250, 0.72);
+}
+
+.jt-ios-input-icon {
+  color: rgba(226, 232, 240, 0.62);
+  flex: none;
+}
+
+.jt-ios-input-wrap input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #ffffff;
+  font-size: 16px;
+}
+
+.jt-ios-eye-btn {
+  border: none;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.72);
+  padding: 4px;
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.jt-ios-submit-btn {
+  margin-top: 4px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 17px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  background: linear-gradient(135deg, #9b6cff 0%, #7c3aed 60%, #6366f1 100%);
+  box-shadow:
+    0 12px 28px rgba(124, 58, 237, 0.4),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.42);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 200ms cubic-bezier(0.22, 1.3, 0.36, 1);
+}
+
+.jt-ios-submit-btn:active {
+  transform: scale(0.968);
+}
+
+.jt-ios-login-footer {
+  margin-top: 18px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jt-ios-e2ee-note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 11.8px;
+  color: rgba(196, 181, 253, 0.92);
+}
+
+.jt-ios-legal-links {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  color: rgba(226, 232, 240, 0.65);
+}
+
+.jt-ios-legal-links a {
+  color: rgba(226, 232, 240, 0.85);
+  text-decoration: underline;
+}
+
+/* ============================================================================
+   Settings -> Devices (iOS Linked Web Sessions & Rear-Camera QR Scanner)
+   ============================================================================ */
+
+.jt-ios-devices-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.jt-ios-devices-hero,
+.jt-ios-devices-list-card {
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--ios-glass-border, rgba(255, 255, 255, 0.2));
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .jt-ios-devices-hero,
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .jt-ios-devices-list-card {
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.jt-ios-devices-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+}
+
+.jt-ios-devices-hero-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent, #9b6cff) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, #9b6cff) 42%, transparent);
+  color: var(--accent, #9b6cff);
+}
+
+.jt-ios-devices-hero-copy h4 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.jt-ios-devices-hero-copy p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-muted, #9ca3af);
+}
+
+.jt-ios-scan-qr-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 12px 16px;
+  border-radius: 15px;
+  font-weight: 700;
+}
+
+.jt-ios-devices-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-radius: 15px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.jt-ios-devices-alert.is-ok {
+  background: rgba(34, 197, 94, 0.16);
+  border: 1px solid rgba(74, 222, 128, 0.36);
+  color: #86efac;
+}
+
+.jt-ios-devices-alert.is-err {
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(248, 113, 113, 0.38);
+  color: #fca5a5;
+}
+
+.jt-ios-devices-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.jt-ios-devices-list-head strong {
+  display: block;
+  font-size: 14px;
+}
+
+.jt-ios-devices-list-head span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted, #9ca3af);
+}
+
+.jt-ios-devices-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 12px;
+  color: var(--text-muted, #9ca3af);
+  font-size: 13px;
+}
+
+.jt-ios-devices-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.jt-ios-device-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.jt-ios-device-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent, #9b6cff) 16%, transparent);
+  color: var(--accent, #9b6cff);
+}
+
+.jt-ios-device-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.jt-ios-device-meta strong {
+  display: block;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jt-ios-device-meta span {
+  display: block;
+  font-size: 11.8px;
+  color: var(--text-muted, #9ca3af);
+}
+
+.jt-ios-device-disconnect {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 11px;
+  border-radius: 11px;
+  border: 1px solid rgba(248, 113, 113, 0.36);
+  background: rgba(239, 68, 68, 0.14);
+  color: #fca5a5;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.jt-ios-devices-security-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted, #9ca3af);
+  padding: 2px 4px;
+}
+
+.jt-ios-qr-viewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 22px;
+  overflow: hidden;
+  background: #06070c;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.jt-ios-qr-viewport video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.jt-ios-qr-reticle {
+  position: absolute;
+  inset: 16%;
+  pointer-events: none;
+}
+
+.jt-ios-qr-reticle .c {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border-color: #a78bfa;
+  border-style: solid;
+  border-width: 0;
+}
+
+.jt-ios-qr-reticle .c.tl {
+  top: 0;
+  left: 0;
+  border-top-width: 3.5px;
+  border-left-width: 3.5px;
+  border-top-left-radius: 12px;
+}
+
+.jt-ios-qr-reticle .c.tr {
+  top: 0;
+  right: 0;
+  border-top-width: 3.5px;
+  border-right-width: 3.5px;
+  border-top-right-radius: 12px;
+}
+
+.jt-ios-qr-reticle .c.bl {
+  bottom: 0;
+  left: 0;
+  border-bottom-width: 3.5px;
+  border-left-width: 3.5px;
+  border-bottom-left-radius: 12px;
+}
+
+.jt-ios-qr-reticle .c.br {
+  bottom: 0;
+  right: 0;
+  border-bottom-width: 3.5px;
+  border-right-width: 3.5px;
+  border-bottom-right-radius: 12px;
+}
+
+.jt-ios-qr-laser {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #c4b5fd, #9b6cff, transparent);
+  box-shadow: 0 0 12px #9b6cff;
+  animation: jtQrLaserSweep 2.4s ease-in-out infinite;
+}
+
+.jt-ios-qr-syncing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(8, 10, 18, 0.78);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: #ffffff;
+  font-size: 13.5px;
+}
+
+.jt-ios-qr-manual-toggle {
+  margin-top: 10px;
+  text-align: center;
+}
+
+.jt-ios-qr-manual-box {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.jt-ios-qr-manual-box input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.36);
+  color: #ffffff;
+  font-size: 13px;
+}
