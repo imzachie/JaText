@@ -107,6 +107,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -366,7 +367,49 @@ fun ChatThreadScreen(
         }
     }
 
-    val reversedItems = remember(unifiedItems) { unifiedItems.asReversed() }
+    val thanosSnapHost = LocalThanosSnapHost.current
+    val threadScopeKey = state.activeGroupId?.let { "grp:$it" } ?: (state.activeChatId ?: "")
+    val prevLiveItemsById = remember(threadScopeKey) { HashMap<String, UnifiedThreadItem>() }
+    val heldSnappingItems = remember(threadScopeKey) { mutableStateMapOf<String, UnifiedThreadItem>() }
+    val pendingPeerSnapQueue = remember(threadScopeKey) { HashMap<String, UnifiedThreadItem>() }
+
+    val effectiveItems = unifiedItems.map { item ->
+        if (item.unsentAt == null) {
+            prevLiveItemsById[item.id] = item
+            item
+        } else {
+            val held = heldSnappingItems[item.id]
+            if (held != null) {
+                held
+            } else {
+                val prevLive = prevLiveItemsById.remove(item.id)
+                if (prevLive != null && thanosSnapHost != null && !thanosSnapHost.hasRecentlySnapped(item.id)) {
+                    pendingPeerSnapQueue[item.id] = prevLive
+                    prevLive
+                } else {
+                    item
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(unifiedItems) {
+        if (pendingPeerSnapQueue.isNotEmpty() && thanosSnapHost != null) {
+            val entries = pendingPeerSnapQueue.toMap()
+            pendingPeerSnapQueue.clear()
+            for ((msgId, liveItem) in entries) {
+                heldSnappingItems[msgId] = liveItem
+                scope.launch {
+                    withFrameNanos { }
+                    thanosSnapHost.snapMessageThen(msgId) {
+                        heldSnappingItems.remove(msgId)
+                    }
+                }
+            }
+        }
+    }
+
+    val reversedItems = remember(effectiveItems) { effectiveItems.asReversed() }
     val listState = rememberLazyListState()
     val newestMessageId = reversedItems.firstOrNull()?.id
 
@@ -388,7 +431,6 @@ fun ChatThreadScreen(
     val shownTranscriptIds = remember { mutableStateMapOf<String, Boolean>() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    val thanosSnapHost = LocalThanosSnapHost.current
     val dismissKeyboardForCall: () -> Unit = {
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
@@ -449,11 +491,13 @@ fun ChatThreadScreen(
     }
     val resolvedWallpaperUrl = remember(activeWallpaperUrl) {
         activeWallpaperUrl?.let { raw ->
-            if (raw.startsWith("preset:")) {
-                val pid = raw.removePrefix("preset:")
-                WEB_WALLPAPER_PRESETS.firstOrNull { it.id == pid }?.url
-            } else {
-                TursoApiClient.resolveAbsoluteMediaUrl(raw)
+            when {
+                raw.startsWith("preset:") -> {
+                    val pid = raw.removePrefix("preset:")
+                    WEB_WALLPAPER_PRESETS.firstOrNull { it.id == pid }?.url
+                }
+                raw.startsWith("file:") || raw.startsWith("content:") -> raw
+                else -> TursoApiClient.resolveAbsoluteMediaUrl(raw)
             }
         }
     }
@@ -3158,7 +3202,7 @@ private fun SwipeableMessageRow(
                                 .padding(horizontal = 12.dp, vertical = 7.dp)
                         ) {
                             Text(
-                                text = "Message unsent",
+                                text = "This message was unsent",
                                 color = if (hasWallpaper) Color(0xFFCBD5E1) else palette.textTertiary,
                                 fontSize = 13.sp,
                                 fontStyle = FontStyle.Italic,

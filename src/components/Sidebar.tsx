@@ -23,7 +23,7 @@ import { useGroupCall } from "../lib/groupCalling";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import { OFFICIAL_COMMUNITY_ID, type GroupSummary, type JaUser } from "../lib/types";
-import { Avatar } from "./Avatar";
+import { AnimatedMediaImg, Avatar } from "./Avatar";
 import {
   ArchiveIcon,
   ArrowDownLeftIcon,
@@ -644,12 +644,9 @@ export function Sidebar({
                   onPointerCancel={cancelRowHold}
                 >
                   {group.avatarUrl ? (
-                    <img
+                    <AnimatedMediaImg
                       className="group-avatar sidebar-group-avatar"
                       src={group.avatarUrl}
-                      alt=""
-                      referrerPolicy="no-referrer"
-                      decoding="async"
                       loading="lazy"
                     />
                   ) : (
@@ -894,10 +891,9 @@ export function Sidebar({
                   >
                     {entry.kind === "group" ? (
                       liveGroup?.avatarUrl || entry.groupAvatarUrl ? (
-                        <img
+                        <AnimatedMediaImg
                           className="group-avatar sidebar-group-avatar"
                           src={liveGroup?.avatarUrl ?? entry.groupAvatarUrl}
-                          alt=""
                         />
                       ) : (
                         <div className="group-avatar sidebar-group-avatar group-avatar-fallback">
@@ -1029,12 +1025,9 @@ export function Sidebar({
                 >
                   <span>
                     {group.avatarUrl ? (
-                      <img
+                      <AnimatedMediaImg
                         className="group-avatar sidebar-group-avatar"
                         src={group.avatarUrl}
-                        alt=""
-                        referrerPolicy="no-referrer"
-                        decoding="async"
                         loading="lazy"
                       />
                     ) : (

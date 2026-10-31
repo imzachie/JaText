@@ -46,10 +46,10 @@ import kotlinx.coroutines.delay
  */
 
 private val ALPHAS = floatArrayOf(0.3f, 0.6f, 1.0f)
-private const val MIN_DURATION_MS = 1400
-private const val MAX_DURATION_MS = 2800
-private const val LINE_SENSITIVE_MS = 600
-private const val LINE_DELAY_MS = 16L
+private const val MIN_DURATION_MS = 850
+private const val MAX_DURATION_MS = 1650
+private const val LINE_SENSITIVE_MS = 360
+private const val LINE_DELAY_MS = 11L
 
 private class SnapParticle(
     val initialX: Int,
@@ -95,10 +95,10 @@ private class SnapParticle(
         x = offsetX + initialX + ((initialX - safeCenterX) / safeCenterX) *
             translationX * fraction * renderingEffect
 
-        val firstRenderingFraction = time / 200f
+        val firstRenderingFraction = time / 130f
         r = initialR * 1.2f
         if (firstRenderingFraction > 1.0f) {
-            val rTimeFraction = (time - 200f) / max(1f, (lifeTime - 200f))
+            val rTimeFraction = (time - 130f) / max(1f, (lifeTime - 130f))
             r = min(15f, r * (1f - rTimeFraction))
         } else {
             val originalSize = max(r, initialR)
@@ -110,11 +110,13 @@ private class SnapParticle(
 }
 
 internal class ActiveSnapInstance(
+    val messageId: String,
     private val bitmap: Bitmap,
     private val offsetX: Float,
     private val offsetY: Float,
     private val density: Float,
     pendingWeight: Int,
+    private val onSweepComplete: () -> Unit,
 ) {
     private val width: Int = bitmap.width
     private val height: Int = bitmap.height
@@ -141,6 +143,14 @@ internal class ActiveSnapInstance(
     private var nextLineWallMs = 0L
     private var endRenderingTimeMs = 0f
     private var recycled = false
+    private var sweepCompleteFired = false
+
+    fun notifySweepDoneOnce() {
+        if (!sweepCompleteFired) {
+            sweepCompleteFired = true
+            onSweepComplete()
+        }
+    }
 
     private fun dpPx(dpVal: Float): Int = max(1, (density * dpVal).toInt())
 
@@ -175,10 +185,11 @@ internal class ActiveSnapInstance(
                 endRenderingTimeMs = timeMs
             }
             animatedLineWidth = width
+            notifySweepDoneOnce()
             return
         }
 
-        val renderCount = if (width > dpPx(300f)) dpPx(2f) else dpPx(1f)
+        val renderCount = if (width > dpPx(260f)) dpPx(3f) else dpPx(2f)
         var emitted = 0
         while (emitted < renderCount && line < maxLine) {
             val x = line * perPx
@@ -215,6 +226,13 @@ internal class ActiveSnapInstance(
                 emitted++
             }
         }
+        if (line >= maxLine) {
+            if (endRenderingTimeMs == 0f) {
+                endRenderingTimeMs = timeMs
+            }
+            animatedLineWidth = width
+            notifySweepDoneOnce()
+        }
         nextLineWallMs = nowWallMs + LINE_DELAY_MS
     }
 
@@ -243,9 +261,12 @@ internal class ActiveSnapInstance(
 
         if (endRenderingTimeMs == 0f) return true
         val alive = timeMs <= endRenderingTimeMs + MAX_DURATION_MS
-        if (!alive && !recycled) {
-            recycled = true
-            bitmap.recycle()
+        if (!alive) {
+            notifySweepDoneOnce()
+            if (!recycled) {
+                recycled = true
+                bitmap.recycle()
+            }
         }
         return alive
     }
@@ -260,9 +281,30 @@ private class RegisteredSnapTarget(
 @Stable
 class ThanosSnapHostState {
     private val targets = HashMap<String, RegisteredSnapTarget>()
+    private val recentlySnappedAtMs = HashMap<String, Long>()
     internal val hiddenSnappingIds = mutableStateMapOf<String, Boolean>()
     internal val activeInstances = ArrayList<ActiveSnapInstance>()
     internal var activeCount by mutableIntStateOf(0)
+
+    fun hasRecentlySnapped(messageId: String): Boolean {
+        val ts = recentlySnappedAtMs[messageId] ?: return false
+        if (System.currentTimeMillis() - ts > 30_000L) {
+            recentlySnappedAtMs.remove(messageId)
+            return false
+        }
+        return true
+    }
+
+    private fun markSnapped(messageId: String) {
+        val now = System.currentTimeMillis()
+        recentlySnappedAtMs[messageId] = now
+        if (recentlySnappedAtMs.size > 400) {
+            val iter = recentlySnappedAtMs.entries.iterator()
+            while (iter.hasNext()) {
+                if (now - iter.next().value > 30_000L) iter.remove()
+            }
+        }
+    }
 
     internal fun register(
         messageId: String,
@@ -286,6 +328,7 @@ class ThanosSnapHostState {
     }
 
     suspend fun snapMessageThen(messageId: String, onCommitUnsend: () -> Unit) {
+        markSnapped(messageId)
         val target = targets[messageId]
         if (target == null) {
             onCommitUnsend()
@@ -308,21 +351,32 @@ class ThanosSnapHostState {
             return
         }
 
+        var committed = false
+        val finishSweepAndCommit: () -> Unit = {
+            hiddenSnappingIds.remove(messageId)
+            if (!committed) {
+                committed = true
+                onCommitUnsend()
+            }
+        }
+
         val inst = ActiveSnapInstance(
+            messageId = messageId,
             bitmap = capturedBitmap,
             offsetX = target.offsetInRoot.x,
             offsetY = target.offsetInRoot.y,
             density = target.density,
             pendingWeight = activeInstances.size,
+            onSweepComplete = finishSweepAndCommit,
         )
         inst.spawnNextLinesIfReady(System.currentTimeMillis())
         hiddenSnappingIds[messageId] = true
         activeInstances.add(inst)
         activeCount = activeInstances.size
 
-        // Commit the unsend RPC right as the left-to-right disintegration finishes sweeping the bubble
-        delay(250L)
-        onCommitUnsend()
+        // Fail-safe so the unsent placeholder always reveals briskly even if frames pause
+        delay(420L)
+        finishSweepAndCommit()
     }
 }
 

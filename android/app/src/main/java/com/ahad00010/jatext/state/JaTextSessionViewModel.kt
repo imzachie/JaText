@@ -452,6 +452,21 @@ class JaTextSessionViewModel(app: Application) :
             if (m.unsentAt != null) continue
             val parsed = JaTextCryptoEngine.parseWallpaperSignal(m.body, m.attachmentUrl) ?: continue
             val scopeKey = "dm:$friendId"
+            val encAtt = m.encryptedAttachment
+            val cipherUrl = m.attachmentUrl
+            if (parsed.kind == "custom" && encAtt != null && !cipherUrl.isNullOrBlank()) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    val decFile = JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(appCtx, cipherUrl, encAtt)
+                    if (decFile != null) {
+                        val fileUri = decFile.toURI().toString()
+                        if (cache.getWallpaperUrl(scopeKey) != fileUri) {
+                            cache.setWallpaperUrl(scopeKey, fileUri)
+                            _state.update { it.copy(wallpaperNonce = it.wallpaperNonce + 1) }
+                        }
+                    }
+                }
+                return
+            }
             val current = cache.getWallpaperUrl(scopeKey)
             if (current != parsed.url) {
                 cache.setWallpaperUrl(scopeKey, parsed.url)
@@ -468,6 +483,21 @@ class JaTextSessionViewModel(app: Application) :
             if (m.unsentAt != null) continue
             val parsed = JaTextCryptoEngine.parseWallpaperSignal(m.body, m.attachmentUrl) ?: continue
             val scopeKey = "grp:$groupId"
+            val encAtt = m.encryptedAttachment
+            val cipherUrl = m.attachmentUrl
+            if (parsed.kind == "custom" && encAtt != null && !cipherUrl.isNullOrBlank()) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    val decFile = JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(appCtx, cipherUrl, encAtt)
+                    if (decFile != null) {
+                        val fileUri = decFile.toURI().toString()
+                        if (cache.getWallpaperUrl(scopeKey) != fileUri) {
+                            cache.setWallpaperUrl(scopeKey, fileUri)
+                            _state.update { it.copy(wallpaperNonce = it.wallpaperNonce + 1) }
+                        }
+                    }
+                }
+                return
+            }
             val current = cache.getWallpaperUrl(scopeKey)
             if (current != parsed.url) {
                 cache.setWallpaperUrl(scopeKey, parsed.url)
@@ -2024,7 +2054,17 @@ class JaTextSessionViewModel(app: Application) :
                     _state.update { cur ->
                         cur.copy(
                             dmMessages = cur.dmMessages.map { m ->
-                                if (m.id == messageId) m.copy(body = "", unsentAt = System.currentTimeMillis(), reactions = emptyList()) else m
+                                if (m.id == messageId) {
+                                    m.copy(
+                                        body = "",
+                                        attachmentUrl = null,
+                                        attachmentName = null,
+                                        attachmentType = null,
+                                        encryptedAttachment = null,
+                                        unsentAt = System.currentTimeMillis(),
+                                        reactions = emptyList(),
+                                    )
+                                } else m
                             }
                         )
                     }
@@ -2033,7 +2073,17 @@ class JaTextSessionViewModel(app: Application) :
                     _state.update { cur ->
                         cur.copy(
                             groupMessages = cur.groupMessages.map { m ->
-                                if (m.id == messageId) m.copy(body = "", unsentAt = System.currentTimeMillis(), reactions = emptyList()) else m
+                                if (m.id == messageId) {
+                                    m.copy(
+                                        body = "",
+                                        attachmentUrl = null,
+                                        attachmentName = null,
+                                        attachmentType = null,
+                                        encryptedAttachment = null,
+                                        unsentAt = System.currentTimeMillis(),
+                                        reactions = emptyList(),
+                                    )
+                                } else m
                             }
                         )
                     }
@@ -2042,7 +2092,16 @@ class JaTextSessionViewModel(app: Application) :
                     _state.update { cur ->
                         cur.copy(
                             communityMessages = cur.communityMessages.map { m ->
-                                if (m.id == messageId) m.copy(body = "", unsentAt = System.currentTimeMillis(), reactions = emptyList()) else m
+                                if (m.id == messageId) {
+                                    m.copy(
+                                        body = "",
+                                        attachmentUrl = null,
+                                        attachmentName = null,
+                                        attachmentType = null,
+                                        unsentAt = System.currentTimeMillis(),
+                                        reactions = emptyList(),
+                                    )
+                                } else m
                             }
                         )
                     }
@@ -3383,9 +3442,16 @@ class JaTextSessionViewModel(app: Application) :
                 )
             }
             if (uri == null) return@withContext null
-            val mime = resolveMime(uri)
-            val name = resolveDisplayName(uri)
-            val bytes = appCtx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
+            val rawBytes = appCtx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
+            val isGif = JaTextCryptoEngine.isGifBytes(rawBytes)
+            val bytes = if (isGif) JaTextCryptoEngine.ensureInfiniteLoopGifBytes(rawBytes) else rawBytes
+            val mime = if (isGif) "image/gif" else resolveMime(uri)
+            val rawName = resolveDisplayName(uri)
+            val name = if (isGif && !rawName.lowercase().endsWith(".gif")) {
+                "${rawName.substringBeforeLast('.', rawName)}.gif"
+            } else {
+                rawName
+            }
             val cacheDir = File(appCtx.cacheDir, "outgoing_media").apply { mkdirs() }
             val cached = File(cacheDir, "out_${System.currentTimeMillis()}_$name").also { it.writeBytes(bytes) }
             AttachmentInputData(bytes, name, mime, cached)

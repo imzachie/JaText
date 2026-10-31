@@ -23,7 +23,7 @@ import {
 import { formatCallDuration, type SoundboardEffectId } from "../lib/calling";
 import { useGroupCall } from "../lib/groupCalling";
 import { useJaText } from "../lib/store";
-import { Avatar } from "./Avatar";
+import { AnimatedMediaImg, Avatar } from "./Avatar";
 import { MobileScreenShareSheet, SharedMediaPlaybackBar } from "./MobileScreenShareSheet";
 import { DrumIcon, RocketIcon, SoundWaveIcon, SparklesIcon, UsersIcon } from "./UiIcons";
 
@@ -203,9 +203,8 @@ export function GroupCallOverlay() {
           </div>
           <div className="call-incoming-avatar-pulse call-dismissed-avatar">
             {groupSession.group.avatarUrl ? (
-              <img
+              <AnimatedMediaImg
                 src={groupSession.group.avatarUrl}
-                alt=""
                 style={{ width: 88, height: 88, borderRadius: "50%", objectFit: "cover" }}
               />
             ) : (
@@ -267,9 +266,8 @@ export function GroupCallOverlay() {
           </div>
           <div className="call-incoming-avatar-pulse">
             {groupSession.group.avatarUrl ? (
-              <img
+              <AnimatedMediaImg
                 src={groupSession.group.avatarUrl}
-                alt=""
                 style={{ width: 92, height: 92, borderRadius: "50%", objectFit: "cover" }}
               />
             ) : (
@@ -353,9 +351,8 @@ export function GroupCallOverlay() {
       >
         <div className="call-pip-avatar">
           {groupSession.group.avatarUrl ? (
-            <img
+            <AnimatedMediaImg
               src={groupSession.group.avatarUrl}
-              alt=""
               style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }}
             />
           ) : (

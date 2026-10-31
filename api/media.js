@@ -9,8 +9,68 @@ export const config = {
 
 export const MEDIA_CHUNK_BYTES = 768 * 1024; // 768 KB per DB chunk
 const MAX_SINGLE_SHOT_BYTES = 768 * 1024; // > 768 KB splits into media_chunks
-const MAX_SERVE_BYTES = 3 * 1024 * 1024; // 3 MB max per HTTP response (< Vercel 4.5 MB cap)
+const MAX_SERVE_BYTES = 3 * 1024 * 1024; // 3 MB max per HTTP Range slice (< Vercel 4.5 MB cap)
+const MAX_INLINE_IMAGE_SERVE_BYTES = 4 * 1024 * 1024; // 4 MB max full 200 OK image (< Vercel 4.5 MB cap)
 const MAX_TOTAL_UPLOAD_BYTES = 64 * 1024 * 1024; // 64 MB max video/audio attachment
+
+const NETSCAPE_INFINITE_LOOP_EXT = Buffer.from([
+  0x21, 0xff, 0x0b,
+  0x4e, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2e, 0x30,
+  0x03, 0x01, 0x00, 0x00, 0x00,
+]);
+
+function ensureInfiniteLoopGifBuffer(buf) {
+  if (!buf || buf.length < 14) return buf;
+  if (
+    buf[0] !== 0x47 ||
+    buf[1] !== 0x49 ||
+    buf[2] !== 0x46 ||
+    buf[3] !== 0x38 ||
+    (buf[4] !== 0x37 && buf[4] !== 0x39) ||
+    buf[5] !== 0x61
+  ) {
+    return buf;
+  }
+
+  // Scan for existing NETSCAPE2.0 / ANIMEXTS1.0 loop block and force loopCount = 0 (infinite)
+  const limit = Math.min(buf.length - 19, 65536);
+  for (let i = 13; i <= limit; i++) {
+    if (
+      buf[i] === 0x21 &&
+      buf[i + 1] === 0xff &&
+      buf[i + 2] === 0x0b &&
+      buf[i + 14] === 0x03 &&
+      buf[i + 15] === 0x01
+    ) {
+      const sig = buf.subarray(i + 3, i + 14).toString("ascii");
+      if (sig === "NETSCAPE2.0" || sig === "ANIMEXTS1.0") {
+        if (buf[i + 16] === 0x00 && buf[i + 17] === 0x00) {
+          return buf;
+        }
+        const copy = Buffer.from(buf);
+        copy[4] = 0x39; // Ensure GIF89a header
+        copy[i + 16] = 0x00;
+        copy[i + 17] = 0x00;
+        return copy;
+      }
+    }
+  }
+
+  // Insert NETSCAPE2.0 infinite loop block right after Logical Screen Descriptor + Global Color Table
+  const packed = buf[10];
+  const hasGct = (packed & 0x80) !== 0;
+  const gctSize = hasGct ? 3 * (1 << ((packed & 0x07) + 1)) : 0;
+  const insertOffset = 13 + gctSize;
+  if (insertOffset > buf.length) return buf;
+
+  const out = Buffer.concat([
+    buf.subarray(0, insertOffset),
+    NETSCAPE_INFINITE_LOOP_EXT,
+    buf.subarray(insertOffset),
+  ]);
+  out[4] = 0x39; // Ensure GIF89a
+  return out;
+}
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -208,7 +268,10 @@ export default async function handler(req, res) {
         return res.status(416).end();
       }
 
-      if (parsedRange || totalSize > MAX_SERVE_BYTES) {
+      const isImageMedia = mime.startsWith("image/");
+      const maxFullServe = isImageMedia ? MAX_INLINE_IMAGE_SERVE_BYTES : MAX_SERVE_BYTES;
+
+      if (parsedRange || totalSize > maxFullServe) {
         const start = parsedRange ? parsedRange.start : 0;
         const end = parsedRange
           ? parsedRange.end
@@ -241,6 +304,11 @@ export default async function handler(req, res) {
         }
       } else {
         buf = toBuffer(row.inline_data);
+      }
+
+      if (mime === "image/gif" || (buf.length >= 6 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46)) {
+        buf = ensureInfiniteLoopGifBuffer(buf);
+        res.setHeader("Content-Type", "image/gif");
       }
 
       res.setHeader("Content-Length", String(buf.length));

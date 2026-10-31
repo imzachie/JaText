@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { ensureInfiniteLoopGifBytes, sniffImageMime } from "../imageUtils";
 import { fetchMediaBytesSmart } from "../tursoClient";
 import {
   E2EE_SIGNAL_PREFIX,
@@ -1023,8 +1024,13 @@ export function seedOutgoingDecryptedMedia(
   plainBytes: Uint8Array<ArrayBuffer>,
 ): void {
   if (!descriptor?.h || preseededMediaUrlByHash.has(descriptor.h)) return;
-  const cleanMime = (descriptor.t || "application/octet-stream").replace(/;jbs=[a-z0-9-]+/gi, "");
-  const blob = new Blob([plainBytes], { type: cleanMime });
+  const sniffed = sniffImageMime(plainBytes.subarray(0, 32));
+  const rawMime = (descriptor.t || "application/octet-stream").replace(/;jbs=[a-z0-9-]+/gi, "");
+  const cleanMime = sniffed === "image/gif" ? "image/gif" : rawMime === "application/octet-stream" && sniffed ? sniffed : rawMime;
+  const finalBytes = cleanMime === "image/gif" ? ensureInfiniteLoopGifBytes(plainBytes) : plainBytes;
+  const safeCopy = new Uint8Array(finalBytes.byteLength);
+  safeCopy.set(finalBytes);
+  const blob = new Blob([safeCopy], { type: cleanMime });
   const objUrl = URL.createObjectURL(blob);
   preseededMediaUrlByHash.set(descriptor.h, objUrl);
   decryptedMediaBlobCache.set(descriptor.h, blob);
@@ -1304,8 +1310,13 @@ export async function decryptRemoteAttachmentToObjectUrl(
   const task = (async () => {
     const cipherBuf = await fetchMediaBytesSmart(cipherUrl);
     const plainBytes = await decryptAttachmentBytes(cipherBuf, descriptor);
-    const cleanMime = (descriptor.t || "application/octet-stream").replace(/;jbs=[a-z0-9-]+/gi, "");
-    const blob = new Blob([plainBytes], { type: cleanMime });
+    const sniffed = sniffImageMime(plainBytes.subarray(0, 32));
+    const rawMime = (descriptor.t || "application/octet-stream").replace(/;jbs=[a-z0-9-]+/gi, "");
+    const cleanMime = sniffed === "image/gif" ? "image/gif" : rawMime === "application/octet-stream" && sniffed ? sniffed : rawMime;
+    const finalBytes = cleanMime === "image/gif" ? ensureInfiniteLoopGifBytes(plainBytes) : plainBytes;
+    const safeCopy = new Uint8Array(finalBytes.byteLength);
+    safeCopy.set(finalBytes);
+    const blob = new Blob([safeCopy], { type: cleanMime });
     const objUrl = URL.createObjectURL(blob);
     decryptedMediaUrlCache.set(key, objUrl);
     decryptedMediaBlobCache.set(descriptor.h, blob);

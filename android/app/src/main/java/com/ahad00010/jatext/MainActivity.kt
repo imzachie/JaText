@@ -73,8 +73,14 @@ import coil.Coil
 import coil.ImageLoader
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
+import com.ahad00010.jatext.crypto.JaTextCryptoEngine
 import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
+import java.util.concurrent.TimeUnit
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.ResponseBody.Companion.toResponseBody
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.ui.effects.LocalThanosSnapHost
 import com.ahad00010.jatext.ui.effects.ThanosSnapHostState
@@ -180,9 +186,103 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         activeActivityRef = WeakReference(this)
 
-        // Register global Coil GIF / Animated WebP decoder so all GIFs animate smoothly across the app
+        // Register global Coil GIF / Animated WebP decoder + OkHttp Range reassembly & NETSCAPE2.0 loop=0
+        val rawSliceClient = OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(35, TimeUnit.SECONDS)
+            .build()
+        val animatedMediaClient = rawSliceClient.newBuilder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val res = chain.proceed(req)
+                if (req.method != "GET" || !res.isSuccessful || req.header("Range") != null) {
+                    return@addInterceptor res
+                }
+
+                val contentTypeHeader = res.header("Content-Type")?.lowercase().orEmpty()
+                val urlStr = req.url.toString().lowercase()
+                val mayBeAnimatedOrChunked = res.code == 206 ||
+                    contentTypeHeader.contains("gif") ||
+                    urlStr.contains("/api/media/") ||
+                    urlStr.endsWith(".gif")
+
+                if (!mayBeAnimatedOrChunked) {
+                    return@addInterceptor res
+                }
+
+                val firstBody = res.body ?: return@addInterceptor res
+                val firstBytes = firstBody.bytes()
+                if (firstBytes.isEmpty()) {
+                    return@addInterceptor res.newBuilder()
+                        .body(firstBytes.toResponseBody(firstBody.contentType()))
+                        .build()
+                }
+
+                var assembledBytes = firstBytes
+                var reassembled206 = false
+                if (res.code == 206) {
+                    val cr = res.header("Content-Range").orEmpty().trim()
+                    val m = Regex("""^bytes\s+(\d+)-(\d+)/(\d+)""", RegexOption.IGNORE_CASE).find(cr)
+                    if (m != null) {
+                        val firstEnd = m.groupValues[2].toIntOrNull() ?: -1
+                        val totalSize = m.groupValues[3].toIntOrNull() ?: -1
+                        if (totalSize > firstEnd + 1 && totalSize <= 32 * 1024 * 1024) {
+                            val full = ByteArray(totalSize)
+                            val initialCopy = firstBytes.size.coerceAtMost(totalSize)
+                            System.arraycopy(firstBytes, 0, full, 0, initialCopy)
+                            var cursor = initialCopy
+                            val sliceStep = (3.8 * 1024 * 1024).toInt()
+                            while (cursor < totalSize) {
+                                val reqEnd = (cursor + sliceStep - 1).coerceAtMost(totalSize - 1)
+                                val sliceReq = Request.Builder()
+                                    .url(req.url)
+                                    .header("Range", "bytes=$cursor-$reqEnd")
+                                    .build()
+                                val sliceBytes = rawSliceClient.newCall(sliceReq).execute().use { sr ->
+                                    if (!sr.isSuccessful) null else sr.body?.bytes()
+                                }
+                                if (sliceBytes == null || sliceBytes.isEmpty()) break
+                                val len = sliceBytes.size.coerceAtMost(totalSize - cursor)
+                                System.arraycopy(sliceBytes, 0, full, cursor, len)
+                                cursor += len
+                            }
+                            if (cursor >= totalSize) {
+                                assembledBytes = full
+                                reassembled206 = true
+                            }
+                        }
+                    }
+                }
+
+                val isGif = JaTextCryptoEngine.isGifBytes(assembledBytes)
+                val finalBytes = if (isGif) {
+                    JaTextCryptoEngine.ensureInfiniteLoopGifBytes(assembledBytes)
+                } else {
+                    assembledBytes
+                }
+                val finalMediaType = if (isGif) {
+                    "image/gif".toMediaType()
+                } else {
+                    firstBody.contentType() ?: "image/jpeg".toMediaType()
+                }
+
+                res.newBuilder()
+                    .apply {
+                        if (reassembled206) {
+                            code(200)
+                            removeHeader("Content-Range")
+                        }
+                    }
+                    .header("Content-Type", finalMediaType.toString())
+                    .header("Content-Length", finalBytes.size.toString())
+                    .body(finalBytes.toResponseBody(finalMediaType))
+                    .build()
+            }
+            .build()
+
         Coil.setImageLoader(
             ImageLoader.Builder(applicationContext)
+                .okHttpClient(animatedMediaClient)
                 .components {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                         add(ImageDecoderDecoder.Factory())

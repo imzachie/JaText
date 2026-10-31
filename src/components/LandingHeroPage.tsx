@@ -124,10 +124,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.7.1",
+    date: "October 31, 2026",
+    headline: "Both-Sides Snappy Thanos Snap, Reliable Delete Undo & Looping Animated GIF PFPs, Banners & Wallpapers",
+    latest: true,
+    bullets: [
+      "Upgraded message unsend with a faster Thanos Snap particle sweep visible on both sender and recipient devices, followed cleanly by the visible This message was unsent notice, and fixed Desktop Delete for me Undo so messages restore instantaneously.",
+      "Enabled continuous infinite-looping animated GIFs across Chat Wallpapers (on both Desktop Web and Mobile), Profile Banners, User PFPs, and Group PFPs with lossless GIF89a loop patching and chunked media reassembly.",
+    ],
+  },
+  {
     version: "v3.7.0",
     date: "October 31, 2026",
     headline: "Thanos Snap Unsend, 5s Delete Undo, Pinch-to-Zoom & Image Hold Menu, On-Demand Voice Transcription & Group Moderation",
-    latest: true,
     bullets: [
       "Added 1:1 Telegram Thanos Snap particle disintegration on message unsend, a 5-second Deleted the message for me Undo popup, on-demand voice note transcription with Hide transcribe, Desktop Web notifications with the default JaText sound, smooth spring call animations, centered 2-minute rotating QR link cards, and balanced anti-DDoS rate limiting.",
       "Upgraded Native Android with full animated GIF playback, pinch-to-zoom fullscreen image viewer, Image Hold menu (Copy image, Copy image address, Save to Favourites), automatic keyboard dismissal on call start, E2EE group Add members, and owner/moderator Mute and Remove controls.",
@@ -384,7 +393,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.7.0 · Live
+                v3.7.1 · Live
               </span>
             </span>
           </a>
@@ -503,7 +512,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.7.0 (Build 48)</strong>
+                    <strong>v3.7.1 (Build 49)</strong>
                     <span>Web &amp; Signed APK</span>
                   </div>
                 </div>
@@ -873,7 +882,7 @@ export function LandingHeroPage() {
               <h2>Ready to jump into your chats?</h2>
               <p>
                 Launch the full JaText web app at <strong>jatext.vercel.app/chats</strong> or grab
-                the latest signed Android Release APK (v3.7.0).
+                the latest signed Android Release APK (v3.7.1).
               </p>
             </div>
             <div className="jt-cta-banner-actions">
@@ -892,7 +901,7 @@ export function LandingHeroPage() {
                 href="/downloads/JaText-release.apk"
                 className="jt-btn-secondary jt-btn-lg"
               >
-                Get Android APK (v3.7.0)
+                Get Android APK (v3.7.1)
               </a>
             </div>
           </div>
@@ -904,7 +913,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.7.0</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.7.1</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

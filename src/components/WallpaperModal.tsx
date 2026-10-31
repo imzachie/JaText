@@ -1,14 +1,23 @@
 import { useRef, useState } from "react";
 import { WALLPAPER_PRESETS } from "../lib/chatCustomization";
+import {
+  ensureInfiniteLoopGifFile,
+  ensureValidFileMime,
+  isAnimatedOrGifFile,
+} from "../lib/imageUtils";
+import { AnimatedMediaImg } from "./Avatar";
 import { CheckIcon, ImageIcon } from "./UiIcons";
 
-async function optimizeWallpaperFile(file: File): Promise<File> {
-  if (!file.type.startsWith("image/")) {
-    throw new Error("Please choose an image file.");
+async function optimizeWallpaperFile(rawFile: File): Promise<File> {
+  if (await isAnimatedOrGifFile(rawFile)) {
+    return ensureInfiniteLoopGifFile(rawFile);
   }
-  // Keep GIFs untouched; compress large JPEGs/PNGs/HEIC-decoded bitmaps for fast sync.
-  if (file.type === "image/gif" && file.size <= 7 * 1024 * 1024) {
-    return file;
+  const file = await ensureValidFileMime(rawFile);
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Please choose an image or GIF file.");
+  }
+  if (file.type === "image/gif") {
+    return ensureInfiniteLoopGifFile(file);
   }
 
   return new Promise<File>((resolve) => {
@@ -160,8 +169,8 @@ export function WallpaperModal({
             <h3 className="bubble-style-title">Chat wallpaper</h3>
             <p className="bubble-style-subtitle">
               {isGroup
-                ? "Shared mobile wallpaper for everyone in this group."
-                : "Shared mobile wallpaper: both of you will see this background."}
+                ? "Shared wallpaper for everyone in this group."
+                : "Shared wallpaper: both of you will see this background."}
             </p>
           </div>
           {currentWallpaperUrl || selectedKind !== "none" ? (
@@ -184,7 +193,7 @@ export function WallpaperModal({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,.gif"
           hidden
           onChange={(e) => {
             void handleCustomFile(e.target.files?.[0]);
@@ -206,10 +215,9 @@ export function WallpaperModal({
             (selectedKind === "custom" &&
               currentWallpaperUrl &&
               !WALLPAPER_PRESETS.some((p) => p.url === currentWallpaperUrl)) ? (
-              <img
+              <AnimatedMediaImg
                 src={customPreview?.previewUrl ?? currentWallpaperUrl ?? ""}
                 alt="Custom wallpaper"
-                referrerPolicy="no-referrer"
               />
             ) : null}
             <div className="wallpaper-custom-overlay">

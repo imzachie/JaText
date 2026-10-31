@@ -4138,6 +4138,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       forwardDmToTarget,
       toggleMessageReaction,
       deleteMessageForMe,
+      restoreMessageForMe,
       unsendMessage,
       editMessage,
       setConversationArchived,

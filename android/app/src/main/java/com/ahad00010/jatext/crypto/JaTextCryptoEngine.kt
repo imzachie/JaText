@@ -1367,6 +1367,70 @@ object JaTextCryptoEngine {
 
     /* ==================== Encrypted Media Attachments ==================== */
 
+    fun isGifBytes(bytes: ByteArray): Boolean {
+        return bytes.size >= 6 &&
+            bytes[0] == 0x47.toByte() &&
+            bytes[1] == 0x49.toByte() &&
+            bytes[2] == 0x46.toByte() &&
+            bytes[3] == 0x38.toByte()
+    }
+
+    /**
+     * Losslessly patches any GIF87a/GIF89a byte array so it carries a NETSCAPE2.0
+     * Application Extension with loopCount = 0 (infinite loop) for animated PFPs,
+     * Group PFPs, Profile Banners, and Chat Wallpapers.
+     */
+    fun ensureInfiniteLoopGifBytes(bytes: ByteArray): ByteArray {
+        if (!isGifBytes(bytes) || bytes.size < 14) return bytes
+        val packed = bytes[10].toInt() and 0xFF
+        val hasGct = (packed and 0x80) != 0
+        val gctSize = if (hasGct) 3 * (1 shl ((packed and 0x07) + 1)) else 0
+        val insertOffset = 13 + gctSize
+        if (insertOffset > bytes.size) return bytes
+
+        var i = insertOffset
+        while (i + 18 < bytes.size) {
+            if (
+                bytes[i] == 0x21.toByte() &&
+                bytes[i + 1] == 0xFF.toByte() &&
+                bytes[i + 2] == 0x0B.toByte()
+            ) {
+                val id = String(bytes, i + 3, 11, Charsets.US_ASCII)
+                if (
+                    (id == "NETSCAPE2.0" || id == "ANIMEXTS1.0") &&
+                    bytes[i + 14] == 0x03.toByte() &&
+                    bytes[i + 15] == 0x01.toByte()
+                ) {
+                    if (bytes[i + 16] == 0x00.toByte() && bytes[i + 17] == 0x00.toByte()) {
+                        return bytes
+                    }
+                    val patched = bytes.copyOf()
+                    patched[4] = 0x39.toByte() // '9'
+                    patched[5] = 0x61.toByte() // 'a'
+                    patched[i + 16] = 0x00.toByte()
+                    patched[i + 17] = 0x00.toByte()
+                    return patched
+                }
+            }
+            i++
+        }
+
+        val netscapeExt = byteArrayOf(
+            0x21.toByte(), 0xFF.toByte(), 0x0B.toByte(),
+            0x4E.toByte(), 0x45.toByte(), 0x54.toByte(), 0x53.toByte(),
+            0x43.toByte(), 0x41.toByte(), 0x50.toByte(), 0x45.toByte(),
+            0x32.toByte(), 0x2E.toByte(), 0x30.toByte(),
+            0x03.toByte(), 0x01.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte(),
+        )
+        val out = ByteArray(bytes.size + netscapeExt.size)
+        System.arraycopy(bytes, 0, out, 0, insertOffset)
+        out[4] = 0x39.toByte() // '9'
+        out[5] = 0x61.toByte() // 'a'
+        System.arraycopy(netscapeExt, 0, out, insertOffset, netscapeExt.size)
+        System.arraycopy(bytes, insertOffset, out, insertOffset + netscapeExt.size, bytes.size - insertOffset)
+        return out
+    }
+
     fun encryptAttachmentBytes(
         plainBytes: ByteArray,
         fileName: String,
@@ -1404,16 +1468,28 @@ object JaTextCryptoEngine {
         val key = b64UrlEncode(sha256(mediaUrl.toByteArray(Charsets.UTF_8))).take(24)
         decryptedMediaFileCache[key]?.takeIf { it.exists() }?.let { return@withContext it }
         val dir = File(context.cacheDir, "decrypted_media").apply { mkdirs() }
+        val existingGif = File(dir, "plain_$key.gif")
+        if (existingGif.exists() && existingGif.length() > 0L) {
+            decryptedMediaFileCache[key] = existingGif
+            return@withContext existingGif
+        }
         val outFile = File(dir, "plain_$key.bin")
         if (outFile.exists() && outFile.length() > 0L) {
             decryptedMediaFileCache[key] = outFile
             return@withContext outFile
         }
         return@withContext try {
-            val bytes = TursoApiClient.fetchMediaBytesSmart(mediaUrl)
-            outFile.writeBytes(bytes)
-            decryptedMediaFileCache[key] = outFile
-            outFile
+            val rawBytes = TursoApiClient.fetchMediaBytesSmart(mediaUrl)
+            if (isGifBytes(rawBytes)) {
+                val looped = ensureInfiniteLoopGifBytes(rawBytes)
+                existingGif.writeBytes(looped)
+                decryptedMediaFileCache[key] = existingGif
+                existingGif
+            } else {
+                outFile.writeBytes(rawBytes)
+                decryptedMediaFileCache[key] = outFile
+                outFile
+            }
         } catch (_: Throwable) {
             null
         }
@@ -1432,9 +1508,10 @@ object JaTextCryptoEngine {
         decryptedMediaFileCache[desc.h]?.takeIf { it.exists() }?.let { return@withContext it }
 
         val dir = File(context.cacheDir, "decrypted_media").apply { mkdirs() }
-        val ext = desc.n.substringAfterLast('.', "").take(6).filter { it.isLetterOrDigit() }
+        val rawExt = desc.n.substringAfterLast('.', "").take(6).filter { it.isLetterOrDigit() }
+        val ext = if (desc.t.lowercase().startsWith("image/gif")) "gif" else rawExt
         val outFile = File(dir, "media_${desc.h.take(24)}${if (ext.isNotEmpty()) ".$ext" else ""}")
-        if (outFile.exists() && outFile.length() == desc.sz.toLong()) {
+        if (outFile.exists() && outFile.length() >= desc.sz.toLong()) {
             decryptedMediaFileCache[desc.h] = outFile
             return@withContext outFile
         }
@@ -1444,9 +1521,16 @@ object JaTextCryptoEngine {
             if (b64UrlEncode(sha256(ctBytes)) != desc.h) return@withContext null
             val aad = "JaText-Blob-v1|${desc.t}|${desc.sz}".toByteArray(Charsets.UTF_8)
             val plain = aesGcmDecrypt(b64UrlDecode(desc.k), b64UrlDecode(desc.iv), aad, ctBytes)
-            outFile.writeBytes(plain)
-            decryptedMediaFileCache[desc.h] = outFile
-            outFile
+            if (isGifBytes(plain)) {
+                val gifFile = File(dir, "media_${desc.h.take(24)}.gif")
+                gifFile.writeBytes(ensureInfiniteLoopGifBytes(plain))
+                decryptedMediaFileCache[desc.h] = gifFile
+                gifFile
+            } else {
+                outFile.writeBytes(plain)
+                decryptedMediaFileCache[desc.h] = outFile
+                outFile
+            }
         } catch (_: Throwable) {
             null
         }
