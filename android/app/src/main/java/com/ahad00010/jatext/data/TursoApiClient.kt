@@ -119,7 +119,19 @@ object TursoApiClient {
 
     /* ==================== Native In-App Google Sign-In API ==================== */
 
-    suspend fun fetchGoogleOAuthWebClientId(): String? = withContext(Dispatchers.IO) {
+    data class GoogleOAuthServerConfig(
+        val clientId: String,
+        val androidClientConfigured: Boolean,
+    )
+
+    data class MobileOAuthPollResult(
+        val status: String,
+        val token: String? = null,
+        val me: JaUser? = null,
+        val error: String? = null,
+    )
+
+    suspend fun fetchGoogleOAuthServerConfig(): GoogleOAuthServerConfig? = withContext(Dispatchers.IO) {
         try {
             val req = Request.Builder()
                 .url("$apiOrigin/api/oauth-google?action=config")
@@ -128,12 +140,53 @@ object TursoApiClient {
             httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
                 val obj = JaTextJson.parseToJsonElement(resp.body?.string().orEmpty()).jsonObject
-                obj["clientId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                val cid = obj["clientId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    ?: return@withContext null
+                val androidReady = obj["androidClientConfigured"]?.jsonPrimitive?.booleanOrNull == true
+                GoogleOAuthServerConfig(clientId = cid, androidClientConfigured = androidReady)
             }
         } catch (_: Throwable) {
             null
         }
     }
+
+    suspend fun fetchGoogleOAuthWebClientId(): String? =
+        fetchGoogleOAuthServerConfig()?.clientId
+
+    suspend fun pollGoogleMobileSession(mobileSessionId: String): MobileOAuthPollResult =
+        withContext(Dispatchers.IO) {
+            try {
+                val encoded = URLEncoder.encode(mobileSessionId, "UTF-8")
+                val req = Request.Builder()
+                    .url("$apiOrigin/api/oauth-google?action=poll&mobileSession=$encoded")
+                    .get()
+                    .build()
+                httpClient.newCall(req).execute().use { resp ->
+                    val raw = resp.body?.string().orEmpty()
+                    val obj = try {
+                        JaTextJson.parseToJsonElement(raw).jsonObject
+                    } catch (_: Throwable) {
+                        null
+                    } ?: return@withContext MobileOAuthPollResult(status = "pending")
+                    val status = obj["status"]?.jsonPrimitive?.contentOrNull ?: "pending"
+                    val token = obj["token"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    val error = obj["error"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    val meEl = obj["me"]
+                    val me = if (meEl != null && meEl !is JsonNull) {
+                        try {
+                            JaTextJson.decodeFromJsonElement(JaUser.serializer(), meEl)
+                        } catch (_: Throwable) {
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                    MobileOAuthPollResult(status = status, token = token, me = me, error = error)
+                }
+            } catch (_: Throwable) {
+                MobileOAuthPollResult(status = "pending")
+            }
+        }
 
     suspend fun signInWithGoogleIdToken(idToken: String): Pair<String, JaUser> =
         withContext(Dispatchers.IO) {

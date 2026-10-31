@@ -117,6 +117,16 @@ async function initSchema(db) {
     `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
     `CREATE INDEX IF NOT EXISTS idx_users_updated ON users(updated_at)`,
 
+    `CREATE TABLE IF NOT EXISTS oauth_mobile_handoffs (
+      session_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      token TEXT,
+      me_json TEXT,
+      error TEXT,
+      created_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_oauth_mobile_created ON oauth_mobile_handoffs(created_at)`,
+
     `CREATE TABLE IF NOT EXISTS friend_requests (
       id TEXT PRIMARY KEY,
       from_id TEXT NOT NULL,
@@ -1277,6 +1287,72 @@ export async function upsertGoogleOAuthAccount({ googleSub, email, name, picture
   return {
     token: createAuthToken(uid, cleanEmail),
     me: mapUserRow(created.rows[0], true),
+  };
+}
+
+export async function saveMobileOAuthHandoff({ sessionId, status, token = null, me = null, error = null }) {
+  const cleanId = String(sessionId || "").trim();
+  if (!/^[a-f0-9]{24,96}$/i.test(cleanId)) return;
+  const db = await getDb();
+  const now = Date.now();
+  await db
+    .execute({
+      sql: `DELETE FROM oauth_mobile_handoffs WHERE created_at < ?`,
+      args: [now - 15 * 60_000],
+    })
+    .catch(() => undefined);
+  await db.execute({
+    sql: `INSERT INTO oauth_mobile_handoffs (session_id, status, token, me_json, error, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            status = excluded.status,
+            token = excluded.token,
+            me_json = excluded.me_json,
+            error = excluded.error,
+            created_at = excluded.created_at`,
+    args: [
+      cleanId,
+      String(status || "pending"),
+      token ? String(token) : null,
+      me ? JSON.stringify(me) : null,
+      error ? String(error) : null,
+      now,
+    ],
+  });
+}
+
+export async function consumeMobileOAuthHandoff(sessionId) {
+  const cleanId = String(sessionId || "").trim();
+  if (!/^[a-f0-9]{24,96}$/i.test(cleanId)) {
+    return { status: "missing" };
+  }
+  const db = await getDb();
+  const res = await db.execute({
+    sql: `SELECT * FROM oauth_mobile_handoffs WHERE session_id = ? LIMIT 1`,
+    args: [cleanId],
+  });
+  if (!res.rows.length) {
+    return { status: "pending" };
+  }
+  const row = res.rows[0];
+  const ageMs = Date.now() - Number(row.created_at || 0);
+  if (ageMs > 15 * 60_000) {
+    await db
+      .execute({ sql: `DELETE FROM oauth_mobile_handoffs WHERE session_id = ?`, args: [cleanId] })
+      .catch(() => undefined);
+    return { status: "expired" };
+  }
+  const status = String(row.status || "pending");
+  if (status === "complete" || status === "error") {
+    await db
+      .execute({ sql: `DELETE FROM oauth_mobile_handoffs WHERE session_id = ?`, args: [cleanId] })
+      .catch(() => undefined);
+  }
+  return {
+    status,
+    token: row.token ? String(row.token) : null,
+    me: row.me_json ? safeJsonParse(row.me_json, null) : null,
+    error: row.error ? String(row.error) : null,
   };
 }
 

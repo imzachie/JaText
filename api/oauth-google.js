@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
-import { getTursoConfig, upsertGoogleOAuthAccount } from "../server/tursoBackend.js";
+import {
+  consumeMobileOAuthHandoff,
+  getTursoConfig,
+  saveMobileOAuthHandoff,
+  upsertGoogleOAuthAccount,
+} from "../server/tursoBackend.js";
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -22,10 +27,14 @@ function getGoogleCredentials() {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+  const androidClientConfigured = Boolean(
+    extraAndroidClientIds.length > 0 || process.env.GOOGLE_ANDROID_SHA1_READY === "1",
+  );
   return {
     clientId,
     clientSecret,
     extraAndroidClientIds,
+    androidClientConfigured,
     configured: Boolean(clientId && clientSecret),
   };
 }
@@ -76,11 +85,19 @@ function verifyState(rawState) {
   }
 }
 
-function redirectWithError(res, platform, origin, message) {
+async function redirectWithError(res, platform, origin, message, mobileSession = "") {
+  if (mobileSession) {
+    await saveMobileOAuthHandoff({
+      sessionId: mobileSession,
+      status: "error",
+      error: message,
+    }).catch(() => undefined);
+  }
   const encoded = encodeURIComponent(message);
   if (platform === "android") {
+    const sessSuffix = mobileSession ? `&mobileSession=${encodeURIComponent(mobileSession)}` : "";
     res.writeHead(302, {
-      Location: `com.ahad00010.jatext://auth?authError=${encoded}`,
+      Location: `com.ahad00010.jatext://auth?authError=${encoded}${sessSuffix}`,
     });
     return res.end();
   }
@@ -88,6 +105,21 @@ function redirectWithError(res, platform, origin, message) {
     Location: `${origin}/chats?authError=${encoded}`,
   });
   return res.end();
+}
+
+function isAllowedGoogleAudience(aud, azp, clientId, extraAndroidClientIds) {
+  const allowed = new Set([clientId, ...extraAndroidClientIds]);
+  if (allowed.has(aud)) return true;
+  const projectPrefix = clientId.includes("-") ? `${clientId.split("-")[0]}-` : "";
+  if (
+    projectPrefix &&
+    aud.startsWith(projectPrefix) &&
+    aud.endsWith(".apps.googleusercontent.com")
+  ) {
+    return true;
+  }
+  if (azp && allowed.has(azp)) return true;
+  return false;
 }
 
 async function handleNativeGoogleTokenSignIn(req, res, credentials) {
@@ -139,9 +171,9 @@ async function handleNativeGoogleTokenSignIn(req, res, credentials) {
         return res.status(401).json({ ok: false, error: "Invalid Google token issuer." });
       }
 
-      const allowedAudiences = new Set([clientId, ...extraAndroidClientIds]);
       const aud = String(claims.aud || "");
-      if (!allowedAudiences.has(aud)) {
+      const azp = String(claims.azp || "");
+      if (!isAllowedGoogleAudience(aud, azp, clientId, extraAndroidClientIds)) {
         return res.status(401).json({
           ok: false,
           error: "Google ID token audience mismatch.",
@@ -199,7 +231,7 @@ export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
   const credentials = getGoogleCredentials();
-  const { clientId, clientSecret, configured } = credentials;
+  const { clientId, clientSecret, androidClientConfigured, configured } = credentials;
   const action = String(req.query?.action || "");
 
   if (req.method === "GET" && action === "config") {
@@ -207,7 +239,28 @@ export default async function handler(req, res) {
       ok: true,
       configured: Boolean(clientId),
       clientId,
+      androidClientConfigured,
     });
+  }
+
+  if (req.method === "GET" && action === "poll") {
+    const mobileSession = String(req.query?.mobileSession || "").trim();
+    if (!mobileSession) {
+      return res.status(400).json({ ok: false, status: "missing", error: "Missing mobileSession." });
+    }
+    try {
+      const result = await consumeMobileOAuthHandoff(mobileSession);
+      return res.status(200).json({
+        ok: result.status !== "error",
+        ...result,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        status: "error",
+        error: err instanceof Error ? err.message : "Failed to poll mobile OAuth status.",
+      });
+    }
   }
 
   if (req.method === "POST") {
@@ -219,17 +272,30 @@ export default async function handler(req, res) {
 
   if (action === "start" || (!req.query?.code && !req.query?.error)) {
     const platform = req.query?.platform === "android" ? "android" : "web";
+    const mobileSession =
+      typeof req.query?.mobileSession === "string" &&
+      /^[a-f0-9]{24,96}$/i.test(req.query.mobileSession.trim())
+        ? req.query.mobileSession.trim()
+        : "";
     if (!configured) {
       return redirectWithError(
         res,
         platform,
         origin,
         "Google Sign-In is not configured yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Vercel Environment Variables.",
+        mobileSession,
       );
+    }
+    if (mobileSession) {
+      await saveMobileOAuthHandoff({
+        sessionId: mobileSession,
+        status: "pending",
+      }).catch(() => undefined);
     }
     const state = signState({
       platform,
       origin,
+      mobileSession,
       ts: Date.now(),
       nonce: crypto.randomBytes(8).toString("hex"),
     });
@@ -250,6 +316,7 @@ export default async function handler(req, res) {
   const parsedState = verifyState(String(req.query?.state || ""));
   const platform = parsedState?.platform === "android" ? "android" : "web";
   const targetOrigin = parsedState?.origin || origin;
+  const mobileSession = String(parsedState?.mobileSession || "");
 
   if (req.query?.error) {
     return redirectWithError(
@@ -257,6 +324,7 @@ export default async function handler(req, res) {
       platform,
       targetOrigin,
       `Google sign-in was cancelled (${String(req.query.error)}).`,
+      mobileSession,
     );
   }
 
@@ -266,6 +334,7 @@ export default async function handler(req, res) {
       platform,
       targetOrigin,
       "Google sign-in session expired. Please try again.",
+      mobileSession,
     );
   }
 
@@ -288,6 +357,7 @@ export default async function handler(req, res) {
         platform,
         targetOrigin,
         tokenJson?.error_description || "Failed to exchange Google OAuth code.",
+        mobileSession,
       );
     }
 
@@ -301,19 +371,30 @@ export default async function handler(req, res) {
         platform,
         targetOrigin,
         "Could not read your Google profile email.",
+        mobileSession,
       );
     }
 
-    const { token } = await upsertGoogleOAuthAccount({
+    const { token, me } = await upsertGoogleOAuthAccount({
       googleSub: String(profile.sub),
       email: String(profile.email),
       name: profile.name ? String(profile.name) : undefined,
       picture: profile.picture ? String(profile.picture) : undefined,
     });
 
+    if (mobileSession) {
+      await saveMobileOAuthHandoff({
+        sessionId: mobileSession,
+        status: "complete",
+        token,
+        me,
+      }).catch(() => undefined);
+    }
+
     if (platform === "android") {
+      const sessSuffix = mobileSession ? `&mobileSession=${encodeURIComponent(mobileSession)}` : "";
       res.writeHead(302, {
-        Location: `com.ahad00010.jatext://auth?tursoToken=${encodeURIComponent(token)}`,
+        Location: `com.ahad00010.jatext://auth?tursoToken=${encodeURIComponent(token)}${sessSuffix}`,
       });
       return res.end();
     }
@@ -328,6 +409,7 @@ export default async function handler(req, res) {
       platform,
       targetOrigin,
       err instanceof Error ? err.message : "Google Sign-In failed.",
+      mobileSession,
     );
   }
 }

@@ -190,8 +190,8 @@ object JaTextThemeManager {
                         CustomThemeData(
                             appearance = if (c.a == "l" || c.a == "light") "light" else "dark",
                             colors = c.cols.ifEmpty { listOf("#e8a87c", "#9b6b9e") },
-                            angle = c.ang,
-                            intensity = c.int,
+                            angle = c.ang.toInt().coerceIn(0, 360),
+                            intensity = c.int.toInt().coerceIn(5, 100),
                         )
                     } else {
                         current.custom
@@ -216,8 +216,8 @@ object JaTextThemeManager {
                 c = SyncedCustomGradient(
                     a = if (cfg.custom.appearance == "light") "l" else "d",
                     cols = cfg.custom.colors.take(5),
-                    ang = cfg.custom.angle,
-                    int = cfg.custom.intensity,
+                    ang = cfg.custom.angle.toDouble(),
+                    int = cfg.custom.intensity.toDouble(),
                 ),
                 u = u,
             )

@@ -49,6 +49,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -153,30 +154,17 @@ fun NativeLoginScreen(
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
+    val sessionState by vm.state.collectAsState()
 
     var isSignUp by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    var googleBusy by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    val fallbackGoogleLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        scope.launch {
-            try {
-                vm.handleGooglePlayServicesFallbackResult(result.data)
-            } catch (_: GoogleSignInCancelledException) {
-                errorMsg = null
-            } catch (e: Throwable) {
-                errorMsg = e.message ?: "Google Sign-In could not complete."
-            } finally {
-                googleBusy = false
-            }
-        }
-    }
+    val googleBusy = sessionState.googleSignInInFlight
+    val activeError = errorMsg?.takeIf { it.isNotBlank() } ?: sessionState.authError
 
     val scrollState = rememberScrollState()
 
@@ -272,7 +260,7 @@ fun NativeLoginScreen(
 
                 Spacer(Modifier.height(22.dp))
 
-                // In-App Native Google Sign-In Button (Credential Manager -> zero browser redirect!)
+                // In-App Google Sign-In Button (Credential Manager + 82%-height In-App OAuth Sheet!)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -282,22 +270,7 @@ fun NativeLoginScreen(
                         .clickable(enabled = !googleBusy && !busy && activity != null) {
                             val act = activity ?: return@clickable
                             errorMsg = null
-                            googleBusy = true
-                            scope.launch {
-                                var launchedIntent = false
-                                try {
-                                    vm.signInWithGoogleInApp(act) { fallbackIntent: Intent ->
-                                        launchedIntent = true
-                                        fallbackGoogleLauncher.launch(fallbackIntent)
-                                    }
-                                } catch (_: GoogleSignInCancelledException) {
-                                    errorMsg = null
-                                } catch (e: Throwable) {
-                                    errorMsg = e.message ?: "Google Sign-In failed"
-                                } finally {
-                                    if (!launchedIntent) googleBusy = false
-                                }
-                            }
+                            vm.startGoogleSignIn(act)
                         },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -341,7 +314,7 @@ fun NativeLoginScreen(
 
                 OutlinedTextField(
                     value = email,
-                    onValueChange = { email = it; errorMsg = null },
+                    onValueChange = { email = it; errorMsg = null; vm.clearAuthError() },
                     label = { Text("Email address") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
@@ -364,7 +337,7 @@ fun NativeLoginScreen(
 
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it; errorMsg = null },
+                    onValueChange = { password = it; errorMsg = null; vm.clearAuthError() },
                     label = { Text(if (isSignUp) "Password (8+ characters)" else "Password") },
                     singleLine = true,
                     visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
@@ -393,7 +366,7 @@ fun NativeLoginScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
-                if (!errorMsg.isNullOrBlank()) {
+                if (!activeError.isNullOrBlank()) {
                     Spacer(Modifier.height(12.dp))
                     Box(
                         modifier = Modifier
@@ -404,7 +377,7 @@ fun NativeLoginScreen(
                             .padding(horizontal = 12.dp, vertical = 10.dp)
                     ) {
                         Text(
-                            text = errorMsg!!,
+                            text = activeError,
                             color = Color(0xFFFCA5A5),
                             fontSize = 12.5.sp,
                             lineHeight = 17.sp,

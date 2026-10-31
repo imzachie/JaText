@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ahad00010.jatext.BuildConfig
 import com.ahad00010.jatext.JaTextSoundManager
+import com.ahad00010.jatext.MainActivity
 import com.ahad00010.jatext.NativeRuntimeBridge
 import com.ahad00010.jatext.auth.GoogleNativeSignIn
 import com.ahad00010.jatext.auth.GoogleSignInCancelledException
@@ -115,6 +116,8 @@ data class SessionUiState(
     val showPostUpdateWelcome: Boolean = false,
     val highlightedMessageId: String? = null,
     val toastMessage: String? = null,
+    val googleSignInInFlight: Boolean = false,
+    val authError: String? = null,
 )
 
 class JaTextSessionViewModel(app: Application) :
@@ -216,7 +219,15 @@ class JaTextSessionViewModel(app: Application) :
 
     /* ==================== Startup, Offline Cache & Bootstrap ==================== */
 
-    private fun bootstrapActiveSlot(targetSlotId: String = cache.getActiveSlotId()) {
+    private var mobileOAuthPollJob: Job? = null
+    private var activeMobileOAuthSessionId: String? = null
+    private var mobileOAuthLaunchedAtMs: Long = 0L
+    private var lastCompletedAuthToken: String? = null
+
+    private fun bootstrapActiveSlot(
+        targetSlotId: String = cache.getActiveSlotId(),
+        initialUser: JaUser? = null,
+    ) {
         syncLoopJob?.cancel()
         sinceTs = 0L
         val token = cache.getTokenForSlot(targetSlotId)
@@ -227,6 +238,7 @@ class JaTextSessionViewModel(app: Application) :
                 it.copy(
                     loading = false,
                     isAuthenticated = false,
+                    googleSignInInFlight = false,
                     slotId = targetSlotId,
                     accounts = cache.getAccounts(),
                     me = null,
@@ -243,8 +255,11 @@ class JaTextSessionViewModel(app: Application) :
                 it.copy(
                     loading = true,
                     isAuthenticated = true,
+                    googleSignInInFlight = false,
+                    authError = null,
                     slotId = targetSlotId,
                     accounts = cache.getAccounts(),
+                    me = initialUser ?: it.me,
                     outgoingBubbleStyle = cache.getOutgoingBubbleStyle(targetSlotId),
                     callHistory = cache.getCallHistory(targetSlotId),
                 )
@@ -625,8 +640,8 @@ class JaTextSessionViewModel(app: Application) :
         val token = root["token"]?.jsonPrimitive?.contentOrNull
             ?: throw IllegalStateException("Server did not return an auth token.")
         val me = JaTextJson.decodeFromJsonElement(JaUser.serializer(), root["me"]!!)
-        cache.upsertSlotSession(slot, token, me)
-        bootstrapActiveSlot(cache.getActiveSlotId())
+        val effectiveSlot = cache.upsertSlotSession(slot, token, me)
+        bootstrapActiveSlot(effectiveSlot, initialUser = me)
     }
 
     suspend fun signUpEmail(email: String, password: String) {
@@ -638,40 +653,164 @@ class JaTextSessionViewModel(app: Application) :
         val token = root["token"]?.jsonPrimitive?.contentOrNull
             ?: throw IllegalStateException("Server did not return an auth token.")
         val me = JaTextJson.decodeFromJsonElement(JaUser.serializer(), root["me"]!!)
-        cache.upsertSlotSession(slot, token, me)
-        bootstrapActiveSlot(cache.getActiveSlotId())
+        val effectiveSlot = cache.upsertSlotSession(slot, token, me)
+        bootstrapActiveSlot(effectiveSlot, initialUser = me)
+    }
+
+    fun clearAuthError() {
+        _state.update { it.copy(authError = null) }
+    }
+
+    fun reportExternalAuthError(message: String?) {
+        mobileOAuthPollJob?.cancel()
+        activeMobileOAuthSessionId = null
+        _state.update {
+            it.copy(
+                googleSignInInFlight = false,
+                authError = message?.takeIf { m -> m.isNotBlank() } ?: "Google Sign-In could not complete.",
+            )
+        }
     }
 
     /**
-     * Pure in-app Google Sign-In (zero Chrome redirect):
-     * 1. Tries Android Credential Manager bottom sheet first.
-     * 2. If Credential Manager returns null on older Play Services, calls launchFallbackIntent
-     *    with Google Play Services Auth sign-in dialog Intent (also 100% in-app).
+     * Completes sign-in immediately when a Turso JWT token arrives via either:
+     * - Channel A: com.ahad00010.jatext://auth?tursoToken=... deep-link intent, or
+     * - Channel B: Turso mobileSession background polling.
      */
-    suspend fun signInWithGoogleInApp(
-        activity: Activity,
-        launchFallbackIntent: (Intent) -> Unit,
-    ) {
-        val serverClientId = GoogleNativeSignIn.resolveServerWebClientId(appCtx)
-        val idToken = GoogleNativeSignIn.requestInAppIdTokenViaCredentialManager(activity, serverClientId)
-        if (!idToken.isNullOrBlank()) {
-            completeGoogleIdTokenSignIn(idToken)
-            return
-        }
-        val fallbackIntent = GoogleNativeSignIn.buildPlayServicesSignInIntent(activity, serverClientId)
-        launchFallbackIntent(fallbackIntent)
+    fun completeDirectTursoTokenSignIn(token: String, initialMe: JaUser? = null) {
+        val cleanToken = token.trim()
+        if (cleanToken.isBlank()) return
+        if (lastCompletedAuthToken == cleanToken && _state.value.isAuthenticated) return
+        lastCompletedAuthToken = cleanToken
+        mobileOAuthPollJob?.cancel()
+        activeMobileOAuthSessionId = null
+        val slot = _state.value.slotId
+        val effectiveSlot = cache.upsertSlotSession(slot, cleanToken, initialMe)
+        bootstrapActiveSlot(effectiveSlot, initialUser = initialMe)
     }
 
-    suspend fun handleGooglePlayServicesFallbackResult(data: Intent?) {
-        val idToken = GoogleNativeSignIn.extractIdTokenFromPlayServicesResult(data)
-        completeGoogleIdTokenSignIn(idToken)
+    /**
+     * Hybrid In-App Google Sign-In:
+     * 1. Uses Android Credential Manager directly if an Android OAuth 2.0 Client ID is configured.
+     * 2. Otherwise (or if Play Services reports [28444] missing SHA-1), immediately opens an
+     *    82%-height rounded In-App Partial Custom Tab sheet right over MainActivity backed by
+     *    BOTH com.ahad00010.jatext://auth deep-link return AND Turso mobileSession polling.
+     */
+    fun startGoogleSignIn(activity: Activity) {
+        if (_state.value.googleSignInInFlight) return
+        mobileOAuthPollJob?.cancel()
+        _state.update { it.copy(googleSignInInFlight = true, authError = null) }
+
+        viewModelScope.launch {
+            try {
+                val serverCfg = TursoApiClient.fetchGoogleOAuthServerConfig()
+                if (serverCfg == null || serverCfg.clientId.isBlank()) {
+                    _state.update {
+                        it.copy(
+                            googleSignInInFlight = false,
+                            authError = "Google Sign-In is not configured on the server yet.",
+                        )
+                    }
+                    return@launch
+                }
+
+                val credentialIdToken = GoogleNativeSignIn.tryCredentialManagerIfConfigured(
+                    activity = activity,
+                    serverConfig = serverCfg,
+                )
+                if (!credentialIdToken.isNullOrBlank()) {
+                    completeGoogleIdTokenSignIn(credentialIdToken)
+                    return@launch
+                }
+
+                // Launch 1-tap In-App Partial Bottom-Sheet OAuth Tab + dual-channel return!
+                val mobileSessionId = GoogleNativeSignIn.generateMobileSessionId()
+                activeMobileOAuthSessionId = mobileSessionId
+                mobileOAuthLaunchedAtMs = System.currentTimeMillis()
+                startMobileOAuthPolling(mobileSessionId)
+                GoogleNativeSignIn.launchInAppGoogleOAuthSheet(activity, mobileSessionId)
+            } catch (_: GoogleSignInCancelledException) {
+                _state.update { it.copy(googleSignInInFlight = false, authError = null) }
+            } catch (e: Throwable) {
+                _state.update {
+                    it.copy(
+                        googleSignInInFlight = false,
+                        authError = e.message ?: "Google Sign-In failed.",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun startMobileOAuthPolling(mobileSessionId: String) {
+        mobileOAuthPollJob?.cancel()
+        mobileOAuthPollJob = viewModelScope.launch {
+            val deadline = System.currentTimeMillis() + 180_000L
+            while (System.currentTimeMillis() < deadline && activeMobileOAuthSessionId == mobileSessionId) {
+                delay(750L)
+                val poll = TursoApiClient.pollGoogleMobileSession(mobileSessionId)
+                when (poll.status) {
+                    "complete" -> {
+                        val tok = poll.token
+                        if (!tok.isNullOrBlank()) {
+                            completeDirectTursoTokenSignIn(tok, poll.me)
+                            MainActivity.bringToFrontAfterAuth()
+                            return@launch
+                        }
+                    }
+                    "error" -> {
+                        reportExternalAuthError(poll.error)
+                        MainActivity.bringToFrontAfterAuth()
+                        return@launch
+                    }
+                    "expired" -> {
+                        _state.update { it.copy(googleSignInInFlight = false) }
+                        activeMobileOAuthSessionId = null
+                        return@launch
+                    }
+                }
+            }
+            if (activeMobileOAuthSessionId == mobileSessionId) {
+                activeMobileOAuthSessionId = null
+                _state.update { it.copy(googleSignInInFlight = false) }
+            }
+        }
+    }
+
+    fun onActivityResumed() {
+        val sessId = activeMobileOAuthSessionId ?: return
+        val elapsed = System.currentTimeMillis() - mobileOAuthLaunchedAtMs
+        if (elapsed < 1200L) return
+        viewModelScope.launch {
+            // Check immediately upon returning from the In-App Auth Sheet, plus one grace check
+            for (attempt in 0..2) {
+                if (activeMobileOAuthSessionId != sessId || _state.value.isAuthenticated) return@launch
+                val poll = TursoApiClient.pollGoogleMobileSession(sessId)
+                if (poll.status == "complete" && !poll.token.isNullOrBlank()) {
+                    completeDirectTursoTokenSignIn(poll.token, poll.me)
+                    return@launch
+                }
+                if (poll.status == "error") {
+                    reportExternalAuthError(poll.error)
+                    return@launch
+                }
+                delay(650L)
+            }
+            // User swiped down / closed the sheet without picking an account
+            if (activeMobileOAuthSessionId == sessId && !_state.value.isAuthenticated) {
+                mobileOAuthPollJob?.cancel()
+                activeMobileOAuthSessionId = null
+                _state.update { it.copy(googleSignInInFlight = false) }
+            }
+        }
     }
 
     private suspend fun completeGoogleIdTokenSignIn(idToken: String) {
         val slot = _state.value.slotId
         val (token, me) = TursoApiClient.signInWithGoogleIdToken(idToken)
-        cache.upsertSlotSession(slot, token, me)
-        bootstrapActiveSlot(cache.getActiveSlotId())
+        lastCompletedAuthToken = token
+        val effectiveSlot = cache.upsertSlotSession(slot, token, me)
+        bootstrapActiveSlot(effectiveSlot, initialUser = me)
     }
 
     fun switchToAccountSlot(slotId: String) {

@@ -133,13 +133,16 @@ class LocalCacheStore(private val appContext: Context) :
         return prefs.getString("token:$slotId", null)?.takeIf { it.isNotBlank() }
     }
 
-    fun upsertSlotSession(slotId: String, token: String, user: JaUser?) {
-        prefs.edit().putString("token:$slotId", token).apply()
+    fun upsertSlotSession(slotId: String, token: String, user: JaUser?): String {
         val current = getAccounts().toMutableList()
         val existingIdx = current.indexOfFirst {
             it.slotId == slotId || (user != null && user.id.isNotBlank() && it.userId == user.id)
         }
         val effectiveSlotId = if (existingIdx >= 0) current[existingIdx].slotId else slotId
+        if (effectiveSlotId != slotId) {
+            prefs.edit().remove("token:$slotId").apply()
+        }
+        prefs.edit().putString("token:$effectiveSlotId", token).apply()
         val prev = if (existingIdx >= 0) current[existingIdx] else null
         val updated = AccountSlot(
             slotId = effectiveSlotId,
@@ -165,6 +168,7 @@ class LocalCacheStore(private val appContext: Context) :
             token,
             BuildConfig.API_ORIGIN
         )
+        return effectiveSlotId
     }
 
     fun createNextEmptySlotId(): String {

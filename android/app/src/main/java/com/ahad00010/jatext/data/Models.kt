@@ -28,8 +28,8 @@ data class UserWebsiteLink(
 data class SyncedCustomGradient(
     val a: String = "d",
     val cols: List<String> = listOf("#efb4aa", "#b6e0d3", "#a5c4f3"),
-    val ang: Int = 45,
-    val int: Int = 60,
+    val ang: Double = 45.0,
+    val int: Double = 60.0,
 )
 
 @Serializable
