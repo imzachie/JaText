@@ -1,4 +1,5 @@
 import { getDb, newId, TursoAppError, verifyAuthToken } from "../server/tursoBackend.js";
+import { enforceHttpRateLimit } from "../server/rateLimiter.js";
 
 export const config = {
   api: {
@@ -150,6 +151,17 @@ export default async function handler(req, res) {
   setCors(res);
   if (req.method === "OPTIONS") {
     return res.status(204).end();
+  }
+
+  const isReadMethod = req.method === "GET" || req.method === "HEAD";
+  if (
+    enforceHttpRateLimit(req, res, {
+      scope: isReadMethod ? "media_read" : "media_upload",
+      limit: isReadMethod ? 600 : 160,
+      windowMs: 60_000,
+    })
+  ) {
+    return;
   }
 
   try {

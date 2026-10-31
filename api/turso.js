@@ -1,4 +1,5 @@
 import { getTursoConfig, handleTursoRpc, TursoAppError } from "../server/tursoBackend.js";
+import { enforceHttpRateLimit, resolveRpcRateTier } from "../server/rateLimiter.js";
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -18,6 +19,9 @@ export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method === "GET") {
+    if (enforceHttpRateLimit(req, res, { scope: "turso_health", limit: 60 })) {
+      return;
+    }
     const cfg = getTursoConfig();
     const googleConfigured = Boolean(
       (process.env.GOOGLE_CLIENT_ID || process.env.AUTH_GOOGLE_ID) &&
@@ -45,6 +49,20 @@ export default async function handler(req, res) {
     const op = String(body.op || "");
     const args = body.args && typeof body.args === "object" ? body.args : {};
     const authHeader = String(req.headers.authorization || "");
+    const { tier, limit, windowMs } = resolveRpcRateTier(op);
+    const tokenSubject = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7, 39)
+      : "";
+    if (
+      enforceHttpRateLimit(req, res, {
+        scope: `rpc:${tier}`,
+        limit,
+        windowMs,
+        subject: tokenSubject,
+      })
+    ) {
+      return;
+    }
     const data = await handleTursoRpc(op, args, authHeader);
     return res.status(200).json({ ok: true, data });
   } catch (err) {

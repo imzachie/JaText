@@ -24,7 +24,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -109,6 +114,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -118,13 +124,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.IntSize
+import androidx.core.content.FileProvider
 import com.ahad00010.jatext.crypto.JaTextCryptoEngine
 import com.ahad00010.jatext.data.GroupSummary
+import com.ahad00010.jatext.ui.components.isMessageAudioVoiceNote
+import com.ahad00010.jatext.ui.components.isMessageImageAttachment
+import com.ahad00010.jatext.ui.effects.LocalThanosSnapHost
+import com.ahad00010.jatext.ui.effects.thanosSnapTarget
 import com.ahad00010.jatext.ui.icons.WebUiIconKind
 import com.ahad00010.jatext.ui.icons.WebUiSvgIcon
 import androidx.compose.ui.text.font.FontStyle
@@ -369,6 +385,14 @@ fun ChatThreadScreen(
     var emojiPickerTargetMessageId by remember { mutableStateOf<String?>(null) }
     var forwardingItem by remember { mutableStateOf<UnifiedThreadItem?>(null) }
     var fullscreenImageModel by remember { mutableStateOf<Any?>(null) }
+    val shownTranscriptIds = remember { mutableStateMapOf<String, Boolean>() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val thanosSnapHost = LocalThanosSnapHost.current
+    val dismissKeyboardForCall: () -> Unit = {
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+    }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showStickerSheet by remember { mutableStateOf(false) }
     var showBubbleStyleModal by remember { mutableStateOf(false) }
@@ -659,6 +683,7 @@ fun ChatThreadScreen(
                         borderColor = headerIconBorder,
                         iconTint = headerTitleColor,
                         onClick = {
+                            dismissKeyboardForCall()
                             if (activeFriend != null) vm.callEngine.startDmCall(me, activeFriend, "voice")
                             else if (activeGroup != null) vm.callEngine.startGroupCall(me, activeGroup, "voice")
                         },
@@ -673,6 +698,7 @@ fun ChatThreadScreen(
                         borderColor = headerIconBorder,
                         iconTint = headerTitleColor,
                         onClick = {
+                            dismissKeyboardForCall()
                             if (activeFriend != null) vm.callEngine.startDmCall(me, activeFriend, "video")
                             else if (activeGroup != null) vm.callEngine.startGroupCall(me, activeGroup, "video")
                         },
@@ -964,6 +990,8 @@ fun ChatThreadScreen(
                                 onEndPoll = { msg.poll?.let { vm.endCommunityPoll(it.id) } },
                                 onViewPollVoters = { msg.poll?.let { pollVotersTarget = it } },
                                 onOpenFullscreenImage = { model -> fullscreenImageModel = model },
+                                showTranscript = shownTranscriptIds[msg.id] == true,
+                                onHideTranscript = { shownTranscriptIds[msg.id] = false },
                             )
                         } else {
                             val isMine = msg.senderId == me.id
@@ -1027,6 +1055,7 @@ fun ChatThreadScreen(
                                     onOpenFullscreenImage = { model -> fullscreenImageModel = model },
                                     onClickSenderOrReader = { user -> onOpenPeerProfile(user) },
                                     onCallAction = { mode ->
+                                        dismissKeyboardForCall()
                                         if (callUiState.active) {
                                             vm.callEngine.setMinimized(false)
                                         } else if (activeFriend != null) {
@@ -1035,6 +1064,8 @@ fun ChatThreadScreen(
                                             vm.callEngine.startGroupCall(me, activeGroup, mode)
                                         }
                                     },
+                                    showTranscript = shownTranscriptIds[msg.id] == true,
+                                    onHideTranscript = { shownTranscriptIds[msg.id] = false },
                                 )
                             }
                         }
@@ -1418,6 +1449,58 @@ fun ChatThreadScreen(
 
                 Spacer(Modifier.height(12.dp))
 
+                val isVoiceNoteMsg = isMessageAudioVoiceNote(
+                    attachmentUrl = msg.attachmentUrl,
+                    attachmentName = msg.attachmentName,
+                    attachmentType = msg.attachmentType,
+                    encryptedAttachment = msg.encryptedAttachment,
+                )
+                val isImageOrStickerMsg = !msg.stickerUrl.isNullOrBlank() || isMessageImageAttachment(
+                    attachmentUrl = msg.attachmentUrl,
+                    attachmentName = msg.attachmentName,
+                    attachmentType = msg.attachmentType,
+                    encryptedAttachment = msg.encryptedAttachment,
+                )
+
+                if (isVoiceNoteMsg) {
+                    val alreadyShown = shownTranscriptIds[msg.id] == true
+                    MessageSheetAction(
+                        icon = WebUiIconKind.Transcript,
+                        label = if (alreadyShown) "Hide transcribe" else "Transcribe",
+                        tint = palette.accent,
+                    ) {
+                        shownTranscriptIds[msg.id] = !alreadyShown
+                        contextMenuMessage = null
+                    }
+                }
+
+                if (isImageOrStickerMsg) {
+                    val mediaRawUrl = msg.stickerUrl ?: msg.attachmentUrl.orEmpty()
+                    val encDesc = if (msg.stickerUrl.isNullOrBlank()) msg.encryptedAttachment else null
+                    MessageSheetAction(WebUiIconKind.Copy, "Copy image") {
+                        contextMenuMessage = null
+                        scope.launch {
+                            val ok = copyImageMessageToClipboard(context, mediaRawUrl, encDesc)
+                            vm.showToast(if (ok) "Image copied to clipboard" else "Could not copy image")
+                        }
+                    }
+                    MessageSheetAction(WebUiIconKind.Link, "Copy image address") {
+                        val absUrl = TursoApiClient.resolveAbsoluteMediaUrl(mediaRawUrl)
+                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        cb?.setPrimaryClip(ClipData.newPlainText("JaText image URL", absUrl))
+                        vm.showToast("Image address copied")
+                        contextMenuMessage = null
+                    }
+                    MessageSheetAction(WebUiIconKind.Star, "Save to Favourites", tint = palette.accent) {
+                        contextMenuMessage = null
+                        vm.saveImageMediaToFavorites(
+                            rawUrl = mediaRawUrl,
+                            encryptedAttachment = encDesc,
+                            fallbackName = msg.attachmentName ?: "Saved media",
+                        )
+                    }
+                }
+
                 if (!isCommunity || state.communityPermissions.canPost) {
                     MessageSheetAction(WebUiIconKind.Reply, "Reply") {
                         replyingTo = ReplySummary(
@@ -1450,8 +1533,18 @@ fun ChatThreadScreen(
                 }
                 if ((isMine && withinUnsendWindow) || canModerateCommunity) {
                     MessageSheetAction(WebUiIconKind.Undo, "Unsend for everyone", tint = palette.danger) {
-                        vm.unsendMessage(msg.id)
+                        val targetId = msg.id
                         contextMenuMessage = null
+                        scope.launch {
+                            delay(90L)
+                            if (thanosSnapHost != null) {
+                                thanosSnapHost.snapMessageThen(targetId) {
+                                    vm.unsendMessage(targetId)
+                                }
+                            } else {
+                                vm.unsendMessage(targetId)
+                            }
+                        }
                     }
                 }
                 if (!isCommunity) {
@@ -2393,36 +2486,186 @@ fun ChatThreadScreen(
 
     /* ==================== Fullscreen Image Lightbox ==================== */
     fullscreenImageModel?.let { model ->
-        Dialog(
-            onDismissRequest = { fullscreenImageModel = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ZoomableFullscreenImageDialog(
+            model = model,
+            onDismiss = { fullscreenImageModel = null },
+        )
+    }
+}
+
+@Composable
+private fun ZoomableFullscreenImageDialog(
+    model: Any,
+    onDismiss: () -> Unit,
+) {
+    var scale by remember(model) { mutableFloatStateOf(1f) }
+    var offsetX by remember(model) { mutableFloatStateOf(0f) }
+    var offsetY by remember(model) { mutableFloatStateOf(0f) }
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+
+    fun clampOffsets(targetScale: Float, rawX: Float, rawY: Float): Pair<Float, Float> {
+        if (targetScale <= 1.01f) return 0f to 0f
+        val maxX = ((containerSize.width * (targetScale - 1f)) / 2f).coerceAtLeast(0f)
+        val maxY = ((containerSize.height * (targetScale - 1f)) / 2f).coerceAtLeast(0f)
+        return rawX.coerceIn(-maxX, maxX) to rawY.coerceIn(-maxY, maxY)
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xF2000000))
+                .onSizeChanged { containerSize = it }
+                .pointerInput(model) {
+                    detectTapGestures(
+                        onDoubleTap = { tapOffset ->
+                            if (scale > 1.08f) {
+                                scale = 1f
+                                offsetX = 0f
+                                offsetY = 0f
+                            } else {
+                                val nextScale = 2.6f
+                                val cx = containerSize.width / 2f
+                                val cy = containerSize.height / 2f
+                                val dx = (cx - tapOffset.x) * (nextScale - 1f)
+                                val dy = (cy - tapOffset.y) * (nextScale - 1f)
+                                val (clampedX, clampedY) = clampOffsets(nextScale, dx, dy)
+                                scale = nextScale
+                                offsetX = clampedX
+                                offsetY = clampedY
+                            }
+                        },
+                        onTap = {
+                            if (scale <= 1.04f) onDismiss()
+                        },
+                    )
+                }
+                .pointerInput(model) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        do {
+                            val event = awaitPointerEvent()
+                            val pointerCount = event.changes.count { it.pressed }
+                            if (pointerCount >= 2 || scale > 1.02f) {
+                                val zoomChange = event.calculateZoom()
+                                val panChange = event.calculatePan()
+                                val nextScale = (scale * zoomChange).coerceIn(1f, 5f)
+                                val (nx, ny) = clampOffsets(
+                                    nextScale,
+                                    offsetX + panChange.x,
+                                    offsetY + panChange.y,
+                                )
+                                if (zoomChange != 1f || nextScale > 1.02f) {
+                                    scale = nextScale
+                                    offsetX = nx
+                                    offsetY = ny
+                                    event.changes.forEach { ch ->
+                                        if (ch.position != ch.previousPosition) {
+                                            ch.consume()
+                                        }
+                                    }
+                                }
+                            }
+                        } while (event.changes.any { it.pressed })
+                        if (scale < 1.02f) {
+                            scale = 1f
+                            offsetX = 0f
+                            offsetY = 0f
+                        }
+                    }
+                },
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
+            AsyncImage(
+                model = model,
+                contentDescription = "Fullscreen media",
+                contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xF0000000))
-                    .clickable { fullscreenImageModel = null },
-                contentAlignment = Alignment.Center,
-            ) {
-                AsyncImage(
-                    model = model,
-                    contentDescription = "Fullscreen media",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                IconButton(
-                    onClick = { fullscreenImageModel = null },
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offsetX
+                        translationY = offsetY
+                    },
+            )
+            if (scale > 1.06f) {
+                Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .statusBarsPadding()
-                        .padding(14.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x66000000)),
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 22.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color(0x88000000))
+                        .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(999.dp))
+                        .clickable {
+                            scale = 1f
+                            offsetX = 0f
+                            offsetY = 0f
+                        }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
                 ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Close", tint = Color.White)
+                    Text(
+                        text = "${String.format(java.util.Locale.US, "%.1fx", scale)} · Reset zoom",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(14.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x66000000)),
+            ) {
+                Icon(Icons.Rounded.Close, contentDescription = "Close", tint = Color.White)
+            }
         }
+    }
+}
+
+private suspend fun copyImageMessageToClipboard(
+    context: Context,
+    rawUrl: String,
+    encryptedAttachment: EncryptedBlobDescriptor?,
+): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    try {
+        val absUrl = TursoApiClient.resolveAbsoluteMediaUrl(rawUrl)
+        val srcFile: java.io.File? = if (rawUrl.startsWith("file://")) {
+            Uri.parse(rawUrl).path?.let { java.io.File(it) }
+        } else {
+            JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(context, absUrl, encryptedAttachment)
+        }
+        if (srcFile == null || !srcFile.exists() || srcFile.length() <= 0L) {
+            return@withContext false
+        }
+        val ext = srcFile.extension.lowercase().takeIf { it in setOf("png", "jpg", "jpeg", "gif", "webp") } ?: "png"
+        val shareCopy = java.io.File(context.cacheDir, "jatext_clip_${System.currentTimeMillis()}.$ext")
+        srcFile.copyTo(shareCopy, overwrite = true)
+        val contentUri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            shareCopy,
+        )
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            if (cb == null) {
+                false
+            } else {
+                val clip = ClipData.newUri(context.contentResolver, "JaText Image", contentUri)
+                cb.setPrimaryClip(clip)
+                true
+            }
+        }
+    } catch (_: Throwable) {
+        false
     }
 }
 
@@ -2552,8 +2795,11 @@ private fun CommunityAnnouncementPostCard(
     onEndPoll: () -> Unit,
     onViewPollVoters: () -> Unit,
     onOpenFullscreenImage: (Any) -> Unit,
+    showTranscript: Boolean = false,
+    onHideTranscript: (() -> Unit)? = null,
 ) {
     val palette = LocalJaTextPalette.current
+    val thanosHost = LocalThanosSnapHost.current
     val scope = rememberCoroutineScope()
     val offsetX = remember { Animatable(0f) }
     var triggeredSwipe by remember { mutableStateOf(false) }
@@ -2601,6 +2847,7 @@ private fun CommunityAnnouncementPostCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                .thanosSnapTarget(msg.id, thanosHost)
                 .clip(RoundedCornerShape(18.dp))
                 .background(palette.bgSecondary)
                 .border(1.dp, palette.border, RoundedCornerShape(18.dp))
@@ -2686,6 +2933,9 @@ private fun CommunityAnnouncementPostCard(
                         encryptedAttachment = null,
                         ink = cardInk,
                         onOpenImageFullscreen = onOpenFullscreenImage,
+                        showTranscript = showTranscript,
+                        onHideTranscript = onHideTranscript,
+                        onLongPressMessage = onLongPress,
                     )
                 }
                 if (!msg.stickerUrl.isNullOrBlank()) {
@@ -2696,7 +2946,10 @@ private fun CommunityAnnouncementPostCard(
                         modifier = Modifier
                             .size(164.dp)
                             .clip(RoundedCornerShape(14.dp))
-                            .clickable { onOpenFullscreenImage(msg.stickerUrl) },
+                            .combinedClickable(
+                                onClick = { onOpenFullscreenImage(msg.stickerUrl) },
+                                onLongClick = onLongPress,
+                            ),
                     )
                 }
                 if (msg.poll != null) {
@@ -2800,8 +3053,11 @@ private fun SwipeableMessageRow(
     onOpenFullscreenImage: (Any) -> Unit,
     onClickSenderOrReader: (JaUser) -> Unit,
     onCallAction: (String) -> Unit,
+    showTranscript: Boolean = false,
+    onHideTranscript: (() -> Unit)? = null,
 ) {
     val palette = LocalJaTextPalette.current
+    val thanosHost = LocalThanosSnapHost.current
     val scope = rememberCoroutineScope()
     val offsetX = remember { Animatable(0f) }
     var triggeredSwipe by remember { mutableStateOf(false) }
@@ -2930,7 +3186,10 @@ private fun SwipeableMessageRow(
                     }
 
                     !msg.stickerUrl.isNullOrBlank() -> {
-                        Column(horizontalAlignment = if (isMine) Alignment.End else Alignment.Start) {
+                        Column(
+                            horizontalAlignment = if (isMine) Alignment.End else Alignment.Start,
+                            modifier = Modifier.thanosSnapTarget(msg.id, thanosHost),
+                        ) {
                             AsyncImage(
                                 model = msg.stickerUrl,
                                 contentDescription = "Sticker",
@@ -2962,10 +3221,12 @@ private fun SwipeableMessageRow(
                             styleId = msg.bubbleStyle,
                             isMine = isMine,
                             palette = palette,
-                            modifier = Modifier.combinedClickable(
-                                onClick = {},
-                                onLongClick = onLongPress,
-                            )
+                            modifier = Modifier
+                                .thanosSnapTarget(msg.id, thanosHost)
+                                .combinedClickable(
+                                    onClick = {},
+                                    onLongClick = onLongPress,
+                                )
                         ) { ink ->
                             Column {
                                 msg.forwardedContext?.let { fwd ->
@@ -2993,6 +3254,9 @@ private fun SwipeableMessageRow(
                                         encryptedAttachment = msg.encryptedAttachment,
                                         ink = ink,
                                         onOpenImageFullscreen = onOpenFullscreenImage,
+                                        showTranscript = showTranscript,
+                                        onHideTranscript = onHideTranscript,
+                                        onLongPressMessage = onLongPress,
                                     )
                                 }
                                 if (msg.body.isNotBlank()) {

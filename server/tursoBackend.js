@@ -2345,6 +2345,20 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       return { ok: true };
     }
 
+    case "restoreMessageForMe": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const messageId = String(args.messageId || "");
+      const res = await db.execute({ sql: `SELECT * FROM messages WHERE id = ?`, args: [messageId] });
+      if (!res.rows.length) return { ok: true };
+      const hidden = safeJsonParse(res.rows[0].hidden_for_json, []).filter((uid) => uid !== meId);
+      await db.execute({
+        sql: `UPDATE messages SET hidden_for_json = ?, updated_at = ? WHERE id = ?`,
+        args: [JSON.stringify(hidden), now, messageId],
+      });
+      return { ok: true };
+    }
+
     case "setConversationPrefs": {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
@@ -2666,6 +2680,15 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       if (action === "hideForMe") {
         const hidden = safeJsonParse(m.hidden_for_json, []);
         if (!hidden.includes(meId)) hidden.push(meId);
+        await db.execute({
+          sql: `UPDATE community_messages SET hidden_for_json = ?, updated_at = ? WHERE id = ?`,
+          args: [JSON.stringify(hidden), now, messageId],
+        });
+        return { ok: true };
+      }
+
+      if (action === "unhideForMe") {
+        const hidden = safeJsonParse(m.hidden_for_json, []).filter((uid) => uid !== meId);
         await db.execute({
           sql: `UPDATE community_messages SET hidden_for_json = ?, updated_at = ? WHERE id = ?`,
           args: [JSON.stringify(hidden), now, messageId],
@@ -3026,6 +3049,15 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         return { ok: true };
       }
 
+      if (action === "unhideForMe") {
+        const hidden = safeJsonParse(m.hidden_for_json, []).filter((uid) => uid !== meId);
+        await db.execute({
+          sql: `UPDATE group_messages SET hidden_for_json = ?, updated_at = ? WHERE id = ?`,
+          args: [JSON.stringify(hidden), now, messageId],
+        });
+        return { ok: true };
+      }
+
       if (action === "edit") {
         if (String(m.sender_id) !== meId) {
           throw new TursoAppError("You can only edit your own messages.", 403);
@@ -3205,8 +3237,20 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         }
 
         case "setMuted": {
-          if (!isMod) throw new TursoAppError("Not authorized.", 403);
+          if (!isMod) throw new TursoAppError("Only owners or moderators can mute members.", 403);
           const targetId = String(args.userId || "");
+          if (targetId === String(grp.owner_id)) {
+            throw new TursoAppError("Cannot mute the group owner.", 403);
+          }
+          if (!isOwner) {
+            const targetRes = await db.execute({
+              sql: `SELECT role FROM group_members WHERE group_id = ? AND user_id = ? LIMIT 1`,
+              args: [groupId, targetId],
+            });
+            if (String(targetRes.rows[0]?.role || "") === "moderator") {
+              throw new TursoAppError("Only the group owner can mute a moderator.", 403);
+            }
+          }
           await db.execute({
             sql: `UPDATE group_members SET muted = ?, updated_at = ? WHERE group_id = ? AND user_id = ? AND role != 'owner'`,
             args: [args.muted ? 1 : 0, now, groupId, targetId],
@@ -3215,7 +3259,9 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         }
 
         case "removeMember": {
-          if (!isMod) throw new TursoAppError("Not authorized.", 403);
+          if (!isOwner) {
+            throw new TursoAppError("Only the group owner can remove members.", 403);
+          }
           const targetId = String(args.userId || "");
           if (targetId === String(grp.owner_id)) {
             throw new TursoAppError("Cannot remove the group owner.");
@@ -3438,8 +3484,17 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const webDhPubB64 = String(args.webDhPubB64 || "").trim();
       const browserName = String(args.browserName || "Chrome").trim().slice(0, 40) || "Chrome";
       const osName = String(args.osName || "").trim().slice(0, 40);
+      const previousPairingId = String(args.previousPairingId || "").trim();
       if (!secretHash || !webDhPubB64) {
         throw new TursoAppError("Invalid QR link session parameters.");
+      }
+      if (previousPairingId) {
+        await db
+          .execute({
+            sql: `DELETE FROM device_link_sessions WHERE pairing_id = ? AND status = 'pending'`,
+            args: [previousPairingId],
+          })
+          .catch(() => {});
       }
       await db
         .execute({
@@ -3457,6 +3512,29 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         args: [pairingId, secretHash, webDhPubB64, browserName, osName, now, now, expiresAt],
       });
       return { pairingId, expiresAt };
+    }
+
+    case "cancelDeviceLinkSession": {
+      const pairingId = String(args.pairingId || "").trim();
+      const linkSecret = String(args.linkSecret || "").trim();
+      if (pairingId && linkSecret) {
+        const res = await db.execute({
+          sql: `SELECT secret_hash, status FROM device_link_sessions WHERE pairing_id = ? LIMIT 1`,
+          args: [pairingId],
+        });
+        const row = res.rows[0];
+        if (
+          row &&
+          String(row.status) === "pending" &&
+          safeEqualStrings(sha256Base64Url(linkSecret), String(row.secret_hash || ""))
+        ) {
+          await db.execute({
+            sql: `DELETE FROM device_link_sessions WHERE pairing_id = ? AND status = 'pending'`,
+            args: [pairingId],
+          });
+        }
+      }
+      return { ok: true };
     }
 
     case "pollDeviceLinkSession": {

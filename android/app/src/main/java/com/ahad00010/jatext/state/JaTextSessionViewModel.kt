@@ -74,6 +74,12 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+data class DeletedForMeUndoBanner(
+    val messageId: String,
+    val nonce: Long,
+    val expiresAt: Long,
+)
+
 data class SessionUiState(
     val loading: Boolean = true,
     val isAuthenticated: Boolean = false,
@@ -127,6 +133,7 @@ data class SessionUiState(
     val showPostUpdateWelcome: Boolean = false,
     val highlightedMessageId: String? = null,
     val toastMessage: String? = null,
+    val deletedForMeUndo: DeletedForMeUndoBanner? = null,
     val googleSignInInFlight: Boolean = false,
     val authError: String? = null,
     val linkedDevices: List<LinkedWebDevice> = emptyList(),
@@ -2045,20 +2052,110 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
+    private var deletedDmSnapshot: ChatMessage? = null
+    private var deletedGroupSnapshot: GroupMessage? = null
+    private var deletedCommunitySnapshot: CommunityMessage? = null
+    private var deletedUndoThreadKind: String = ""
+    private var deleteUndoJob: Job? = null
+
     fun deleteMessageForMe(messageId: String) {
         val st = _state.value
         val token = currentAuthToken() ?: return
+        val nonce = System.currentTimeMillis()
+        val expiresAt = nonce + 5_000L
+
+        deleteUndoJob?.cancel()
+        deletedDmSnapshot = null
+        deletedGroupSnapshot = null
+        deletedCommunitySnapshot = null
+        deletedUndoThreadKind = ""
+
+        if (st.activeChatId != null && st.activeChatId != OFFICIAL_COMMUNITY_ID) {
+            deletedDmSnapshot = st.dmMessages.firstOrNull { it.id == messageId }
+            deletedUndoThreadKind = "dm"
+            _state.update { cur ->
+                cur.copy(
+                    dmMessages = cur.dmMessages.filterNot { it.id == messageId },
+                    deletedForMeUndo = DeletedForMeUndoBanner(messageId, nonce, expiresAt),
+                )
+            }
+        } else if (st.activeGroupId != null) {
+            deletedGroupSnapshot = st.groupMessages.firstOrNull { it.id == messageId }
+            deletedUndoThreadKind = "group"
+            _state.update { cur ->
+                cur.copy(
+                    groupMessages = cur.groupMessages.filterNot { it.id == messageId },
+                    deletedForMeUndo = DeletedForMeUndoBanner(messageId, nonce, expiresAt),
+                )
+            }
+        } else if (st.activeChatId == OFFICIAL_COMMUNITY_ID) {
+            deletedCommunitySnapshot = st.communityMessages.firstOrNull { it.id == messageId }
+            deletedUndoThreadKind = "community"
+            _state.update { cur ->
+                cur.copy(
+                    communityMessages = cur.communityMessages.filterNot { it.id == messageId },
+                    deletedForMeUndo = DeletedForMeUndoBanner(messageId, nonce, expiresAt),
+                )
+            }
+        }
+
+        deleteUndoJob = viewModelScope.launch {
+            delay(5_000L)
+            _state.update { cur ->
+                if (cur.deletedForMeUndo?.nonce == nonce) cur.copy(deletedForMeUndo = null) else cur
+            }
+        }
+
+        val kind = deletedUndoThreadKind
         viewModelScope.launch {
             try {
-                if (st.activeChatId != null && st.activeChatId != OFFICIAL_COMMUNITY_ID) {
-                    TursoApiClient.rpcRaw("deleteMessageForMe", mapOf("messageId" to messageId), token)
-                    _state.update { cur -> cur.copy(dmMessages = cur.dmMessages.filterNot { it.id == messageId }) }
-                } else if (st.activeGroupId != null) {
-                    TursoApiClient.rpcRaw("mutateGroupMessage", mapOf("messageId" to messageId, "action" to "hideForMe"), token)
-                    _state.update { cur -> cur.copy(groupMessages = cur.groupMessages.filterNot { it.id == messageId }) }
-                } else if (st.activeChatId == OFFICIAL_COMMUNITY_ID) {
-                    TursoApiClient.rpcRaw("mutateCommunityMessage", mapOf("messageId" to messageId, "action" to "hideForMe"), token)
-                    _state.update { cur -> cur.copy(communityMessages = cur.communityMessages.filterNot { it.id == messageId }) }
+                when (kind) {
+                    "dm" -> TursoApiClient.rpcRaw("deleteMessageForMe", mapOf("messageId" to messageId), token)
+                    "group" -> TursoApiClient.rpcRaw("mutateGroupMessage", mapOf("messageId" to messageId, "action" to "hideForMe"), token)
+                    "community" -> TursoApiClient.rpcRaw("mutateCommunityMessage", mapOf("messageId" to messageId, "action" to "hideForMe"), token)
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    fun undoDeleteMessageForMe() {
+        val token = currentAuthToken() ?: return
+        val banner = _state.value.deletedForMeUndo ?: return
+        deleteUndoJob?.cancel()
+        val kind = deletedUndoThreadKind
+        val dmSnap = deletedDmSnapshot
+        val grpSnap = deletedGroupSnapshot
+        val commSnap = deletedCommunitySnapshot
+        deletedDmSnapshot = null
+        deletedGroupSnapshot = null
+        deletedCommunitySnapshot = null
+        deletedUndoThreadKind = ""
+
+        _state.update { cur ->
+            when (kind) {
+                "dm" -> cur.copy(
+                    dmMessages = if (dmSnap != null) (cur.dmMessages.filterNot { it.id == dmSnap.id } + dmSnap).sortedBy { it.createdAt } else cur.dmMessages,
+                    deletedForMeUndo = null,
+                )
+                "group" -> cur.copy(
+                    groupMessages = if (grpSnap != null) (cur.groupMessages.filterNot { it.id == grpSnap.id } + grpSnap).sortedBy { it.createdAt } else cur.groupMessages,
+                    deletedForMeUndo = null,
+                )
+                "community" -> cur.copy(
+                    communityMessages = if (commSnap != null) (cur.communityMessages.filterNot { it.id == commSnap.id } + commSnap).sortedBy { it.createdAt } else cur.communityMessages,
+                    deletedForMeUndo = null,
+                )
+                else -> cur.copy(deletedForMeUndo = null)
+            }
+        }
+
+        viewModelScope.launch {
+            try {
+                when (kind) {
+                    "dm" -> TursoApiClient.rpcRaw("restoreMessageForMe", mapOf("messageId" to banner.messageId), token)
+                    "group" -> TursoApiClient.rpcRaw("mutateGroupMessage", mapOf("messageId" to banner.messageId, "action" to "unhideForMe"), token)
+                    "community" -> TursoApiClient.rpcRaw("mutateCommunityMessage", mapOf("messageId" to banner.messageId, "action" to "unhideForMe"), token)
                 }
             } catch (_: Throwable) {
             }
@@ -2546,6 +2643,7 @@ class JaTextSessionViewModel(app: Application) :
 
     fun addGroupMembers(groupId: String, memberIds: List<String>) {
         val token = currentAuthToken() ?: return
+        val me = _state.value.me ?: return
         if (memberIds.isEmpty()) return
         viewModelScope.launch {
             try {
@@ -2554,9 +2652,186 @@ class JaTextSessionViewModel(app: Application) :
                     mapOf("groupId" to groupId, "subOp" to "addMembers", "memberIds" to memberIds),
                     token
                 )
-                openGroupChat(groupId)
+                val detRoot = TursoApiClient.rpcRaw("getGroupDetails", mapOf("groupId" to groupId), token).jsonObject
+                val updatedDetails = detRoot["details"]?.let {
+                    if (it is kotlinx.serialization.json.JsonNull) null
+                    else JaTextJson.decodeFromJsonElement(GroupDetails.serializer(), it)
+                }
+                if (updatedDetails != null) {
+                    cache.saveGroupDetailsCache(_state.value.slotId, groupId, updatedDetails)
+                    _state.update { cur ->
+                        cur.copy(
+                            groupDetails = if (cur.activeGroupId == groupId) updatedDetails else cur.groupDetails,
+                            groups = cur.groups.map { g ->
+                                if (g.id == groupId) g.copy(memberCount = updatedDetails.members.size) else g
+                            },
+                        )
+                    }
+                    try {
+                        JaTextCryptoEngine.ensureOrDistributeGroupEpoch(
+                            context = appCtx,
+                            myUserId = me.id,
+                            groupId = groupId,
+                            memberUserIds = updatedDetails.members.map { it.id },
+                            token = token,
+                            forceRedistribute = true,
+                        )
+                    } catch (_: Throwable) {
+                    }
+                }
+                showToast("Added ${memberIds.size} member${if (memberIds.size == 1) "" else "s"}!")
             } catch (e: Throwable) {
                 showToast(e.message ?: "Failed to add members")
+            }
+        }
+    }
+
+    fun setGroupMemberMuted(groupId: String, userId: String, muted: Boolean) {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            try {
+                TursoApiClient.rpcRaw(
+                    "manageGroup",
+                    mapOf("groupId" to groupId, "subOp" to "setMuted", "userId" to userId, "muted" to muted),
+                    token
+                )
+                _state.update { cur ->
+                    val nextDet = cur.groupDetails?.let { det ->
+                        if (det.id == groupId) {
+                            det.copy(members = det.members.map { m -> if (m.id == userId) m.copy(muted = muted) else m })
+                        } else det
+                    }
+                    if (nextDet != null) cache.saveGroupDetailsCache(cur.slotId, groupId, nextDet)
+                    cur.copy(groupDetails = nextDet)
+                }
+                showToast(if (muted) "Member muted" else "Member unmuted")
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Could not update mute state")
+            }
+        }
+    }
+
+    fun setGroupMemberRole(groupId: String, userId: String, role: String) {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            try {
+                TursoApiClient.rpcRaw(
+                    "manageGroup",
+                    mapOf("groupId" to groupId, "subOp" to "setRole", "userId" to userId, "role" to role),
+                    token
+                )
+                _state.update { cur ->
+                    val nextDet = cur.groupDetails?.let { det ->
+                        if (det.id == groupId) {
+                            det.copy(members = det.members.map { m -> if (m.id == userId) m.copy(role = role) else m })
+                        } else det
+                    }
+                    if (nextDet != null) cache.saveGroupDetailsCache(cur.slotId, groupId, nextDet)
+                    cur.copy(groupDetails = nextDet)
+                }
+                showToast(if (role == "moderator") "Promoted to moderator" else "Removed moderator role")
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Could not update role")
+            }
+        }
+    }
+
+    fun removeGroupMemberAsOwner(groupId: String, userId: String) {
+        val token = currentAuthToken() ?: return
+        val me = _state.value.me ?: return
+        viewModelScope.launch {
+            try {
+                TursoApiClient.rpcRaw(
+                    "manageGroup",
+                    mapOf("groupId" to groupId, "subOp" to "removeMember", "userId" to userId),
+                    token
+                )
+                var remainingMemberIds: List<String> = emptyList()
+                _state.update { cur ->
+                    val nextDet = cur.groupDetails?.let { det ->
+                        if (det.id == groupId) {
+                            val rem = det.members.filterNot { it.id == userId }
+                            remainingMemberIds = rem.map { it.id }
+                            det.copy(members = rem)
+                        } else det
+                    }
+                    if (nextDet != null) cache.saveGroupDetailsCache(cur.slotId, groupId, nextDet)
+                    cur.copy(
+                        groupDetails = nextDet,
+                        groups = cur.groups.map { g ->
+                            if (g.id == groupId && nextDet != null) g.copy(memberCount = nextDet.members.size) else g
+                        },
+                    )
+                }
+                if (remainingMemberIds.isNotEmpty()) {
+                    try {
+                        JaTextCryptoEngine.ensureOrDistributeGroupEpoch(
+                            context = appCtx,
+                            myUserId = me.id,
+                            groupId = groupId,
+                            memberUserIds = remainingMemberIds,
+                            token = token,
+                            rotateEpoch = true,
+                        )
+                    } catch (_: Throwable) {
+                    }
+                }
+                showToast("Removed from group")
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Could not remove member")
+            }
+        }
+    }
+
+    fun saveImageMediaToFavorites(
+        rawUrl: String,
+        encryptedAttachment: EncryptedBlobDescriptor? = null,
+        fallbackName: String = "Saved media",
+    ) {
+        val token = currentAuthToken() ?: return
+        if (encryptedAttachment == null) {
+            val resolved = TursoApiClient.resolveAbsoluteMediaUrl(rawUrl)
+            val isGif = resolved.lowercase().contains(".gif")
+            toggleStickerFavorite(
+                StickerMedia(
+                    key = "fav:$resolved",
+                    url = resolved,
+                    previewUrl = resolved,
+                    name = fallbackName,
+                    mediaType = if (isGif) "gif" else "sticker",
+                    source = "custom",
+                    isFavorite = true,
+                ),
+                favorite = true,
+            )
+            showToast("Saved to Favourites!")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val absUrl = TursoApiClient.resolveAbsoluteMediaUrl(rawUrl)
+                val decFile = JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(appCtx, absUrl, encryptedAttachment)
+                    ?: throw IllegalStateException("Could not read image")
+                val bytes = withContext(Dispatchers.IO) { decFile.readBytes() }
+                val mime = encryptedAttachment.mt.ifBlank { "image/png" }
+                val cleanName = encryptedAttachment.n.ifBlank { fallbackName }
+                val uploadedUrl = TursoApiClient.uploadMediaBytes(bytes, cleanName, mime, token)
+                val isGif = mime.contains("gif", ignoreCase = true) || cleanName.endsWith(".gif", ignoreCase = true)
+                toggleStickerFavorite(
+                    StickerMedia(
+                        key = "fav:$uploadedUrl",
+                        url = uploadedUrl,
+                        previewUrl = uploadedUrl,
+                        name = cleanName,
+                        mediaType = if (isGif) "gif" else "sticker",
+                        source = "custom",
+                        isFavorite = true,
+                    ),
+                    favorite = true,
+                )
+                showToast("Saved to Favourites!")
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Could not save to Favourites")
             }
         }
     }

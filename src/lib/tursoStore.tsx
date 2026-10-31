@@ -303,6 +303,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     forwardMessageMut,
     toggleReactionMut,
     deleteForMeMut,
+    restoreForMeMut,
     unsendMut,
     editMessageMut,
     updateConversationMut,
@@ -333,6 +334,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     deleteCommunityMessageMut,
     toggleCommunityReactionMut,
     deleteCommunityForMeMut,
+    restoreCommunityForMeMut,
     unsendCommunityMut,
     createGroupMut,
     addGroupMembersMut,
@@ -341,6 +343,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     setGroupTypingMut,
     toggleGroupReactionMut,
     deleteGroupForMeMut,
+    restoreGroupForMeMut,
     unsendGroupMut,
     editGroupMut,
     renameGroupMut,
@@ -1534,6 +1537,14 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     },
     [deleteCommunityForMeMut],
   );
+  const restoreCommunityMessageForMe = useCallback<
+    NonNullable<JaTextStore["restoreCommunityMessageForMe"]>
+  >(
+    async (message) => {
+      await restoreCommunityForMeMut({ message });
+    },
+    [restoreCommunityForMeMut],
+  );
   const unsendCommunityMessage = useCallback<JaTextStore["unsendCommunityMessage"]>(
     async (messageId) => (await unsendCommunityMut({ messageId: messageId })) as boolean,
     [unsendCommunityMut],
@@ -2023,6 +2034,14 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       await deleteGroupForMeMut({ messageId: messageId });
     },
     [deleteGroupForMeMut],
+  );
+  const restoreGroupMessageForMe = useCallback<
+    NonNullable<JaTextStore["restoreGroupMessageForMe"]>
+  >(
+    async (message) => {
+      await restoreGroupForMeMut({ message });
+    },
+    [restoreGroupForMeMut],
   );
   const unsendGroupMessage = useCallback<JaTextStore["unsendGroupMessage"]>(
     async (messageId) => (await unsendGroupMut({ messageId: messageId })) as boolean,
@@ -3005,6 +3024,13 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       await deleteForMeMut({ messageId: messageId });
     },
     [deleteForMeMut],
+  );
+
+  const restoreMessageForMe = useCallback<NonNullable<JaTextStore["restoreMessageForMe"]>>(
+    async (message) => {
+      await restoreForMeMut({ message });
+    },
+    [restoreForMeMut],
   );
 
   const unsendMessage = useCallback<JaTextStore["unsendMessage"]>(
@@ -4139,6 +4165,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       deleteCommunityMessage,
       toggleCommunityReaction,
       deleteCommunityMessageForMe,
+      restoreCommunityMessageForMe,
       unsendCommunityMessage,
       forwardCommunityMessage,
       favoriteCommunityStickerFromMessage,
@@ -4151,6 +4178,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       setGroupTyping,
       toggleGroupReaction,
       deleteGroupMessageForMe,
+      restoreGroupMessageForMe,
       unsendGroupMessage,
       editGroupMessage,
       forwardGroupMessage,
@@ -4205,6 +4233,9 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       deleteGroup,
       deleteGroupMessageForMe,
       deleteMessageForMe,
+      restoreCommunityMessageForMe,
+      restoreGroupMessageForMe,
+      restoreMessageForMe,
       editCommunityMessage,
       editGroupMessage,
       editMessage,

@@ -92,6 +92,8 @@ import {
   UsersIcon,
 } from "./UiIcons";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
+import { DeleteForMeToast, type DeletedForMeUndoState } from "./DeleteForMeToast";
+import { triggerMessageThanosSnapById } from "../lib/thanosSnapEffect";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
@@ -970,6 +972,8 @@ export function ChatView({
   const [file, setFile] = useState<File | null>(null);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
+  const [deletedUndoState, setDeletedUndoState] = useState<DeletedForMeUndoState | null>(null);
+  const deletedSnapshotRef = useRef<Map<string, ChatMessage>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [showUnsendWarning, setShowUnsendWarning] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
@@ -1618,19 +1622,40 @@ export function ChatView({
   }
 
   async function deleteForMe(message: ChatMessage) {
+    closeMessageMenu();
+    deletedSnapshotRef.current.set(message.id, message);
+    setDeletedUndoState({
+      messageId: message.id,
+      nonce: Date.now(),
+      expiresAt: Date.now() + 5_000,
+    });
     try {
       await store.deleteMessageForMe(message.id);
-      closeMessageMenu();
     } catch (actionError) {
+      setDeletedUndoState(null);
       setError(friendlyError(actionError, "Couldn't delete the message. Please try again."));
     }
   }
 
-  async function unsend(message: ChatMessage) {
+  async function undoDeleteForMe(messageId: string) {
+    const snap = deletedSnapshotRef.current.get(messageId);
+    deletedSnapshotRef.current.delete(messageId);
+    setDeletedUndoState(null);
+    if (!snap || !store.restoreMessageForMe) return;
     try {
+      await store.restoreMessageForMe(snap);
+    } catch (err) {
+      setError(friendlyError(err, "Couldn't restore the message."));
+    }
+  }
+
+  async function unsend(message: ChatMessage) {
+    closeMessageMenu();
+    triggerMessageThanosSnapById(message.id);
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 260));
       const shouldShowWarning = await store.unsendMessage(message.id);
       if (shouldShowWarning) setShowUnsendWarning(true);
-      closeMessageMenu();
     } catch (actionError) {
       setError(friendlyError(actionError, "Couldn't unsend the message. Please try again."));
     }
@@ -1959,8 +1984,8 @@ export function ChatView({
                   <FileTextIcon size={15} />
                 </span>{" "}
                 {shownTranscriptIds[messageMenu.message.id]
-                  ? "Hide transcription"
-                  : "Show transcription"}
+                  ? "Hide transcribe"
+                  : "Transcribe"}
               </button>
             )}
           {!messageMenu.message.unsentAt && (
@@ -2377,6 +2402,13 @@ export function ChatView({
           onClose={() => setInspectingMessage(null)}
         />
       )}
+      <DeleteForMeToast
+        state={deletedUndoState}
+        onUndo={(id) => void undoDeleteForMe(id)}
+        onExpire={(nonce) =>
+          setDeletedUndoState((cur) => (cur?.nonce === nonce ? null : cur))
+        }
+      />
     </section>
   );
 }

@@ -99,7 +99,9 @@ export function detectBrowserAndOs(): { browserName: string; osName: string } {
   return { browserName, osName };
 }
 
-export async function startWebQrPairingSession(): Promise<WebQrSessionHandle> {
+export async function startWebQrPairingSession(
+  previousPairingId?: string,
+): Promise<WebQrSessionHandle> {
   const subtle = globalThis.crypto.subtle;
   const kp = await subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
@@ -121,6 +123,7 @@ export async function startWebQrPairingSession(): Promise<WebQrSessionHandle> {
       webDhPubB64,
       browserName,
       osName,
+      ...(previousPairingId ? { previousPairingId } : {}),
     },
     { skipAuthClear: true },
   );

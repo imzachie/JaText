@@ -12,9 +12,24 @@ import android.net.Uri
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -51,8 +66,13 @@ import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Cameraswitch
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PersonAdd
+import androidx.compose.material.icons.rounded.PersonRemove
+import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -91,7 +111,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -265,7 +287,11 @@ fun NativeCallOverlay(
     }
 
     // Transient "GC VC Ended" banner when call has just finished
-    if (!callState.active && !callState.statusBanner.isNullOrBlank()) {
+    AnimatedVisibility(
+        visible = !callState.active && !callState.statusBanner.isNullOrBlank(),
+        enter = slideInVertically { -it } + fadeIn(tween(180)),
+        exit = slideOutVertically { -it } + fadeOut(tween(160)),
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -281,28 +307,157 @@ fun NativeCallOverlay(
                     .padding(horizontal = 18.dp, vertical = 9.dp)
             ) {
                 Text(
-                    text = callState.statusBanner!!,
+                    text = callState.statusBanner.orEmpty(),
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.5.sp,
                 )
             }
         }
-        return
     }
 
-    if (!callState.active) return
+    var cachedActiveState by remember { mutableStateOf(callState) }
+    if (callState.active) {
+        cachedActiveState = callState
+    }
 
-    // Freely Draggable Minimized Floating Call Bubble (with Spring Edge Snap!)
-    if (callState.minimized && callState.phase != "dismissed") {
-        val density = LocalDensity.current
-        val scope = rememberCoroutineScope()
-        BoxWithConstraints(
+    AnimatedVisibility(
+        visible = callState.active,
+        enter = scaleIn(
+            initialScale = 0.92f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioLowBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+            )
+        ) + fadeIn(tween(190)),
+        exit = scaleOut(
+            targetScale = 0.92f,
+            animationSpec = tween(175),
+        ) + fadeOut(tween(165)),
+    ) {
+        val activeSnap = if (callState.active) callState else cachedActiveState
+        val isMinimizedPip = activeSnap.minimized && activeSnap.phase != "dismissed"
+
+        AnimatedContent(
+            targetState = isMinimizedPip,
+            transitionSpec = {
+                (scaleIn(
+                    initialScale = 0.88f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow,
+                    )
+                ) + fadeIn(tween(180)))
+                    .togetherWith(
+                        scaleOut(targetScale = 0.90f, animationSpec = tween(160)) + fadeOut(tween(150))
+                    )
+            },
+            label = "CallStagePipMorph",
+        ) { renderMinimized ->
+            if (renderMinimized) {
+                NativeCallMinimizedPipBubble(
+                    me = me,
+                    callState = activeSnap,
+                    elapsedSec = elapsedSec,
+                    callEngine = callEngine,
+                )
+            } else {
+                NativeCallFullscreenStage(
+                    me = me,
+                    callState = activeSnap,
+                    elapsedSec = elapsedSec,
+                    showSoundboard = showSoundboard,
+                    onSetShowSoundboard = { showSoundboard = it },
+                    onLaunchScreenShare = { intent -> screenShareLauncher.launch(intent) },
+                    callEngine = callEngine,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CallRingingPulseAvatar(
+    avatarUrl: String?,
+    displayName: String,
+    avatarColor: String,
+    sizeDp: androidx.compose.ui.unit.Dp,
+    accentRing: Color = Color(0xFF9B6CFF),
+) {
+    val infinite = rememberInfiniteTransition(label = "CallRingAura")
+    val wave1 by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1750, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "Wave1",
+    )
+    val wave2 by infinite.animateFloat(
+        initialValue = 0.5f,
+        targetValue = 1.5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1750, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "Wave2",
+    )
+    val w2Frac = wave2 % 1f
+    Box(
+        modifier = Modifier.size(sizeDp * 1.48f),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-        ) {
+                .size(sizeDp)
+                .graphicsLayer {
+                    val s = 1f + wave1 * 0.44f
+                    scaleX = s
+                    scaleY = s
+                    alpha = (1f - wave1) * 0.42f
+                }
+                .clip(CircleShape)
+                .background(accentRing.copy(alpha = 0.35f))
+                .border(1.5.dp, accentRing, CircleShape)
+        )
+        Box(
+            modifier = Modifier
+                .size(sizeDp)
+                .graphicsLayer {
+                    val s = 1f + w2Frac * 0.44f
+                    scaleX = s
+                    scaleY = s
+                    alpha = (1f - w2Frac) * 0.36f
+                }
+                .clip(CircleShape)
+                .background(accentRing.copy(alpha = 0.25f))
+                .border(1.5.dp, accentRing, CircleShape)
+        )
+        JaAvatar(
+            avatarUrl = avatarUrl,
+            displayName = displayName,
+            avatarColor = avatarColor,
+            size = sizeDp,
+        )
+    }
+}
+
+@Composable
+private fun NativeCallMinimizedPipBubble(
+    me: JaUser,
+    callState: com.ahad00010.jatext.webrtc.NativeCallUiState,
+    elapsedSec: Long,
+    callEngine: NativeCallEngine,
+) {
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
             val maxWpx = with(density) { maxWidth.toPx() }
             val maxHpx = with(density) { maxHeight.toPx() }
             val marginPx = with(density) { 12.dp.toPx() }
@@ -407,9 +562,20 @@ fun NativeCallOverlay(
                 }
             }
         }
-        return
-    }
+}
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun NativeCallFullscreenStage(
+    me: JaUser,
+    callState: com.ahad00010.jatext.webrtc.NativeCallUiState,
+    elapsedSec: Long,
+    showSoundboard: Boolean,
+    onSetShowSoundboard: (Boolean) -> Unit,
+    onLaunchScreenShare: (Intent) -> Unit,
+    callEngine: NativeCallEngine,
+) {
+    val context = LocalContext.current
     val titleName = callState.peer?.displayName?.ifBlank { callState.peer?.username.orEmpty() }
         ?: callState.group?.name
         ?: "JaText Call"
@@ -490,11 +656,11 @@ fun NativeCallOverlay(
             ) {
                 Spacer(Modifier.height(24.dp))
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    JaAvatar(
+                    CallRingingPulseAvatar(
                         avatarUrl = callState.peer?.avatarUrl ?: callState.group?.avatarUrl,
                         displayName = titleName,
                         avatarColor = callState.peer?.avatarColor ?: "purple",
-                        size = 104.dp,
+                        sizeDp = 104.dp,
                     )
                     Spacer(Modifier.height(18.dp))
                     Text(titleName, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
@@ -766,7 +932,7 @@ fun NativeCallOverlay(
                         } else {
                             val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
                             if (mpm != null) {
-                                screenShareLauncher.launch(mpm.createScreenCaptureIntent())
+                                onLaunchScreenShare(mpm.createScreenCaptureIntent())
                             }
                         }
                     },
@@ -774,7 +940,7 @@ fun NativeCallOverlay(
                 CallDockCircleButton(
                     icon = Icons.Rounded.GraphicEq,
                     active = showSoundboard,
-                    onClick = { showSoundboard = !showSoundboard },
+                    onClick = { onSetShowSoundboard(!showSoundboard) },
                 )
                 CallDockCircleButton(
                     icon = Icons.AutoMirrored.Rounded.VolumeUp,
@@ -867,10 +1033,10 @@ private fun CallDockCircleButton(
     Box(
         modifier = Modifier
             .size(48.dp)
+            .jaBouncyClick(pressedScale = 0.88f) { onClick() }
             .clip(CircleShape)
             .background(if (active) palette.accentSoft else Color(0xFF1B1B26))
-            .border(1.dp, if (active) palette.accent else Color(0x28FFFFFF), CircleShape)
-            .clickable { onClick() },
+            .border(1.dp, if (active) palette.accent else Color(0x28FFFFFF), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
@@ -1374,9 +1540,32 @@ fun GroupMembersBottomModal(
     onDismiss: () -> Unit,
 ) {
     val palette = LocalJaTextPalette.current
+    val sessionState by vm.state.collectAsState()
+    val myId = sessionState.me?.id.orEmpty()
+    val isOwner = details.ownerId == myId || details.myRole == "owner"
+    val canEditGroup = isOwner || details.myRole == "moderator" || details.myRole == "admin"
+
     var newName by remember(details.id, details.name) { mutableStateOf(details.name) }
     var pickedGroupAvatarUri by remember(details.id) { mutableStateOf<Uri?>(null) }
-    val canEditGroup = details.myRole == "owner" || details.myRole == "admin"
+    var showAddMembersPane by remember(details.id) { mutableStateOf(false) }
+    var addSearchQuery by remember(details.id) { mutableStateOf("") }
+    var selectedFriendIds by remember(details.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var moderatingMember by remember { mutableStateOf<com.ahad00010.jatext.data.GroupMember?>(null) }
+    var confirmKickMember by remember { mutableStateOf<com.ahad00010.jatext.data.GroupMember?>(null) }
+
+    val existingMemberIds = remember(details.members) {
+        details.members.map { it.id }.toSet()
+    }
+    val addableFriends = remember(sessionState.friends, existingMemberIds, addSearchQuery) {
+        val q = addSearchQuery.trim().lowercase()
+        sessionState.friends
+            .filter { it.id !in existingMemberIds }
+            .filter { fr ->
+                q.isEmpty() ||
+                    fr.displayName.lowercase().contains(q) ||
+                    fr.username.lowercase().contains(q)
+            }
+    }
 
     val groupAvatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -1490,26 +1679,191 @@ fun GroupMembersBottomModal(
                         },
                     )
                 }
+
+                // Add Members Toggle Bar + Expandable Friend Picker
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Members (${details.members.size})",
+                        color = palette.textSecondary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.5.sp,
+                    )
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(if (showAddMembersPane) palette.bgTertiary else palette.accentSoft)
+                            .border(1.dp, palette.accent.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+                            .clickable {
+                                showAddMembersPane = !showAddMembersPane
+                                selectedFriendIds = emptySet()
+                                addSearchQuery = ""
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = if (showAddMembersPane) Icons.Rounded.Close else Icons.Rounded.PersonAdd,
+                            contentDescription = null,
+                            tint = palette.accent,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            text = if (showAddMembersPane) "Done" else "Add members",
+                            color = palette.accent,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+
+                AnimatedVisibility(visible = showAddMembersPane) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(palette.bgSecondary)
+                            .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        JaWebInput(
+                            value = addSearchQuery,
+                            onValueChange = { addSearchQuery = it },
+                            placeholder = "Search friends to add...",
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (addableFriends.isEmpty()) {
+                            Text(
+                                text = "All of your friends are already in this group.",
+                                color = palette.textSecondary,
+                                fontSize = 12.5.sp,
+                                modifier = Modifier.padding(vertical = 6.dp),
+                            )
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.heightIn(max = 175.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                items(addableFriends, key = { "add-fr:${it.id}" }) { fr ->
+                                    val selected = fr.id in selectedFriendIds
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(if (selected) palette.accentSoft else palette.bgTertiary)
+                                            .clickable {
+                                                selectedFriendIds = if (selected) {
+                                                    selectedFriendIds - fr.id
+                                                } else {
+                                                    selectedFriendIds + fr.id
+                                                }
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        JaAvatar(
+                                            fr.avatarUrl,
+                                            fr.displayName.ifBlank { fr.username },
+                                            fr.avatarColor,
+                                            size = 34.dp,
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                fr.displayName.ifBlank { fr.username },
+                                                color = palette.textPrimary,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 13.5.sp,
+                                            )
+                                            Text("@${fr.username}", color = palette.textSecondary, fontSize = 11.5.sp)
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(22.dp)
+                                                .clip(CircleShape)
+                                                .background(if (selected) palette.accent else Color.Transparent)
+                                                .border(1.5.dp, if (selected) palette.accent else palette.borderStrong, CircleShape),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            if (selected) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Check,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(14.dp),
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            JaWebPrimaryButton(
+                                text = if (selectedFriendIds.isEmpty()) "Select friends" else "Add ${selectedFriendIds.size} to group",
+                                enabled = selectedFriendIds.isNotEmpty(),
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    val toAdd = selectedFriendIds.toList()
+                                    selectedFriendIds = emptySet()
+                                    showAddMembersPane = false
+                                    vm.addGroupMembers(details.id, toAdd)
+                                },
+                            )
+                        }
+                    }
+                }
             }
 
             LazyColumn(
-                modifier = Modifier.heightIn(max = 260.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.heightIn(max = 270.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 items(details.members, key = { it.id }) { m ->
+                    val targetIsOwner = m.id == details.ownerId || m.role == "owner"
+                    val canActOnMember = m.id != myId && !targetIsOwner && (isOwner || (canEditGroup && m.role == "member"))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
                             .background(palette.bgSecondary)
+                            .then(
+                                if (canActOnMember) Modifier.clickable { moderatingMember = m } else Modifier
+                            )
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         JaAvatar(m.avatarUrl, m.displayName.ifBlank { m.username }, m.avatarColor, size = 38.dp)
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(m.displayName.ifBlank { m.username }, color = palette.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text(
+                                m.displayName.ifBlank { m.username },
+                                color = palette.textPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                             Text("@${m.username}", color = palette.textSecondary, fontSize = 12.sp)
+                        }
+                        if (m.muted) {
+                            Box(
+                                modifier = Modifier
+                                    .padding(end = 6.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(palette.danger.copy(alpha = 0.16f))
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    "MUTED",
+                                    color = palette.danger,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                )
+                            }
                         }
                         Box(
                             modifier = Modifier
@@ -1519,11 +1873,187 @@ fun GroupMembersBottomModal(
                         ) {
                             Text(m.role.uppercase(), color = palette.accent, fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold)
                         }
+                        if (canActOnMember) {
+                            Spacer(Modifier.width(4.dp))
+                            IconButton(
+                                onClick = { moderatingMember = m },
+                                modifier = Modifier.size(30.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.MoreVert,
+                                    contentDescription = "Manage member",
+                                    tint = palette.textSecondary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
             Spacer(Modifier.height(8.dp))
         }
+    }
+
+    moderatingMember?.let { target ->
+        val freshTarget = details.members.firstOrNull { it.id == target.id } ?: target
+        val canMuteTarget = isOwner || (canEditGroup && freshTarget.role == "member")
+        ModalBottomSheet(
+            onDismissRequest = { moderatingMember = null },
+            containerColor = palette.surface,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    JaAvatar(
+                        freshTarget.avatarUrl,
+                        freshTarget.displayName.ifBlank { freshTarget.username },
+                        freshTarget.avatarColor,
+                        size = 42.dp,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            freshTarget.displayName.ifBlank { freshTarget.username },
+                            color = palette.textPrimary,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 16.sp,
+                        )
+                        Text("@${freshTarget.username}", color = palette.textSecondary, fontSize = 12.5.sp)
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+
+                if (canMuteTarget) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.bgSecondary)
+                            .clickable {
+                                vm.setGroupMemberMuted(details.id, freshTarget.id, !freshTarget.muted)
+                                moderatingMember = null
+                            }
+                            .padding(horizontal = 14.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = if (freshTarget.muted) Icons.AutoMirrored.Rounded.VolumeUp else Icons.Rounded.VolumeOff,
+                            contentDescription = null,
+                            tint = if (freshTarget.muted) palette.success else palette.textPrimary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = if (freshTarget.muted) "Unmute member" else "Mute member",
+                            color = palette.textPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.5.sp,
+                        )
+                    }
+                }
+
+                if (isOwner) {
+                    val nextRole = if (freshTarget.role == "moderator") "member" else "moderator"
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.bgSecondary)
+                            .clickable {
+                                vm.setGroupMemberRole(details.id, freshTarget.id, nextRole)
+                                moderatingMember = null
+                            }
+                            .padding(horizontal = 14.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.VerifiedUser,
+                            contentDescription = null,
+                            tint = palette.accent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = if (freshTarget.role == "moderator") "Remove moderator role" else "Make moderator",
+                            color = palette.textPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.5.sp,
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.danger.copy(alpha = 0.12f))
+                            .clickable {
+                                moderatingMember = null
+                                confirmKickMember = freshTarget
+                            }
+                            .padding(horizontal = 14.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PersonRemove,
+                            contentDescription = null,
+                            tint = palette.danger,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = "Remove from group",
+                            color = palette.danger,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.5.sp,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+    }
+
+    confirmKickMember?.let { kickTarget ->
+        AlertDialog(
+            onDismissRequest = { confirmKickMember = null },
+            containerColor = palette.bgSecondary,
+            title = {
+                Text(
+                    text = "Remove ${kickTarget.displayName.ifBlank { kickTarget.username }}?",
+                    color = palette.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Text(
+                    text = "They will be removed from \"${details.name}\" immediately.",
+                    color = palette.textSecondary,
+                    fontSize = 14.sp,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.removeGroupMemberAsOwner(details.id, kickTarget.id)
+                        confirmKickMember = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.danger),
+                ) {
+                    Text("Remove", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmKickMember = null }) {
+                    Text("Cancel", color = palette.textSecondary)
+                }
+            },
+        )
     }
 }
 

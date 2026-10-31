@@ -1044,7 +1044,7 @@ export function SettingsModal({
                     <div className="settings-inline-legal-card" style={{ marginTop: 4 }}>
                       <h4>App Version &amp; Updates</h4>
                       <p className="muted small">
-                        Installed release: <strong>JaText v3.6.0 (Build 47)</strong>. JaText checks
+                        Installed release: <strong>JaText v3.7.0 (Build 48)</strong>. JaText checks
                         for updates automatically on launch, or you can check manually below.
                       </p>
                       <button

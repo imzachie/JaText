@@ -214,6 +214,8 @@ async function trySpecialOEmbed(parsedUrl) {
   return null;
 }
 
+import { enforceHttpRateLimit } from "../server/rateLimiter.js";
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -221,6 +223,10 @@ export default async function handler(req, res) {
 
   if (req.method === "OPTIONS") {
     return res.status(204).end();
+  }
+
+  if (enforceHttpRateLimit(req, res, { scope: "link_preview", limit: 90, windowMs: 60_000 })) {
+    return;
   }
 
   const rawUrl = typeof req.query?.url === "string" ? req.query.url.trim() : "";

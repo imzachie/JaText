@@ -1,10 +1,14 @@
 import { getDb, getTursoConfig } from "../server/tursoBackend.js";
+import { enforceHttpRateLimit } from "../server/rateLimiter.js";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "no-store");
   if (req.method === "OPTIONS") {
     return res.status(204).end();
+  }
+  if (enforceHttpRateLimit(req, res, { scope: "auth_status", limit: 60, windowMs: 60_000 })) {
+    return;
   }
 
   const cfg = getTursoConfig();

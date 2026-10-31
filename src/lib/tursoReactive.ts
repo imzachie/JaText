@@ -527,10 +527,13 @@ export function useTursoReactiveSession(
     }
   }, [isAuthenticated]);
 
-  // Adaptive Foreground Delta Sync Engine
+  // Adaptive Foreground + Desktop Background Delta Sync Engine
   const runDeltaSync = useCallback(async () => {
     if (!isAuthenticated) return;
-    if (typeof document !== "undefined" && document.hidden) return;
+    // On Native Android, FCM handles background notifications while hidden; on Desktop Web, keep syncing!
+    if (Capacitor.isNativePlatform() && typeof document !== "undefined" && document.hidden) {
+      return;
+    }
     if (!sinceTsRef.current) return;
     if (syncInFlightRef.current) {
       // Queue an immediate follow-up sync instead of dropping real-time FCM / mutation wakes!
@@ -647,11 +650,17 @@ export function useTursoReactiveSession(
     const scheduleNext = () => {
       if (cancelled) return;
       if (timer !== null) window.clearTimeout(timer);
-      const delay = isInTursoActivityBurst()
-        ? 500
-        : activeChatRef.current || activeGroupRef.current
-          ? 950
-          : 1800;
+      const isHiddenWeb =
+        !Capacitor.isNativePlatform() &&
+        typeof document !== "undefined" &&
+        document.hidden;
+      const delay = isHiddenWeb
+        ? 3200
+        : isInTursoActivityBurst()
+          ? 500
+          : activeChatRef.current || activeGroupRef.current
+            ? 950
+            : 1800;
       timer = window.setTimeout(async () => {
         await runDeltaSync();
         scheduleNext();
@@ -861,8 +870,13 @@ export function useTursoReactiveSession(
       },
 
       deleteForMeMut: async (args: { messageId: string }) => {
-        await tursoRpc("deleteMessageForMe", args, { slotId });
         setActiveMessagesQuery((prev) => prev?.filter((m) => m.id !== args.messageId));
+        await tursoRpc("deleteMessageForMe", args, { slotId });
+      },
+
+      restoreForMeMut: async (args: { message: ChatMessage }) => {
+        setActiveMessagesQuery((prev) => mergeMessagesById(prev, [args.message]));
+        await tursoRpc("restoreMessageForMe", { messageId: args.message.id }, { slotId });
       },
 
       unsendMut: async (args: { messageId: string }) => {
@@ -1247,12 +1261,21 @@ export function useTursoReactiveSession(
       },
 
       deleteCommunityForMeMut: async (args: { messageId: string }) => {
+        setCommunityMessagesQuery((prev) => prev?.filter((m) => m.id !== args.messageId));
         await tursoRpc(
           "mutateCommunityMessage",
           { messageId: args.messageId, action: "hideForMe" },
           { slotId },
         );
-        setCommunityMessagesQuery((prev) => prev?.filter((m) => m.id !== args.messageId));
+      },
+
+      restoreCommunityForMeMut: async (args: { message: CommunityMessage }) => {
+        setCommunityMessagesQuery((prev) => mergeMessagesById(prev, [args.message]));
+        await tursoRpc(
+          "mutateCommunityMessage",
+          { messageId: args.message.id, action: "unhideForMe" },
+          { slotId },
+        );
       },
 
       unsendCommunityMut: async (args: { messageId: string }) => {
@@ -1398,12 +1421,21 @@ export function useTursoReactiveSession(
       },
 
       deleteGroupForMeMut: async (args: { messageId: string }) => {
+        setGroupMessagesQuery((prev) => prev?.filter((m) => m.id !== args.messageId));
         await tursoRpc(
           "mutateGroupMessage",
           { messageId: args.messageId, action: "hideForMe" },
           { slotId },
         );
-        setGroupMessagesQuery((prev) => prev?.filter((m) => m.id !== args.messageId));
+      },
+
+      restoreGroupForMeMut: async (args: { message: GroupMessage }) => {
+        setGroupMessagesQuery((prev) => mergeMessagesById(prev, [args.message]));
+        await tursoRpc(
+          "mutateGroupMessage",
+          { messageId: args.message.id, action: "unhideForMe" },
+          { slotId },
+        );
       },
 
       unsendGroupMut: async (args: { messageId: string }) => {
