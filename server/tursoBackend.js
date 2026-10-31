@@ -10,6 +10,8 @@ export const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
 export const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 export const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const TOKEN_RENEW_THRESHOLD_MS = 20 * 24 * 60 * 60 * 1000;
+export const MAX_LINKED_DEVICES = 5;
+export const LINK_SESSION_TTL_MS = 2 * 60 * 1000;
 export const USERNAME_REGEX = /^[a-z0-9._]{3,20}$/;
 export const OWNER_EMAIL = "aidilzafri2013@gmail.com";
 
@@ -369,6 +371,34 @@ async function initSchema(db) {
       data BLOB NOT NULL,
       PRIMARY KEY (media_id, chunk_index)
     )`,
+
+    `CREATE TABLE IF NOT EXISTS linked_devices (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      browser_name TEXT NOT NULL DEFAULT 'Chrome',
+      os_name TEXT NOT NULL DEFAULT '',
+      device_label TEXT NOT NULL DEFAULT 'Chrome JaText',
+      created_at INTEGER NOT NULL,
+      last_active_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_linked_devices_user ON linked_devices(user_id)`,
+
+    `CREATE TABLE IF NOT EXISTS device_link_sessions (
+      pairing_id TEXT PRIMARY KEY,
+      secret_hash TEXT NOT NULL,
+      web_dh_pub_b64 TEXT NOT NULL,
+      browser_name TEXT NOT NULL DEFAULT 'Chrome',
+      os_name TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      user_id TEXT,
+      linked_device_id TEXT,
+      linked_jwt TEXT,
+      sealed_bundle_json TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_device_link_expires ON device_link_sessions(expires_at)`,
   ];
 
   await db.batch(statements, "write");
@@ -397,13 +427,19 @@ function base64UrlDecode(str) {
   return Buffer.from(b64 + pad, "base64");
 }
 
-export function createAuthToken(userId, email) {
+export function createAuthToken(userId, email, extraClaims = null) {
   const now = Date.now();
   const header = base64UrlEncode(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const payload = base64UrlEncode(
     JSON.stringify({
       sub: userId,
       email: email || "",
+      ...(extraClaims && extraClaims.linkedDeviceId
+        ? {
+            linkedDeviceId: String(extraClaims.linkedDeviceId),
+            client: String(extraClaims.client || "web_linked"),
+          }
+        : {}),
       iat: Math.floor(now / 1000),
       exp: Math.floor((now + TOKEN_TTL_MS) / 1000),
     }),
@@ -434,10 +470,38 @@ export function verifyAuthToken(token) {
       userId: String(parsed.sub),
       email: parsed.email ? String(parsed.email) : "",
       expMs: Number(parsed.exp) * 1000,
+      linkedDeviceId: parsed.linkedDeviceId ? String(parsed.linkedDeviceId) : null,
+      client: parsed.client ? String(parsed.client) : null,
     };
   } catch {
     return null;
   }
+}
+
+function sha256Base64Url(inputStr) {
+  return base64UrlEncode(crypto.createHash("sha256").update(String(inputStr || ""), "utf8").digest());
+}
+
+function safeEqualStrings(aStr, bStr) {
+  const a = Buffer.from(String(aStr || ""), "utf8");
+  const b = Buffer.from(String(bStr || ""), "utf8");
+  if (a.length === 0 || a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+async function listLinkedDevicesForUser(db, userId) {
+  const res = await db.execute({
+    sql: `SELECT * FROM linked_devices WHERE user_id = ? ORDER BY last_active_at DESC, created_at DESC`,
+    args: [userId],
+  });
+  return res.rows.map((r) => ({
+    id: String(r.id),
+    browserName: String(r.browser_name || "Chrome"),
+    osName: String(r.os_name || ""),
+    deviceLabel: String(r.device_label || `${r.browser_name || "Chrome"} JaText`),
+    createdAt: Number(r.created_at || 0),
+    lastActiveAt: Number(r.last_active_at || 0),
+  }));
 }
 
 async function hashPassword(password) {
@@ -1236,6 +1300,25 @@ async function isBlockedEitherWay(db, a, b) {
 
 async function requireMeRow(db, auth) {
   if (!auth?.userId) throw new TursoAppError("Please sign in first.", 401);
+  if (auth.linkedDeviceId) {
+    const devRes = await db.execute({
+      sql: `SELECT id, last_active_at FROM linked_devices WHERE id = ? AND user_id = ? LIMIT 1`,
+      args: [auth.linkedDeviceId, auth.userId],
+    });
+    if (!devRes.rows.length) {
+      throw new TursoAppError("This device was unlinked from your phone.", 401);
+    }
+    const nowTs = Date.now();
+    const prevActive = Number(devRes.rows[0].last_active_at || 0);
+    if (nowTs - prevActive > 60_000) {
+      await db
+        .execute({
+          sql: `UPDATE linked_devices SET last_active_at = ? WHERE id = ? AND user_id = ?`,
+          args: [nowTs, auth.linkedDeviceId, auth.userId],
+        })
+        .catch(() => {});
+    }
+  }
   const res = await db.execute({
     sql: `SELECT * FROM users WHERE id = ? LIMIT 1`,
     args: [auth.userId],
@@ -1512,7 +1595,13 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
 
       const refreshedToken =
         auth.expMs - now < TOKEN_RENEW_THRESHOLD_MS
-          ? createAuthToken(meId, String(meRow.email || ""))
+          ? createAuthToken(
+              meId,
+              String(meRow.email || ""),
+              auth.linkedDeviceId
+                ? { linkedDeviceId: auth.linkedDeviceId, client: auth.client || "web_linked" }
+                : null,
+            )
           : undefined;
 
       return {
@@ -3340,6 +3429,238 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           ts: Number(r.updated_at),
           updatedAt: Number(r.updated_at),
         })),
+      };
+    }
+
+    /* ---------- QR Companion Device Linking (Max 5 Linked Web Devices) ---------- */
+    case "createDeviceLinkSession": {
+      const secretHash = String(args.secretHash || "").trim();
+      const webDhPubB64 = String(args.webDhPubB64 || "").trim();
+      const browserName = String(args.browserName || "Chrome").trim().slice(0, 40) || "Chrome";
+      const osName = String(args.osName || "").trim().slice(0, 40);
+      if (!secretHash || !webDhPubB64) {
+        throw new TursoAppError("Invalid QR link session parameters.");
+      }
+      await db
+        .execute({
+          sql: `DELETE FROM device_link_sessions WHERE expires_at < ?`,
+          args: [now - 5 * 60_000],
+        })
+        .catch(() => {});
+
+      const pairingId = newId();
+      const expiresAt = now + LINK_SESSION_TTL_MS;
+      await db.execute({
+        sql: `INSERT INTO device_link_sessions (
+                pairing_id, secret_hash, web_dh_pub_b64, browser_name, os_name, status, created_at, updated_at, expires_at
+              ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+        args: [pairingId, secretHash, webDhPubB64, browserName, osName, now, now, expiresAt],
+      });
+      return { pairingId, expiresAt };
+    }
+
+    case "pollDeviceLinkSession": {
+      const pairingId = String(args.pairingId || "").trim();
+      const linkSecret = String(args.linkSecret || "").trim();
+      if (!pairingId || !linkSecret) return { status: "expired" };
+      const res = await db.execute({
+        sql: `SELECT * FROM device_link_sessions WHERE pairing_id = ? LIMIT 1`,
+        args: [pairingId],
+      });
+      if (!res.rows.length) return { status: "expired" };
+      const row = res.rows[0];
+      if (!safeEqualStrings(sha256Base64Url(linkSecret), String(row.secret_hash || ""))) {
+        return { status: "expired" };
+      }
+      const status = String(row.status || "pending");
+      const expiresAt = Number(row.expires_at || 0);
+      if (status === "pending" && now > expiresAt) {
+        return { status: "expired" };
+      }
+      if (status === "approved") {
+        return {
+          status: "approved",
+          token: String(row.linked_jwt || ""),
+          sealedBundleJson: String(row.sealed_bundle_json || ""),
+          linkedDeviceId: String(row.linked_device_id || ""),
+        };
+      }
+      return { status, expiresAt };
+    }
+
+    case "completeDeviceLinkSession": {
+      const pairingId = String(args.pairingId || "").trim();
+      const linkSecret = String(args.linkSecret || "").trim();
+      if (!pairingId || !linkSecret) {
+        throw new TursoAppError("Invalid link session.");
+      }
+      const res = await db.execute({
+        sql: `SELECT * FROM device_link_sessions WHERE pairing_id = ? LIMIT 1`,
+        args: [pairingId],
+      });
+      if (!res.rows.length) {
+        throw new TursoAppError("Link session expired.");
+      }
+      const row = res.rows[0];
+      if (!safeEqualStrings(sha256Base64Url(linkSecret), String(row.secret_hash || ""))) {
+        throw new TursoAppError("Invalid link secret.");
+      }
+      await db.execute({
+        sql: `UPDATE device_link_sessions
+              SET status = 'completed', linked_jwt = NULL, sealed_bundle_json = NULL, updated_at = ?
+              WHERE pairing_id = ?`,
+        args: [now, pairingId],
+      });
+      return { ok: true };
+    }
+
+    case "listLinkedDevices": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const devices = await listLinkedDevicesForUser(db, meId);
+      return { devices, maxDevices: MAX_LINKED_DEVICES };
+    }
+
+    case "disconnectLinkedDevice": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const targetId = String(args.deviceId || auth?.linkedDeviceId || "").trim();
+      if (!targetId) {
+        throw new TursoAppError("Device ID is required.");
+      }
+      await db.execute({
+        sql: `DELETE FROM linked_devices WHERE id = ? AND user_id = ?`,
+        args: [targetId, meId],
+      });
+      const devices = await listLinkedDevicesForUser(db, meId);
+      return { devices, maxDevices: MAX_LINKED_DEVICES };
+    }
+
+    case "claimDeviceLinkSession": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const existingDevices = await listLinkedDevicesForUser(db, meId);
+      if (existingDevices.length >= MAX_LINKED_DEVICES) {
+        throw new TursoAppError(
+          `Maximum of ${MAX_LINKED_DEVICES} devices reached. Disconnect at least one device in order to link a new one.`,
+          400,
+        );
+      }
+
+      const pairingId = String(args.pairingId || "").trim();
+      const linkSecret = String(args.linkSecret || "").trim();
+      if (!pairingId || !linkSecret) {
+        throw new TursoAppError("Invalid QR code. Point your camera at the QR code on jatext.vercel.app/chats.");
+      }
+      const res = await db.execute({
+        sql: `SELECT * FROM device_link_sessions WHERE pairing_id = ? LIMIT 1`,
+        args: [pairingId],
+      });
+      if (!res.rows.length) {
+        throw new TursoAppError("This QR code has expired. Refresh or wait for a new QR code on your computer.");
+      }
+      const row = res.rows[0];
+      if (!safeEqualStrings(sha256Base64Url(linkSecret), String(row.secret_hash || ""))) {
+        throw new TursoAppError("Invalid QR code secret. Please scan the latest QR code on screen.");
+      }
+      if (Number(row.expires_at || 0) < now || String(row.status) !== "pending") {
+        throw new TursoAppError("This QR code was already used or expired. Scan the new QR code on screen.");
+      }
+
+      await db.execute({
+        sql: `UPDATE device_link_sessions
+              SET status = 'syncing', user_id = ?, updated_at = ?, expires_at = ?
+              WHERE pairing_id = ?`,
+        args: [meId, now, now + 2 * 60_000, pairingId],
+      });
+
+      return {
+        pairingId,
+        browserName: String(row.browser_name || "Chrome"),
+        osName: String(row.os_name || ""),
+        webDhPubB64: String(row.web_dh_pub_b64 || ""),
+      };
+    }
+
+    case "approveDeviceLinkSession": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const existingDevices = await listLinkedDevicesForUser(db, meId);
+      if (existingDevices.length >= MAX_LINKED_DEVICES) {
+        throw new TursoAppError(
+          `Maximum of ${MAX_LINKED_DEVICES} devices reached. Disconnect at least one device in order to link a new one.`,
+          400,
+        );
+      }
+
+      const pairingId = String(args.pairingId || "").trim();
+      const linkSecret = String(args.linkSecret || "").trim();
+      const sealedBundleJson = String(args.sealedBundleJson || "").trim();
+      if (!pairingId || !linkSecret || !sealedBundleJson) {
+        throw new TursoAppError("Missing encrypted sync payload.");
+      }
+
+      const res = await db.execute({
+        sql: `SELECT * FROM device_link_sessions WHERE pairing_id = ? LIMIT 1`,
+        args: [pairingId],
+      });
+      if (!res.rows.length) {
+        throw new TursoAppError("Link session expired.");
+      }
+      const row = res.rows[0];
+      if (
+        String(row.user_id || "") !== meId ||
+        !safeEqualStrings(sha256Base64Url(linkSecret), String(row.secret_hash || ""))
+      ) {
+        throw new TursoAppError("Link session verification failed.");
+      }
+
+      const browserName = String(row.browser_name || "Chrome").trim() || "Chrome";
+      const osName = String(row.os_name || "").trim();
+      const deviceId = newId();
+      const deviceLabel = `${browserName} JaText`;
+
+      await db.execute({
+        sql: `INSERT INTO linked_devices (id, user_id, browser_name, os_name, device_label, created_at, last_active_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        args: [deviceId, meId, browserName, osName, deviceLabel, now, now],
+      });
+
+      const linkedJwt = createAuthToken(meId, String(meRow.email || ""), {
+        linkedDeviceId: deviceId,
+        client: "web_linked",
+      });
+
+      await db.execute({
+        sql: `UPDATE device_link_sessions
+              SET status = 'approved', linked_device_id = ?, linked_jwt = ?, sealed_bundle_json = ?, updated_at = ?, expires_at = ?
+              WHERE pairing_id = ?`,
+        args: [deviceId, linkedJwt, sealedBundleJson, now, now + 2 * 60_000, pairingId],
+      });
+
+      return {
+        linkedDeviceId: deviceId,
+        browserName,
+        osName,
+      };
+    }
+
+    case "getDeviceLinkStatus": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const pairingId = String(args.pairingId || "").trim();
+      if (!pairingId) return { status: "expired" };
+      const res = await db.execute({
+        sql: `SELECT status, browser_name, os_name, linked_device_id FROM device_link_sessions WHERE pairing_id = ? AND user_id = ? LIMIT 1`,
+        args: [pairingId, meId],
+      });
+      if (!res.rows.length) return { status: "expired" };
+      const row = res.rows[0];
+      return {
+        status: String(row.status || "syncing"),
+        browserName: String(row.browser_name || "Chrome"),
+        osName: String(row.os_name || ""),
+        linkedDeviceId: row.linked_device_id ? String(row.linked_device_id) : null,
       };
     }
 

@@ -22,9 +22,11 @@ import com.ahad00010.jatext.data.CallHistoryEntry
 import com.ahad00010.jatext.data.ChatMessage
 import com.ahad00010.jatext.data.ChatPreview
 import com.ahad00010.jatext.data.ChatTypingUser
+import com.ahad00010.jatext.data.ClaimDeviceLinkResponse
 import com.ahad00010.jatext.data.CommunityMessage
 import com.ahad00010.jatext.data.CommunityPermissions
 import com.ahad00010.jatext.data.CommunityUser
+import com.ahad00010.jatext.data.DeviceLinkStatusResponse
 import com.ahad00010.jatext.data.E2EEPlainPayload
 import com.ahad00010.jatext.data.EncryptedStickerDescriptor
 import com.ahad00010.jatext.data.ForwardedMessageContext
@@ -36,6 +38,8 @@ import com.ahad00010.jatext.data.GroupSeenReader
 import com.ahad00010.jatext.data.GroupSummary
 import com.ahad00010.jatext.data.JaTextJson
 import com.ahad00010.jatext.data.JaUser
+import com.ahad00010.jatext.data.LinkedWebDevice
+import com.ahad00010.jatext.data.ListLinkedDevicesResponse
 import com.ahad00010.jatext.data.LocalCacheStore
 import com.ahad00010.jatext.data.MessageReaction
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
@@ -125,6 +129,12 @@ data class SessionUiState(
     val toastMessage: String? = null,
     val googleSignInInFlight: Boolean = false,
     val authError: String? = null,
+    val linkedDevices: List<LinkedWebDevice> = emptyList(),
+    val maxLinkedDevices: Int = 5,
+    val deviceLinkPhase: String = "idle",
+    val deviceLinkBrowserName: String = "",
+    val deviceLinkError: String? = null,
+    val disconnectingDeviceId: String? = null,
 )
 
 class JaTextSessionViewModel(app: Application) :
@@ -1022,6 +1032,11 @@ class JaTextSessionViewModel(app: Application) :
                 activeChatId = null,
                 activeGroupId = null,
                 addingAccountReturnSlotId = null,
+                linkedDevices = emptyList(),
+                deviceLinkPhase = "idle",
+                deviceLinkBrowserName = "",
+                deviceLinkError = null,
+                disconnectingDeviceId = null,
             )
         }
         bootstrapActiveSlot(slotId)
@@ -3111,6 +3126,188 @@ class JaTextSessionViewModel(app: Application) :
             } ?: "attachment"
         } catch (_: Throwable) {
             "attachment"
+        }
+    }
+
+    /* ==================== QR Linked Web Devices (Max 5 Connected Devices) ==================== */
+
+    fun clearDeviceLinkFeedback() {
+        _state.update {
+            it.copy(
+                deviceLinkPhase = "idle",
+                deviceLinkBrowserName = "",
+                deviceLinkError = null,
+            )
+        }
+    }
+
+    fun refreshLinkedDevices() {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            try {
+                val res = TursoApiClient.rpc<ListLinkedDevicesResponse>(
+                    op = "listLinkedDevices",
+                    args = emptyMap(),
+                    token = token,
+                )
+                _state.update {
+                    it.copy(
+                        linkedDevices = res.devices,
+                        maxLinkedDevices = res.maxDevices,
+                    )
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    fun disconnectLinkedDevice(deviceId: String) {
+        val token = currentAuthToken() ?: return
+        if (deviceId.isBlank()) return
+        _state.update { it.copy(disconnectingDeviceId = deviceId) }
+        viewModelScope.launch {
+            try {
+                val res = TursoApiClient.rpc<ListLinkedDevicesResponse>(
+                    op = "disconnectLinkedDevice",
+                    args = mapOf("deviceId" to deviceId),
+                    token = token,
+                )
+                _state.update {
+                    it.copy(
+                        linkedDevices = res.devices,
+                        maxLinkedDevices = res.maxDevices,
+                        disconnectingDeviceId = null,
+                    )
+                }
+                showToast("Device disconnected")
+            } catch (e: Throwable) {
+                _state.update { it.copy(disconnectingDeviceId = null) }
+                showToast(e.message ?: "Failed to disconnect device")
+            }
+        }
+    }
+
+    fun handleScannedDeviceQrCode(rawQr: String) {
+        val token = currentAuthToken() ?: return
+        val me = _state.value.me ?: return
+        val curState = _state.value
+        if (curState.deviceLinkPhase == "syncing") return
+
+        if (curState.linkedDevices.size >= curState.maxLinkedDevices) {
+            _state.update {
+                it.copy(
+                    deviceLinkPhase = "error",
+                    deviceLinkError = "Maximum of ${curState.maxLinkedDevices} devices connected. Disconnect at least one device first.",
+                )
+            }
+            return
+        }
+
+        val parts = rawQr.trim().split("|")
+        if (parts.size < 4 || parts[0] != "JATEXT_LINK_V1") {
+            _state.update {
+                it.copy(
+                    deviceLinkPhase = "error",
+                    deviceLinkError = "Unrecognized QR code. Open jatext.vercel.app/chats on your computer and scan the JaText QR code.",
+                )
+            }
+            return
+        }
+
+        val pairingId = parts[1].trim()
+        val linkSecret = parts[2].trim()
+        val qrWebDhPub = parts[3].trim()
+
+        _state.update {
+            it.copy(
+                deviceLinkPhase = "syncing",
+                deviceLinkBrowserName = "Web",
+                deviceLinkError = null,
+            )
+        }
+
+        viewModelScope.launch {
+            try {
+                val claimed = TursoApiClient.rpc<ClaimDeviceLinkResponse>(
+                    op = "claimDeviceLinkSession",
+                    args = mapOf(
+                        "pairingId" to pairingId,
+                        "linkSecret" to linkSecret,
+                    ),
+                    token = token,
+                )
+                val resolvedBrowser = claimed.browserName.ifBlank { "Chrome" }
+                _state.update {
+                    it.copy(
+                        deviceLinkPhase = "syncing",
+                        deviceLinkBrowserName = resolvedBrowser,
+                        deviceLinkError = null,
+                    )
+                }
+
+                val targetDhPub = claimed.webDhPubB64.ifBlank { qrWebDhPub }
+                val sealedBundleJson = withContext(Dispatchers.Default) {
+                    JaTextCryptoEngine.sealDeviceLinkBundle(
+                        context = appCtx,
+                        userId = me.id,
+                        pairingId = pairingId,
+                        linkSecret = linkSecret,
+                        webDhPubB64 = targetDhPub,
+                        outgoingBubbleStyle = _state.value.outgoingBubbleStyle,
+                        wallpapers = cache.getAllWallpapers(),
+                    )
+                }
+
+                TursoApiClient.rpcRaw(
+                    op = "approveDeviceLinkSession",
+                    args = mapOf(
+                        "pairingId" to pairingId,
+                        "linkSecret" to linkSecret,
+                        "sealedBundleJson" to sealedBundleJson,
+                    ),
+                    token = token,
+                )
+
+                // Refresh device list immediately and wait for Web to confirm message/attachment sync completion
+                refreshLinkedDevices()
+
+                val pollDeadline = System.currentTimeMillis() + 25_000L
+                var completed = false
+                while (System.currentTimeMillis() < pollDeadline) {
+                    delay(550L)
+                    val st = runCatching {
+                        TursoApiClient.rpc<DeviceLinkStatusResponse>(
+                            op = "getDeviceLinkStatus",
+                            args = mapOf("pairingId" to pairingId),
+                            token = token,
+                        )
+                    }.getOrNull()
+                    if (st != null && st.status == "completed") {
+                        completed = true
+                        break
+                    }
+                }
+
+                refreshLinkedDevices()
+                _state.update {
+                    it.copy(
+                        deviceLinkPhase = "success",
+                        deviceLinkBrowserName = resolvedBrowser,
+                        deviceLinkError = null,
+                    )
+                }
+                if (completed) {
+                    showToast("Successfully linked the device!")
+                }
+            } catch (e: Throwable) {
+                refreshLinkedDevices()
+                _state.update {
+                    it.copy(
+                        deviceLinkPhase = "error",
+                        deviceLinkError = e.message ?: "Failed to link device. Please try scanning again.",
+                    )
+                }
+            }
         }
     }
 }

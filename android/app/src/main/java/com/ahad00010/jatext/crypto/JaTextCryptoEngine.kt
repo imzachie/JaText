@@ -20,9 +20,11 @@ import com.ahad00010.jatext.data.GroupSeenReader
 import com.ahad00010.jatext.data.JaTextJson
 import com.ahad00010.jatext.data.MessageE2EEProof
 import com.ahad00010.jatext.data.OverflowDescriptor
+import com.ahad00010.jatext.data.PlainDeviceLinkBundle
 import com.ahad00010.jatext.data.PublicIdentityBundle
 import com.ahad00010.jatext.data.ReplySummary
 import com.ahad00010.jatext.data.SealedAutoSyncKeyring
+import com.ahad00010.jatext.data.SealedDeviceLinkBundle
 import com.ahad00010.jatext.data.SealedE2EEVault
 import com.ahad00010.jatext.data.StickerMedia
 import com.ahad00010.jatext.data.StoredIdentityRecord
@@ -2226,7 +2228,7 @@ object JaTextCryptoEngine {
     fun exportVaultContents(context: Context, userId: String): E2EEVaultContents {
         val primary = ensureOrCreatePrimaryIdentity(context, userId)
         val allLocal = loadLocalIdentities(context, userId)
-        val previous = allLocal.filter { it.keyId != primary.keyId && isCompleteSigningAndDhIdentity(it) }
+        val previous = allLocal.filter { it.keyId != primary.keyId && isUsableDhIdentity(it) }
         val exportedEpochs = mutableListOf<E2EEVaultGroupEpoch>()
         for ((k, rawSecrets) in groupEpochSecrets.entries) {
             val sep = k.lastIndexOf(':')
@@ -2555,5 +2557,47 @@ object JaTextCryptoEngine {
         ensurePrimaryIdentityPublished(merged.primaryIdentity, token)
         syncAccountKeyringWithServer(context, userId, stickerItems, token, forcePush = true)
         merged.primaryIdentity
+    }
+
+    fun sealDeviceLinkBundle(
+        context: Context,
+        userId: String,
+        pairingId: String,
+        linkSecret: String,
+        webDhPubB64: String,
+        outgoingBubbleStyle: String,
+        wallpapers: Map<String, String>,
+    ): String {
+        loadGroupEpochMap(context, userId)
+        val vault = exportVaultContents(context, userId)
+        val plainBundle = PlainDeviceLinkBundle(
+            v = 1,
+            userId = userId,
+            vault = vault,
+            outgoingBubbleStyle = outgoingBubbleStyle,
+            wallpapers = wallpapers,
+        )
+        val plainBytes = JaTextJson.encodeToString(plainBundle).toByteArray(Charsets.UTF_8)
+
+        val peerPub = importRawP256Public(b64UrlDecode(webDhPubB64))
+        val kpg = KeyPairGenerator.getInstance("EC").apply {
+            initialize(ECGenParameterSpec("secp256r1"), secureRandom)
+        }
+        val ephem = kpg.generateKeyPair()
+        val shared = ecdhSharedSecret(ephem.private, peerPub)
+        val salt = sha256(linkSecret.toByteArray(Charsets.UTF_8))
+        val aesKey = hkdfSha256(shared, salt, "JaText-DeviceLink-Wrap-v1|$pairingId")
+        val iv = randomBytes(12)
+        val aad = "JaText-DeviceLink-AAD-v1|$pairingId|$userId".toByteArray(Charsets.UTF_8)
+        val ct = aesGcmEncrypt(aesKey, iv, aad, plainBytes)
+
+        val sealed = SealedDeviceLinkBundle(
+            v = 1,
+            userId = userId,
+            epk = b64UrlEncode(exportRawUncompressedP256Public(ephem.public)),
+            iv = b64UrlEncode(iv),
+            ct = b64UrlEncode(ct),
+        )
+        return JaTextJson.encodeToString(sealed)
     }
 }

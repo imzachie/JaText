@@ -757,7 +757,7 @@ function AppContent() {
     );
   }
 
-  if (!store.me && !notificationWelcomeSeen) {
+  if (!store.me && Capacitor.isNativePlatform() && !notificationWelcomeSeen) {
     return (
       <NotificationWelcome
         onContinue={() => {
@@ -831,7 +831,9 @@ function AppContent() {
           setSettingsDirectMobile(false);
           setSettingsOpen(true);
         }}
-        onOpenAccountSwitcher={() => setAccountSwitcherOpen(true)}
+        onOpenAccountSwitcher={
+          Capacitor.isNativePlatform() ? () => setAccountSwitcherOpen(true) : undefined
+        }
       />
       <main className="main-pane">{renderMainPaneContent()}</main>
 
@@ -847,10 +849,14 @@ function AppContent() {
           initialCategory={settingsInitialCategory}
           openCategoryDirectlyOnMobile={settingsDirectMobile}
           onClose={() => setSettingsOpen(false)}
-          onOpenAccountSwitcher={() => {
-            setSettingsOpen(false);
-            setAccountSwitcherOpen(true);
-          }}
+          onOpenAccountSwitcher={
+            Capacitor.isNativePlatform()
+              ? () => {
+                  setSettingsOpen(false);
+                  setAccountSwitcherOpen(true);
+                }
+              : undefined
+          }
           onOpenCustomThemeDrawer={() => {
             setSettingsOpen(false);
             setCustomThemeDrawerOpen(true);
@@ -868,7 +874,7 @@ function AppContent() {
           }}
         />
       )}
-      {accountSwitcherOpen && (
+      {Capacitor.isNativePlatform() && accountSwitcherOpen && (
         <AccountSwitcherModal onClose={() => setAccountSwitcherOpen(false)} />
       )}
       <CallOverlay />

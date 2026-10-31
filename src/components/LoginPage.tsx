@@ -1,326 +1,312 @@
-import { useEffect, useState, type FormEvent } from "react";
-import {
-  cancelAddAnotherAccount,
-  switchToAccountSlot,
-  useMultiAccountState,
-} from "../lib/accountManager";
-import { consumePendingOAuthError, PUBLIC_TURSO_API_ORIGIN } from "../lib/tursoClient";
-import { useJaText } from "../lib/store";
-import { Avatar } from "./Avatar";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LegalModal, type LegalTab } from "./LegalModal";
+import { LockClosedIcon } from "./UiIcons";
+import { buildQrSvgPath } from "../lib/qrCodeSvg";
 import {
-  ArrowLeftIcon,
-  FlaskIcon,
-  MessageCircleIcon,
-  PaletteIcon,
-  SwitchAccountIcon,
-  UsersIcon,
-} from "./UiIcons";
+  decryptAndHydrateLinkedWebSession,
+  pollWebQrPairingSession,
+  startWebQrPairingSession,
+  type WebQrSessionHandle,
+} from "../lib/deviceLinking";
 
-const BACKEND_ORIGIN = PUBLIC_TURSO_API_ORIGIN;
-
-function GoogleIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden>
-      <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.3 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/>
-      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.3 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
-      <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-4.8C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/>
-      <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.1 5.6l6.2 4.8C36.9 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/>
-    </svg>
-  );
-}
+type LinkScreenPhase = "loading_qr" | "waiting_scan" | "syncing" | "error";
 
 export function LoginPage() {
-  const store = useJaText();
-  const { activeSlotId, accounts, returnToSlotId } = useMultiAccountState();
-  const activeSavedAccount = accounts.find((acct) => acct.slotId === activeSlotId);
-  const switchableAccounts = accounts.filter((acct) => acct.slotId !== activeSlotId);
-  const returnAccount = returnToSlotId
-    ? accounts.find((acct) => acct.slotId === returnToSlotId)
-    : undefined;
-  const [tab, setTab] = useState<"signin" | "signup">("signin");
-  const [email, setEmail] = useState(() => activeSavedAccount?.email ?? "");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [errorSource, setErrorSource] = useState<"signin" | "signup" | "google" | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [showDemoGoogle, setShowDemoGoogle] = useState(false);
-  const [gName, setGName] = useState("Alex Google");
-  const [gEmail, setGEmail] = useState("Alex@example.com");
+  const [phase, setPhase] = useState<LinkScreenPhase>("loading_qr");
+  const [qrHandle, setQrHandle] = useState<WebQrSessionHandle | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [syncProgress, setSyncProgress] = useState<number>(12);
   const [legalTab, setLegalTab] = useState<LegalTab | null>(null);
 
-  useEffect(() => {
-    const oauthErr = consumePendingOAuthError();
-    if (oauthErr) {
-      setErrorSource("google");
-      setError(oauthErr);
+  const activeHandleRef = useRef<WebQrSessionHandle | null>(null);
+  const hydratingRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  const createFreshQr = useCallback(async () => {
+    if (hydratingRef.current) return;
+    setErrorMsg(null);
+    if (!activeHandleRef.current) {
+      setPhase("loading_qr");
+    }
+    try {
+      const next = await startWebQrPairingSession();
+      if (!mountedRef.current || hydratingRef.current) return;
+      activeHandleRef.current = next;
+      setQrHandle(next);
+      setPhase("waiting_scan");
+    } catch (err) {
+      if (!mountedRef.current || hydratingRef.current) return;
+      setErrorMsg(
+        err instanceof Error ? err.message : "Could not generate QR code. Check your connection.",
+      );
+      setPhase("error");
     }
   }, []);
 
-  async function resolveAuthError(
-    err: unknown,
-    _context: "signin" | "signup" | "google",
-  ): Promise<string> {
-    const raw = err instanceof Error ? err.message : String(err ?? "");
-    if (/TURSO_DATABASE_URL|TURSO_AUTH_TOKEN|not configured yet/i.test(raw)) {
-      return "Turso database is not connected yet. Add TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in Vercel Environment Variables and redeploy.";
-    }
-    if (/failed to fetch|networkerror|load failed|network request failed|fetch failed|offline/i.test(raw)) {
-      return "Network error while reaching JaText. Check your internet connection and try again.";
-    }
-    if (/too\s*many|ratelimit/i.test(raw)) {
-      return "Too many sign-in attempts. Please wait a minute and try again.";
-    }
-    if (/at least 8 characters|invalid password/i.test(raw)) {
-      return "Password must be at least 8 characters long.";
-    }
-    if (/already exists/i.test(raw)) {
-      return "An account with this email already exists. Switch to 'Sign in' or tap 'Continue with Google' above.";
-    }
-    return raw.trim() || "Something went wrong. Please try again.";
-  }
+  useEffect(() => {
+    mountedRef.current = true;
+    void createFreshQr();
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [createFreshQr]);
 
-  async function run(
-    context: "signin" | "signup" | "google",
-    fn: () => Promise<void>,
-  ) {
-    setBusy(true);
-    setError(null);
-    setErrorSource(null);
+  // Poll QR pairing session every 800ms and auto-rotate before expiry while idle
+  useEffect(() => {
+    if (!qrHandle || phase === "error") return;
+    let cancelled = false;
+    let timerId: number | null = null;
+
+    const tick = async () => {
+      if (cancelled || !mountedRef.current) return;
+      const current = activeHandleRef.current;
+      if (!current) return;
+
+      // Auto-rotate QR 15s before 2-minute TTL if still waiting for scan
+      if (!hydratingRef.current && phase === "waiting_scan" && Date.now() > current.expiresAt - 15_000) {
+        await createFreshQr();
+        return;
+      }
+
+      try {
+        const res = await pollWebQrPairingSession(current);
+        if (cancelled || !mountedRef.current) return;
+
+        if (res.status === "expired") {
+          if (!hydratingRef.current) {
+            await createFreshQr();
+          }
+          return;
+        }
+
+        if (res.status === "syncing") {
+          setPhase("syncing");
+          setSyncProgress((prev) => (prev < 24 ? Math.min(24, prev + 3) : prev));
+        } else if (res.status === "approved" && res.token && res.sealedBundleJson) {
+          if (!hydratingRef.current) {
+            hydratingRef.current = true;
+            setPhase("syncing");
+            try {
+              await decryptAndHydrateLinkedWebSession(
+                current,
+                res.token,
+                res.sealedBundleJson,
+                (pct) => {
+                  if (mountedRef.current) {
+                    setSyncProgress((prev) => Math.max(prev, pct));
+                  }
+                },
+              );
+            } catch (syncErr) {
+              hydratingRef.current = false;
+              if (mountedRef.current) {
+                setErrorMsg(
+                  syncErr instanceof Error
+                    ? syncErr.message
+                    : "Sync interrupted. Please scan a fresh QR code.",
+                );
+                setSyncProgress(12);
+                await createFreshQr();
+              }
+            }
+            return;
+          }
+        }
+      } catch {
+        // Ignore transient network hiccup during poll
+      }
+
+      if (!cancelled && mountedRef.current && !hydratingRef.current) {
+        timerId = window.setTimeout(() => void tick(), 800);
+      }
+    };
+
+    timerId = window.setTimeout(() => void tick(), 800);
+    return () => {
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [createFreshQr, phase, qrHandle]);
+
+  // Warn before accidental tab close while actively syncing messages & attachments
+  useEffect(() => {
+    if (phase !== "syncing") return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [phase]);
+
+  const qrVector = useMemo(() => {
+    if (!qrHandle?.qrPayload) return null;
     try {
-      await fn();
-    } catch (e) {
-      const msg = await resolveAuthError(e, context);
-      setErrorSource(context);
-      setError(msg);
-    } finally {
-      setBusy(false);
+      return buildQrSvgPath(qrHandle.qrPayload, 3);
+    } catch {
+      return null;
     }
-  }
+  }, [qrHandle?.qrPayload]);
 
-  function onEmailSubmit(e: FormEvent) {
-    e.preventDefault();
-    void run(tab, () =>
-      tab === "signin"
-        ? store.signInEmail(email, password)
-        : store.signUpEmail(email, password),
+  if (phase === "syncing") {
+    return (
+      <div className="login-screen qr-link-screen">
+        <div className="login-card qr-sync-card">
+          <div className="qr-sync-logo-wrap">
+            <img
+              className="qr-sync-logo"
+              src="/jatext-logo-icon.png"
+              alt="JaText"
+            />
+          </div>
+
+          <div className="qr-e2ee-pill">
+            <LockClosedIcon size={14} />
+            <span>End-to-End Encrypted</span>
+          </div>
+
+          <h2 className="qr-sync-heading">
+            Syncing your messages and attachments....
+          </h2>
+          <p className="qr-sync-subtext">
+            Do not close this tab while its syncing.
+          </p>
+
+          <div
+            className="qr-sync-progress-track"
+            role="progressbar"
+            aria-valuenow={syncProgress}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className="qr-sync-progress-fill"
+              style={{ width: `${Math.max(10, Math.min(100, syncProgress))}%` }}
+            />
+          </div>
+        </div>
+      </div>
     );
   }
 
-  function onGoogle() {
-    if (store.mode === "demo") {
-      setShowDemoGoogle(true);
-      return;
-    }
-    void run("google", () => store.signInGoogle());
-  }
-
   return (
-    <div className="login-viewport">
-      <div className="login-page">
-        <section className="login-hero">
-          <img
-            className="logo-full"
-            src="/jatext-logo-full.png"
-            alt="JaText · JAMusic Coding and Research Corp"
-          />
-          <p className="hero-tagline">
-            Text your people. Add friends by username, make your profile yours,
-            and chat in real time.
-          </p>
-          <ul className="hero-points">
-            <li>
-              <MessageCircleIcon size={16} style={{ color: "var(--accent)" }} /> Real-time chats &amp; attachments
-            </li>
-            <li>
-              <PaletteIcon size={16} style={{ color: "var(--accent)" }} /> Profile picture, banner &amp; your own avatar color
-            </li>
-            <li>
-              <UsersIcon size={16} style={{ color: "var(--accent)" }} /> Friend requests: you only chat with people you accept
-            </li>
-          </ul>
-        </section>
+    <div className="login-screen qr-link-screen">
+      <div className="login-card qr-link-card">
+        <div className="qr-link-grid">
+          <div className="qr-link-instructions">
+            <div className="qr-brand-row">
+              <img
+                className="qr-brand-logo"
+                src="/jatext-logo-icon.png"
+                alt="JaText"
+              />
+              <span className="qr-brand-name">JaText</span>
+            </div>
 
-        <section className="login-card">
-          {returnToSlotId && (
-            <div className="login-add-account-banner">
-              <button
-                type="button"
-                className="ghost-btn login-back-account-btn"
-                onClick={() => cancelAddAnotherAccount(BACKEND_ORIGIN)}
-              >
-                <ArrowLeftIcon size={15} />
+            <h1 className="qr-link-title">Link your phone in order to use it.</h1>
+
+            <ol className="qr-steps-list">
+              <li>
+                <span className="qr-step-num">1</span>
                 <span>
-                  {returnAccount
-                    ? `Back to @${returnAccount.username ?? returnAccount.displayName}`
-                    : "Back to active account"}
+                  Open <strong>JaText</strong> on your phone
                 </span>
-              </button>
-              <span className="login-add-account-badge">
-                <SwitchAccountIcon size={13} /> Adding account
-              </span>
-            </div>
-          )}
+              </li>
+              <li>
+                <span className="qr-step-num">2</span>
+                <span>
+                  Go to <strong>Settings</strong> and open <strong>Devices</strong> (3rd tab)
+                </span>
+              </li>
+              <li>
+                <span className="qr-step-num">3</span>
+                <span>
+                  Tap <strong>Scan with QR code</strong> and point your phone at this screen
+                </span>
+              </li>
+            </ol>
 
-          {switchableAccounts.length > 0 && (
-            <div className="login-saved-accounts">
-              <div className="login-saved-accounts-header">
-                <span>Saved accounts on this device</span>
-                <span className="muted small">Tap to switch directly</span>
-              </div>
-              <div className="login-saved-accounts-list">
-                {switchableAccounts.map((acct) => (
-                  <button
-                    key={acct.slotId}
-                    type="button"
-                    className="login-saved-account-btn"
-                      onClick={() => switchToAccountSlot(acct.slotId, BACKEND_ORIGIN)}
-                  >
-                    <Avatar
-                      user={{
-                        displayName: acct.displayName || acct.username || "JaText User",
-                        username: acct.username || "user",
-                        avatarUrl: acct.avatarUrl,
-                        avatarColor: acct.avatarColor,
-                      }}
-                      size={34}
-                    />
-                    <span className="login-saved-account-meta">
-                      <strong>{acct.displayName}</strong>
-                      <span>
-                        {acct.username
-                          ? `@${acct.username}`
-                          : acct.email ?? "Saved account"}
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <h2>
-            {returnToSlotId
-              ? tab === "signin"
-                ? "Add another account"
-                : "Create another account"
-              : activeSavedAccount
-                ? `Sign back in as ${activeSavedAccount.displayName}`
-                : tab === "signin"
-                  ? "Welcome back"
-                  : "Create your account"}
-          </h2>
-
-          <button type="button" className="google-btn" onClick={onGoogle} disabled={busy}>
-            <GoogleIcon /> Continue with Google
-          </button>
-
-          {error && errorSource === "google" && <div className="error-box">{error}</div>}
-
-          {showDemoGoogle && (
-            <div className="demo-google-box">
-              <p className="muted small">
-                <FlaskIcon size={14} /> Demo mode: this simulates a Google account. Connect Convex +
-                Google OAuth (see README) for the real Google sign-in popup.
-              </p>
-              <label>
-                Name
-                <input value={gName} onChange={(e) => setGName(e.target.value)} />
-              </label>
-              <label>
-                Google email
-                <input value={gEmail} onChange={(e) => setGEmail(e.target.value)} />
-              </label>
-              <button
-                type="button"
-                className="primary-btn"
-                disabled={busy}
-                onClick={() =>
-                  void run("google", () => store.signInGoogle({ name: gName, email: gEmail }))
-                }
-              >
-                Continue as {gName || "Guest"}
-              </button>
-            </div>
-          )}
-
-          <div className="divider"><span>or</span></div>
-
-          <div className="tabs">
-            <button
-              type="button"
-              className={tab === "signin" ? "active" : ""}
-              onClick={() => {
-                setError(null);
-                setErrorSource(null);
-                setTab("signin");
-              }}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              className={tab === "signup" ? "active" : ""}
-              onClick={() => {
-                setError(null);
-                setErrorSource(null);
-                setTab("signup");
-              }}
-            >
-              Sign up
-            </button>
-          </div>
-
-          <form onSubmit={onEmailSubmit} className="login-form">
-            <label>
-              Email
-              <input
-                type="email"
-                required
-                autoComplete="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </label>
-            <label>
-              Password
-              <input
-                type="password"
-                required
-                autoComplete={tab === "signin" ? "current-password" : "new-password"}
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </label>
-            {error && errorSource !== "google" && <div className="error-box">{error}</div>}
-            <button className="primary-btn" type="submit" disabled={busy}>
-              {busy ? "Please wait…" : tab === "signin" ? "Sign in" : "Create account"}
-            </button>
-          </form>
-
-          {store.mode === "demo" ? (
-            <p className="muted small center">
-              Running in <strong>demo mode</strong>. Your data lives in this browser.
+            <p className="qr-download-note">
+              <em>
+                Don&apos;t have JaText on your phone yet?{" "}
+                <a href="/downloads/JaText-release.apk" download>
+                  Download the Android app
+                </a>
+              </em>
             </p>
-          ) : null}
+          </div>
 
-          <div className="login-legal-footer">
-            <span className="muted small">By continuing, you agree to JaText&apos;s</span>
-            <div className="legal-inline-btns">
-              <button type="button" className="inline-link-btn" onClick={() => setLegalTab("terms")}>
-                Terms of Service
-              </button>
-              <span className="muted small">·</span>
-              <button type="button" className="inline-link-btn" onClick={() => setLegalTab("privacy")}>
-                Privacy Policy
-              </button>
+          <div className="qr-code-column">
+            <div className="qr-code-box">
+              {phase === "waiting_scan" && qrVector ? (
+                <svg
+                  className="qr-code-svg"
+                  viewBox={`0 0 ${qrVector.viewBoxSize} ${qrVector.viewBoxSize}`}
+                  shapeRendering="crispEdges"
+                  role="img"
+                  aria-label="JaText device linking QR code"
+                >
+                  <rect
+                    x="0"
+                    y="0"
+                    width={qrVector.viewBoxSize}
+                    height={qrVector.viewBoxSize}
+                    fill="#ffffff"
+                  />
+                  <path d={qrVector.pathData} fill="#0b0b10" />
+                </svg>
+              ) : phase === "error" ? (
+                <div className="qr-code-placeholder">
+                  <p className="qr-error-text">{errorMsg || "QR code unavailable"}</p>
+                  <button
+                    type="button"
+                    className="primary-btn qr-reload-btn"
+                    onClick={() => void createFreshQr()}
+                  >
+                    <span>Reload QR code</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="qr-code-placeholder">
+                  <div className="qr-spinner" />
+                  <span className="muted small">Generating secure QR code...</span>
+                </div>
+              )}
             </div>
           </div>
-        </section>
-        {legalTab && <LegalModal initialTab={legalTab} onClose={() => setLegalTab(null)} />}
+        </div>
+
+        <div className="qr-link-footer">
+          <div className="qr-footer-e2ee">
+            <LockClosedIcon size={13} />
+            <span>Your personal messages and attachments are end-to-end encrypted</span>
+          </div>
+          <div className="qr-footer-legal">
+            <button
+              type="button"
+              className="inline-link-btn"
+              onClick={() => setLegalTab("terms")}
+            >
+              Terms of Service
+            </button>
+            {" · "}
+            <button
+              type="button"
+              className="inline-link-btn"
+              onClick={() => setLegalTab("privacy")}
+            >
+              Privacy Policy
+            </button>
+          </div>
+        </div>
       </div>
+
+      {legalTab && (
+        <LegalModal
+          initialTab={legalTab}
+          onClose={() => setLegalTab(null)}
+        />
+      )}
     </div>
   );
 }

@@ -112,8 +112,9 @@ function readStateFromStorage(): MultiAccountState {
         }
       }
     }
-    const activeSlotId =
-      typeof parsed?.activeSlotId === "string" && parsed.activeSlotId
+    const activeSlotId = !Capacitor.isNativePlatform()
+      ? DEFAULT_ACCOUNT_SLOT_ID
+      : typeof parsed?.activeSlotId === "string" && parsed.activeSlotId
         ? parsed.activeSlotId
         : DEFAULT_ACCOUNT_SLOT_ID;
     const returnToSlotId =
@@ -207,10 +208,34 @@ export function getTursoTokenKeyForSlot(slotId = getActiveAccountSlotId()): stri
     : `jatext:turso-jwt:v1:${slotId}`;
 }
 
+function isWebLinkedTokenValid(token: string | null | undefined): boolean {
+  if (!token || typeof token !== "string") return false;
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const clean = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = clean.length % 4 === 0 ? "" : "=".repeat(4 - (clean.length % 4));
+    const json = atob(clean + pad);
+    const parsed = JSON.parse(json) as { linkedDeviceId?: string; exp?: number };
+    if (!parsed?.linkedDeviceId) return false;
+    if (parsed.exp && parsed.exp * 1000 < Date.now()) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getTursoTokenForSlotSync(slotId = getActiveAccountSlotId()): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(getTursoTokenKeyForSlot(slotId));
+    const key = getTursoTokenKeyForSlot(slotId);
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    if (!Capacitor.isNativePlatform() && !isWebLinkedTokenValid(raw)) {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+    return raw;
   } catch {
     return null;
   }
@@ -235,8 +260,11 @@ export function hasStoredAuthForSlot(
   if (typeof window === "undefined") return false;
   if (invalidatedAuthSlots.has(slotId)) return false;
   try {
-    const tursoToken = window.localStorage.getItem(getTursoTokenKeyForSlot(slotId));
+    const tursoToken = getTursoTokenForSlotSync(slotId);
     if (tursoToken) return true;
+    if (!Capacitor.isNativePlatform()) {
+      return false;
+    }
     if (!backendIdentifier) {
       return Boolean(window.localStorage.getItem(getDemoSessionKeyForSlot(slotId)));
     }

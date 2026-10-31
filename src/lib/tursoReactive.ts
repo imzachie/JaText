@@ -751,10 +751,23 @@ export function useTursoReactiveSession(
   }, []);
 
   const authSignOut = useCallback(async () => {
+    if (!Capacitor.isNativePlatform()) {
+      await tursoRpc("disconnectLinkedDevice", {}, { slotId, skipAuthClear: true }).catch(
+        () => undefined,
+      );
+      await setTursoTokenForSlot(slotId, "", PUBLIC_TURSO_API_ORIGIN).catch(() => undefined);
+      try {
+        window.localStorage.removeItem(
+          slotId === "slot-1" ? "jatext:turso-jwt:v1" : `jatext:turso-jwt:v1:${slotId}`,
+        );
+      } catch {
+        // ignore
+      }
+    }
     setIsAuthenticated(false);
     setAuthLoading(false);
     resetSessionState();
-  }, [resetSessionState]);
+  }, [resetSessionState, slotId]);
 
   const upload = useCallback(
     async (file: File): Promise<string> => uploadMediaToTurso(file, slotId),

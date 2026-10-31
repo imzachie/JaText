@@ -787,3 +787,53 @@ data class GroupSignalEnvelope(
     val screenSharing: Boolean? = null,
     val ts: Long = 0L,
 )
+
+@Serializable
+data class LinkedWebDevice(
+    val id: String = "",
+    val browserName: String = "Chrome",
+    val osName: String = "",
+    val deviceLabel: String = "Chrome JaText",
+    val createdAt: Long = 0L,
+    val lastActiveAt: Long = 0L,
+)
+
+@Serializable
+data class ListLinkedDevicesResponse(
+    val devices: List<LinkedWebDevice> = emptyList(),
+    val maxDevices: Int = 5,
+)
+
+@Serializable
+data class ClaimDeviceLinkResponse(
+    val pairingId: String = "",
+    val browserName: String = "Chrome",
+    val osName: String = "",
+    val webDhPubB64: String = "",
+)
+
+@Serializable
+data class DeviceLinkStatusResponse(
+    val status: String = "syncing",
+    val browserName: String = "Chrome",
+    val osName: String = "",
+    val linkedDeviceId: String? = null,
+)
+
+@Serializable
+data class PlainDeviceLinkBundle(
+    val v: Int = 1,
+    val userId: String = "",
+    val vault: E2EEVaultContents,
+    val outgoingBubbleStyle: String = "default",
+    val wallpapers: Map<String, String> = emptyMap(),
+)
+
+@Serializable
+data class SealedDeviceLinkBundle(
+    val v: Int = 1,
+    val userId: String = "",
+    val epk: String = "",
+    val iv: String = "",
+    val ct: String = "",
+)

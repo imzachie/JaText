@@ -282,6 +282,16 @@ class LocalCacheStore(private val appContext: Context) :
         }
     }
 
+    fun getAllWallpapers(): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        for ((k, v) in prefs.all) {
+            if (k.startsWith("wp:") && v is String && v.isNotBlank()) {
+                out[k.removePrefix("wp:")] = v
+            }
+        }
+        return out
+    }
+
     fun getDraft(slotId: String, targetKey: String): String {
         return prefs.getString("draft:$slotId:$targetKey", "") ?: ""
     }

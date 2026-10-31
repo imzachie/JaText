@@ -771,15 +771,6 @@ fun ChatThreadScreen(
                                 },
                             )
                         }
-                        ChatOverflowSvgItem(
-                            icon = WebUiIconKind.RefreshSync,
-                            label = if (state.isSyncingKeysAndMessages) "Syncing chat & keys…" else "Sync chat & keys",
-                            iconTint = palette.accent,
-                            onClick = {
-                                showOverflowMenu = false
-                                vm.syncMessagesAndKeysNow()
-                            },
-                        )
                         if (activeFriend != null) {
                             val isMuted = activePreview?.isMuted == true
                             val isArchived = activePreview?.isArchived == true
