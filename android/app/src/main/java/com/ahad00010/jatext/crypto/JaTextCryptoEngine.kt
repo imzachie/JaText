@@ -2427,7 +2427,7 @@ object JaTextCryptoEngine {
         try {
             val autoSyncEntry = stickerItems
                 .filter { it.name.trim() == E2EE_AUTOSYNC_STICKER_NAME && it.url.isNotBlank() }
-                .maxByOrNull { it.lastUsedAt }
+                .maxByOrNull { it.lastUsedAt ?: 0L }
 
             var remoteContents: E2EEVaultContents? = null
             if (autoSyncEntry != null) {
@@ -2541,7 +2541,7 @@ object JaTextCryptoEngine {
         if (sealedVault == null) {
             val vaultSticker = stickerItems
                 .filter { it.name.trim() == E2EE_VAULT_STICKER_NAME && it.url.isNotBlank() }
-                .maxByOrNull { it.lastUsedAt }
+                .maxByOrNull { it.lastUsedAt ?: 0L }
             if (vaultSticker != null) {
                 val raw = TursoApiClient.fetchMediaBytesSmart(vaultSticker.url)
                 sealedVault = JaTextJson.decodeFromString<SealedE2EEVault>(String(raw, Charsets.UTF_8))

@@ -743,12 +743,12 @@ fun SettingsModalScreen(
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(999.dp))
-                                            .background(palette.ok.copy(alpha = 0.16f))
+                                            .background(palette.success.copy(alpha = 0.16f))
                                             .padding(horizontal = 9.dp, vertical = 3.dp)
                                     ) {
                                         Text(
                                             text = "Auto-Sync On",
-                                            color = palette.ok,
+                                            color = palette.success,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                         )

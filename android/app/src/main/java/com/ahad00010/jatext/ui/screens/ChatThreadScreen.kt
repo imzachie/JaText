@@ -123,6 +123,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import com.ahad00010.jatext.crypto.JaTextCryptoEngine
+import com.ahad00010.jatext.data.GroupSummary
 import com.ahad00010.jatext.ui.icons.WebUiIconKind
 import com.ahad00010.jatext.ui.icons.WebUiSvgIcon
 import androidx.compose.ui.text.font.FontStyle
@@ -827,7 +829,7 @@ fun ChatThreadScreen(
                                 icon = if (isFriendBlocked) WebUiIconKind.Unlock else WebUiIconKind.Ban,
                                 label = if (isFriendBlocked) "Unblock" else "Block",
                                 textTint = if (isFriendBlocked) palette.textPrimary else palette.danger,
-                                iconTint = if (isFriendBlocked) palette.ok else palette.danger,
+                                iconTint = if (isFriendBlocked) palette.success else palette.danger,
                                 onClick = {
                                     showOverflowMenu = false
                                     vm.setBlockedUser(activeFriend.id, !isFriendBlocked)
@@ -1699,7 +1701,7 @@ fun ChatThreadScreen(
                     OutlinedTextField(
                         value = typedName,
                         onValueChange = { typedName = it },
-                        placeholder = { Text(grp.name, color = palette.textMuted) },
+                        placeholder = { Text(grp.name, color = palette.textTertiary) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )

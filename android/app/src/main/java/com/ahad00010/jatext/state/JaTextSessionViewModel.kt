@@ -422,7 +422,7 @@ class JaTextSessionViewModel(app: Application) :
     private fun extractSyncedBubbleStyle(items: List<StickerMedia>): String? {
         val entry = items
             .filter { it.name.trim().startsWith(JaTextCryptoEngine.E2EE_BUBBLE_PREF_PREFIX) }
-            .maxByOrNull { it.lastUsedAt } ?: return null
+            .maxByOrNull { it.lastUsedAt ?: 0L } ?: return null
         val styleId = entry.name.trim().removePrefix(JaTextCryptoEngine.E2EE_BUBBLE_PREF_PREFIX).trim()
         return styleId.takeIf { JaTextCryptoEngine.BUBBLE_STYLE_IDS.contains(it) }
     }
