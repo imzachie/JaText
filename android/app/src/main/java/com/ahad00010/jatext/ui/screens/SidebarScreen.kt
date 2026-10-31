@@ -475,13 +475,15 @@ fun SidebarScreen(
                     )
                 }
                 val grpRows = state.groups.mapNotNull { g ->
-                    if (g.isArchived) return@mapNotNull null
-                    if (q.isNotEmpty() && !g.name.lowercase().contains(q)) return@mapNotNull null
-                    UnifiedRow(
-                        key = "grp:${g.id}",
-                        sortTs = g.lastMessageAt ?: g.createdAt,
-                        group = g,
-                    )
+                    if (!g.isArchived && (q.isEmpty() || g.name.lowercase().contains(q))) {
+                        UnifiedRow(
+                            key = "grp:${g.id}",
+                            sortTs = g.lastMessageAt,
+                            group = g,
+                        )
+                    } else {
+                        null
+                    }
                 }
                 val combined = (dmRows + grpRows).sortedByDescending { it.sortTs }
 
@@ -1274,7 +1276,7 @@ private fun GroupSidebarRow(
                     )
                     Spacer(Modifier.width(5.dp))
                 }
-                group.lastMessageAt?.takeIf { it > 0L }?.let {
+                group.lastMessageAt.takeIf { it > 0L }?.let {
                     Text(
                         text = formatShortTime(it),
                         color = if (unread > 0) palette.accent else palette.textTertiary,
@@ -1285,7 +1287,7 @@ private fun GroupSidebarRow(
             Spacer(Modifier.height(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = group.lastMessage?.takeIf { it.isNotBlank() } ?: "${group.memberCount} members",
+                    text = group.lastMessage.ifBlank { "${group.memberCount} members" },
                     color = if (unread > 0) palette.textPrimary else palette.textSecondary,
                     fontSize = 13.sp,
                     maxLines = 1,

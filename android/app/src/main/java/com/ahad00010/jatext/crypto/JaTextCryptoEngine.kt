@@ -1122,6 +1122,36 @@ object JaTextCryptoEngine {
         return ctBytes to desc
     }
 
+    suspend fun resolveOrDecryptAttachmentToFile(
+        context: Context,
+        mediaUrl: String,
+        desc: EncryptedBlobDescriptor?,
+    ): File? = withContext(Dispatchers.IO) {
+        if (desc != null) {
+            return@withContext resolveDecryptedAttachmentFile(
+                context,
+                mediaUrl,
+                JaTextJson.encodeToString(desc),
+            )
+        }
+        val key = b64UrlEncode(sha256(mediaUrl.toByteArray(Charsets.UTF_8))).take(24)
+        decryptedMediaFileCache[key]?.takeIf { it.exists() }?.let { return@withContext it }
+        val dir = File(context.cacheDir, "decrypted_media").apply { mkdirs() }
+        val outFile = File(dir, "plain_$key.bin")
+        if (outFile.exists() && outFile.length() > 0L) {
+            decryptedMediaFileCache[key] = outFile
+            return@withContext outFile
+        }
+        return@withContext try {
+            val bytes = TursoApiClient.fetchMediaBytesSmart(mediaUrl)
+            outFile.writeBytes(bytes)
+            decryptedMediaFileCache[key] = outFile
+            outFile
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     suspend fun resolveDecryptedAttachmentFile(
         context: Context,
         mediaUrl: String,

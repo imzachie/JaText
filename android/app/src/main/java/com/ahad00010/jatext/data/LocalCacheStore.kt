@@ -374,6 +374,11 @@ class LocalCacheStore(private val appContext: Context) :
         prefs.edit().putBoolean("shown_perms_modal", true).apply()
     }
 
+    fun wasPermissionPromptDismissed(): Boolean = hasShownPermissionsOnboarding()
+    fun setPermissionPromptDismissed(dismissed: Boolean) {
+        prefs.edit().putBoolean("shown_perms_modal", dismissed).apply()
+    }
+
     fun syncSuppressedPushTargets(
         communityMuted: Boolean,
         suppressedDmIds: Collection<String>,

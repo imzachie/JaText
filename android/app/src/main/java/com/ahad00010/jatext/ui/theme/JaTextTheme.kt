@@ -13,7 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import com.ahad00010.jatext.data.SyncedCustomTheme
+import com.ahad00010.jatext.data.SyncedCustomGradient
 import com.ahad00010.jatext.data.SyncedThemePayload
 import kotlin.math.PI
 import kotlin.math.cos
@@ -177,18 +177,18 @@ object JaTextThemeManager {
 
     fun applyRemotePayload(current: JaTextThemeConfig, remote: SyncedThemePayload): JaTextThemeConfig {
         return when (remote.k) {
-            "preset" -> current.copy(
+            "p", "preset" -> current.copy(
                 kind = "preset",
                 presetId = remote.p ?: current.presetId,
                 updatedAt = remote.u ?: System.currentTimeMillis(),
             )
-            "custom" -> {
+            "c", "custom" -> {
                 val c = remote.c
                 current.copy(
                     kind = "custom",
                     custom = if (c != null) {
                         CustomThemeData(
-                            appearance = c.a,
+                            appearance = if (c.a == "l" || c.a == "light") "light" else "dark",
                             colors = c.cols.ifEmpty { listOf("#e8a87c", "#9b6b9e") },
                             angle = c.ang,
                             intensity = c.int,
@@ -208,22 +208,21 @@ object JaTextThemeManager {
     }
 
     fun toSyncedPayload(cfg: JaTextThemeConfig): SyncedThemePayload {
-        return SyncedThemePayload(
-            k = cfg.kind,
-            d = if (cfg.kind == "default") cfg.defaultId else null,
-            p = if (cfg.kind == "preset") cfg.presetId else null,
-            c = if (cfg.kind == "custom") {
-                SyncedCustomTheme(
-                    a = cfg.custom.appearance,
-                    cols = cfg.custom.colors,
+        val u = cfg.updatedAt.takeIf { it > 0L } ?: System.currentTimeMillis()
+        return when (cfg.kind) {
+            "preset" -> SyncedThemePayload(k = "p", p = cfg.presetId, u = u)
+            "custom" -> SyncedThemePayload(
+                k = "c",
+                c = SyncedCustomGradient(
+                    a = if (cfg.custom.appearance == "light") "l" else "d",
+                    cols = cfg.custom.colors.take(5),
                     ang = cfg.custom.angle,
                     int = cfg.custom.intensity,
-                )
-            } else {
-                null
-            },
-            u = cfg.updatedAt.takeIf { it > 0L } ?: System.currentTimeMillis(),
-        )
+                ),
+                u = u,
+            )
+            else -> SyncedThemePayload(k = "d", d = cfg.defaultId, u = u)
+        }
     }
 
     fun buildPalette(cfg: JaTextThemeConfig, systemDark: Boolean): JaTextPalette {

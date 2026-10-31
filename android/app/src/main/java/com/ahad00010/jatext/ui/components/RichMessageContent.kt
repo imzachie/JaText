@@ -142,8 +142,15 @@ fun ForwardedContextCardUi(
                 modifier = Modifier.weight(1f),
             )
         }
+        val labelText = contextCard.sourceLabel.ifBlank {
+            when (contextCard.sourceKind) {
+                "community" -> "JaText Community"
+                "group" -> contextCard.groupName ?: "Group Chat"
+                else -> "Direct Message"
+            }
+        }
         Text(
-            text = "${contextCard.sourceLabel}  •  $dateStr",
+            text = "$labelText  •  $dateStr",
             color = ink.subTextColor,
             fontSize = 10.5.sp,
             maxLines = 1,
@@ -187,7 +194,7 @@ fun ReplyQuoteBannerUi(
         Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = reply.senderName,
+                text = reply.senderName.orEmpty().ifBlank { "Message" },
                 color = ink.textColor,
                 fontSize = 11.5.sp,
                 fontWeight = FontWeight.Bold,

@@ -216,8 +216,8 @@ fun SettingsModalScreen(
                     var pronouns by remember(me.id) { mutableStateOf(me.pronouns) }
                     var bio by remember(me.id) { mutableStateOf(me.bio) }
                     var avatarColor by remember(me.id) { mutableStateOf(me.avatarColor.ifBlank { "purple" }) }
-                    var customStatus by remember(me.id) { mutableStateOf(me.customStatus) }
-                    var statusPref by remember(me.id) { mutableStateOf(me.statusPreference.ifBlank { "online" }) }
+                    var customStatus by remember(me.id) { mutableStateOf(me.customStatus.orEmpty()) }
+                    var statusPref by remember(me.id) { mutableStateOf(me.statusPreference.orEmpty().ifBlank { "online" }) }
                     var avatarUri by remember { mutableStateOf<Uri?>(null) }
                     var bannerUri by remember { mutableStateOf<Uri?>(null) }
                     var saving by remember { mutableStateOf(false) }
@@ -562,24 +562,46 @@ fun SettingsModalScreen(
                 }
 
                 "audio" -> {
-                    var customNotifName by remember { mutableStateOf(JaTextSoundManager.getCustomNotificationName(context)) }
-                    var customRingName by remember { mutableStateOf(JaTextSoundManager.getCustomRingtoneName(context)) }
+                    var customNotifName by remember {
+                        mutableStateOf(vm.cache.getNotifSoundLabel().takeIf { vm.cache.getNotifSoundMode() == "custom" })
+                    }
+                    var customRingName by remember {
+                        mutableStateOf(vm.cache.getRingtoneLabel().takeIf { vm.cache.getRingtoneMode() == "custom" })
+                    }
 
                     val notifSoundLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
                         if (uri != null) {
                             val name = queryUriFileName(context, uri) ?: "Custom notification.mp3"
-                            if (JaTextSoundManager.saveCustomNotificationSound(context, uri, name)) {
-                                customNotifName = JaTextSoundManager.getCustomNotificationName(context)
-                                vm.showToast("Custom notification sound applied!")
+                            try {
+                                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                if (bytes != null && bytes.isNotEmpty()) {
+                                    val saved = JaTextSoundManager.saveCustomSoundFile(context, "notification", name, bytes)
+                                    JaTextSoundManager.saveSoundPreferences(
+                                        context, "custom", saved.absolutePath, name, null, null, null
+                                    )
+                                    customNotifName = name
+                                    vm.showToast("Custom notification sound applied!")
+                                }
+                            } catch (e: Throwable) {
+                                vm.showToast("Could not load custom notification sound")
                             }
                         }
                     }
                     val ringtoneSoundLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
                         if (uri != null) {
                             val name = queryUriFileName(context, uri) ?: "Custom ringtone.mp3"
-                            if (JaTextSoundManager.saveCustomRingtoneSound(context, uri, name)) {
-                                customRingName = JaTextSoundManager.getCustomRingtoneName(context)
-                                vm.showToast("Custom ringtone applied!")
+                            try {
+                                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                if (bytes != null && bytes.isNotEmpty()) {
+                                    val saved = JaTextSoundManager.saveCustomSoundFile(context, "ringtone", name, bytes)
+                                    JaTextSoundManager.saveSoundPreferences(
+                                        context, null, null, null, "custom", saved.absolutePath, name
+                                    )
+                                    customRingName = name
+                                    vm.showToast("Custom ringtone applied!")
+                                }
+                            } catch (e: Throwable) {
+                                vm.showToast("Could not load custom ringtone")
                             }
                         }
                     }
@@ -590,10 +612,14 @@ fun SettingsModalScreen(
                         title = "JaText (Default)",
                         selected = customNotifName == null,
                         onSelect = {
-                            JaTextSoundManager.clearCustomNotificationSound(context)
+                            JaTextSoundManager.saveSoundPreferences(
+                                context, "default", "", "JaText (Default)", null, null, null
+                            )
                             customNotifName = null
                         },
-                        onPreview = { JaTextSoundManager.previewNotificationSound(context) },
+                        onPreview = {
+                            JaTextSoundManager.previewSound(context, "notification", "default", "", false)
+                        },
                     )
                     if (customNotifName != null) {
                         Spacer(Modifier.height(6.dp))
@@ -601,7 +627,15 @@ fun SettingsModalScreen(
                             title = customNotifName!!,
                             selected = true,
                             onSelect = {},
-                            onPreview = { JaTextSoundManager.previewNotificationSound(context) },
+                            onPreview = {
+                                JaTextSoundManager.previewSound(
+                                    context,
+                                    "notification",
+                                    vm.cache.getNotifSoundMode(),
+                                    vm.cache.getNotifSoundUri(),
+                                    false
+                                )
+                            },
                         )
                     }
                     Spacer(Modifier.height(8.dp))
@@ -623,10 +657,14 @@ fun SettingsModalScreen(
                         title = "JaText (Default)",
                         selected = customRingName == null,
                         onSelect = {
-                            JaTextSoundManager.clearCustomRingtoneSound(context)
+                            JaTextSoundManager.saveSoundPreferences(
+                                context, null, null, null, "default", "", "JaText (Default)"
+                            )
                             customRingName = null
                         },
-                        onPreview = { JaTextSoundManager.previewRingtoneSound(context) },
+                        onPreview = {
+                            JaTextSoundManager.previewSound(context, "ringtone", "default", "", false)
+                        },
                     )
                     if (customRingName != null) {
                         Spacer(Modifier.height(6.dp))
@@ -634,7 +672,15 @@ fun SettingsModalScreen(
                             title = customRingName!!,
                             selected = true,
                             onSelect = {},
-                            onPreview = { JaTextSoundManager.previewRingtoneSound(context) },
+                            onPreview = {
+                                JaTextSoundManager.previewSound(
+                                    context,
+                                    "ringtone",
+                                    vm.cache.getRingtoneMode(),
+                                    vm.cache.getRingtoneUri(),
+                                    false
+                                )
+                            },
                         )
                     }
                     Spacer(Modifier.height(8.dp))

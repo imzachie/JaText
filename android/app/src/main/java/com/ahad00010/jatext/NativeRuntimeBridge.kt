@@ -23,6 +23,10 @@ object NativeRuntimeBridge {
     private val screenListeners = CopyOnWriteArraySet<ScreenCaptureListener>()
 
     @Volatile
+    @JvmField
+    var isAppInForeground: Boolean = false
+
+    @Volatile
     var latestFcmToken: String? = null
 
     fun addSyncWakeListener(listener: SyncWakeListener) {

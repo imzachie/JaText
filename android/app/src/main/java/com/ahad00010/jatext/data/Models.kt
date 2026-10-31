@@ -6,6 +6,10 @@ import kotlinx.serialization.Serializable
 const val OFFICIAL_COMMUNITY_ID = "jatext-official-community"
 const val OWNER_EMAIL = "aidilzafri2013@gmail.com"
 const val OWNER_USERNAME = "imzachie"
+const val UNSEND_WINDOW_MS: Long = 60L * 60L * 1000L
+
+typealias SyncedCustomTheme = SyncedCustomGradient
+typealias LinkPreviewData = LinkPreviewInfo
 
 @Serializable
 data class UserSocialLink(
@@ -55,7 +59,14 @@ data class JaUser(
     val socials: List<UserSocialLink>? = null,
     val website: UserWebsiteLink? = null,
     val syncedTheme: SyncedThemePayload? = null,
-)
+) {
+    val isOwner: Boolean
+        get() = email?.equals(OWNER_EMAIL, ignoreCase = true) == true ||
+            username.equals(OWNER_USERNAME, ignoreCase = true)
+
+    val needsProfileSetup: Boolean
+        get() = !onboardingComplete || username.isBlank()
+}
 
 @Serializable
 data class FriendActivity(
@@ -63,7 +74,14 @@ data class FriendActivity(
     val status: String = "offline",
     val customStatus: String = "",
     val isTyping: Boolean = false,
-)
+) {
+    val online: Boolean
+        get() = status != "offline"
+    val statusPreference: String
+        get() = status.ifBlank { "online" }
+    val typingToMe: Boolean
+        get() = isTyping
+}
 
 @Serializable
 data class FriendRequest(
@@ -72,7 +90,12 @@ data class FriendRequest(
     val to: JaUser = JaUser(),
     val status: String = "pending",
     val createdAt: Long = 0L,
-)
+) {
+    val requestId: String
+        get() = id
+    val user: JaUser
+        get() = from
+}
 
 @Serializable
 data class MessageReaction(
@@ -92,6 +115,7 @@ data class ReplySummary(
 data class ForwardedMessageContext(
     val v: Int = 1,
     val sourceKind: String = "dm",
+    val sourceLabel: String = "",
     val originalMessageId: String = "",
     val originalCreatedAt: Long = 0L,
     val originalSenderId: String = "",
@@ -130,6 +154,7 @@ data class ChatMessage(
     val stickerKey: String? = null,
     val isStickerFavorite: Boolean? = false,
     val deliveryStatus: String? = "sent",
+    val readAt: Long? = null,
     val editedAt: Long? = null,
     val createdAt: Long = 0L,
     val replyTo: ReplySummary? = null,
@@ -139,7 +164,23 @@ data class ChatMessage(
     val reactions: List<MessageReaction> = emptyList(),
     val e2ee: MessageE2EEProof? = null,
     val encryptedAttachmentJson: String? = null,
-)
+) {
+    val encryptedAttachment: EncryptedBlobDescriptor?
+        get() = encryptedAttachmentJson?.let {
+            try {
+                JaTextJson.decodeFromString<EncryptedBlobDescriptor>(it)
+            } catch (_: Throwable) {
+                null
+            }
+        }
+
+    val encryptedSticker: EncryptedStickerDescriptor?
+        get() = if (!stickerKey.isNullOrBlank() && !attachmentUrl.isNullOrBlank()) {
+            EncryptedStickerDescriptor(url = attachmentUrl, n = attachmentName ?: "Sticker", key = stickerKey)
+        } else {
+            null
+        }
+}
 
 @Serializable
 data class ChatPreview(
@@ -187,6 +228,20 @@ data class CommunityPermissions(
     val isOwner: Boolean = false,
     val canModerate: Boolean = false,
     val moderatorIds: List<String> = emptyList(),
+) {
+    val canCreatePolls: Boolean
+        get() = isOwner || canModerate
+    val canManagePolls: Boolean
+        get() = isOwner || canModerate
+}
+
+data class CommunityPoll(
+    val id: String,
+    val options: List<String>,
+    val counts: List<Int>,
+    val totalVotes: Int,
+    val myVote: Int?,
+    val endedAt: Long?,
 )
 
 @Serializable
@@ -231,7 +286,25 @@ data class CommunityMessage(
     val reactions: List<MessageReaction> = emptyList(),
     val canModerate: Boolean = false,
     val isOwner: Boolean = false,
-)
+) {
+    val senderIsOwner: Boolean
+        get() = isOwner
+
+    val poll: CommunityPoll?
+        get() = if (type == "poll" && pollOptions.isNotEmpty()) {
+            val counts = List(pollOptions.size) { idx -> votes.count { it.optionIndex == idx } }
+            CommunityPoll(
+                id = id,
+                options = pollOptions,
+                counts = counts,
+                totalVotes = votes.size,
+                myVote = myVote,
+                endedAt = pollEndedAt,
+            )
+        } else {
+            null
+        }
+}
 
 @Serializable
 data class GroupSummary(
@@ -249,7 +322,10 @@ data class GroupSummary(
     val isSilenced: Boolean = false,
     val isArchived: Boolean = false,
     val unreadCount: Int = 0,
-)
+) {
+    val myRole: String
+        get() = role
+}
 
 @Serializable
 data class GroupMember(
@@ -274,7 +350,10 @@ data class GroupDetails(
     val ownerId: String = "",
     val role: String = "member",
     val members: List<GroupMember> = emptyList(),
-)
+) {
+    val myRole: String
+        get() = role
+}
 
 @Serializable
 data class GroupMessage(
@@ -306,7 +385,23 @@ data class GroupMessage(
     val reactions: List<MessageReaction> = emptyList(),
     val e2ee: MessageE2EEProof? = null,
     val encryptedAttachmentJson: String? = null,
-)
+) {
+    val encryptedAttachment: EncryptedBlobDescriptor?
+        get() = encryptedAttachmentJson?.let {
+            try {
+                JaTextJson.decodeFromString<EncryptedBlobDescriptor>(it)
+            } catch (_: Throwable) {
+                null
+            }
+        }
+
+    val encryptedSticker: EncryptedStickerDescriptor?
+        get() = if (!stickerKey.isNullOrBlank() && !(stickerUrl ?: attachmentUrl).isNullOrBlank()) {
+            EncryptedStickerDescriptor(url = stickerUrl ?: attachmentUrl, n = stickerName ?: attachmentName ?: "Sticker", key = stickerKey)
+        } else {
+            null
+        }
+}
 
 @Serializable
 data class ChatTypingUser(
@@ -441,7 +536,10 @@ data class EncryptedBlobDescriptor(
     val t: String = "application/octet-stream",
     val sz: Int = 0,
     val h: String = "",
-)
+) {
+    val mt: String
+        get() = t
+}
 
 @Serializable
 data class EncryptedStickerDescriptor(
