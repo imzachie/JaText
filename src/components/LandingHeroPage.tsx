@@ -124,13 +124,22 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.7.2",
+    date: "October 31, 2026",
+    headline: "Instant Desktop Delete-for-Me, Strict Keyboard Focus Control & Mobile-Only Chat Wallpapers",
+    latest: true,
+    bullets: [
+      "Made Desktop Delete for me instantaneous and permanent across 1:1 DMs, Groups, and Community while keeping 5-second Undo restoration seamless.",
+      "Stopped soft keyboards from ever opening on their own after being dismissed, and restored Chat Wallpapers strictly to mobile devices.",
+    ],
+  },
+  {
     version: "v3.7.1",
     date: "October 31, 2026",
     headline: "Both-Sides Snappy Thanos Snap, Reliable Delete Undo & Looping Animated GIF PFPs, Banners & Wallpapers",
-    latest: true,
     bullets: [
       "Upgraded message unsend with a faster Thanos Snap particle sweep visible on both sender and recipient devices, followed cleanly by the visible This message was unsent notice, and fixed Desktop Delete for me Undo so messages restore instantaneously.",
-      "Enabled continuous infinite-looping animated GIFs across Chat Wallpapers (on both Desktop Web and Mobile), Profile Banners, User PFPs, and Group PFPs with lossless GIF89a loop patching and chunked media reassembly.",
+      "Enabled continuous infinite-looping animated GIFs across Mobile Chat Wallpapers, Profile Banners, User PFPs, and Group PFPs with lossless GIF89a loop patching and chunked media reassembly.",
     ],
   },
   {

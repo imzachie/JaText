@@ -507,10 +507,11 @@ export function setCachedDmConversation(
     .slice(-12)
     .map((m) => `${m.id}:${m.deliveryStatus}`)
     .join("|");
+  const existingIdsSig = existing ? existing.messages.map((m) => m.id).join(",") : "";
+  const nextIdsSig = capped.map((m) => m.id).join(",");
   if (
     existing &&
-    existing.messages.length === capped.length &&
-    existing.messages.at(-1)?.id === capped.at(-1)?.id &&
+    existingIdsSig === nextIdsSig &&
     existing.messages.at(-1)?.body === capped.at(-1)?.body &&
     existing.messages.at(-1)?.editedAt === capped.at(-1)?.editedAt &&
     existing.messages.at(-1)?.unsentAt === capped.at(-1)?.unsentAt &&
@@ -520,7 +521,7 @@ export function setCachedDmConversation(
   ) {
     return;
   }
-  const wasMissing = !existing;
+  const shouldNotify = !existing || existingIdsSig !== nextIdsSig;
   slotData.dms[friendId] = {
     messages: capped,
     rawRows: trimRawRowsForCache(rawRows),
@@ -528,7 +529,7 @@ export function setCachedDmConversation(
   };
   slotData.updatedAt = Date.now();
   schedulePersistSlotToIdb(slotId);
-  if (wasMissing) {
+  if (shouldNotify) {
     notifyCacheListeners();
   }
 }
@@ -565,13 +566,14 @@ export function setCachedGroupConversation(
       ? trimRawRowsForCache(patch.rawRows)
       : existing?.rawRows;
 
+  const existingIdsSig = existing ? existing.messages.map((m) => m.id).join(",") : "";
+  const nextIdsSig = nextMessages.map((m) => m.id).join(",");
   if (
     existing &&
     existing.details?.name === nextDetails?.name &&
     existing.details?.avatarUrl === nextDetails?.avatarUrl &&
     (existing.details?.members.length ?? 0) === (nextDetails?.members.length ?? 0) &&
-    existing.messages.length === nextMessages.length &&
-    existing.messages.at(-1)?.id === nextMessages.at(-1)?.id &&
+    existingIdsSig === nextIdsSig &&
     existing.messages.at(-1)?.body === nextMessages.at(-1)?.body &&
     existing.messages.at(-1)?.editedAt === nextMessages.at(-1)?.editedAt &&
     existing.messages.at(-1)?.unsentAt === nextMessages.at(-1)?.unsentAt &&
@@ -581,7 +583,7 @@ export function setCachedGroupConversation(
     return;
   }
 
-  const wasMissing = !existing;
+  const shouldNotify = !existing || existingIdsSig !== nextIdsSig;
   slotData.groups[groupId] = {
     details: nextDetails,
     messages: nextMessages,
@@ -590,7 +592,7 @@ export function setCachedGroupConversation(
   };
   slotData.updatedAt = Date.now();
   schedulePersistSlotToIdb(slotId);
-  if (wasMissing) {
+  if (shouldNotify) {
     notifyCacheListeners();
   }
 }
@@ -691,6 +693,75 @@ export function markCachedBootstrapGroupRead(slotId: string, groupId: string): v
     }
   }
   notifyCacheListeners();
+}
+
+export function removeMessageFromConversationCache(slotId: string, messageId: string): void {
+  if (!messageId) return;
+  let mutated = false;
+  const slotData = getOrInitMemorySlot(slotId);
+
+  for (const [friendId, entry] of Object.entries(slotData.dms)) {
+    const nextMessages = entry.messages.filter((m) => m.id !== messageId);
+    const nextRaw = entry.rawRows?.filter((m) => m.id !== messageId);
+    if (
+      nextMessages.length !== entry.messages.length ||
+      (nextRaw?.length ?? 0) !== (entry.rawRows?.length ?? 0)
+    ) {
+      slotData.dms[friendId] = {
+        messages: nextMessages,
+        rawRows: nextRaw,
+        updatedAt: Date.now(),
+      };
+      mutated = true;
+    }
+  }
+
+  for (const [groupId, entry] of Object.entries(slotData.groups)) {
+    const nextMessages = entry.messages.filter((m) => m.id !== messageId);
+    const nextRaw = entry.rawRows?.filter((m) => m.id !== messageId);
+    if (
+      nextMessages.length !== entry.messages.length ||
+      (nextRaw?.length ?? 0) !== (entry.rawRows?.length ?? 0)
+    ) {
+      slotData.groups[groupId] = {
+        ...entry,
+        messages: nextMessages,
+        rawRows: nextRaw,
+        updatedAt: Date.now(),
+      };
+      mutated = true;
+    }
+  }
+
+  if (mutated) {
+    slotData.updatedAt = Date.now();
+    schedulePersistSlotToIdb(slotId);
+  }
+
+  const boot = memoryBootstrap.get(slotId);
+  if (boot?.communityMessages?.length) {
+    const nextComm = boot.communityMessages.filter((m) => m.id !== messageId);
+    if (nextComm.length !== boot.communityMessages.length) {
+      const nextBoot: SlotBootstrapCache = {
+        ...boot,
+        communityMessages: nextComm,
+        updatedAt: Date.now(),
+      };
+      memoryBootstrap.set(slotId, nextBoot);
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(getBootstrapStorageKey(slotId), JSON.stringify(nextBoot));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      mutated = true;
+    }
+  }
+
+  if (mutated) {
+    notifyCacheListeners();
+  }
 }
 
 export async function clearSlotChatCache(slotId: string): Promise<void> {

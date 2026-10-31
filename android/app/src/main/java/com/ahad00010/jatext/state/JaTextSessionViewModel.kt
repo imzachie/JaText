@@ -790,17 +790,26 @@ class JaTextSessionViewModel(app: Application) :
 
             _state.update { prev ->
                 val nextDms = if (hydratedDmDelta.isNotEmpty() && prev.activeChatId == activeFriend) {
-                    mergeDmMessages(prev.dmMessages, hydratedDmDelta)
+                    mergeDmMessages(
+                        prev.dmMessages.filterNot { locallyDeletedIds.contains(it.id) },
+                        hydratedDmDelta.filterNot { locallyDeletedIds.contains(it.id) },
+                    )
                 } else {
                     prev.dmMessages
                 }
                 val nextGrps = if (hydratedGrpDelta.isNotEmpty() && prev.activeGroupId == st.activeGroupId) {
-                    mergeGroupMessages(prev.groupMessages, hydratedGrpDelta)
+                    mergeGroupMessages(
+                        prev.groupMessages.filterNot { locallyDeletedIds.contains(it.id) },
+                        hydratedGrpDelta.filterNot { locallyDeletedIds.contains(it.id) },
+                    )
                 } else {
                     prev.groupMessages
                 }
                 val nextComm = if (!sync.changedCommunityMessages.isNullOrEmpty()) {
-                    mergeCommunityMessages(prev.communityMessages, hydrateCommunityList(sync.changedCommunityMessages))
+                    mergeCommunityMessages(
+                        prev.communityMessages.filterNot { locallyDeletedIds.contains(it.id) },
+                        hydrateCommunityList(sync.changedCommunityMessages).filterNot { locallyDeletedIds.contains(it.id) },
+                    )
                 } else {
                     prev.communityMessages
                 }
@@ -2112,6 +2121,7 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
+    private val locallyDeletedIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     private var deletedDmSnapshot: ChatMessage? = null
     private var deletedGroupSnapshot: GroupMessage? = null
     private var deletedCommunitySnapshot: CommunityMessage? = null
@@ -2124,6 +2134,7 @@ class JaTextSessionViewModel(app: Application) :
         val nonce = System.currentTimeMillis()
         val expiresAt = nonce + 5_000L
 
+        locallyDeletedIds.add(messageId)
         deleteUndoJob?.cancel()
         deletedDmSnapshot = null
         deletedGroupSnapshot = null
@@ -2131,23 +2142,29 @@ class JaTextSessionViewModel(app: Application) :
         deletedUndoThreadKind = ""
 
         if (st.activeChatId != null && st.activeChatId != OFFICIAL_COMMUNITY_ID) {
+            val activeFriendId = st.activeChatId
             deletedDmSnapshot = st.dmMessages.firstOrNull { it.id == messageId }
             deletedUndoThreadKind = "dm"
+            val updated = st.dmMessages.filterNot { it.id == messageId }
             _state.update { cur ->
                 cur.copy(
                     dmMessages = cur.dmMessages.filterNot { it.id == messageId },
                     deletedForMeUndo = DeletedForMeUndoBanner(messageId, nonce, expiresAt),
                 )
             }
+            cache.saveDmMessagesCache(st.slotId, activeFriendId, updated)
         } else if (st.activeGroupId != null) {
+            val activeGrpId = st.activeGroupId
             deletedGroupSnapshot = st.groupMessages.firstOrNull { it.id == messageId }
             deletedUndoThreadKind = "group"
+            val updated = st.groupMessages.filterNot { it.id == messageId }
             _state.update { cur ->
                 cur.copy(
                     groupMessages = cur.groupMessages.filterNot { it.id == messageId },
                     deletedForMeUndo = DeletedForMeUndoBanner(messageId, nonce, expiresAt),
                 )
             }
+            cache.saveGroupMessagesCache(st.slotId, activeGrpId, updated)
         } else if (st.activeChatId == OFFICIAL_COMMUNITY_ID) {
             deletedCommunitySnapshot = st.communityMessages.firstOrNull { it.id == messageId }
             deletedUndoThreadKind = "community"
@@ -2182,6 +2199,7 @@ class JaTextSessionViewModel(app: Application) :
     fun undoDeleteMessageForMe() {
         val token = currentAuthToken() ?: return
         val banner = _state.value.deletedForMeUndo ?: return
+        locallyDeletedIds.remove(banner.messageId)
         deleteUndoJob?.cancel()
         val kind = deletedUndoThreadKind
         val dmSnap = deletedDmSnapshot
@@ -2194,14 +2212,26 @@ class JaTextSessionViewModel(app: Application) :
 
         _state.update { cur ->
             when (kind) {
-                "dm" -> cur.copy(
-                    dmMessages = if (dmSnap != null) (cur.dmMessages.filterNot { it.id == dmSnap.id } + dmSnap).sortedBy { it.createdAt } else cur.dmMessages,
-                    deletedForMeUndo = null,
-                )
-                "group" -> cur.copy(
-                    groupMessages = if (grpSnap != null) (cur.groupMessages.filterNot { it.id == grpSnap.id } + grpSnap).sortedBy { it.createdAt } else cur.groupMessages,
-                    deletedForMeUndo = null,
-                )
+                "dm" -> {
+                    val restored = if (dmSnap != null) (cur.dmMessages.filterNot { it.id == dmSnap.id } + dmSnap).sortedBy { it.createdAt } else cur.dmMessages
+                    if (cur.activeChatId != null && cur.activeChatId != OFFICIAL_COMMUNITY_ID) {
+                        cache.saveDmMessagesCache(cur.slotId, cur.activeChatId, restored)
+                    }
+                    cur.copy(
+                        dmMessages = restored,
+                        deletedForMeUndo = null,
+                    )
+                }
+                "group" -> {
+                    val restored = if (grpSnap != null) (cur.groupMessages.filterNot { it.id == grpSnap.id } + grpSnap).sortedBy { it.createdAt } else cur.groupMessages
+                    if (cur.activeGroupId != null) {
+                        cache.saveGroupMessagesCache(cur.slotId, cur.activeGroupId, restored)
+                    }
+                    cur.copy(
+                        groupMessages = restored,
+                        deletedForMeUndo = null,
+                    )
+                }
                 "community" -> cur.copy(
                     communityMessages = if (commSnap != null) (cur.communityMessages.filterNot { it.id == commSnap.id } + commSnap).sortedBy { it.createdAt } else cur.communityMessages,
                     deletedForMeUndo = null,

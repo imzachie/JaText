@@ -1,8 +1,11 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from "react";
 import { useJaText } from "../lib/store";
 import type { PollVoter } from "../lib/types";
 import { playMessageSound } from "../lib/alerts";
-import { useChatAutoScrollAndKeyboard } from "../lib/useChatAutoScrollAndKeyboard";
+import {
+  isSoftKeyboardCurrentlyOpen,
+  useChatAutoScrollAndKeyboard,
+} from "../lib/useChatAutoScrollAndKeyboard";
 import {
   copyImageUrlToClipboard,
   extractClipboardFile,
@@ -298,7 +301,8 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
     event?.preventDefault();
     const trimmed = draft.trim();
     if (isEditing ? !trimmed : !trimmed && !hasFile) return;
-    const keepFocus = document.activeElement === composerRef.current;
+    const keepFocus =
+      document.activeElement === composerRef.current && isSoftKeyboardCurrentlyOpen();
     prevLenRef.current = 0;
     setDraft("");
     if (!isEditing) clearDraft(draftKey);
@@ -408,6 +412,7 @@ export function CommunityChatView({
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
   const [deletedUndoState, setDeletedUndoState] = useState<DeletedForMeUndoState | null>(null);
+  const [locallyHiddenIds, setLocallyHiddenIds] = useState<Record<string, true>>({});
   const deletedSnapshotRef = useRef<Map<string, CommunityMessage>>(new Map());
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
@@ -509,8 +514,15 @@ export function CommunityChatView({
     });
 
   const pendingMerged = getCommunityPendingMessages(pendingMessages, store.communityMessages);
+  const visiblePendingMerged = useMemo(
+    () =>
+      pendingMerged.messages.filter(
+        (m) => !locallyHiddenIds[m.id] && !(m.renderKey && locallyHiddenIds[m.renderKey]),
+      ),
+    [locallyHiddenIds, pendingMerged.messages],
+  );
   const displayedMessages = useUnsendThanosWatcher(
-    pendingMerged.messages,
+    visiblePendingMerged,
     OFFICIAL_COMMUNITY_ID,
   );
   const matchedPendingIds = pendingMerged.matchedIds;
@@ -1090,6 +1102,23 @@ export function CommunityChatView({
   async function deleteForMe(message: CommunityMessage) {
     closeMessageMenu();
     deletedSnapshotRef.current.set(message.id, message);
+    setLocallyHiddenIds((prev) => ({
+      ...prev,
+      [message.id]: true,
+      ...(message.renderKey ? { [message.renderKey]: true } : {}),
+    }));
+    setPendingMessages((cur) =>
+      cur.filter(
+        (m) =>
+          m.id !== message.id &&
+          m.id !== message.renderKey &&
+          !(
+            m.senderId === message.senderId &&
+            m.body === message.body &&
+            Math.abs(m.createdAt - message.createdAt) < 60_000
+          ),
+      ),
+    );
     setDeletedUndoState({
       messageId: message.id,
       nonce: Date.now(),
@@ -1098,6 +1127,12 @@ export function CommunityChatView({
     try {
       await store.deleteCommunityMessageForMe(message.id);
     } catch (err) {
+      setLocallyHiddenIds((prev) => {
+        const next = { ...prev };
+        delete next[message.id];
+        if (message.renderKey) delete next[message.renderKey];
+        return next;
+      });
       setDeletedUndoState(null);
       setError(friendlyError(err, "Couldn't delete the message."));
     }
@@ -1105,6 +1140,12 @@ export function CommunityChatView({
   async function undoDeleteForMe(messageId: string) {
     const snap = deletedSnapshotRef.current.get(messageId);
     deletedSnapshotRef.current.delete(messageId);
+    setLocallyHiddenIds((prev) => {
+      const next = { ...prev };
+      delete next[messageId];
+      if (snap?.renderKey) delete next[snap.renderKey];
+      return next;
+    });
     setDeletedUndoState(null);
     if (!snap || !store.restoreCommunityMessageForMe) return;
     try {
