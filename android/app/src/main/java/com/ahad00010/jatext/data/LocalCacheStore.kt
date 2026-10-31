@@ -294,6 +294,27 @@ class LocalCacheStore(private val appContext: Context) :
         }
     }
 
+    fun getEmojiUsageCounts(slotId: String): Map<String, Int> {
+        val raw = prefs.getString("emoji_usage:$slotId", null) ?: return emptyMap()
+        return try {
+            JaTextJson.decodeFromString<Map<String, Int>>(raw)
+        } catch (_: Throwable) {
+            emptyMap()
+        }
+    }
+
+    fun incrementEmojiUsage(slotId: String, emoji: String): Map<String, Int> {
+        val clean = emoji.trim()
+        if (clean.isEmpty()) return getEmojiUsageCounts(slotId)
+        val map = getEmojiUsageCounts(slotId).toMutableMap()
+        map[clean] = (map[clean] ?: 0) + 1
+        try {
+            prefs.edit().putString("emoji_usage:$slotId", JaTextJson.encodeToString(map)).apply()
+        } catch (_: Throwable) {
+        }
+        return map
+    }
+
     fun getCallHistory(slotId: String): List<CallHistoryEntry> {
         val raw = getKv("calls:$slotId") ?: return emptyList()
         return try {

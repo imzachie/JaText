@@ -62,10 +62,12 @@ jobs:
           CODE=$?
           cat /tmp/gradle.log
           if [ $CODE -ne 0 ]; then
-            ERR_SUMMARY=$(grep -E "^e: |FAILURE:|What went wrong:|^\* | > " /tmp/gradle.log | head -n 28 | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g' | tr '\n' ' ')
-            TAIL_SUMMARY=$(tail -n 35 /tmp/gradle.log | tr '\n' ' ' | cut -c1-1800)
-            echo "::error title=GradleErrorLines::${ERR_SUMMARY}"
-            echo "::error title=GradleLogTail::${TAIL_SUMMARY}"
+            ERR_1=$(grep -E "^e: |FAILURE:|What went wrong:|^\* | > " /tmp/gradle.log | sed -n '1,18p' | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' ' ')
+            ERR_2=$(grep -E "^e: " /tmp/gradle.log | sed -n '19,36p' | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' ' ')
+            ERR_3=$(grep -E "^e: " /tmp/gradle.log | sed -n '37,54p' | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' ' ')
+            echo "::error title=GradleErrorLines1::${ERR_1}"
+            [ -n "${ERR_2}" ] && echo "::error title=GradleErrorLines2::${ERR_2}"
+            [ -n "${ERR_3}" ] && echo "::error title=GradleErrorLines3::${ERR_3}"
             exit $CODE
           fi
 

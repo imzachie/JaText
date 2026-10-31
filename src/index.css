@@ -1705,7 +1705,29 @@ html[data-jt-mode="light"] .logo-full {
 .profile-names { margin-top: 8px; }
 .profile-display { font-size: 24px; font-weight: 900; }
 .profile-username { color: var(--muted); font-weight: 600; }
-.profile-bio { line-height: 1.5; margin: 12px 0 0; white-space: pre-wrap; }
+.profile-bio { line-height: 1.5; margin: 12px 0 0; word-break: break-word; }
+.profile-bio .msg-markdown { display: block; }
+.profile-bio .msg-markdown p { margin: 0 0 6px; }
+.profile-bio .msg-markdown p:last-child { margin-bottom: 0; }
+.profile-card.has-chat-wallpaper {
+  position: relative;
+  isolation: isolate;
+}
+.profile-card-wallpaper-ambient {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  opacity: 0.22;
+  filter: blur(14px) saturate(1.18);
+  pointer-events: none;
+}
+.profile-card.has-chat-wallpaper .profile-banner,
+.profile-card.has-chat-wallpaper .profile-body {
+  position: relative;
+  z-index: 1;
+}
 .profile-color-row {
   display: flex; align-items: center; gap: 7px;
   margin-top: 16px; font-size: 13.5px; color: var(--muted); flex-wrap: wrap;

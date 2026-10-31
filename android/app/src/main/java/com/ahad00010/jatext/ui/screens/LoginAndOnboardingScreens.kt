@@ -15,9 +15,11 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -36,6 +38,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Palette
@@ -223,18 +226,20 @@ fun NativeLoginScreen(
                     modifier = Modifier
                         .widthIn(max = 460.dp)
                         .fillMaxWidth()
-                        .padding(bottom = 24.dp),
+                        .padding(bottom = 22.dp),
                     horizontalAlignment = Alignment.Start,
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.jatext_logo_full),
                         contentDescription = "JaText · JAMusic Coding and Research Corp",
                         contentScale = ContentScale.Fit,
+                        alignment = Alignment.CenterStart,
                         modifier = Modifier
-                            .widthIn(max = 250.dp)
-                            .height(58.dp),
+                            .fillMaxWidth(0.70f)
+                            .widthIn(min = 215.dp, max = 265.dp)
+                            .aspectRatio(1f),
                     )
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         text = "Text your people. Add friends by username, make your profile yours, and chat in real time.",
                         color = loginPalette.textSecondary,
@@ -585,7 +590,7 @@ fun NativeLoginScreen(
             }
 
             legalDialogTab?.let { tab ->
-                LoginLegalModalDialog(
+                JaTextLegalModalDialog(
                     initialTab = tab,
                     onDismiss = { legalDialogTab = null },
                 )
@@ -617,115 +622,244 @@ private fun LoginHeroBullet(
     }
 }
 
+/**
+ * 1:1 recreation of `src/components/LegalModal.tsx` (used on both Login and Settings -> Legal Policies & Privacy).
+ */
 @Composable
-private fun LoginLegalModalDialog(
-    initialTab: String,
+fun JaTextLegalModalDialog(
+    initialTab: String = "terms",
     onDismiss: () -> Unit,
 ) {
     val palette = LocalJaTextPalette.current
-    var tab by remember(initialTab) { mutableStateOf(initialTab) }
+    var tab by remember(initialTab) { mutableStateOf(if (initialTab == "privacy") "privacy" else "terms") }
+
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
+                .clip(RoundedCornerShape(24.dp))
                 .background(palette.bgSecondary)
-                .border(1.dp, palette.border, RoundedCornerShape(22.dp))
+                .border(1.dp, palette.border, RoundedCornerShape(24.dp))
                 .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "JaText Legal Policies",
-                    color = palette.textPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.ExtraBold,
+                JaWebTabs(
+                    tabs = listOf(
+                        JaTabItem("terms", "Terms of Service", icon = Icons.Rounded.Description),
+                        JaTabItem("privacy", "Privacy Policy", icon = Icons.Rounded.Lock),
+                    ),
+                    selectedId = tab,
+                    onSelect = { tab = it },
+                    modifier = Modifier.weight(1f),
                 )
                 JaWebIconButton(
                     icon = Icons.Rounded.Close,
-                    contentDescription = "Close",
-                    size = 34.dp,
+                    contentDescription = "Close legal document",
+                    size = 36.dp,
                     iconSize = 16.dp,
                     onClick = onDismiss,
                 )
             }
-            JaWebTabs(
-                tabs = listOf(
-                    JaTabItem("terms", "Terms of Service"),
-                    JaTabItem("privacy", "Privacy Policy"),
-                ),
-                selectedId = tab,
-                onSelect = { tab = it },
-            )
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(260.dp)
+                    .heightIn(min = 240.dp, max = 420.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (tab == "terms") {
                     Text(
-                        text = "1. Respectful Use & Zero Harassment",
+                        text = "Terms of Service",
                         color = palette.textPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
                     )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("For ", color = palette.textSecondary, fontSize = 12.5.sp)
+                        Text("JaText", color = palette.accent, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                        Text(" · Effective date: 25 October 2026", color = palette.textSecondary, fontSize = 12.5.sp)
+                    }
                     Text(
-                        text = "JaText is built for real-time communication with friends and groups you accept. Spam, impersonation, non-consensual content, malware, and unlawful abuse are strictly prohibited.",
+                        text = "These terms govern your use of JaText, a small independent messaging app. By creating an account or using JaText, you agree to these terms and to our Privacy Policy.",
                         color = palette.textSecondary,
-                        fontSize = 13.sp,
-                        lineHeight = 19.sp,
+                        fontSize = 13.5.sp,
+                        lineHeight = 20.sp,
                     )
                     Text(
-                        text = "2. Account Ownership & Username Policy",
-                        color = palette.textPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                    )
-                    Text(
-                        text = "Usernames are unique handles (3 to 20 lowercase letters, numbers, dots, or underscores) subject to a 14-day cooldown between changes.",
-                        color = palette.textSecondary,
+                        text = "Read Privacy Policy",
+                        color = palette.accent,
                         fontSize = 13.sp,
-                        lineHeight = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clickable { tab = "privacy" },
+                    )
+
+                    LegalSectionHeading("1. Your account", palette)
+                    LegalBullet("You must provide accurate information when registering and keep your sign-in credentials secure.", palette)
+                    LegalBullet("You are responsible for all activity that occurs under your account.", palette)
+                    LegalBullet("You must be at least 13 years old, or the minimum age required to hold an account in your country.", palette)
+                    LegalBullet("Your username can be changed at most once every 14 days, as shown in the app.", palette)
+
+                    LegalSectionHeading("2. Acceptable use", palette)
+                    Text("When using JaText, you agree not to:", color = palette.textSecondary, fontSize = 13.5.sp)
+                    LegalBullet("Harass, threaten, exploit, or harm other users.", palette)
+                    LegalBullet("Send spam, scams, malware, or other harmful content.", palette)
+                    LegalBullet("Upload content that is illegal, or that you do not have the right to share.", palette)
+                    LegalBullet("Impersonate another person in a misleading way.", palette)
+                    LegalBullet("Attempt to break, overload, reverse-engineer, or gain unauthorised access to the service or other users' accounts.", palette)
+                    LegalBullet("Use the service for any unlawful purpose.", palette)
+
+                    LegalSectionHeading("3. Your content", palette)
+                    LegalBody(
+                        "You keep ownership of the profile information, messages, and files you submit (\"your content\"). You give JaText permission to store, transmit, and display your content only as needed to operate the service (for example, showing your profile to other users and delivering your messages to the people you send them to). You are responsible for your content.",
+                        palette
+                    )
+
+                    LegalSectionHeading("4. Availability", palette)
+                    LegalBody(
+                        "JaText is a small independent project provided \"as is\" and \"as available,\" without warranties of any kind. The service may change, break, lose data, or be discontinued at any time. Do not rely on JaText as your only copy of important information.",
+                        palette
+                    )
+
+                    LegalSectionHeading("5. Suspension and termination", palette)
+                    LegalBody(
+                        "We may suspend or remove accounts that violate these terms. You may stop using JaText at any time and may request deletion of your account using the contact method described in the Privacy Policy.",
+                        palette
+                    )
+
+                    LegalSectionHeading("6. Liability", palette)
+                    LegalBody(
+                        "To the maximum extent allowed by law, JaText and its developer are not liable for any indirect, incidental, or consequential damages arising from your use of the service.",
+                        palette
+                    )
+
+                    LegalSectionHeading("7. Changes to these terms", palette)
+                    LegalBody(
+                        "If these terms change, the updated version will be posted with a new effective date. Continuing to use JaText after a change means you accept the updated terms.",
+                        palette
+                    )
+
+                    LegalSectionHeading("8. Contact", palette)
+                    LegalBody(
+                        "Questions about these terms can be sent to the developer at the user support email shown on the Google sign-in consent screen for JaText.",
+                        palette
                     )
                 } else {
                     Text(
-                        text = "1. End-to-End Encrypted Messaging",
+                        text = "Privacy Policy",
                         color = palette.textPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
                     )
-                    Text(
-                        text = "1:1 direct messages, group chats, voice notes, stickers, and media attachments are encrypted on your device using NIST P-256 ECDH, HKDF-SHA-256, and AES-256-GCM before leaving your phone.",
-                        color = palette.textSecondary,
-                        fontSize = 13.sp,
-                        lineHeight = 19.sp,
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("For ", color = palette.textSecondary, fontSize = 12.5.sp)
+                        Text("JaText", color = palette.accent, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                        Text(" · Effective date: 25 October 2026", color = palette.textSecondary, fontSize = 12.5.sp)
+                    }
+                    LegalBody(
+                        "JaText is a small, independent messaging app that lets people create an account, build a profile, add friends, and exchange messages and attachments. This policy explains what information JaText collects, why, and what happens to it.",
+                        palette
                     )
-                    Text(
-                        text = "2. Minimal Account Metadata",
-                        color = palette.textPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
+
+                    LegalSectionHeading("1. Information we collect", palette)
+                    LegalBullet("Account information: When you register with an email address and password, we store your email address and encrypted authentication credentials; your password is never stored in plain text or visible to other users.", palette)
+                    LegalBullet("Google sign-in information: If you choose \"Continue with Google,\" Google shares your name, email address, and profile picture with us so we can create and sign you into your JaText account. We do not receive your Google password or access Gmail, Drive, or contacts.", palette)
+                    LegalBullet("Profile information: Display name, username, biography, pronouns, profile picture, banner image, and avatar colour you choose to set.", palette)
+                    LegalBullet("Messages and attachments: Direct messages, group messages, voice notes, and attachments are end-to-end encrypted on your device before transmission and stored so they can be delivered to participants.", palette)
+                    LegalBullet("Technical information: Hosting and backend providers may record standard technical data (such as IP address and request logs) to run and secure the service.", palette)
+
+                    LegalSectionHeading("2. How we use your information", palette)
+                    LegalBullet("To create and operate your account and let you sign in.", palette)
+                    LegalBullet("To display your profile to other users of JaText.", palette)
+                    LegalBullet("To deliver your messages and attachments to your friends and groups.", palette)
+                    LegalBullet("To keep the service running, secure, and free of abuse.", palette)
+                    LegalBody(
+                        "We do not sell your personal information, use your messages for advertising, or show third-party ads.",
+                        palette
                     )
-                    Text(
-                        text = "JaText stores only your account profile, encrypted ciphertext envelopes, friend graph, and push device token so your messages and calls reach your devices reliably.",
-                        color = palette.textSecondary,
-                        fontSize = 13.sp,
-                        lineHeight = 19.sp,
+
+                    LegalSectionHeading("3. Google user data", palette)
+                    LegalBody(
+                        "JaText's use and transfer of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.",
+                        palette
+                    )
+
+                    LegalSectionHeading("4. Service providers", palette)
+                    LegalBullet("Turso: hosts encrypted database, authentication, and media chunk storage.", palette)
+                    LegalBullet("Vercel: hosts the JaText website and serverless API routes.", palette)
+                    LegalBullet("Google: provides optional sign-in and push notification delivery.", palette)
+
+                    LegalSectionHeading("5. Data retention and deletion", palette)
+                    LegalBody(
+                        "Your account data, profile, and messages are kept for as long as your account exists so the service can function. Contact us via the support email shown on the Google sign-in consent screen to request account deletion.",
+                        palette
+                    )
+
+                    LegalSectionHeading("6. Children", palette)
+                    LegalBody(
+                        "JaText is not directed at children under 13 (or the minimum age required in your country).",
+                        palette
+                    )
+
+                    LegalSectionHeading("7. Contact", palette)
+                    LegalBody(
+                        "For privacy questions or deletion requests, contact the developer at the user support email shown on the Google sign-in consent screen for JaText.",
+                        palette
                     )
                 }
             }
+
             JaWebPrimaryButton(
                 text = "Done",
                 modifier = Modifier.fillMaxWidth(),
                 onClick = onDismiss,
             )
         }
+    }
+}
+
+@Composable
+private fun LegalSectionHeading(title: String, palette: JaTextPalette) {
+    Text(
+        text = title,
+        color = palette.textPrimary,
+        fontWeight = FontWeight.Bold,
+        fontSize = 14.5.sp,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+@Composable
+private fun LegalBody(text: String, palette: JaTextPalette) {
+    Text(
+        text = text,
+        color = palette.textSecondary,
+        fontSize = 13.5.sp,
+        lineHeight = 20.sp,
+    )
+}
+
+@Composable
+private fun LegalBullet(text: String, palette: JaTextPalette) {
+    Row(verticalAlignment = Alignment.Top) {
+        Text(
+            text = "•  ",
+            color = palette.accent,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = text,
+            color = palette.textSecondary,
+            fontSize = 13.5.sp,
+            lineHeight = 19.5.sp,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

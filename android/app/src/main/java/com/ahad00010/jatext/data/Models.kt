@@ -109,6 +109,8 @@ data class ReplySummary(
     val senderId: String = "",
     val senderName: String? = null,
     val body: String = "",
+    val attachmentName: String? = null,
+    val attachmentType: String? = null,
 )
 
 @Serializable
@@ -152,6 +154,7 @@ data class ChatMessage(
     val attachmentName: String? = null,
     val attachmentType: String? = null,
     val stickerKey: String? = null,
+    val explicitStickerUrl: String? = null,
     val isStickerFavorite: Boolean? = false,
     val deliveryStatus: String? = "sent",
     val readAt: Long? = null,
@@ -174,11 +177,30 @@ data class ChatMessage(
             }
         }
 
+    /**
+     * Note: server/tursoBackend.js sets `stickerKey = "klipy:${attachment_url}"` on ALL DM/Group
+     * attachments (photos, videos, voice notes) for star/favourite indexing!
+     * Only treat a message as a Sticker when `explicitStickerUrl` is set (from E2EE `payload.stk`)
+     * or `attachmentType` explicitly says `"sticker"`.
+     */
     val encryptedSticker: EncryptedStickerDescriptor?
-        get() = if (!stickerKey.isNullOrBlank() && !attachmentUrl.isNullOrBlank()) {
-            EncryptedStickerDescriptor(url = attachmentUrl, n = attachmentName ?: "Sticker", key = stickerKey)
-        } else {
-            null
+        get() {
+            val trueStickerUrl = explicitStickerUrl?.takeIf { it.isNotBlank() }
+                ?: attachmentUrl?.takeIf {
+                    it.isNotBlank() &&
+                        encryptedAttachmentJson.isNullOrBlank() &&
+                        (attachmentType?.equals("sticker", ignoreCase = true) == true ||
+                            stickerKey?.startsWith("upload:") == true)
+                }
+            return if (!trueStickerUrl.isNullOrBlank()) {
+                EncryptedStickerDescriptor(
+                    url = trueStickerUrl,
+                    n = attachmentName ?: "Sticker",
+                    key = stickerKey.orEmpty(),
+                )
+            } else {
+                null
+            }
         }
 }
 
@@ -229,6 +251,8 @@ data class CommunityPermissions(
     val canModerate: Boolean = false,
     val moderatorIds: List<String> = emptyList(),
 ) {
+    val canPost: Boolean
+        get() = isOwner || canModerate
     val canCreatePolls: Boolean
         get() = isOwner || canModerate
     val canManagePolls: Boolean
@@ -373,6 +397,7 @@ data class GroupMessage(
     val stickerUrl: String? = null,
     val stickerName: String? = null,
     val stickerKey: String? = null,
+    val explicitStickerUrl: String? = null,
     val isStickerFavorite: Boolean = false,
     val forwardedFromName: String? = null,
     val forwardedContext: ForwardedMessageContext? = null,
@@ -396,12 +421,35 @@ data class GroupMessage(
         }
 
     val encryptedSticker: EncryptedStickerDescriptor?
-        get() = if (!stickerKey.isNullOrBlank() && !(stickerUrl ?: attachmentUrl).isNullOrBlank()) {
-            EncryptedStickerDescriptor(url = stickerUrl ?: attachmentUrl, n = stickerName ?: attachmentName ?: "Sticker", key = stickerKey)
-        } else {
-            null
+        get() {
+            val trueStickerUrl = (explicitStickerUrl ?: stickerUrl)?.takeIf { it.isNotBlank() }
+                ?: attachmentUrl?.takeIf {
+                    it.isNotBlank() &&
+                        encryptedAttachmentJson.isNullOrBlank() &&
+                        (attachmentType?.equals("sticker", ignoreCase = true) == true ||
+                            stickerKey?.startsWith("upload:") == true)
+                }
+            return if (!trueStickerUrl.isNullOrBlank()) {
+                EncryptedStickerDescriptor(
+                    url = trueStickerUrl,
+                    n = stickerName ?: attachmentName ?: "Sticker",
+                    key = stickerKey.orEmpty(),
+                )
+            } else {
+                null
+            }
         }
 }
+
+@Serializable
+data class GroupSeenReader(
+    val id: String = "",
+    val displayName: String = "",
+    val username: String = "",
+    val avatarColor: String = "black",
+    val avatarUrl: String? = null,
+    val seenAt: Long = 0L,
+)
 
 @Serializable
 data class ChatTypingUser(
@@ -489,12 +537,18 @@ data class CallHistoryEntry(
 @Serializable
 data class LinkPreviewInfo(
     val url: String = "",
+    val hasEmbed: Boolean = true,
     val title: String? = null,
     val description: String? = null,
+    val imageUrl: String? = null,
     val image: String? = null,
     val siteName: String? = null,
+    val themeColor: String? = null,
     val domain: String? = null,
-)
+) {
+    val effectiveImageUrl: String?
+        get() = (imageUrl ?: image)?.trim()?.takeIf { it.isNotEmpty() }
+}
 
 @Serializable
 data class ApkVersionManifest(

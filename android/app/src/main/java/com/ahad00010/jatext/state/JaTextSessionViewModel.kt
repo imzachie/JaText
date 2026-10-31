@@ -32,6 +32,7 @@ import com.ahad00010.jatext.data.FriendActivity
 import com.ahad00010.jatext.data.FriendRequest
 import com.ahad00010.jatext.data.GroupDetails
 import com.ahad00010.jatext.data.GroupMessage
+import com.ahad00010.jatext.data.GroupSeenReader
 import com.ahad00010.jatext.data.GroupSummary
 import com.ahad00010.jatext.data.JaTextJson
 import com.ahad00010.jatext.data.JaUser
@@ -90,6 +91,7 @@ data class SessionUiState(
     val dmLoadingOlder: Boolean = false,
     val groupDetails: GroupDetails? = null,
     val groupMessages: List<GroupMessage> = emptyList(),
+    val groupSeenByMessageId: Map<String, List<GroupSeenReader>> = emptyMap(),
     val groupHasMore: Boolean = false,
     val groupLoadingOlder: Boolean = false,
     val groupTypingUsers: List<ChatTypingUser> = emptyList(),
@@ -103,6 +105,8 @@ data class SessionUiState(
     val communityUnreadCount: Int = 0,
     val stickerFavorites: List<StickerMedia> = emptyList(),
     val recentStickers: List<StickerMedia> = emptyList(),
+    val emojiUsageCounts: Map<String, Int> = emptyMap(),
+    val wallpaperNonce: Int = 0,
     val callHistory: List<CallHistoryEntry> = emptyList(),
     val outgoingBubbleStyle: String = "default",
     val notificationsEnabled: Boolean = true,
@@ -134,6 +138,7 @@ class JaTextSessionViewModel(app: Application) :
             accounts = cache.getAccounts(),
             notificationsEnabled = cache.isNotificationsEnabled(),
             soundsEnabled = cache.isSoundsEnabled(),
+            emojiUsageCounts = cache.getEmojiUsageCounts(cache.getActiveSlotId()),
         )
     )
     val state: StateFlow<SessionUiState> = _state.asStateFlow()
@@ -262,6 +267,7 @@ class JaTextSessionViewModel(app: Application) :
                     me = initialUser ?: it.me,
                     outgoingBubbleStyle = cache.getOutgoingBubbleStyle(targetSlotId),
                     callHistory = cache.getCallHistory(targetSlotId),
+                    emojiUsageCounts = cache.getEmojiUsageCounts(targetSlotId),
                 )
             }
         }
@@ -342,6 +348,7 @@ class JaTextSessionViewModel(app: Application) :
                 blockedUserIds = boot.blockedUserIds,
                 previews = boot.previews,
                 friendActivities = boot.friendActivities,
+                emojiUsageCounts = cache.getEmojiUsageCounts(slotId),
                 groups = boot.groups,
                 communityPermissions = boot.communityPermissions,
                 communityDirectory = boot.communityDirectory,
@@ -519,6 +526,7 @@ class JaTextSessionViewModel(app: Application) :
                 emptyList()
             }
 
+            var deltaGroupSeen: Map<String, List<GroupSeenReader>>? = null
             val hydratedGrpDelta = if (!sync.changedGroupMessages.isNullOrEmpty() && st.activeGroupId != null) {
                 val grpSummary = (_state.value.groups).firstOrNull { it.id == st.activeGroupId }
                 if (grpSummary != null) {
@@ -526,7 +534,18 @@ class JaTextSessionViewModel(app: Application) :
                         inspectRawGroupForCallSignal(myUser, grpSummary, raw)
                     }
                 }
-                JaTextCryptoEngine.hydrateGroupMessages(appCtx, myUser.id, st.activeGroupId, sync.changedGroupMessages)
+                val members = _state.value.groupDetails?.members.orEmpty()
+                val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(
+                    appCtx,
+                    myUser.id,
+                    st.activeGroupId,
+                    sync.changedGroupMessages,
+                    members
+                )
+                if (outcome.seenByMessageId.isNotEmpty()) {
+                    deltaGroupSeen = outcome.seenByMessageId
+                }
+                outcome.messages
             } else {
                 emptyList()
             }
@@ -576,6 +595,7 @@ class JaTextSessionViewModel(app: Application) :
                     groups = hydratedGroups ?: prev.groups,
                     dmMessages = nextDms,
                     groupMessages = nextGrps,
+                    groupSeenByMessageId = deltaGroupSeen ?: prev.groupSeenByMessageId,
                     communityMessages = nextComm,
                     groupTypingUsers = sync.groupTypingUsers,
                     communityTypingUsers = sync.communityTypingUsers,
@@ -912,6 +932,61 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
+    private val groupCursorRowByGroupId = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val groupSeenPublishedTsByGroupId = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun publishGroupSeenCursorAsync(
+        groupId: String,
+        latestMsgId: String,
+        latestMsgTs: Long,
+        memberIds: List<String>,
+        existingCursorMsgId: String?,
+    ) {
+        val me = _state.value.me ?: return
+        val token = currentAuthToken() ?: return
+        if (latestMsgId.isBlank() || latestMsgTs <= 0L) return
+        val alreadyTs = groupSeenPublishedTsByGroupId[groupId] ?: 0L
+        if (latestMsgTs <= alreadyTs) return
+        groupSeenPublishedTsByGroupId[groupId] = latestMsgTs
+        if (!existingCursorMsgId.isNullOrBlank()) {
+            groupCursorRowByGroupId[groupId] = existingCursorMsgId
+        }
+        viewModelScope.launch {
+            try {
+                val plainSig = JaTextCryptoEngine.serializeGroupSeenSignal(latestMsgId, latestMsgTs)
+                val payload = E2EEPlainPayload(v = 1, b = plainSig)
+                val wire = try {
+                    JaTextCryptoEngine.encryptGroupMessage(appCtx, me.id, groupId, memberIds, payload, token, silentSignal = true)
+                } catch (_: Throwable) {
+                    plainSig
+                }
+                val cursorMsgId = groupCursorRowByGroupId[groupId]
+                if (!cursorMsgId.isNullOrBlank()) {
+                    try {
+                        TursoApiClient.rpcRaw(
+                            "mutateGroupMessage",
+                            mapOf("messageId" to cursorMsgId, "action" to "edit", "body" to wire),
+                            token
+                        )
+                        return@launch
+                    } catch (_: Throwable) {
+                        groupCursorRowByGroupId.remove(groupId)
+                    }
+                }
+                val root = TursoApiClient.rpcRaw(
+                    "sendGroupMessage",
+                    mapOf("groupId" to groupId, "body" to wire),
+                    token
+                ).jsonObject
+                val newId = root["message"]?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull
+                if (!newId.isNullOrBlank()) {
+                    groupCursorRowByGroupId[groupId] = newId
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     fun openGroupChat(groupId: String, highlightMessageId: String? = null) {
         val slot = _state.value.slotId
         val cachedMsgs = cache.loadGroupMessagesCache(slot, groupId).orEmpty()
@@ -922,6 +997,7 @@ class JaTextSessionViewModel(app: Application) :
                 activeChatId = null,
                 groupDetails = cachedDet,
                 groupMessages = cachedMsgs,
+                groupSeenByMessageId = emptyMap(),
                 groupHasMore = false,
                 highlightedMessageId = highlightMessageId,
                 groups = prev.groups.map { g ->
@@ -960,14 +1036,34 @@ class JaTextSessionViewModel(app: Application) :
                     JaTextCryptoEngine.ensurePeerBundles(details.members.map { it.id }, token)
                     cache.saveGroupDetailsCache(slot, groupId, details)
                 }
-                val hydrated = JaTextCryptoEngine.hydrateGroupMessages(appCtx, myId, groupId, rawMsgs)
-                cache.saveGroupMessagesCache(slot, groupId, hydrated)
+                val effectiveMembers = details?.members ?: cachedDet?.members.orEmpty()
+                val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(
+                    appCtx,
+                    myId,
+                    groupId,
+                    rawMsgs,
+                    effectiveMembers
+                )
+                cache.saveGroupMessagesCache(slot, groupId, outcome.messages)
                 if (_state.value.activeGroupId == groupId) {
                     _state.update {
                         it.copy(
                             groupDetails = details ?: it.groupDetails,
-                            groupMessages = hydrated,
+                            groupMessages = outcome.messages,
+                            groupSeenByMessageId = outcome.seenByMessageId,
                             groupHasMore = hasMore,
+                        )
+                    }
+                    val latestVisible = outcome.messages.lastOrNull {
+                        it.unsentAt == null && !it.id.startsWith("opt-") && it.senderId != myId
+                    }
+                    if (latestVisible != null && latestVisible.createdAt > outcome.mySeenUpToTs) {
+                        publishGroupSeenCursorAsync(
+                            groupId = groupId,
+                            latestMsgId = latestVisible.id,
+                            latestMsgTs = latestVisible.createdAt,
+                            memberIds = effectiveMembers.map { it.id },
+                            existingCursorMsgId = outcome.myCursorMessageId,
                         )
                     }
                 }
@@ -1492,10 +1588,93 @@ class JaTextSessionViewModel(app: Application) :
 
     /* ==================== Message Actions: Reactions (2+ per user!), Edit, Unsend, Forward, Polls ==================== */
 
+    fun toggleStickerFavorite(
+        sticker: StickerMedia,
+        favorite: Boolean = _state.value.stickerFavorites.none {
+            (sticker.key.isNotBlank() && it.key == sticker.key) || it.url == TursoApiClient.resolveAbsoluteMediaUrl(sticker.url)
+        },
+    ) {
+        val token = currentAuthToken() ?: return
+        val resolvedUrl = TursoApiClient.resolveAbsoluteMediaUrl(sticker.url)
+        val key = sticker.key.ifBlank { "klipy:$resolvedUrl" }
+        _state.update { cur ->
+            val updatedFavs = if (favorite) {
+                val entry = sticker.copy(key = key, url = resolvedUrl, isFavorite = true)
+                listOf(entry) + cur.stickerFavorites.filterNot { it.key == key || it.url == resolvedUrl }
+            } else {
+                cur.stickerFavorites.filterNot { it.key == key || it.url == resolvedUrl }
+            }
+            cur.copy(
+                stickerFavorites = updatedFavs,
+                recentStickers = cur.recentStickers.map {
+                    if (it.key == key || it.url == resolvedUrl) it.copy(isFavorite = favorite) else it
+                }
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val libRoot = TursoApiClient.rpcRaw(
+                    "upsertSticker",
+                    mapOf(
+                        "sticker" to mapOf(
+                            "key" to key,
+                            "url" to resolvedUrl,
+                            "previewUrl" to (sticker.previewUrl ?: resolvedUrl),
+                            "name" to sticker.name.ifBlank { "Sticker" },
+                            "mediaType" to sticker.mediaType.ifBlank { "sticker" },
+                            "source" to sticker.source.ifBlank { "klipy" },
+                        ),
+                        "isFavorite" to favorite,
+                    ),
+                    token
+                ).jsonObject
+                val favs = libRoot["stickerFavorites"]?.let {
+                    JaTextJson.decodeFromJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(StickerMedia.serializer()),
+                        it
+                    )
+                }
+                val recs = libRoot["recentStickers"]?.let {
+                    JaTextJson.decodeFromJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(StickerMedia.serializer()),
+                        it
+                    )
+                }
+                _state.update { cur ->
+                    cur.copy(
+                        stickerFavorites = favs ?: cur.stickerFavorites,
+                        recentStickers = recs ?: cur.recentStickers,
+                    )
+                }
+                showToast(if (favorite) "Saved to Favourites!" else "Removed from Favourites")
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Could not update favourite stickers")
+            }
+        }
+    }
+
+    fun recordReactionEmojiUsed(emoji: String) {
+        val updated = cache.incrementEmojiUsage(_state.value.slotId, emoji)
+        _state.update { it.copy(emojiUsageCounts = updated) }
+    }
+
     fun toggleReaction(messageId: String, emoji: String) {
         val st = _state.value
         val meId = st.me?.id ?: return
         val token = currentAuthToken() ?: return
+
+        val alreadyMine = when {
+            st.activeChatId != null && st.activeChatId != OFFICIAL_COMMUNITY_ID ->
+                st.dmMessages.firstOrNull { it.id == messageId }?.reactions?.any { it.userId == meId && it.emoji == emoji } == true
+            st.activeGroupId != null ->
+                st.groupMessages.firstOrNull { it.id == messageId }?.reactions?.any { it.userId == meId && it.emoji == emoji } == true
+            st.activeChatId == OFFICIAL_COMMUNITY_ID ->
+                st.communityMessages.firstOrNull { it.id == messageId }?.reactions?.any { it.userId == meId && it.emoji == emoji } == true
+            else -> false
+        }
+        if (!alreadyMine) {
+            recordReactionEmojiUsed(emoji)
+        }
 
         fun applyLocalToggle(list: List<MessageReaction>): List<MessageReaction> {
             val exists = list.any { it.userId == meId && it.emoji == emoji }
@@ -2090,6 +2269,83 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
+    fun updateGroupProfile(
+        groupId: String,
+        newName: String? = null,
+        newAvatarUri: Uri? = null,
+        removeAvatar: Boolean = false,
+    ) {
+        val token = currentAuthToken() ?: return
+        val cleanName = newName?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanName == null && newAvatarUri == null && !removeAvatar) return
+        viewModelScope.launch {
+            try {
+                var finalAvatarUrl: String? = _state.value.groupDetails?.avatarUrl
+                    ?: _state.value.groups.firstOrNull { it.id == groupId }?.avatarUrl
+                var avatarChanged = false
+
+                if (removeAvatar) {
+                    finalAvatarUrl = null
+                    avatarChanged = true
+                } else if (newAvatarUri != null) {
+                    val (b, n, m, _) = readAttachmentBytes(newAvatarUri, null)
+                        ?: throw IllegalStateException("Could not read group photo")
+                    finalAvatarUrl = TursoApiClient.uploadMediaBytes(b, n, m, token)
+                    avatarChanged = true
+                }
+
+                if (cleanName != null) {
+                    TursoApiClient.rpcRaw(
+                        "manageGroup",
+                        mapOf("groupId" to groupId, "subOp" to "rename", "name" to cleanName),
+                        token
+                    )
+                }
+                if (avatarChanged) {
+                    TursoApiClient.rpcRaw(
+                        "manageGroup",
+                        mapOf("groupId" to groupId, "subOp" to "setAvatar", "avatarUrl" to finalAvatarUrl),
+                        token
+                    )
+                }
+                _state.update { cur ->
+                    val nextDetails = cur.groupDetails?.let {
+                        if (it.id == groupId) it.copy(name = cleanName ?: it.name, avatarUrl = finalAvatarUrl) else it
+                    }
+                    if (nextDetails != null) {
+                        cache.saveGroupDetailsCache(cur.slotId, groupId, nextDetails)
+                    }
+                    cur.copy(
+                        groupDetails = nextDetails,
+                        groups = cur.groups.map {
+                            if (it.id == groupId) it.copy(name = cleanName ?: it.name, avatarUrl = finalAvatarUrl) else it
+                        },
+                    )
+                }
+                showToast("Group profile saved!")
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Failed to update group profile")
+            }
+        }
+    }
+
+    fun setCommunityModerators(userIds: List<String>) {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            try {
+                TursoApiClient.rpcRaw("setCommunityModerators", mapOf("userIds" to userIds), token)
+                _state.update { cur ->
+                    cur.copy(
+                        communityPermissions = cur.communityPermissions.copy(moderatorIds = userIds)
+                    )
+                }
+                showToast("Community moderators saved!")
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Could not save moderators")
+            }
+        }
+    }
+
     fun addGroupMembers(groupId: String, memberIds: List<String>) {
         val token = currentAuthToken() ?: return
         if (memberIds.isEmpty()) return
@@ -2291,6 +2547,7 @@ class JaTextSessionViewModel(app: Application) :
                     resolvedUrl = TursoApiClient.uploadMediaBytes(b, n, m, token)
                 }
                 cache.setWallpaperUrl(scopeKey, if (kind == "none") null else resolvedUrl)
+                _state.update { it.copy(wallpaperNonce = it.wallpaperNonce + 1) }
                 val sigText = JaTextCryptoEngine.serializeWallpaperSignal(
                     kind = kind,
                     url = resolvedUrl,
@@ -2448,10 +2705,24 @@ class JaTextSessionViewModel(app: Application) :
             } else {
                 val (clean, bubble) = JaTextCryptoEngine.extractMessageBubbleStyle(m.body, m.attachmentType)
                 val (fwd, stripped) = JaTextCryptoEngine.extractForwardedContext(clean)
+                val absAtt = m.attachmentUrl?.takeIf { it.isNotBlank() }?.let {
+                    TursoApiClient.resolveAbsoluteMediaUrl(it)
+                }
+                val absSticker = m.stickerUrl?.takeIf { it.isNotBlank() }?.let {
+                    TursoApiClient.resolveAbsoluteMediaUrl(it)
+                }
+                val cleanReply = m.replyTo?.let { r ->
+                    val (rClean, _) = JaTextCryptoEngine.extractMessageBubbleStyle(r.body, null)
+                    val (_, rNoFwd) = JaTextCryptoEngine.extractForwardedContext(rClean)
+                    r.copy(body = rNoFwd.trim().ifBlank { r.attachmentName ?: "Announcement" })
+                }
                 m.copy(
                     body = stripped,
+                    attachmentUrl = absAtt,
+                    stickerUrl = absSticker,
                     bubbleStyle = m.bubbleStyle ?: bubble,
                     forwardedContext = fwd ?: m.forwardedContext,
+                    replyTo = cleanReply,
                 )
             }
         }
