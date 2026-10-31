@@ -2271,13 +2271,13 @@ class JaTextSessionViewModel(app: Application) :
 
     fun updateGroupProfile(
         groupId: String,
-        newName: String,
+        newName: String? = null,
         newAvatarUri: Uri? = null,
         removeAvatar: Boolean = false,
     ) {
         val token = currentAuthToken() ?: return
-        val cleanName = newName.trim()
-        if (cleanName.isEmpty()) return
+        val cleanName = newName?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanName == null && newAvatarUri == null && !removeAvatar) return
         viewModelScope.launch {
             try {
                 var finalAvatarUrl: String? = _state.value.groupDetails?.avatarUrl
@@ -2294,11 +2294,13 @@ class JaTextSessionViewModel(app: Application) :
                     avatarChanged = true
                 }
 
-                TursoApiClient.rpcRaw(
-                    "manageGroup",
-                    mapOf("groupId" to groupId, "subOp" to "rename", "name" to cleanName),
-                    token
-                )
+                if (cleanName != null) {
+                    TursoApiClient.rpcRaw(
+                        "manageGroup",
+                        mapOf("groupId" to groupId, "subOp" to "rename", "name" to cleanName),
+                        token
+                    )
+                }
                 if (avatarChanged) {
                     TursoApiClient.rpcRaw(
                         "manageGroup",
@@ -2308,7 +2310,7 @@ class JaTextSessionViewModel(app: Application) :
                 }
                 _state.update { cur ->
                     val nextDetails = cur.groupDetails?.let {
-                        if (it.id == groupId) it.copy(name = cleanName, avatarUrl = finalAvatarUrl) else it
+                        if (it.id == groupId) it.copy(name = cleanName ?: it.name, avatarUrl = finalAvatarUrl) else it
                     }
                     if (nextDetails != null) {
                         cache.saveGroupDetailsCache(cur.slotId, groupId, nextDetails)
@@ -2316,7 +2318,7 @@ class JaTextSessionViewModel(app: Application) :
                     cur.copy(
                         groupDetails = nextDetails,
                         groups = cur.groups.map {
-                            if (it.id == groupId) it.copy(name = cleanName, avatarUrl = finalAvatarUrl) else it
+                            if (it.id == groupId) it.copy(name = cleanName ?: it.name, avatarUrl = finalAvatarUrl) else it
                         },
                     )
                 }

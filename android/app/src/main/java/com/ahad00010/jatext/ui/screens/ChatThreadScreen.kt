@@ -2623,7 +2623,7 @@ private fun SwipeableMessageRow(
                                 id = msg.senderId,
                                 displayName = msg.senderName,
                                 username = msg.senderUsername,
-                                avatarColor = msg.senderAvatarColor,
+                                avatarColor = msg.senderAvatarColor.orEmpty().ifBlank { "violet" },
                                 avatarUrl = msg.senderAvatarUrl,
                                 onboardingComplete = true,
                             )
