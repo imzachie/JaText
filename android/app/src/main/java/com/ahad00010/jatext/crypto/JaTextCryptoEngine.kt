@@ -1606,7 +1606,8 @@ object JaTextCryptoEngine {
                 val dec = decryptGroupWire(groupId, m.id, m.senderId, wire)
                 if (dec != null) {
                     val p = dec.payload
-                    parseGroupSeenSignal(p.b)?.let { sig ->
+                    val sig = parseGroupSeenSignal(p.b)
+                    if (sig != null) {
                         if (m.senderId == myUserId && m.createdAt >= myCursorMsgCreatedAt) {
                             myCursorMsgCreatedAt = m.createdAt
                             myCursorMsgId = m.id
@@ -1676,7 +1677,8 @@ object JaTextCryptoEngine {
                     )
                 }
             } else {
-                parseGroupSeenSignal(m.body)?.let { sig ->
+                val sig = parseGroupSeenSignal(m.body)
+                if (sig != null) {
                     if (m.senderId == myUserId && m.createdAt >= myCursorMsgCreatedAt) {
                         myCursorMsgCreatedAt = m.createdAt
                         myCursorMsgId = m.id

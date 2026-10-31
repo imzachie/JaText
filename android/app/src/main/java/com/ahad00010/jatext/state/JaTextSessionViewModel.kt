@@ -1588,7 +1588,12 @@ class JaTextSessionViewModel(app: Application) :
 
     /* ==================== Message Actions: Reactions (2+ per user!), Edit, Unsend, Forward, Polls ==================== */
 
-    fun toggleStickerFavorite(sticker: StickerMedia, favorite: Boolean) {
+    fun toggleStickerFavorite(
+        sticker: StickerMedia,
+        favorite: Boolean = _state.value.stickerFavorites.none {
+            (sticker.key.isNotBlank() && it.key == sticker.key) || it.url == TursoApiClient.resolveAbsoluteMediaUrl(sticker.url)
+        },
+    ) {
         val token = currentAuthToken() ?: return
         val resolvedUrl = TursoApiClient.resolveAbsoluteMediaUrl(sticker.url)
         val key = sticker.key.ifBlank { "klipy:$resolvedUrl" }

@@ -1739,9 +1739,8 @@ fun ChatThreadScreen(
                         ) {
                             Box(modifier = Modifier.fillMaxWidth()) {
                                 BubblePreviewThumbUi(
-                                    spec = spec,
-                                    accentColor = palette.accent,
-                                    accentDark = palette.accentDark,
+                                    styleId = spec.id,
+                                    palette = palette,
                                 )
                                 if (spec.limited) {
                                     Box(
@@ -2029,9 +2028,13 @@ fun ChatThreadScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("Poll Votes (${poll.totalVotes})", color = palette.textPrimary, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
-                    JaWebIconButton(Icons.Rounded.Close, "Close", size = 32.dp, iconSize = 16.dp) {
-                        pollVotersTarget = null
-                    }
+                    JaWebIconButton(
+                        icon = Icons.Rounded.Close,
+                        contentDescription = "Close",
+                        size = 32.dp,
+                        iconSize = 16.dp,
+                        onClick = { pollVotersTarget = null },
+                    )
                 }
                 if (loadingVoters) {
                     Text("Loading voters…", color = palette.textSecondary, fontSize = 13.sp)
@@ -2129,12 +2132,15 @@ fun ChatThreadScreen(
                     }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    JaWebGhostButton("Cancel") { showModeratorsModal = false }
+                    JaWebGhostButton(text = "Cancel", onClick = { showModeratorsModal = false })
                     Spacer(Modifier.width(8.dp))
-                    JaWebPrimaryButton("Save") {
-                        vm.setCommunityModerators(selectedModIds.toList())
-                        showModeratorsModal = false
-                    }
+                    JaWebPrimaryButton(
+                        text = "Save",
+                        onClick = {
+                            vm.setCommunityModerators(selectedModIds.toList())
+                            showModeratorsModal = false
+                        },
+                    )
                 }
             }
         }

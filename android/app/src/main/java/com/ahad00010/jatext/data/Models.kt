@@ -109,6 +109,8 @@ data class ReplySummary(
     val senderId: String = "",
     val senderName: String? = null,
     val body: String = "",
+    val attachmentName: String? = null,
+    val attachmentType: String? = null,
 )
 
 @Serializable

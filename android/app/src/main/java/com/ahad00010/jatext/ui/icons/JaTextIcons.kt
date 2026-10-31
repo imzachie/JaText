@@ -87,7 +87,19 @@ data class SocialPlatformSpec(
     val placeholder: String,
     val accent: Color,
     val buildUrl: (String) -> Pair<String, String>, // (handle, url)
-)
+) {
+    val brandTint: Color
+        get() = accent
+}
+
+data class SocialPlatformMeta(
+    val label: String,
+    val brandTint: Color,
+    val id: String,
+) {
+    val accent: Color
+        get() = brandTint
+}
 
 private fun cleanHandle(raw: String): String = raw.trim().trimStart('@')
 
@@ -325,22 +337,25 @@ val SOCIAL_PLATFORM_SPECS: List<SocialPlatformSpec> = listOf(
     ),
 )
 
-fun getSocialPlatformMeta(platformRaw: String): Triple<String, Color, String> {
+fun getSocialPlatformMeta(platformRaw: String): SocialPlatformMeta {
     val key = platformRaw.trim().lowercase()
     val match = SOCIAL_PLATFORM_SPECS.firstOrNull {
         it.id == key || it.label.lowercase() == key
     }
     return if (match != null && match.id != "other") {
-        Triple(match.label, match.accent, match.id)
+        SocialPlatformMeta(match.label, match.accent, match.id)
     } else {
-        Triple(platformRaw.trim().ifEmpty { "Social" }, Color(0xFFA78BFA), key)
+        SocialPlatformMeta(platformRaw.trim().ifEmpty { "Social" }, Color(0xFFA78BFA), key)
     }
 }
 
-fun isHandleOnlyDiscord(social: UserSocialLink): Boolean {
-    val key = social.platform.trim().lowercase()
-    return key == "discord" && (social.url.isBlank() || social.url == "https://discord.com/users")
+fun isHandleOnlyDiscord(platform: String, url: String): Boolean {
+    val key = platform.trim().lowercase()
+    return key == "discord" && (url.isBlank() || url == "https://discord.com/users")
 }
+
+fun isHandleOnlyDiscord(social: UserSocialLink): Boolean =
+    isHandleOnlyDiscord(social.platform, social.url)
 
 private val SVG_PATHS_24 = mapOf(
     "discord" to "M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.74 19.74 0 0 0 3.677 4.37a.07.07 0 0 0-.032.028C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.11 13.11 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.292a.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.1.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03ZM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418Zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418Z",
@@ -358,15 +373,15 @@ private val SVG_PATHS_24 = mapOf(
 
 @Composable
 fun SocialBrandVectorIcon(
-    platform: String,
+    platformId: String,
     size: Dp = 15.dp,
     tint: Color = Color.Unspecified,
 ) {
-    val key = remember(platform) {
-        val raw = platform.trim().lowercase()
+    val key = remember(platformId) {
+        val raw = platformId.trim().lowercase()
         if (raw == "twitter") "x" else raw
     }
-    val (_, defaultAccent, _) = remember(platform) { getSocialPlatformMeta(platform) }
+    val (_, defaultAccent, _) = remember(platformId) { getSocialPlatformMeta(platformId) }
     val resolvedTint = if (tint == Color.Unspecified) defaultAccent else tint
     val pathData = SVG_PATHS_24[key]
     val parsedBasePath = remember(pathData) {

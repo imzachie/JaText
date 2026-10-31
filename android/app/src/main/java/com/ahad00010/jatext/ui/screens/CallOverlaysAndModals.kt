@@ -1381,7 +1381,7 @@ fun GroupMembersBottomModal(
     val groupAvatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             pickedGroupAvatarUri = uri
-            vm.updateGroupProfile(groupId = details.id, newName = null, avatarUri = uri)
+            vm.updateGroupProfile(groupId = details.id, newName = null, newAvatarUri = uri)
         }
     }
 
@@ -1464,7 +1464,7 @@ fun GroupMembersBottomModal(
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.clickable {
                                         pickedGroupAvatarUri = null
-                                        vm.updateGroupProfile(groupId = details.id, newName = null, clearAvatar = true)
+                                        vm.updateGroupProfile(groupId = details.id, newName = null, removeAvatar = true)
                                     },
                                 )
                             }
@@ -1486,7 +1486,7 @@ fun GroupMembersBottomModal(
                         text = "Save",
                         enabled = newName.trim().isNotEmpty() && newName.trim() != details.name,
                         onClick = {
-                            vm.updateGroupProfile(groupId = details.id, newName = newName.trim(), avatarUri = null)
+                            vm.updateGroupProfile(groupId = details.id, newName = newName.trim(), newAvatarUri = null)
                         },
                     )
                 }

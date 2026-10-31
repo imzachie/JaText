@@ -289,6 +289,7 @@ fun JaWebPrimaryButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     big: Boolean = false,
+    leadingIcon: ImageVector? = null,
     leading: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val palette = LocalJaTextPalette.current
@@ -305,6 +306,15 @@ fun JaWebPrimaryButton(
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (leadingIcon != null) {
+            Icon(
+                imageVector = leadingIcon,
+                contentDescription = null,
+                tint = palette.accentDark,
+                modifier = Modifier.size(if (big) 18.dp else 16.dp),
+            )
+            Spacer(Modifier.width(7.dp))
+        }
         if (leading != null) {
             leading()
             Spacer(Modifier.width(8.dp))
@@ -468,7 +478,7 @@ fun JaVerifiedBadge(size: Dp = 17.dp) {
 }
 
 @Composable
-fun JaOfficialBadge() {
+fun JaOfficialBadge(text: String = "OFFICIAL") {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
@@ -477,7 +487,7 @@ fun JaOfficialBadge() {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "OFFICIAL",
+            text = text.uppercase(),
             color = Color(0xFF052E16),
             fontSize = 9.5.sp,
             fontWeight = FontWeight.Black,

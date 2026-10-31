@@ -322,7 +322,7 @@ fun GroupCallMessageCardUi(
         invite.hostName.isNotBlank() -> "Started by ${invite.hostName}"
         else -> "Tap to join voice channel"
     }
-    val badgeColor = if (isEnded) palette.textMuted else Color(0xFF22C55E)
+    val badgeColor = if (isEnded) palette.textTertiary else Color(0xFF22C55E)
 
     Row(
         modifier = Modifier
@@ -1763,7 +1763,7 @@ fun GroupSeenAvatarsRowUi(
     ) {
         Text(
             text = "Seen by",
-            color = if (hasWallpaper) Color(0xE0FFFFFF) else palette.textMuted,
+            color = if (hasWallpaper) Color(0xE0FFFFFF) else palette.textTertiary,
             fontSize = 10.sp,
             fontWeight = FontWeight.Medium,
         )

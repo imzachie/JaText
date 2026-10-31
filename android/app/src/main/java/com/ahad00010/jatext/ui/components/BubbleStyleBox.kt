@@ -48,6 +48,7 @@ import coil.compose.AsyncImage
 import com.ahad00010.jatext.data.TursoApiClient
 import com.ahad00010.jatext.ui.theme.JaTextPalette
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
+import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
 import java.util.concurrent.ConcurrentHashMap
 
 data class BubbleStyleSpec(
@@ -929,9 +930,10 @@ fun JaAvatar(
 @Composable
 fun JaGroupAvatar(
     avatarUrl: String?,
-    groupName: String,
-    palette: JaTextPalette,
+    name: String,
     size: Dp = 44.dp,
+    ringWidth: Dp = 2.dp,
+    palette: JaTextPalette = LocalJaTextPalette.current,
     modifier: Modifier = Modifier,
 ) {
     val resolvedUrl = remember(avatarUrl) {
@@ -942,13 +944,13 @@ fun JaGroupAvatar(
             .size(size)
             .clip(CircleShape)
             .background(palette.accentSoft)
-            .border(1.5.dp, palette.accent.copy(alpha = 0.45f), CircleShape),
+            .border(ringWidth, palette.accent.copy(alpha = 0.55f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         if (!resolvedUrl.isNullOrBlank()) {
             AsyncImage(
                 model = resolvedUrl,
-                contentDescription = groupName,
+                contentDescription = name,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
@@ -957,7 +959,7 @@ fun JaGroupAvatar(
         } else {
             Icon(
                 imageVector = Icons.Rounded.Groups,
-                contentDescription = groupName,
+                contentDescription = name,
                 tint = palette.accent,
                 modifier = Modifier.size(size * 0.52f),
             )
