@@ -145,29 +145,60 @@ function getConversationMessages(
   pendingMessages: ChatMessage[],
   activeMessages: ChatMessage[],
   friendId: string,
+  myUserId?: string,
 ) {
   const conversationPendingMessages = pendingMessages.filter(
     (message) => message.receiverId === friendId,
   );
   const matchedPendingIds = new Set<string>();
-  const confirmedMessages = activeMessages.map((message) => {
+  const now = Date.now();
+  const confirmedMessages: ChatMessage[] = [];
+
+  for (const message of activeMessages) {
+    const isUndecryptedEcho = Boolean(message.e2ee && !message.e2ee.decrypted);
     const pendingIndex = conversationPendingMessages.findIndex(
       (pendingMessage) =>
         pendingMessage.senderId === message.senderId &&
         pendingMessage.receiverId === message.receiverId &&
-        message.createdAt >= pendingMessage.createdAt - 1_000 &&
+        message.createdAt >= pendingMessage.createdAt - 60_000 &&
         message.createdAt <= pendingMessage.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
         (message.unsentAt ||
           Boolean(message.editedAt) ||
+          isUndecryptedEcho ||
           (message.body === pendingMessage.body &&
             message.attachmentName === pendingMessage.attachmentName)),
     );
-    if (pendingIndex === -1) return message;
+    if (pendingIndex === -1) {
+      // Never flash a transient "Decrypting message…" placeholder for our own freshly-sent message
+      if (
+        isUndecryptedEcho &&
+        myUserId &&
+        message.senderId === myUserId &&
+        now - message.createdAt < 30_000
+      ) {
+        continue;
+      }
+      confirmedMessages.push(message);
+      continue;
+    }
 
     const [pendingMessage] = conversationPendingMessages.splice(pendingIndex, 1);
     matchedPendingIds.add(pendingMessage.id);
-    return { ...message, renderKey: pendingMessage.id };
-  });
+    confirmedMessages.push(
+      isUndecryptedEcho
+        ? {
+            ...message,
+            body: pendingMessage.body,
+            bubbleStyle: pendingMessage.bubbleStyle ?? message.bubbleStyle,
+            attachmentUrl: pendingMessage.attachmentUrl ?? message.attachmentUrl,
+            attachmentName: pendingMessage.attachmentName ?? message.attachmentName,
+            attachmentType: pendingMessage.attachmentType ?? message.attachmentType,
+            renderKey: pendingMessage.id,
+          }
+        : { ...message, renderKey: pendingMessage.id },
+    );
+  }
+
   return {
     messages: [...confirmedMessages, ...conversationPendingMessages].sort(
       (a, b) => a.createdAt - b.createdAt,
@@ -250,7 +281,12 @@ const ChatHistory = memo(function ChatHistory({
     if (dist > 12) cancelBubbleTouchHold();
   }
 
-  const [visibleCount, setVisibleCount] = useState(50);
+  const [visibleCount, setVisibleCount] = useState(120);
+  const scrollSettleTimerRef = useRef<number | null>(null);
+  const handleOpenFriendProfile = useCallback(
+    () => onOpenProfile(friend),
+    [friend, onOpenProfile],
+  );
   const [highlightedJumpId, setHighlightedJumpId] = useState<string | null>(null);
   const [firstUnreadMessageId, setFirstUnreadMessageId] = useState<string | null>(null);
   const capturedUnreadForFriendRef = useRef<string | null>(null);
@@ -271,8 +307,8 @@ const ChatHistory = memo(function ChatHistory({
     prevFriendIdRef.current = friend.id;
     prependAnchorRef.current = null;
     capturedUnreadForFriendRef.current = null;
-    if (visibleCount !== 50) {
-      setVisibleCount(50);
+    if (visibleCount !== 120) {
+      setVisibleCount(120);
     }
     if (firstUnreadMessageId !== null) {
       setFirstUnreadMessageId(null);
@@ -416,12 +452,27 @@ const ChatHistory = memo(function ChatHistory({
     }
   };
 
+  useEffect(
+    () => () => {
+      if (scrollSettleTimerRef.current !== null) {
+        window.clearTimeout(scrollSettleTimerRef.current);
+      }
+    },
+    [],
+  );
+
   const handleMessagesScroll = () => {
-    const el = messagesRef.current;
-    if (!el) return;
-    if (el.scrollTop < 260) {
-      triggerRevealOrFetchOlder();
+    if (!canLoadOlderAny) return;
+    if (scrollSettleTimerRef.current !== null) {
+      window.clearTimeout(scrollSettleTimerRef.current);
     }
+    scrollSettleTimerRef.current = window.setTimeout(() => {
+      scrollSettleTimerRef.current = null;
+      const el = messagesRef.current;
+      if (el && el.scrollTop < 120) {
+        triggerRevealOrFetchOlder();
+      }
+    }, 140);
   };
 
   return (
@@ -495,7 +546,10 @@ const ChatHistory = memo(function ChatHistory({
           !isAudioNote &&
           (message.attachmentType?.startsWith("video/") ||
             /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
-        return (
+          const isJustArrived =
+            message.id.startsWith("pending-") ||
+            Date.now() - message.createdAt < 2_500;
+          return (
           <div key={message.renderKey ?? message.id}>
             {showDay && <div className="day-divider">{day}</div>}
             {firstUnreadMessageId === message.id && (
@@ -505,12 +559,14 @@ const ChatHistory = memo(function ChatHistory({
             )}
             <div
               className={`msg-row ${mine ? "mine" : "theirs"} ${
+                isJustArrived ? "msg-just-arrived" : ""
+              } ${
                 highlightedJumpId === message.id ? "jump-highlight-pulse" : ""
               }`}
               id={`message-${message.id}`}
             >
               {!mine && (
-                <Avatar user={friend} size={30} ringWidth={2} onClick={() => onOpenProfile(friend)} />
+                <Avatar user={friend} size={30} ringWidth={2} onClick={handleOpenFriendProfile} />
               )}
               <div className="msg-col">
                 <SwipeToReply
@@ -982,8 +1038,8 @@ export function ChatView({
     return `${unread.length}:${unread.at(-1)?.id ?? ""}`;
   }, [conversationMessages, friend.id]);
   const { messages: displayedMessages, matchedPendingIds } = useMemo(
-    () => getConversationMessages(pendingMessages, conversationMessages, friend.id),
-    [conversationMessages, friend.id, pendingMessages],
+    () => getConversationMessages(pendingMessages, conversationMessages, friend.id, me?.id),
+    [conversationMessages, friend.id, me?.id, pendingMessages],
   );
   const activeWallpaperUrl = useMemo(() => {
     for (let i = displayedMessages.length - 1; i >= 0; i--) {
@@ -1606,6 +1662,19 @@ export function ChatView({
     }
   }, [closeMessageMenu, toggleMessageReaction]);
 
+  const handleOpenReactionPicker = useCallback(
+    (x: number, y: number, message: ChatMessage) => {
+      setReactionTarget({ x, y, message });
+    },
+    [],
+  );
+
+  const handleSwipeReply = useCallback((msg: ChatMessage) => {
+    setEditingMessage(null);
+    setReplyTo(msg);
+    window.setTimeout(() => composerRef.current?.focus(), 40);
+  }, []);
+
   if (!me) return null;
 
   async function favoriteSticker(message: ChatMessage) {
@@ -1769,12 +1838,8 @@ export function ChatView({
         onOpenMessageMenuAt={openMessageMenuAt}
         onOpenImage={openImagePreview}
         onReactToMessage={reactToMessage}
-        onOpenReactionPicker={(x, y, message) => setReactionTarget({ x, y, message })}
-        onSwipeReply={(msg) => {
-          setEditingMessage(null);
-          setReplyTo(msg);
-          window.setTimeout(() => composerRef.current?.focus(), 40);
-        }}
+        onOpenReactionPicker={handleOpenReactionPicker}
+        onSwipeReply={handleSwipeReply}
       />
 
       {error && <div className="error-box chat-error">{error}</div>}

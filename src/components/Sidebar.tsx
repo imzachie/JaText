@@ -141,12 +141,11 @@ export function Sidebar({
   }
 
   function startRowHold(
-    event: React.TouchEvent<HTMLElement>,
+    event: React.PointerEvent<HTMLElement>,
     onTrigger: (x: number, y: number) => void,
   ) {
-    if (event.touches.length !== 1) return;
-    const touch = event.touches[0];
-    const { clientX, clientY } = touch;
+    if (event.pointerType !== "touch") return;
+    const { clientX, clientY } = event;
     rowHoldOriginRef.current = { x: clientX, y: clientY };
     if (rowHoldTimerRef.current !== null) window.clearTimeout(rowHoldTimerRef.current);
     rowHoldTimerRef.current = window.setTimeout(() => {
@@ -155,13 +154,12 @@ export function Sidebar({
     }, 450);
   }
 
-  function moveRowHold(event: React.TouchEvent<HTMLElement>) {
-    if (!rowHoldOriginRef.current || event.touches.length !== 1) return;
-    const touch = event.touches[0];
+  function moveRowHold(event: React.PointerEvent<HTMLElement>) {
+    if (event.pointerType !== "touch" || !rowHoldOriginRef.current) return;
     if (
       Math.hypot(
-        touch.clientX - rowHoldOriginRef.current.x,
-        touch.clientY - rowHoldOriginRef.current.y,
+        event.clientX - rowHoldOriginRef.current.x,
+        event.clientY - rowHoldOriginRef.current.y,
       ) > 12
     ) {
       cancelRowHold();
@@ -184,6 +182,11 @@ export function Sidebar({
   const friendById = useMemo(
     () => new Map(friends.map((f) => [f.id, f])),
     [friends],
+  );
+
+  const activityByUserId = useMemo(
+    () => new Map(store.friendActivities.map((a) => [a.userId, a])),
+    [store.friendActivities],
   );
 
   // Combine persisted call history + any DM preview call invites not yet in storage
@@ -563,12 +566,12 @@ export function Sidebar({
                   event.stopPropagation();
                   openCommunityMenuAt(event.clientX, event.clientY);
                 }}
-                onTouchStart={(event) =>
+                onPointerDown={(event) =>
                   startRowHold(event, (x, y) => openCommunityMenuAt(x, y))
                 }
-                onTouchMove={moveRowHold}
-                onTouchEnd={cancelRowHold}
-                onTouchCancel={cancelRowHold}
+                onPointerMove={moveRowHold}
+                onPointerUp={cancelRowHold}
+                onPointerCancel={cancelRowHold}
               >
                 <img className="community-mark" src="/jatext-logo-icon.png" alt="" />
                 <div className="friend-row-text">
@@ -627,12 +630,12 @@ export function Sidebar({
                     event.stopPropagation();
                     openGroupMenuAt(event.clientX, event.clientY, group);
                   }}
-                  onTouchStart={(event) =>
+                  onPointerDown={(event) =>
                     startRowHold(event, (x, y) => openGroupMenuAt(x, y, group))
                   }
-                  onTouchMove={moveRowHold}
-                  onTouchEnd={cancelRowHold}
-                  onTouchCancel={cancelRowHold}
+                  onPointerMove={moveRowHold}
+                  onPointerUp={cancelRowHold}
+                  onPointerCancel={cancelRowHold}
                 >
                   {group.avatarUrl ? (
                     <img
@@ -747,7 +750,7 @@ export function Sidebar({
                   }`}
                   onClick={() => setActiveChatId(friend.id)}
                   onContextMenu={(event) => openChatMenu(event, friend)}
-                  onTouchStart={(event) =>
+                  onPointerDown={(event) =>
                     startRowHold(event, (x, y) => {
                       setChatActionError(null);
                       setGroupMenu(null);
@@ -755,17 +758,14 @@ export function Sidebar({
                       setChatMenu({ x, y, friend });
                     })
                   }
-                  onTouchMove={moveRowHold}
-                  onTouchEnd={cancelRowHold}
-                  onTouchCancel={cancelRowHold}
+                  onPointerMove={moveRowHold}
+                  onPointerUp={cancelRowHold}
+                  onPointerCancel={cancelRowHold}
                 >
                   <Avatar
                     user={friend}
                     size={48}
-                    status={
-                      store.friendActivities.find((activity) => activity.userId === friend.id)
-                        ?.status
-                    }
+                    status={activityByUserId.get(friend.id)?.status}
                     onClick={(e) => {
                       e.stopPropagation();
                       onOpenProfile(friend);

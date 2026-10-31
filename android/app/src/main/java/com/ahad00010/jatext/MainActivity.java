@@ -110,6 +110,7 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         activeInstanceRef = new WeakReference<>(this);
         appInForeground = true;
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
         applyHighRefreshRateAndLockScreenFlags(getIntent());
         JaTextSoundManager.ensureActiveMessageChannel(this);
         if (getBridge() != null) {
@@ -118,10 +119,10 @@ public class MainActivity extends BridgeActivity {
             if (webView != null) {
                 WebSettings ws = webView.getSettings();
                 ws.setMediaPlaybackRequiresUserGesture(false);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    ws.setOffscreenPreRaster(true);
-                }
-                webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+                // Keep LAYER_TYPE_NONE on a hardware-accelerated Window so Chromium's Viz GPU
+                // tile compositor renders directly to the window surface at 60/90/120Hz without
+                // an extra full-screen Android RenderNode FBO blit on every scroll frame.
+                webView.setLayerType(View.LAYER_TYPE_NONE, null);
                 webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
                 JaTextWebView.installReceiveContentSupport(webView);
             }

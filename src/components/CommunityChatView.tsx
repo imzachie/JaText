@@ -224,7 +224,7 @@ function getCommunityPendingMessages(pending: CommunityMessage[], real: Communit
     const idx = pendingCopy.findIndex(
       (p) =>
         p.senderId === message.senderId &&
-        message.createdAt >= p.createdAt - 1000 &&
+        message.createdAt >= p.createdAt - 60_000 &&
         message.createdAt <= p.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
         (message.unsentAt ||
           Boolean(message.editedAt) ||
@@ -516,6 +516,16 @@ export function CommunityChatView({
       }
     }
   }, [displayedMessages.length, messagesElement]);
+
+  const communityScrollSettleRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (communityScrollSettleRef.current !== null) {
+        window.clearTimeout(communityScrollSettleRef.current);
+      }
+    },
+    [],
+  );
 
   const triggerFetchOlderCommunity = useCallback(() => {
     const el = messagesElement.current;
@@ -1244,12 +1254,18 @@ export function CommunityChatView({
       <div
         className="messages community-messages"
         ref={messagesElement}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          wasPinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
-          if (element.scrollTop < 260 && store.hasMoreOlderCommunityMessages) {
-            triggerFetchOlderCommunity();
+        onScroll={() => {
+          if (!store.hasMoreOlderCommunityMessages) return;
+          if (communityScrollSettleRef.current !== null) {
+            window.clearTimeout(communityScrollSettleRef.current);
           }
+          communityScrollSettleRef.current = window.setTimeout(() => {
+            communityScrollSettleRef.current = null;
+            const element = messagesElement.current;
+            if (element && element.scrollTop < 120 && store.hasMoreOlderCommunityMessages) {
+              triggerFetchOlderCommunity();
+            }
+          }, 140);
         }}
       >
         {Boolean(store.hasMoreOlderCommunityMessages) && displayedMessages.length > 0 && (
@@ -1292,6 +1308,9 @@ export function CommunityChatView({
             !isAudioNote &&
             (message.attachmentType?.startsWith("video/") ||
               /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
+          const isJustArrived =
+            message.id.startsWith("pending-") ||
+            Date.now() - message.createdAt < 2_500;
           return (
             <SwipeToReply
               key={message.renderKey ?? message.id}
@@ -1308,6 +1327,8 @@ export function CommunityChatView({
             >
               <article
                 className={`community-post ${
+                  isJustArrived ? "msg-just-arrived" : ""
+                } ${
                   highlightedCommunityJumpId === message.id ? "jump-highlight-pulse" : ""
                 }`}
                 id={`community-message-${message.id}`}

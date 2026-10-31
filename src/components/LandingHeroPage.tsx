@@ -124,10 +124,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.4.4",
+    date: "October 31, 2026",
+    headline: "Zero-Flash Outgoing E2EE Delivery & Native 120Hz Mobile Chat Scrolling",
+    latest: true,
+    bullets: [
+      "Pre-seeded outgoing ECDH and Group Epoch encryption caches before network dispatch and pre-warmed incoming delta batches so sent and received messages never flash a transient Decrypting message placeholder.",
+      "Eliminated idle delta-sync React re-renders, switched Sidebar row holds to compositor-safe PointerEvents, replaced 480 per-bubble touch listeners and idle GPU badge layers with a single delegated passive swipe listener, and tuned Android WebView direct Viz compositing for butter-smooth 60 to 120 FPS mobile chat scrolling.",
+    ],
+  },
+  {
     version: "v3.4.3",
     date: "October 31, 2026",
     headline: "Official Mastered Default Notification Audio Asset",
-    latest: true,
     bullets: [
       "Updated the default JaText notification sound across Web and Android (NotificationChannel v6) directly to the exact mastered JaText Notification-FIXED.mp3 audio file with zero runtime gain modification.",
     ],
@@ -311,7 +320,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.4.3 · Live
+                v3.4.4 · Live
               </span>
             </span>
           </a>
@@ -430,7 +439,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.4.3 (Build 40)</strong>
+                    <strong>v3.4.4 (Build 41)</strong>
                     <span>Web &amp; Signed APK</span>
                   </div>
                 </div>
@@ -800,7 +809,7 @@ export function LandingHeroPage() {
               <h2>Ready to jump into your chats?</h2>
               <p>
                 Launch the full JaText web app at <strong>jatext.vercel.app/chats</strong> or grab
-                the latest signed Android Release APK (v3.4.3).
+                the latest signed Android Release APK (v3.4.4).
               </p>
             </div>
             <div className="jt-cta-banner-actions">
@@ -819,7 +828,7 @@ export function LandingHeroPage() {
                 href="/downloads/JaText-release.apk"
                 className="jt-btn-secondary jt-btn-lg"
               >
-                Get Android APK (v3.4.3)
+                Get Android APK (v3.4.4)
               </a>
             </div>
           </div>
@@ -831,7 +840,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.4.3</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.4.4</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">
