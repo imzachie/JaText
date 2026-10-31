@@ -124,10 +124,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.5.1",
+    date: "October 31, 2026",
+    headline: "Zero-Config In-App Mobile Google Sign-In Sheet & Dual-Channel Session Handoff",
+    latest: true,
+    bullets: [
+      "Fixed mobile Continue with Google silently dropping Play Services [28444] unregistered SHA-1 responses after account selection.",
+      "Added an in-app 82%-height rounded Partial Custom Tab OAuth sheet with dual-channel return (instant com.ahad00010.jatext://auth deep-link plus Turso mobileSession background polling) so Google Sign-In goes straight into JaText with zero Google Cloud SHA-1 setup required.",
+    ],
+  },
+  {
     version: "v3.5.0",
     date: "October 31, 2026",
     headline: "100% Pure Native Android APK (Kotlin + Jetpack Compose) & In-App Google Sign-In",
-    latest: true,
     bullets: [
       "Rebuilt the entire JaText Android app in pure Kotlin and Jetpack Compose with zero WebView or Capacitor code, delivering native 120Hz RenderThread scrolling, zero-gap keyboard insets, and zero-lag Customise Theme HSV controls.",
       "Added in-app Google Sign-In via Android Credential Manager backed by server-side Google ID token verification on Turso so mobile accounts sign in directly inside JaText without redirecting to Chrome.",
@@ -330,7 +339,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.5.0 · Live
+                v3.5.1 · Live
               </span>
             </span>
           </a>
@@ -449,7 +458,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.5.0 (Build 42)</strong>
+                    <strong>v3.5.1 (Build 43)</strong>
                     <span>Web &amp; Signed APK</span>
                   </div>
                 </div>
@@ -819,7 +828,7 @@ export function LandingHeroPage() {
               <h2>Ready to jump into your chats?</h2>
               <p>
                 Launch the full JaText web app at <strong>jatext.vercel.app/chats</strong> or grab
-                the latest signed Android Release APK (v3.5.0).
+                the latest signed Android Release APK (v3.5.1).
               </p>
             </div>
             <div className="jt-cta-banner-actions">
@@ -838,7 +847,7 @@ export function LandingHeroPage() {
                 href="/downloads/JaText-release.apk"
                 className="jt-btn-secondary jt-btn-lg"
               >
-                Get Android APK (v3.5.0)
+                Get Android APK (v3.5.1)
               </a>
             </div>
           </div>
@@ -850,7 +859,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.5.0</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.5.1</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

@@ -128,6 +128,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        @JvmStatic
+        fun bringToFrontAfterAuth() {
+            mainHandler.post {
+                val activity = activeActivityRef?.get() ?: return@post
+                try {
+                    val bringIntent = Intent(activity, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }
+                    activity.startActivity(bringIntent)
+                } catch (_: Throwable) {
+                }
+            }
+        }
     }
 
     private val sessionViewModel: JaTextSessionViewModel by viewModels()
@@ -181,6 +195,12 @@ class MainActivity : ComponentActivity() {
         sessionViewModel.triggerImmediateSync(burst = true)
     }
 
+    override fun onResume() {
+        super.onResume()
+        activeActivityRef = WeakReference(this)
+        sessionViewModel.onActivityResumed()
+    }
+
     override fun onStop() {
         NativeRuntimeBridge.isAppInForeground = false
         super.onStop()
@@ -195,6 +215,18 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingPushIntent(intent: Intent?) {
         if (intent == null) return
+        val dataUri = intent.data
+        if (dataUri != null && dataUri.scheme == "com.ahad00010.jatext" && dataUri.host == "auth") {
+            val tursoToken = dataUri.getQueryParameter("tursoToken")
+            val authError = dataUri.getQueryParameter("authError")
+            intent.data = null
+            if (!tursoToken.isNullOrBlank()) {
+                sessionViewModel.completeDirectTursoTokenSignIn(tursoToken, null)
+            } else if (!authError.isNullOrBlank()) {
+                sessionViewModel.reportExternalAuthError(authError)
+            }
+            return
+        }
         if (intent.getBooleanExtra("jatext_decline_call", false)) {
             JaTextSoundManager.cancelIncomingCallWakeup(this, true)
             sessionViewModel.state.value.me?.let { me ->
