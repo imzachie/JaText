@@ -14,7 +14,7 @@ import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { friendlyError } from "../lib/errors";
 import { AnimatedModal } from "./AnimatedModal";
-import { Avatar } from "./Avatar";
+import { AnimatedMediaImg, Avatar } from "./Avatar";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { ChatAttachmentImage } from "./ChatAttachmentImage";
@@ -57,7 +57,10 @@ import {
 } from "./UiIcons";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { DeleteForMeToast, type DeletedForMeUndoState } from "./DeleteForMeToast";
-import { triggerMessageThanosSnapById } from "../lib/thanosSnapEffect";
+import {
+  triggerMessageThanosSnapById,
+  useUnsendThanosWatcher,
+} from "../lib/thanosSnapEffect";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
@@ -506,7 +509,10 @@ export function CommunityChatView({
     });
 
   const pendingMerged = getCommunityPendingMessages(pendingMessages, store.communityMessages);
-  const displayedMessages = pendingMerged.messages;
+  const displayedMessages = useUnsendThanosWatcher(
+    pendingMerged.messages,
+    OFFICIAL_COMMUNITY_ID,
+  );
   const matchedPendingIds = pendingMerged.matchedIds;
 
   useLayoutEffect(() => {
@@ -1863,7 +1869,7 @@ export function CommunityChatView({
                 .map((target) => (
                   <button type="button" key={target.id} className="forward-friend" onClick={() => void forwardToGroup(target.id)}>
                     {target.avatarUrl ? (
-                      <img className="group-avatar" src={target.avatarUrl} alt="" style={{ width: 38, height: 38 }} />
+                      <AnimatedMediaImg className="group-avatar" src={target.avatarUrl} style={{ width: 38, height: 38 }} />
                     ) : (
                       <span className="group-avatar group-avatar-fallback" style={{ width: 38, height: 38 }}><UsersIcon size={19} /></span>
                     )}

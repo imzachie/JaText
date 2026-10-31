@@ -93,12 +93,15 @@ import {
 } from "./UiIcons";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { DeleteForMeToast, type DeletedForMeUndoState } from "./DeleteForMeToast";
-import { triggerMessageThanosSnapById } from "../lib/thanosSnapEffect";
+import {
+  triggerMessageThanosSnapById,
+  useUnsendThanosWatcher,
+} from "../lib/thanosSnapEffect";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import type { ChatMessage, JaUser } from "../lib/types";
-import { Avatar } from "./Avatar";
+import { AnimatedMediaImg, Avatar } from "./Avatar";
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
@@ -576,6 +579,7 @@ const ChatHistory = memo(function ChatHistory({
                   onReply={() => onSwipeReply(message)}
                 >
                   <DecoratedMessageBubble
+                    key={message.unsentAt ? "unsent" : "live"}
                     styleId={callInvite ? "default" : (message.bubbleStyle ?? "default")}
                     mine={mine}
                     unsent={Boolean(message.unsentAt)}
@@ -1041,10 +1045,11 @@ export function ChatView({
     if (unread.length === 0) return "";
     return `${unread.length}:${unread.at(-1)?.id ?? ""}`;
   }, [conversationMessages, friend.id]);
-  const { messages: displayedMessages, matchedPendingIds } = useMemo(
+  const { messages: rawDisplayedMessages, matchedPendingIds } = useMemo(
     () => getConversationMessages(pendingMessages, conversationMessages, friend.id, me?.id),
     [conversationMessages, friend.id, me?.id, pendingMessages],
   );
+  const displayedMessages = useUnsendThanosWatcher(rawDisplayedMessages, `dm:${friend.id}`);
   const activeWallpaperUrl = useMemo(() => {
     for (let i = displayedMessages.length - 1; i >= 0; i--) {
       const msg = displayedMessages[i];
@@ -1745,11 +1750,7 @@ export function ChatView({
     >
       {showMobileWallpaper && activeWallpaperUrl ? (
         <div className="chat-wallpaper-layer" aria-hidden="true">
-          <img
-            src={activeWallpaperUrl}
-            alt=""
-            referrerPolicy="no-referrer"
-          />
+          <AnimatedMediaImg src={activeWallpaperUrl} />
         </div>
       ) : null}
       <header className="chat-header">
@@ -2153,9 +2154,8 @@ export function ChatView({
                     onClick={() => void forwardToGroup(grp.id)}
                   >
                     {grp.avatarUrl ? (
-                      <img
+                      <AnimatedMediaImg
                         src={grp.avatarUrl}
-                        alt=""
                         className="group-avatar"
                         style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }}
                       />

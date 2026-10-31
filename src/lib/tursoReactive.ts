@@ -783,6 +783,11 @@ export function useTursoReactiveSession(
     [slotId],
   );
 
+  const hiddenRawDmRef = useRef<Map<string, ChatMessage>>(new Map());
+  const hiddenRawGroupRef = useRef<Map<string, GroupMessage>>(new Map());
+  const hiddenRawCommunityRef = useRef<Map<string, CommunityMessage>>(new Map());
+  const inFlightHideRpcRef = useRef<Map<string, Promise<unknown>>>(new Map());
+
   /* ==================== Direct Queries & Mutations ==================== */
 
   const mutations = useMemo(
@@ -870,13 +875,30 @@ export function useTursoReactiveSession(
       },
 
       deleteForMeMut: async (args: { messageId: string }) => {
-        setActiveMessagesQuery((prev) => prev?.filter((m) => m.id !== args.messageId));
-        await tursoRpc("deleteMessageForMe", args, { slotId });
+        setActiveMessagesQuery((prev) => {
+          const found = prev?.find((m) => m.id === args.messageId);
+          if (found) hiddenRawDmRef.current.set(args.messageId, found);
+          return prev?.filter((m) => m.id !== args.messageId);
+        });
+        const hidePromise = tursoRpc("deleteMessageForMe", args, { slotId }).finally(() => {
+          if (inFlightHideRpcRef.current.get(args.messageId) === hidePromise) {
+            inFlightHideRpcRef.current.delete(args.messageId);
+          }
+        });
+        inFlightHideRpcRef.current.set(args.messageId, hidePromise);
+        await hidePromise;
       },
 
       restoreForMeMut: async (args: { message: ChatMessage }) => {
-        setActiveMessagesQuery((prev) => mergeMessagesById(prev, [args.message]));
+        const rawToRestore = hiddenRawDmRef.current.get(args.message.id) ?? args.message;
+        hiddenRawDmRef.current.delete(args.message.id);
+        setActiveMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
+        const pendingHide = inFlightHideRpcRef.current.get(args.message.id);
+        if (pendingHide) {
+          await pendingHide.catch(() => undefined);
+        }
         await tursoRpc("restoreMessageForMe", { messageId: args.message.id }, { slotId });
+        setActiveMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
       },
 
       unsendMut: async (args: { messageId: string }) => {
@@ -885,9 +907,20 @@ export function useTursoReactiveSession(
           args,
           { slotId },
         );
+        const nowTs = Date.now();
         setActiveMessagesQuery((prev) =>
           prev?.map((m) =>
-            m.id === args.messageId ? { ...m, body: "", unsentAt: Date.now(), reactions: [] } : m,
+            m.id === args.messageId
+              ? {
+                  ...m,
+                  body: "",
+                  attachmentUrl: undefined,
+                  attachmentName: undefined,
+                  attachmentType: undefined,
+                  unsentAt: nowTs,
+                  reactions: [],
+                }
+              : m,
           ),
         );
         return Boolean(res.showUnsendNotice);
@@ -1261,21 +1294,38 @@ export function useTursoReactiveSession(
       },
 
       deleteCommunityForMeMut: async (args: { messageId: string }) => {
-        setCommunityMessagesQuery((prev) => prev?.filter((m) => m.id !== args.messageId));
-        await tursoRpc(
+        setCommunityMessagesQuery((prev) => {
+          const found = prev?.find((m) => m.id === args.messageId);
+          if (found) hiddenRawCommunityRef.current.set(args.messageId, found);
+          return prev?.filter((m) => m.id !== args.messageId);
+        });
+        const hidePromise = tursoRpc(
           "mutateCommunityMessage",
           { messageId: args.messageId, action: "hideForMe" },
           { slotId },
-        );
+        ).finally(() => {
+          if (inFlightHideRpcRef.current.get(args.messageId) === hidePromise) {
+            inFlightHideRpcRef.current.delete(args.messageId);
+          }
+        });
+        inFlightHideRpcRef.current.set(args.messageId, hidePromise);
+        await hidePromise;
       },
 
       restoreCommunityForMeMut: async (args: { message: CommunityMessage }) => {
-        setCommunityMessagesQuery((prev) => mergeMessagesById(prev, [args.message]));
+        const rawToRestore = hiddenRawCommunityRef.current.get(args.message.id) ?? args.message;
+        hiddenRawCommunityRef.current.delete(args.message.id);
+        setCommunityMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
+        const pendingHide = inFlightHideRpcRef.current.get(args.message.id);
+        if (pendingHide) {
+          await pendingHide.catch(() => undefined);
+        }
         await tursoRpc(
           "mutateCommunityMessage",
           { messageId: args.message.id, action: "unhideForMe" },
           { slotId },
         );
+        setCommunityMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
       },
 
       unsendCommunityMut: async (args: { messageId: string }) => {
@@ -1283,6 +1333,24 @@ export function useTursoReactiveSession(
           "mutateCommunityMessage",
           { messageId: args.messageId, action: "unsend" },
           { slotId },
+        );
+        const nowTs = Date.now();
+        setCommunityMessagesQuery((prev) =>
+          prev?.map((m) =>
+            m.id === args.messageId
+              ? {
+                  ...m,
+                  body: "",
+                  attachmentUrl: undefined,
+                  attachmentName: undefined,
+                  attachmentType: undefined,
+                  stickerUrl: undefined,
+                  stickerName: undefined,
+                  unsentAt: nowTs,
+                  reactions: [],
+                }
+              : m,
+          ),
         );
         return Boolean(res.showUnsendNotice);
       },
@@ -1421,21 +1489,38 @@ export function useTursoReactiveSession(
       },
 
       deleteGroupForMeMut: async (args: { messageId: string }) => {
-        setGroupMessagesQuery((prev) => prev?.filter((m) => m.id !== args.messageId));
-        await tursoRpc(
+        setGroupMessagesQuery((prev) => {
+          const found = prev?.find((m) => m.id !== undefined && m.id === args.messageId);
+          if (found) hiddenRawGroupRef.current.set(args.messageId, found);
+          return prev?.filter((m) => m.id !== args.messageId);
+        });
+        const hidePromise = tursoRpc(
           "mutateGroupMessage",
           { messageId: args.messageId, action: "hideForMe" },
           { slotId },
-        );
+        ).finally(() => {
+          if (inFlightHideRpcRef.current.get(args.messageId) === hidePromise) {
+            inFlightHideRpcRef.current.delete(args.messageId);
+          }
+        });
+        inFlightHideRpcRef.current.set(args.messageId, hidePromise);
+        await hidePromise;
       },
 
       restoreGroupForMeMut: async (args: { message: GroupMessage }) => {
-        setGroupMessagesQuery((prev) => mergeMessagesById(prev, [args.message]));
+        const rawToRestore = hiddenRawGroupRef.current.get(args.message.id) ?? args.message;
+        hiddenRawGroupRef.current.delete(args.message.id);
+        setGroupMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
+        const pendingHide = inFlightHideRpcRef.current.get(args.message.id);
+        if (pendingHide) {
+          await pendingHide.catch(() => undefined);
+        }
         await tursoRpc(
           "mutateGroupMessage",
           { messageId: args.message.id, action: "unhideForMe" },
           { slotId },
         );
+        setGroupMessagesQuery((prev) => mergeMessagesById(prev ?? [], [rawToRestore]));
       },
 
       unsendGroupMut: async (args: { messageId: string }) => {
@@ -1443,6 +1528,24 @@ export function useTursoReactiveSession(
           "mutateGroupMessage",
           { messageId: args.messageId, action: "unsend" },
           { slotId },
+        );
+        const nowTs = Date.now();
+        setGroupMessagesQuery((prev) =>
+          prev?.map((m) =>
+            m.id === args.messageId
+              ? {
+                  ...m,
+                  body: "",
+                  attachmentUrl: undefined,
+                  attachmentName: undefined,
+                  attachmentType: undefined,
+                  stickerUrl: undefined,
+                  stickerName: undefined,
+                  unsentAt: nowTs,
+                  reactions: [],
+                }
+              : m,
+          ),
         );
         return Boolean(res.showUnsendNotice);
       },

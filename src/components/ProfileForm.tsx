@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { AVATAR_COLORS, colorById } from "../lib/colors";
+import {
+  ensureInfiniteLoopGifFile,
+  ensureValidFileMime,
+  isAnimatedOrGifFile,
+} from "../lib/imageUtils";
 import { useJaText } from "../lib/store";
 import {
   USERNAME_REGEX,
@@ -7,7 +12,7 @@ import {
   type JaUser,
   type UserSocialLink,
 } from "../lib/types";
-import { Avatar } from "./Avatar";
+import { AnimatedMediaImg, Avatar } from "./Avatar";
 import { MessageMarkdown } from "./MessageMarkdown";
 import {
   SOCIAL_PLATFORMS,
@@ -132,10 +137,14 @@ export function ProfileForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [username]);
 
-  function pickImage(file: File | undefined, set: (s: ImageState) => void) {
-    if (!file) return;
+  async function pickImage(rawFile: File | undefined, set: (s: ImageState) => void) {
+    if (!rawFile) return;
+    const isGif = await isAnimatedOrGifFile(rawFile);
+    const file = isGif
+      ? await ensureInfiniteLoopGifFile(rawFile)
+      : await ensureValidFileMime(rawFile);
     if (!file.type.startsWith("image/")) {
-      setError("Please choose an image file.");
+      setError("Please choose an image or GIF file.");
       return;
     }
     set({ kind: "new", file, preview: URL.createObjectURL(file) });
@@ -289,14 +298,13 @@ export function ProfileForm({
           >
             <div
               className="pf-banner"
-              style={
-                bannerPreview
-                  ? { backgroundImage: `url(${bannerPreview})` }
-                  : { background: color.gradient }
-              }
+              style={!bannerPreview ? { background: color.gradient } : undefined}
               onClick={() => bannerInput.current?.click()}
               title="Click to set your banner"
             >
+              {bannerPreview && (
+                <AnimatedMediaImg src={bannerPreview} className="profile-banner-img" />
+              )}
               <span className="pf-banner-hint">
                 <ImageIcon size={14} /> {bannerPreview ? "Change banner" : "Add a banner"}
               </span>
@@ -316,9 +324,12 @@ export function ProfileForm({
             <input
               ref={bannerInput}
               type="file"
-              accept="image/*"
+              accept="image/*,.gif"
               hidden
-              onChange={(e) => pickImage(e.target.files?.[0], setBanner)}
+              onChange={(e) => {
+                void pickImage(e.target.files?.[0], setBanner);
+                e.target.value = "";
+              }}
             />
 
             <div className="pf-avatar-zone">
@@ -335,9 +346,12 @@ export function ProfileForm({
               <input
                 ref={pfpInput}
                 type="file"
-                accept="image/*"
+                accept="image/*,.gif"
                 hidden
-                onChange={(e) => pickImage(e.target.files?.[0], setAvatar)}
+                onChange={(e) => {
+                  void pickImage(e.target.files?.[0], setAvatar);
+                  e.target.value = "";
+                }}
               />
               <div className="pf-preview-names">
                 <strong>{previewUser.displayName}</strong>

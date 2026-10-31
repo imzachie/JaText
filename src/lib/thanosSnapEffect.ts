@@ -6,11 +6,13 @@
  *  - ThanosEffect-OpenGL/res/raw/dust_vertex.glsl & dust_fragment.glsl
  */
 
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+
 const ALPHAS = [0.3, 0.6, 1.0] as const;
-const MIN_DURATION_MS = 1400;
-const MAX_DURATION_MS = 2800;
-const LINE_SENSITIVE_MS = 600;
-const LINE_STEP_DELAY_MS = 16;
+const MIN_DURATION_MS = 850;
+const MAX_DURATION_MS = 1650;
+const LINE_SENSITIVE_MS = 360;
+const LINE_STEP_DELAY_MS = 11;
 
 interface SnapParticle {
   initialX: number;
@@ -32,6 +34,8 @@ interface SnapParticle {
 }
 
 interface ActiveSnapRenderer {
+  messageId: string;
+  targetEl: HTMLElement;
   offscreen: HTMLCanvasElement;
   imageData: Uint8ClampedArray;
   width: number;
@@ -50,6 +54,9 @@ interface ActiveSnapRenderer {
   particles: SnapParticle[];
   firstFrameCallback?: () => void;
   firstFrameFired: boolean;
+  sweepCompleteFired: boolean;
+  onSweepComplete?: () => void;
+  fallbackTimerId: number | null;
 }
 
 let overlayCanvas: HTMLCanvasElement | null = null;
@@ -57,6 +64,75 @@ let overlayCtx: CanvasRenderingContext2D | null = null;
 let activeRenderers: ActiveSnapRenderer[] = [];
 let rafId: number | null = null;
 let lastFrameTs = 0;
+
+const recentlySnappedAtById = new Map<string, number>();
+const activeSweepListenersById = new Map<string, Set<() => void>>();
+
+function restoreTargetVisibility(el: HTMLElement) {
+  el.style.opacity = "";
+  el.style.pointerEvents = "";
+}
+
+function finalizeRendererSweep(r: ActiveSnapRenderer) {
+  if (r.sweepCompleteFired) return;
+  r.sweepCompleteFired = true;
+  if (r.fallbackTimerId !== null && typeof window !== "undefined") {
+    window.clearTimeout(r.fallbackTimerId);
+    r.fallbackTimerId = null;
+  }
+  restoreTargetVisibility(r.targetEl);
+  r.onSweepComplete?.();
+  const listeners = activeSweepListenersById.get(r.messageId);
+  activeSweepListenersById.delete(r.messageId);
+  if (listeners) {
+    listeners.forEach((fn) => {
+      try {
+        fn();
+      } catch {
+        // ignore listener error
+      }
+    });
+  }
+}
+
+function markMessageRecentlySnapped(messageId: string) {
+  const now = Date.now();
+  recentlySnappedAtById.set(messageId, now);
+  if (recentlySnappedAtById.size > 400) {
+    for (const [k, ts] of recentlySnappedAtById) {
+      if (now - ts > 30_000) recentlySnappedAtById.delete(k);
+    }
+  }
+}
+
+export function hasMessageRecentlySnapped(messageId: string): boolean {
+  const ts = recentlySnappedAtById.get(messageId);
+  if (!ts) return false;
+  if (Date.now() - ts > 30_000) {
+    recentlySnappedAtById.delete(messageId);
+    return false;
+  }
+  return true;
+}
+
+export function isMessageSweepActive(messageId: string): boolean {
+  return activeSweepListenersById.has(messageId);
+}
+
+export function subscribeMessageSweepComplete(
+  messageId: string,
+  onComplete: () => void,
+): () => void {
+  const existing = activeSweepListenersById.get(messageId);
+  if (!existing) {
+    onComplete();
+    return () => undefined;
+  }
+  existing.add(onComplete);
+  return () => {
+    existing.delete(onComplete);
+  };
+}
 
 function randInt(maxExclusive: number): number {
   if (maxExclusive <= 1) return 0;
@@ -298,10 +374,11 @@ function spawnNextLinesIfReady(r: ActiveSnapRenderer, nowMs: number) {
       r.endRenderingTime = r.time;
     }
     r.animatedLineWidth = r.width;
+    finalizeRendererSweep(r);
     return;
   }
 
-  const renderCount = r.width > 300 ? 2 : 1;
+  const renderCount = r.width > 260 ? 3 : 2;
   let emittedCols = 0;
 
   while (emittedCols < renderCount && r.line < r.maxLine) {
@@ -343,6 +420,14 @@ function spawnNextLinesIfReady(r: ActiveSnapRenderer, nowMs: number) {
     if (onThisLine > 0) {
       emittedCols += 1;
     }
+  }
+
+  if (r.line >= r.maxLine) {
+    if (r.endRenderingTime === 0) {
+      r.endRenderingTime = r.time;
+    }
+    r.animatedLineWidth = r.width;
+    finalizeRendererSweep(r);
   }
 
   r.nextLineTime = nowMs + LINE_STEP_DELAY_MS;
@@ -395,10 +480,10 @@ function drawRenderer(ctx: CanvasRenderingContext2D, r: ActiveSnapRenderer, delt
         fraction *
         renderingEffect;
 
-    const firstRenderingFraction = p.time / 200;
+    const firstRenderingFraction = p.time / 130;
     let rad = p.initialR * 1.2;
     if (firstRenderingFraction > 1) {
-      const rTimeFraction = (p.time - 200) / Math.max(1, p.lifeTime - 200);
+      const rTimeFraction = (p.time - 130) / Math.max(1, p.lifeTime - 130);
       rad = Math.min(15, rad * (1 - rTimeFraction));
     } else {
       const originalSize = Math.max(rad, p.initialR);
@@ -420,12 +505,19 @@ function drawRenderer(ctx: CanvasRenderingContext2D, r: ActiveSnapRenderer, delt
   }
 
   if (r.endRenderingTime === 0) return true;
-  return r.time <= r.endRenderingTime + MAX_DURATION_MS;
+  const stillAnimating = r.time <= r.endRenderingTime + MAX_DURATION_MS;
+  if (!stillAnimating) {
+    finalizeRendererSweep(r);
+  }
+  return stillAnimating;
 }
 
 function stepAnimation(nowTs: number) {
   const ctx = ensureOverlayCanvas();
   if (!ctx || !overlayCanvas) {
+    for (const r of activeRenderers) {
+      finalizeRendererSweep(r);
+    }
     activeRenderers = [];
     teardownOverlayIfIdle();
     return;
@@ -443,6 +535,8 @@ function stepAnimation(nowTs: number) {
     spawnNextLinesIfReady(r, nowWall);
     if (drawRenderer(ctx, r, deltaMs)) {
       remaining.push(r);
+    } else {
+      finalizeRendererSweep(r);
     }
   }
   activeRenderers = remaining;
@@ -457,16 +551,29 @@ function stepAnimation(nowTs: number) {
 
 /**
  * Triggers the 1:1 Telegram Thanos Snap disintegration effect on a message DOM node by ID.
- * Invokes `onFirstFrameRendered` as soon as the particle canvas takes over visual rendering.
+ * Invokes `onFirstFrameRendered` as soon as the particle canvas takes over visual rendering,
+ * and `onSweepComplete` right when the disintegration sweep crosses the right edge of the bubble
+ * (restoring element inline visibility so the unsent placeholder renders visibly).
  */
 export function triggerMessageThanosSnapById(
   messageId: string,
   onFirstFrameRendered?: () => void,
+  onSweepComplete?: () => void,
 ): boolean {
   if (typeof document === "undefined") {
     onFirstFrameRendered?.();
+    onSweepComplete?.();
     return false;
   }
+  if (activeSweepListenersById.has(messageId)) {
+    if (onSweepComplete) {
+      subscribeMessageSweepComplete(messageId, onSweepComplete);
+    }
+    onFirstFrameRendered?.();
+    return true;
+  }
+
+  markMessageRecentlySnapped(messageId);
 
   const rowEl =
     document.getElementById(`message-${messageId}`) ||
@@ -475,6 +582,7 @@ export function triggerMessageThanosSnapById(
     document.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
   if (!rowEl) {
     onFirstFrameRendered?.();
+    onSweepComplete?.();
     return false;
   }
 
@@ -487,12 +595,14 @@ export function triggerMessageThanosSnapById(
   const snap = rasterizeElementToCanvas(targetEl);
   if (!snap) {
     onFirstFrameRendered?.();
+    onSweepComplete?.();
     return false;
   }
 
   const ctxOff = snap.canvas.getContext("2d", { willReadFrequently: true });
   if (!ctxOff) {
     onFirstFrameRendered?.();
+    onSweepComplete?.();
     return false;
   }
 
@@ -501,6 +611,7 @@ export function triggerMessageThanosSnapById(
     imgData = ctxOff.getImageData(0, 0, snap.canvas.width, snap.canvas.height).data;
   } catch {
     onFirstFrameRendered?.();
+    onSweepComplete?.();
     return false;
   }
 
@@ -508,7 +619,11 @@ export function triggerMessageThanosSnapById(
   const perPx = Math.min(10, 5 + pendingWeight * 2);
   const maxLine = Math.max(1, Math.floor(snap.canvas.width / perPx));
 
+  activeSweepListenersById.set(messageId, new Set());
+
   const renderer: ActiveSnapRenderer = {
+    messageId,
+    targetEl,
     offscreen: snap.canvas,
     imageData: imgData,
     width: snap.canvas.width,
@@ -526,11 +641,21 @@ export function triggerMessageThanosSnapById(
     endRenderingTime: 0,
     particles: [],
     firstFrameCallback: () => {
-      targetEl.style.opacity = "0";
-      targetEl.style.pointerEvents = "none";
+      if (!renderer.sweepCompleteFired) {
+        targetEl.style.opacity = "0";
+        targetEl.style.pointerEvents = "none";
+      }
       onFirstFrameRendered?.();
     },
     firstFrameFired: false,
+    sweepCompleteFired: false,
+    onSweepComplete,
+    fallbackTimerId:
+      typeof window !== "undefined"
+        ? window.setTimeout(() => {
+            finalizeRendererSweep(renderer);
+          }, 850)
+        : null,
   };
 
   activeRenderers.push(renderer);
@@ -539,4 +664,116 @@ export function triggerMessageThanosSnapById(
     rafId = window.requestAnimationFrame(stepAnimation);
   }
   return true;
+}
+
+/**
+ * Watches a conversation's message list for live -> unsent transitions on BOTH sender
+ * and recipient sides:
+ *  - When the peer unsends a message, holds the live message in DOM for one layout pass,
+ *    triggers the Thanos Snap disintegration sweep on the live bubble, and reveals
+ *    "This message was unsent" right as the sweep completes.
+ *  - When the local sender clicks Unsend (which already started a sweep), holds the live
+ *    DOM node until the sweep finishes so "This message was unsent" mounts cleanly with
+ *    full opacity right after the bubble disintegrates.
+ */
+export function useUnsendThanosWatcher<T extends { id: string; unsentAt?: number }>(
+  messages: T[],
+  conversationKey: string,
+): T[] {
+  const [holdingById, setHoldingById] = useState<Record<string, T>>({});
+  const stateRef = useRef<{
+    key: string;
+    liveById: Map<string, T>;
+    pendingAutoSnap: Map<string, T>;
+    pendingHoldSweep: Map<string, T>;
+  }>({
+    key: conversationKey,
+    liveById: new Map(),
+    pendingAutoSnap: new Map(),
+    pendingHoldSweep: new Map(),
+  });
+
+  if (stateRef.current.key !== conversationKey) {
+    stateRef.current = {
+      key: conversationKey,
+      liveById: new Map(),
+      pendingAutoSnap: new Map(),
+      pendingHoldSweep: new Map(),
+    };
+  }
+
+  useEffect(() => {
+    setHoldingById({});
+  }, [conversationKey]);
+
+  const effectiveMessages = messages.map((msg) => {
+    if (!msg.unsentAt) {
+      stateRef.current.liveById.set(msg.id, msg);
+      return msg;
+    }
+
+    const held = holdingById[msg.id];
+    if (held) {
+      return held;
+    }
+
+    const prevLive = stateRef.current.liveById.get(msg.id);
+    if (!prevLive) {
+      return msg;
+    }
+
+    stateRef.current.liveById.delete(msg.id);
+
+    if (isMessageSweepActive(msg.id)) {
+      stateRef.current.pendingHoldSweep.set(msg.id, prevLive);
+      return prevLive;
+    }
+
+    if (!hasMessageRecentlySnapped(msg.id)) {
+      stateRef.current.pendingAutoSnap.set(msg.id, prevLive);
+      return prevLive;
+    }
+
+    return msg;
+  });
+
+  useLayoutEffect(() => {
+    const autoSnapEntries = Array.from(stateRef.current.pendingAutoSnap.entries());
+    const holdSweepEntries = Array.from(stateRef.current.pendingHoldSweep.entries());
+    stateRef.current.pendingAutoSnap.clear();
+    stateRef.current.pendingHoldSweep.clear();
+
+    if (autoSnapEntries.length === 0 && holdSweepEntries.length === 0) return;
+
+    const releaseId = (id: string) => {
+      setHoldingById((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    };
+
+    const nextHolds: Record<string, T> = {};
+
+    for (const [msgId, liveMsg] of holdSweepEntries) {
+      if (isMessageSweepActive(msgId)) {
+        nextHolds[msgId] = liveMsg;
+        subscribeMessageSweepComplete(msgId, () => releaseId(msgId));
+      }
+    }
+
+    for (const [msgId, liveMsg] of autoSnapEntries) {
+      const started = triggerMessageThanosSnapById(msgId, undefined, () => releaseId(msgId));
+      if (started && isMessageSweepActive(msgId)) {
+        nextHolds[msgId] = liveMsg;
+      }
+    }
+
+    if (Object.keys(nextHolds).length > 0) {
+      setHoldingById((prev) => ({ ...prev, ...nextHolds }));
+    }
+  });
+
+  return effectiveMessages;
 }

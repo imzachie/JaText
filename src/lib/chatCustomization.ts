@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Capacitor } from "@capacitor/core";
 import { ACCOUNT_SLOT_CHANGE_EVENT, getScopedStorageKey } from "./accountManager";
 
 export type BubbleStyleId =
@@ -299,10 +298,18 @@ function readWallpaperCache(): Record<string, string | null> {
 
 export function getCachedWallpaper(scopeKey: string): string | null | undefined {
   const map = readWallpaperCache();
-  return Object.prototype.hasOwnProperty.call(map, scopeKey) ? map[scopeKey] : undefined;
+  if (!Object.prototype.hasOwnProperty.call(map, scopeKey)) return undefined;
+  const cached = map[scopeKey];
+  if (typeof cached === "string" && cached.startsWith("blob:")) {
+    return undefined;
+  }
+  return cached;
 }
 
 export function saveCachedWallpaper(scopeKey: string, url: string | null): void {
+  if (typeof url === "string" && url.startsWith("blob:")) {
+    return;
+  }
   try {
     const map = readWallpaperCache();
     map[scopeKey] = url;
@@ -313,19 +320,5 @@ export function saveCachedWallpaper(scopeKey: string, url: string | null): void 
 }
 
 export function useIsMobileWallpaperSupported(): boolean {
-  const [isMobile, setIsMobile] = useState<boolean>(() => {
-    if (Capacitor.isNativePlatform()) return true;
-    if (typeof window === "undefined") return false;
-    return window.matchMedia("(max-width: 820px)").matches;
-  });
-
-  useEffect(() => {
-    if (Capacitor.isNativePlatform()) return;
-    const mq = window.matchMedia("(max-width: 820px)");
-    const update = () => setIsMobile(mq.matches);
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
-  }, []);
-
-  return isMobile;
+  return true;
 }

@@ -97,7 +97,12 @@ import { MessageLinkEmbeds } from "./LinkEmbeds";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
 import { SwipeToReply } from "./SwipeToReply";
-import { Avatar } from "./Avatar";
+import { AnimatedMediaImg, Avatar } from "./Avatar";
+import {
+  ensureInfiniteLoopGifFile,
+  ensureValidFileMime,
+  isAnimatedOrGifFile,
+} from "../lib/imageUtils";
 import { StickerPicker } from "./StickerPicker";
 import {
   clearPendingMessageJump,
@@ -106,7 +111,10 @@ import {
 } from "../lib/forwardedContext";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { DeleteForMeToast, type DeletedForMeUndoState } from "./DeleteForMeToast";
-import { triggerMessageThanosSnapById } from "../lib/thanosSnapEffect";
+import {
+  triggerMessageThanosSnapById,
+  useUnsendThanosWatcher,
+} from "../lib/thanosSnapEffect";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
@@ -626,6 +634,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                     onReply={() => onSwipeReply(message)}
                   >
                     <DecoratedMessageBubble
+                      key={message.unsentAt ? "unsent" : "live"}
                       styleId={groupCallInvite ? "default" : (message.bubbleStyle ?? "default")}
                       mine={mine}
                       unsent={Boolean(message.unsentAt)}
@@ -1731,9 +1740,13 @@ export function GroupChatView({
   const conversationReady = Boolean(groupId) && store.groupMessagesReady;
   const isMuted = group?.members.find((member) => member.id === store.me?.id)?.muted ?? false;
 
-  const { messages: displayedMessages, matchedPendingIds } = useMemo(
+  const { messages: rawDisplayedMessages, matchedPendingIds } = useMemo(
     () => getConversationMessages(pendingMessages, conversationMessages, store.me?.id),
     [conversationMessages, pendingMessages, store.me?.id],
+  );
+  const displayedMessages = useUnsendThanosWatcher(
+    rawDisplayedMessages,
+    `group:${groupId ?? ""}`,
   );
   const lastDisplayedKey = displayedMessages.at(-1)?.id ?? "";
   const lastDisplayedSenderId = displayedMessages.at(-1)?.senderId ?? "";
@@ -2480,10 +2493,14 @@ export function GroupChatView({
     }
   }
 
-  function pickGroupPicture(picked: File | undefined) {
-    if (!picked) return;
+  async function pickGroupPicture(rawPicked: File | undefined) {
+    if (!rawPicked) return;
+    const isGif = await isAnimatedOrGifFile(rawPicked);
+    const picked = isGif
+      ? await ensureInfiniteLoopGifFile(rawPicked)
+      : await ensureValidFileMime(rawPicked);
     if (!picked.type.startsWith("image/")) {
-      setManageError("Please choose an image file for the group picture.");
+      setManageError("Please choose an image or GIF file for the group picture.");
       return;
     }
     if (groupAvatarState.kind === "new") URL.revokeObjectURL(groupAvatarState.preview);
@@ -2638,11 +2655,7 @@ export function GroupChatView({
     >
       {showMobileWallpaper && activeWallpaperUrl ? (
         <div className="chat-wallpaper-layer" aria-hidden="true">
-          <img
-            src={activeWallpaperUrl}
-            alt=""
-            referrerPolicy="no-referrer"
-          />
+          <AnimatedMediaImg src={activeWallpaperUrl} />
         </div>
       ) : null}
       <header className="chat-header">
@@ -2656,12 +2669,9 @@ export function GroupChatView({
           aria-label="Open group settings"
         >
           {(group?.avatarUrl ?? summary?.avatarUrl) ? (
-            <img
+            <AnimatedMediaImg
               className="group-avatar"
               src={group?.avatarUrl ?? summary?.avatarUrl}
-              alt=""
-              referrerPolicy="no-referrer"
-              decoding="async"
             />
           ) : (
             <div className="group-avatar group-avatar-fallback" aria-hidden="true">
@@ -3192,10 +3202,9 @@ export function GroupChatView({
                     onClick={() => void forwardToGroup(target.id)}
                   >
                     {target.avatarUrl ? (
-                      <img
+                      <AnimatedMediaImg
                         className="group-avatar"
                         src={target.avatarUrl}
-                        alt=""
                         style={{ width: 38, height: 38 }}
                       />
                     ) : (
@@ -3363,7 +3372,11 @@ export function GroupChatView({
                     title="Click to change group picture"
                   >
                     {groupAvatarPreview ? (
-                      <img className="group-pfp-circle-img" src={groupAvatarPreview} alt={group.name} />
+                      <AnimatedMediaImg
+                        className="group-pfp-circle-img"
+                        src={groupAvatarPreview}
+                        alt={group.name}
+                      />
                     ) : (
                       <span className="group-pfp-circle-fallback" aria-hidden="true">
                         {(renameDraft.trim() || group.name).slice(0, 2).toUpperCase() || (
@@ -3378,10 +3391,10 @@ export function GroupChatView({
                   <input
                     ref={groupPfpInput}
                     type="file"
-                    accept="image/*"
+                    accept="image/*,.gif"
                     hidden
                     onChange={(event) => {
-                      pickGroupPicture(event.target.files?.[0]);
+                      void pickGroupPicture(event.target.files?.[0]);
                       event.currentTarget.value = "";
                     }}
                   />
@@ -3477,12 +3490,9 @@ export function GroupChatView({
                     title={group.avatarUrl ? "View group photo" : group.name}
                   >
                     {group.avatarUrl ? (
-                      <img
+                      <AnimatedMediaImg
                         className="group-pfp-circle-img"
                         src={group.avatarUrl}
-                        alt=""
-                        referrerPolicy="no-referrer"
-                        decoding="async"
                       />
                     ) : (
                       <span className="group-pfp-circle-fallback" aria-hidden="true">

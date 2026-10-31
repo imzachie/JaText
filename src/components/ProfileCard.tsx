@@ -14,7 +14,7 @@ import { togglePeerVerified, useE2EESnapshot } from "../lib/e2ee/keystore";
 import { normalizeAvatarSrc } from "../lib/imageUtils";
 import { useJaText } from "../lib/store";
 import type { ActivityStatus, JaUser } from "../lib/types";
-import { Avatar } from "./Avatar";
+import { AnimatedMediaImg, Avatar } from "./Avatar";
 import { LockIcon } from "./E2EEModals";
 import { MessageMarkdown } from "./MessageMarkdown";
 import {
@@ -121,22 +121,21 @@ export function ProfileCard({
       style={{ "--profile-outline": color.hex } as CSSProperties}
     >
       {effectiveWallpaper && (
-        <div
-          className="profile-card-wallpaper-ambient"
-          style={{ backgroundImage: `url(${effectiveWallpaper})` }}
-          aria-hidden="true"
-        />
+        <div className="profile-card-wallpaper-ambient" aria-hidden="true">
+          <AnimatedMediaImg src={effectiveWallpaper} className="profile-banner-img" />
+        </div>
       )}
       <div
         className="profile-banner"
-        style={
-          bannerSrc
-            ? { backgroundImage: `url(${bannerSrc})` }
-            : effectiveWallpaper
-              ? { backgroundImage: `url(${effectiveWallpaper})` }
-              : { background: color.gradient }
-        }
-      />
+        style={!bannerSrc && !effectiveWallpaper ? { background: color.gradient } : undefined}
+      >
+        {(bannerSrc || effectiveWallpaper) && (
+          <AnimatedMediaImg
+            src={bannerSrc || effectiveWallpaper}
+            className="profile-banner-img"
+          />
+        )}
+      </div>
       <div className="profile-body">
         <div className="profile-avatar-wrap">
           <Avatar user={user} size={86} ringWidth={3.5} status={status} />
