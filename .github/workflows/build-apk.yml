@@ -80,8 +80,20 @@ jobs:
             echo "::error title=CapacitorCheck::Capacitor resource found inside JaText-release.apk!"
             exit 1
           fi
+          python3 -c '
+          import zipfile, sys
+          with zipfile.ZipFile("JaText-release.apk") as z:
+              names = z.namelist()
+              libs = [n for n in names if n.startswith("lib/")]
+              for n in names:
+                  if n.startswith("classes") and n.endswith(".dex"):
+                      dex = z.read(n)
+                      if b"Lcom/getcapacitor/" in dex or b"LJaTextWebView;" in dex or b"Lcom/ahad00010/jatext/JaTextWebView;" in dex:
+                          sys.exit("Forbidden Capacitor/JaTextWebView class found in " + n)
+              print("Native libs in APK:", libs)
+          '
           APK_BYTES=$(stat -c%s JaText-release.apk)
-          echo "::notice title=PureNativeAPK::Verified pure native Jetpack Compose APK (${APK_BYTES} bytes, zero Capacitor, zero HTML bundle)."
+          echo "::notice title=PureNativeAPK::Verified pure native Jetpack Compose APK (${APK_BYTES} bytes, arm64-v8a + armeabi-v7a, zero Capacitor, zero WebView code, zero HTML bundle)."
 
       - name: Upload Release APK build artifact
         uses: actions/upload-artifact@v4
@@ -97,9 +109,7 @@ jobs:
           VERSION_CODE=$(grep -oP 'versionCode\s*=\s*\K\d+|versionCode\s+\K\d+' android/app/build.gradle | head -n 1)
           VERSION_NAME=$(grep -oP 'versionName\s*=?\s*"\K[^"]+' android/app/build.gradle | head -n 1)
           cp JaText-release.apk /tmp/JaText-release.apk
-          base64 -w 0 /tmp/JaText-release.apk > apk.b64
-          jq -Rs '{content: ., encoding: "base64"}' apk.b64 > blob_payload.json
-          BLOB_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --input blob_payload.json --jq .sha)
+          BLOB_SHA=$(git hash-object /tmp/JaText-release.apk)
           gh release delete apk-latest --cleanup-tag --yes || true
           gh release create apk-latest /tmp/JaText-release.apk \
             --title "JaText v${VERSION_NAME} (build ${VERSION_CODE})" \
