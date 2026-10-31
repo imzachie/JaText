@@ -109,7 +109,7 @@ private class SnapParticle(
     }
 }
 
-private class ActiveSnapInstance(
+internal class ActiveSnapInstance(
     private val bitmap: Bitmap,
     private val offsetX: Float,
     private val offsetY: Float,

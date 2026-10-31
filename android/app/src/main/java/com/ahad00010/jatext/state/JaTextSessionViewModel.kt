@@ -28,6 +28,7 @@ import com.ahad00010.jatext.data.CommunityPermissions
 import com.ahad00010.jatext.data.CommunityUser
 import com.ahad00010.jatext.data.DeviceLinkStatusResponse
 import com.ahad00010.jatext.data.E2EEPlainPayload
+import com.ahad00010.jatext.data.EncryptedBlobDescriptor
 import com.ahad00010.jatext.data.EncryptedStickerDescriptor
 import com.ahad00010.jatext.data.ForwardedMessageContext
 import com.ahad00010.jatext.data.FriendActivity
