@@ -24,7 +24,6 @@ jobs:
         with:
           distribution: "temurin"
           java-version: "21"
-          cache: "gradle"
 
       - name: Restore or cache release keystore
         uses: actions/cache@v4
