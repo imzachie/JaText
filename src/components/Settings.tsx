@@ -464,7 +464,11 @@ export function SettingsModal({
                     void signOut();
                   }}
                 >
-                  {accounts.length > 1 ? `Sign out of @${currentUser.username}` : "Sign out"}
+                  {isNative
+                    ? accounts.length > 1
+                      ? `Sign out of @${currentUser.username}`
+                      : "Sign out"
+                    : "Unlink device"}
                 </button>
               </div>
             </aside>
@@ -1040,7 +1044,7 @@ export function SettingsModal({
                     <div className="settings-inline-legal-card" style={{ marginTop: 4 }}>
                       <h4>App Version &amp; Updates</h4>
                       <p className="muted small">
-                        Installed release: <strong>JaText v3.5.1 (Build 43)</strong>. JaText checks
+                        Installed release: <strong>JaText v3.6.0 (Build 47)</strong>. JaText checks
                         for updates automatically on launch, or you can check manually below.
                       </p>
                       <button

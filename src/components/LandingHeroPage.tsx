@@ -124,10 +124,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.6.0",
+    date: "October 31, 2026",
+    headline: "Mobile QR Linked Devices, End-to-End Encrypted Companion Sync & Live Device Management",
+    latest: true,
+    bullets: [
+      "Link JaText Web directly from your phone via Settings -> Devices -> Scan with QR code with zero-knowledge ECDH + AES-256-GCM keyring and attachment sync.",
+      "View up to 5 connected web sessions live in Mobile Settings and disconnect any linked browser session instantaneously.",
+    ],
+  },
+  {
     version: "v3.5.4",
     date: "October 31, 2026",
     headline: "Seamless Desktop & Mobile E2EE Keyring Sync, Stroked SVG Chat Menu & Wallpaper Event Pills",
-    latest: true,
     bullets: [
       "Unified multi-device E2EE keyring auto-sync and live Turso delta sync across Desktop Web and Native Android so messages sent from either device decrypt immediately with zero waiting.",
       "Upgraded the mobile 3-dots chat menu to JaText's crisp stroked SVG vector icons, rendered shared wallpaper updates as clean event pills, and added a one-tap Sync Messages & Keys action.",
@@ -366,7 +375,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.5.1 · Live
+                v3.6.0 · Live
               </span>
             </span>
           </a>
@@ -485,7 +494,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.5.1 (Build 43)</strong>
+                    <strong>v3.6.0 (Build 47)</strong>
                     <span>Web &amp; Signed APK</span>
                   </div>
                 </div>
@@ -855,7 +864,7 @@ export function LandingHeroPage() {
               <h2>Ready to jump into your chats?</h2>
               <p>
                 Launch the full JaText web app at <strong>jatext.vercel.app/chats</strong> or grab
-                the latest signed Android Release APK (v3.5.1).
+                the latest signed Android Release APK (v3.6.0).
               </p>
             </div>
             <div className="jt-cta-banner-actions">
@@ -874,7 +883,7 @@ export function LandingHeroPage() {
                 href="/downloads/JaText-release.apk"
                 className="jt-btn-secondary jt-btn-lg"
               >
-                Get Android APK (v3.5.1)
+                Get Android APK (v3.6.0)
               </a>
             </div>
           </div>
@@ -886,7 +895,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.5.1</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.6.0</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

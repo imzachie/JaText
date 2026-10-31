@@ -242,6 +242,15 @@ export default async function handler(req, res) {
       if (!auth?.userId) {
         return res.status(401).json({ ok: false, error: "Please sign in before uploading files." });
       }
+      if (auth.linkedDeviceId) {
+        const devCheck = await db.execute({
+          sql: `SELECT id FROM linked_devices WHERE id = ? AND user_id = ? LIMIT 1`,
+          args: [auth.linkedDeviceId, auth.userId],
+        });
+        if (!devCheck.rows.length) {
+          return res.status(401).json({ ok: false, error: "This linked device was disconnected." });
+        }
+      }
 
       const action = String(req.query?.action || urlObj.searchParams.get("action") || "").trim();
       const origin = resolvePublicOrigin(req);

@@ -414,6 +414,11 @@ export async function captureUrlOAuthCallbackIfPresent(
   url.searchParams.delete("authError");
   window.history.replaceState({}, "", url.pathname + url.search + url.hash);
 
+  // Web is strictly linked-device via Mobile QR; ignore direct OAuth tokens on Web.
+  if (!Capacitor.isNativePlatform()) {
+    return false;
+  }
+
   if (authError) {
     pendingWebOAuthError = authError;
     return false;

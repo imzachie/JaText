@@ -92,7 +92,7 @@ export function Sidebar({
 }: {
   onOpenProfile: (user: JaUser) => void;
   onOpenSettings: () => void;
-  onOpenAccountSwitcher: () => void;
+  onOpenAccountSwitcher?: () => void;
 }) {
   const store = useJaText();
   const { session, startCall, endCall } = useCall();
@@ -425,20 +425,22 @@ export function Sidebar({
           <span>JaText</span>
         </div>
         <div className="sidebar-header-actions">
-          <button
-            type="button"
-            className="icon-btn account-switch-header-btn"
-            onClick={onOpenAccountSwitcher}
-            title="Switch or add account"
-            aria-label="Switch or add account"
-          >
-            <SwitchAccountIcon size={17} />
-            {accounts.length > 1 && (
-              <span className="account-count-badge" aria-hidden="true">
-                {accounts.length}
-              </span>
-            )}
-          </button>
+          {onOpenAccountSwitcher && (
+            <button
+              type="button"
+              className="icon-btn account-switch-header-btn"
+              onClick={onOpenAccountSwitcher}
+              title="Switch or add account"
+              aria-label="Switch or add account"
+            >
+              <SwitchAccountIcon size={17} />
+              {accounts.length > 1 && (
+                <span className="account-count-badge" aria-hidden="true">
+                  {accounts.length}
+                </span>
+              )}
+            </button>
+          )}
           <button className="icon-btn" onClick={onOpenSettings} title="Settings" aria-label="Settings">
             <SettingsIcon size={18} />
           </button>
@@ -462,17 +464,21 @@ export function Sidebar({
           <span className="greeting-title">
             Good {dayPart(now)}, {me.displayName}!
           </span>
-          <button
-            type="button"
-            className="greeting-account-btn"
-            onClick={onOpenAccountSwitcher}
-            title="Switch or add account"
-          >
+          {onOpenAccountSwitcher ? (
+            <button
+              type="button"
+              className="greeting-account-btn"
+              onClick={onOpenAccountSwitcher}
+              title="Switch or add account"
+            >
+              <span className="greeting-username">@{me.username}</span>
+              <ChevronUpDownIcon size={13} />
+            </button>
+          ) : (
             <span className="greeting-username">@{me.username}</span>
-            <ChevronUpDownIcon size={13} />
-          </button>
+          )}
         </div>
-        {otherSavedAccounts.length > 0 && (
+        {onOpenAccountSwitcher && otherSavedAccounts.length > 0 && (
           <div className="greeting-quick-accounts">
             {otherSavedAccounts.slice(0, 2).map((acct) => (
               <button

@@ -1,5 +1,8 @@
 package com.ahad00010.jatext.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
@@ -41,12 +44,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Gavel
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.NotificationsActive
@@ -54,8 +61,10 @@ import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -100,6 +109,7 @@ import coil.compose.AsyncImage
 import com.ahad00010.jatext.BuildConfig
 import com.ahad00010.jatext.JaTextSoundManager
 import com.ahad00010.jatext.data.JaUser
+import com.ahad00010.jatext.data.LinkedWebDevice
 import com.ahad00010.jatext.data.TursoApiClient
 import com.ahad00010.jatext.data.UserSocialLink
 import com.ahad00010.jatext.data.UserWebsiteLink
@@ -126,6 +136,9 @@ import com.ahad00010.jatext.ui.theme.CustomThemeData
 import com.ahad00010.jatext.ui.theme.JaTextPalette
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.random.Random
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -142,21 +155,23 @@ fun SettingsModalScreen(
     val scope = rememberCoroutineScope()
     val me = state.me ?: return
 
-    var activeCategory by remember { mutableStateOf("profile") } // profile | appearance | socials | audio | encryption | legal
+    var activeCategory by remember { mutableStateOf("profile") } // profile | appearance | devices | socials | audio | encryption | legal
     var showCustomThemeDrawer by remember { mutableStateOf(false) }
+    var showQrScanner by remember { mutableStateOf(false) }
     var legalDialogTab by remember { mutableStateOf<String?>(null) }
 
     BackHandler {
-        if (showCustomThemeDrawer) {
-            showCustomThemeDrawer = false
-        } else {
-            onClose()
+        when {
+            showQrScanner -> showQrScanner = false
+            showCustomThemeDrawer -> showCustomThemeDrawer = false
+            else -> onClose()
         }
     }
 
     val categories = listOf(
         Triple("profile", "Profile", Icons.Rounded.Person),
         Triple("appearance", "Appearance", Icons.Rounded.Palette),
+        Triple("devices", "Devices", Icons.Rounded.Devices),
         Triple("socials", "Socials", Icons.Rounded.Link),
         Triple("audio", "Alerts & Audio", Icons.Rounded.NotificationsActive),
         Triple("encryption", "Encryption", Icons.Rounded.Lock),
@@ -557,6 +572,19 @@ fun SettingsModalScreen(
                             )
                         }
 
+                        /* ==================== 3rd Tab: QR Linked Devices (Max 5 Connected Devices) ==================== */
+                        "devices" -> {
+                            LinkedDevicesSettingsSection(
+                                state = state,
+                                vm = vm,
+                                palette = palette,
+                                onOpenScanner = {
+                                    vm.clearDeviceLinkFeedback()
+                                    showQrScanner = true
+                                },
+                            )
+                        }
+
                         /* ==================== 1:1 Web Socials & Website (`ProfileForm.tsx` `sectionMode="socials"`) ==================== */
                         "socials" -> {
                             WebParitySocialsAndWebsiteSection(me = me, vm = vm)
@@ -697,12 +725,10 @@ fun SettingsModalScreen(
                         }
 
                         "encryption" -> {
-                            var showVaultUnlock by remember { mutableStateOf(false) }
-                            var useRecoveryMode by remember { mutableStateOf(false) }
-                            var vaultSecretInput by remember { mutableStateOf("") }
+                            var copiedFp by remember { mutableStateOf(false) }
 
                             Text(
-                                text = "End-to-End Encryption & Multi-Device Sync",
+                                text = "End-to-End Encryption",
                                 color = palette.textPrimary,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
@@ -715,71 +741,6 @@ fun SettingsModalScreen(
                                 lineHeight = 19.sp,
                             )
                             Spacer(Modifier.height(16.dp))
-
-                            /* ---- Multi-Device Keyring Sync Card ---- */
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(palette.surface)
-                                    .border(1.dp, palette.borderStrong, RoundedCornerShape(16.dp))
-                                    .padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    WebUiSvgIcon(
-                                        kind = WebUiIconKind.RefreshSync,
-                                        tint = palette.accent,
-                                        size = 18.dp,
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        text = "Multi-Device Message & Key Sync",
-                                        color = palette.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 14.5.sp,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(999.dp))
-                                            .background(palette.success.copy(alpha = 0.16f))
-                                            .padding(horizontal = 9.dp, vertical = 3.dp)
-                                    ) {
-                                        Text(
-                                            text = "Auto-Sync On",
-                                            color = palette.success,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                        )
-                                    }
-                                }
-                                Text(
-                                    text = "Your account keyring automatically converges across Desktop Web and Android Mobile so messages sent from either device decrypt immediately. Tap below anytime to force an instant re-sync.",
-                                    color = palette.textSecondary,
-                                    fontSize = 12.8.sp,
-                                    lineHeight = 18.sp,
-                                )
-                                JaWebPrimaryButton(
-                                    text = if (state.isSyncingKeysAndMessages) {
-                                        "Syncing Messages & Keys…"
-                                    } else {
-                                        "Sync Messages & Keys Now"
-                                    },
-                                    onClick = { vm.syncMessagesAndKeysNow() },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = !state.isSyncingKeysAndMessages,
-                                    leading = {
-                                        WebUiSvgIcon(
-                                            kind = WebUiIconKind.RefreshSync,
-                                            tint = palette.onAccent,
-                                            size = 16.dp,
-                                        )
-                                    },
-                                )
-                            }
-
-                            Spacer(Modifier.height(14.dp))
 
                             /* ---- Active Identity Key Card ---- */
                             Column(
@@ -818,11 +779,30 @@ fun SettingsModalScreen(
                                     fontSize = 12.5.sp,
                                     fontFamily = FontFamily.Monospace,
                                 )
+                                if (state.myKeyFingerprint.isNotBlank()) {
+                                    Spacer(Modifier.height(10.dp))
+                                    JaWebGhostButton(
+                                        text = if (copiedFp) "Copied" else "Copy security key",
+                                        onClick = {
+                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                            cm?.setPrimaryClip(
+                                                ClipData.newPlainText(
+                                                    "JaText Security Key",
+                                                    "JaText E2EE Key (@${me.username} · ${state.myKeyId})\nFingerprint: ${state.myKeyFingerprint}",
+                                                )
+                                            )
+                                            copiedFp = true
+                                            scope.launch {
+                                                delay(1800)
+                                                copiedFp = false
+                                            }
+                                        },
+                                    )
+                                }
                             }
 
                             Spacer(Modifier.height(14.dp))
 
-                            /* ---- Optional E2EE Backup Vault Unlock (PIN / 24-Char Recovery Key) ---- */
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -830,76 +810,24 @@ fun SettingsModalScreen(
                                     .background(palette.surface)
                                     .border(1.dp, palette.borderStrong, RoundedCornerShape(16.dp))
                                     .padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    WebUiSvgIcon(
-                                        kind = WebUiIconKind.Unlock,
-                                        tint = palette.accent,
-                                        size = 18.dp,
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        text = "E2EE Cloud Backup Vault",
-                                        color = palette.textPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    JaWebGhostButton(
-                                        text = if (showVaultUnlock) "Hide" else "Unlock Vault",
-                                        onClick = { showVaultUnlock = !showVaultUnlock },
-                                    )
-                                }
                                 Text(
-                                    text = if (state.hasRemoteE2EEVault) {
-                                        "Encrypted E2EE Backup Vault detected on your account. If you ever created a PIN or 24-character Recovery Key backup on Desktop, you can also unlock it here."
-                                    } else {
-                                        "If you saved an encrypted E2EE Backup Vault with a PIN or 24-character Recovery Key on Desktop, you can unlock it here."
-                                    },
+                                    text = "App Version & Updates",
+                                    color = palette.textPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                )
+                                Text(
+                                    text = "Installed release: JaText v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE}). JaText checks for updates automatically on launch, or you can check manually below.",
                                     color = palette.textSecondary,
                                     fontSize = 12.5.sp,
                                     lineHeight = 17.5.sp,
                                 )
-                                if (showVaultUnlock) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        JaWebGhostButton(
-                                            text = "Backup PIN",
-                                            onClick = { useRecoveryMode = false },
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                        JaWebGhostButton(
-                                            text = "Recovery Key",
-                                            onClick = { useRecoveryMode = true },
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                    }
-                                    JaWebInput(
-                                        value = vaultSecretInput,
-                                        onValueChange = { vaultSecretInput = it },
-                                        placeholder = if (useRecoveryMode) {
-                                            "XXXXXX-XXXXXX-XXXXXX-XXXXXX"
-                                        } else {
-                                            "Enter your E2EE Vault PIN / passphrase"
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                    JaWebPrimaryButton(
-                                        text = if (state.isSyncingKeysAndMessages) "Unlocking…" else "Unlock Vault & Sync",
-                                        onClick = {
-                                            vm.restoreE2EEVault(
-                                                secretInput = vaultSecretInput,
-                                                useRecoveryKey = useRecoveryMode,
-                                                onSuccess = {
-                                                    vaultSecretInput = ""
-                                                    showVaultUnlock = false
-                                                },
-                                            )
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        enabled = !state.isSyncingKeysAndMessages && vaultSecretInput.isNotBlank(),
-                                    )
-                                }
+                                JaWebGhostButton(
+                                    text = "Check for App Updates",
+                                    onClick = { vm.checkApkUpdate(manual = true) },
+                                )
                             }
                         }
 
@@ -925,6 +853,16 @@ fun SettingsModalScreen(
                 onCloseAll = {
                     showCustomThemeDrawer = false
                     onClose()
+                },
+            )
+        }
+
+        if (showQrScanner) {
+            QrScannerModal(
+                onDismiss = { showQrScanner = false },
+                onQrScanned = { rawCode ->
+                    showQrScanner = false
+                    vm.handleScannedDeviceQrCode(rawCode)
                 },
             )
         }
@@ -2299,5 +2237,379 @@ private fun queryUriFileName(context: android.content.Context, uri: Uri): String
         }
     } catch (_: Throwable) {
         null
+    }
+}
+
+/* ==================== 3rd Tab: QR Linked Devices (Max 5 Connected Devices) ==================== */
+
+@Composable
+private fun LinkedDevicesSettingsSection(
+    state: SessionUiState,
+    vm: JaTextSessionViewModel,
+    palette: JaTextPalette,
+    onOpenScanner: () -> Unit,
+) {
+    LaunchedEffect(state.slotId) {
+        vm.refreshLinkedDevices()
+    }
+
+    val connectedCount = state.linkedDevices.size
+    val maxDevices = state.maxLinkedDevices
+    val limitReached = connectedCount >= maxDevices
+    val isSyncing = state.deviceLinkPhase == "syncing"
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Link your devices.",
+                color = palette.textPrimary,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Open jatext.vercel.app/chats on your computer and scan the QR code to use JaText on Web.",
+                color = palette.textSecondary,
+                fontSize = 13.sp,
+                lineHeight = 18.5.sp,
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(
+                    if (limitReached) palette.warning.copy(alpha = 0.16f)
+                    else palette.accentSoft
+                )
+                .border(
+                    1.dp,
+                    if (limitReached) palette.warning.copy(alpha = 0.45f)
+                    else palette.accent.copy(alpha = 0.35f),
+                    RoundedCornerShape(999.dp),
+                )
+                .padding(horizontal = 11.dp, vertical = 5.dp),
+        ) {
+            Text(
+                text = "$connectedCount / $maxDevices",
+                color = if (limitReached) palette.warning else palette.accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+
+    Spacer(Modifier.height(16.dp))
+
+    // Primary Scan CTA Card
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(palette.surface)
+            .border(1.dp, palette.borderStrong, RoundedCornerShape(18.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        JaWebPrimaryButton(
+            text = "Scan with QR code",
+            onClick = onOpenScanner,
+            enabled = !limitReached && !isSyncing,
+            modifier = Modifier.fillMaxWidth(),
+            leading = {
+                Icon(
+                    imageVector = Icons.Rounded.QrCodeScanner,
+                    contentDescription = null,
+                    tint = palette.onAccent,
+                    modifier = Modifier.size(18.dp),
+                )
+            },
+        )
+
+        if (limitReached) {
+            Text(
+                text = "Maximum of $maxDevices devices connected. Disconnect at least one device below in order to link a new one.",
+                color = palette.warning,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 17.5.sp,
+            )
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Rounded.Lock,
+                    contentDescription = null,
+                    tint = palette.success,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "Your messages and attachments stay end-to-end encrypted across linked devices.",
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.5.sp,
+                )
+            }
+        }
+    }
+
+    // Live Syncing / Success / Error Banner
+    when (state.deviceLinkPhase) {
+        "syncing" -> {
+            Spacer(Modifier.height(14.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(palette.accentSoft)
+                    .border(1.dp, palette.accent.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    color = palette.accent,
+                    strokeWidth = 2.5.dp,
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Syncing to ${state.deviceLinkBrowserName.ifBlank { "Chrome" }} JaText...",
+                        color = palette.textPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "Syncing end-to-end encrypted keys, messages, and attachments.",
+                        color = palette.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+        }
+
+        "success" -> {
+            Spacer(Modifier.height(14.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(palette.success.copy(alpha = 0.14f))
+                    .border(1.dp, palette.success.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.CheckCircle,
+                    contentDescription = null,
+                    tint = palette.success,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = "Successfully linked the device!",
+                    color = palette.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = { vm.clearDeviceLinkFeedback() },
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Dismiss",
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
+
+        "error" -> {
+            if (!state.deviceLinkError.isNullOrBlank()) {
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(palette.danger.copy(alpha = 0.14f))
+                        .border(1.dp, palette.danger.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = state.deviceLinkError,
+                        color = palette.danger,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = { vm.clearDeviceLinkFeedback() },
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Dismiss",
+                            tint = palette.danger,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    Spacer(Modifier.height(20.dp))
+
+    Text(
+        text = "Connected Devices ($connectedCount/$maxDevices)",
+        color = palette.textPrimary,
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Bold,
+    )
+    Spacer(Modifier.height(10.dp))
+
+    if (state.linkedDevices.isEmpty()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(palette.bgSecondary)
+                .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Computer,
+                contentDescription = null,
+                tint = palette.textTertiary,
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "No linked devices yet",
+                color = palette.textPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Tap Scan with QR code above to link Chrome, Edge, Firefox, or any desktop browser.",
+                color = palette.textSecondary,
+                fontSize = 12.5.sp,
+            )
+        }
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            for (dev in state.linkedDevices) {
+                ConnectedDeviceRowCard(
+                    device = dev,
+                    isDisconnecting = state.disconnectingDeviceId == dev.id,
+                    palette = palette,
+                    onDisconnect = { vm.disconnectLinkedDevice(dev.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectedDeviceRowCard(
+    device: LinkedWebDevice,
+    isDisconnecting: Boolean,
+    palette: JaTextPalette,
+    onDisconnect: () -> Unit,
+) {
+    val activitySubtitle = remember(device.lastActiveAt, device.osName) {
+        val now = System.currentTimeMillis()
+        val diff = now - device.lastActiveAt
+        val timeText = when {
+            device.lastActiveAt <= 0L -> "Linked"
+            diff < 2 * 60_000L -> "Active now"
+            diff < 60 * 60_000L -> "Last active ${(diff / 60_000L).coerceAtLeast(1)}m ago"
+            diff < 24 * 60 * 60_000L -> "Last active ${(diff / 3_600_000L).coerceAtLeast(1)}h ago"
+            else -> {
+                val fmt = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
+                "Last active ${fmt.format(Date(device.lastActiveAt))}"
+            }
+        }
+        if (device.osName.isNotBlank()) "${device.osName} · $timeText" else timeText
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(palette.surface)
+            .border(1.dp, palette.borderStrong, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(palette.accentSoft),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Computer,
+                contentDescription = null,
+                tint = palette.accent,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = device.deviceLabel.ifBlank { "${device.browserName} JaText" },
+                color = palette.textPrimary,
+                fontSize = 14.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = activitySubtitle,
+                color = palette.textSecondary,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Row(
+            modifier = Modifier
+                .jaBouncyClick(pressedScale = 0.95f) {
+                    if (!isDisconnecting) onDisconnect()
+                }
+                .clip(RoundedCornerShape(11.dp))
+                .background(palette.danger.copy(alpha = 0.14f))
+                .border(1.dp, palette.danger.copy(alpha = 0.42f), RoundedCornerShape(11.dp))
+                .padding(horizontal = 11.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.LinkOff,
+                contentDescription = null,
+                tint = palette.danger,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(5.dp))
+            Text(
+                text = if (isDisconnecting) "..." else "Disconnect",
+                color = palette.danger,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
 }
