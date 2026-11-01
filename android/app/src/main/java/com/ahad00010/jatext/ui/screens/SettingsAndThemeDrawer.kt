@@ -78,6 +78,7 @@ import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -149,6 +150,9 @@ fun SettingsModalScreen(
     state: SessionUiState,
     vm: JaTextSessionViewModel,
     onClose: () -> Unit,
+    embeddedInBottomBar: Boolean = false,
+    onOpenAccountSwitcher: (() -> Unit)? = null,
+    onFullScreenOverlayChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val palette = LocalJaTextPalette.current
@@ -159,6 +163,15 @@ fun SettingsModalScreen(
     var showCustomThemeDrawer by remember { mutableStateOf(false) }
     var showQrScanner by remember { mutableStateOf(false) }
     var legalDialogTab by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(showCustomThemeDrawer, showQrScanner) {
+        onFullScreenOverlayChange(showCustomThemeDrawer || showQrScanner)
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            onFullScreenOverlayChange(false)
+        }
+    }
 
     BackHandler {
         when {
@@ -187,10 +200,12 @@ fun SettingsModalScreen(
                     else Modifier.background(palette.bgPrimary)
                 )
                 .statusBarsPadding()
-                .navigationBarsPadding()
+                .then(
+                    if (embeddedInBottomBar) Modifier else Modifier.navigationBarsPadding()
+                )
                 .imePadding()
         ) {
-            /* ==================== Settings Top Header (Kept Same as Existing Shell!) ==================== */
+            /* ==================== Settings Top Header ==================== */
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -216,13 +231,15 @@ fun SettingsModalScreen(
                     text = "Check updates",
                     onClick = { vm.checkApkUpdate(manual = true) },
                 )
-                JaWebIconButton(
-                    icon = Icons.Rounded.Close,
-                    contentDescription = "Close Settings",
-                    size = 38.dp,
-                    iconSize = 18.dp,
-                    onClick = onClose,
-                )
+                if (!embeddedInBottomBar) {
+                    JaWebIconButton(
+                        icon = Icons.Rounded.Close,
+                        contentDescription = "Close Settings",
+                        size = 38.dp,
+                        iconSize = 18.dp,
+                        onClick = onClose,
+                    )
+                }
             }
 
             /* ==================== Categorized Settings Navigation (Kept Same as Existing Shell!) ==================== */
@@ -562,6 +579,15 @@ fun SettingsModalScreen(
                                     }
                                 },
                             )
+
+                            if (onOpenAccountSwitcher != null) {
+                                Spacer(Modifier.height(14.dp))
+                                JaWebGhostButton(
+                                    text = "Switch or add account",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = onOpenAccountSwitcher,
+                                )
+                            }
                         }
 
                         "appearance" -> {
@@ -839,7 +865,7 @@ fun SettingsModalScreen(
                             )
                         }
                     }
-                    Spacer(Modifier.height(32.dp))
+                    Spacer(Modifier.height(if (embeddedInBottomBar) 112.dp else 32.dp))
                 }
             }
         }

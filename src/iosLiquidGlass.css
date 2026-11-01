@@ -1252,3 +1252,148 @@ html.jatext-ios-liquid-glass[data-theme-mode="light"] .jt-ios-devices-list-card 
   color: #ffffff;
   font-size: 13px;
 }
+
+/* ============================================================================
+   iOS 26 Liquid Glass Floating Bottom Navigation Bar (Chats / Calls / Add / Settings)
+   ============================================================================ */
+
+html.jatext-ios-liquid-glass .sidebar.ios-bottom-nav-layout {
+  position: relative;
+}
+
+html.jatext-ios-liquid-glass .ios-compact-profile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+html.jatext-ios-liquid-glass .ios-profile-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+html.jatext-ios-liquid-glass .ios-profile-header-titles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+html.jatext-ios-liquid-glass .ios-profile-header-heading {
+  font-size: 23px;
+  font-weight: 900;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+html.jatext-ios-liquid-glass .sidebar.ios-bottom-nav-layout .friend-list,
+html.jatext-ios-liquid-glass .sidebar.ios-bottom-nav-layout .sidebar-tab-pane {
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+html.jatext-ios-liquid-glass .ios-liquid-bottom-nav {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  z-index: 45;
+  height: 64px;
+  padding: 4px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated, #141418) 54%, transparent);
+  backdrop-filter: blur(28px) saturate(210%);
+  -webkit-backdrop-filter: blur(28px) saturate(210%);
+  border: 1px solid var(--ios-glass-border, rgba(255, 255, 255, 0.24));
+  box-shadow:
+    0 18px 42px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34);
+}
+
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .ios-liquid-bottom-nav {
+  background: rgba(250, 250, 252, 0.56);
+  border-color: rgba(255, 255, 255, 0.72);
+  box-shadow:
+    0 14px 36px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+html.jatext-ios-liquid-glass .ios-liquid-bottom-pill {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 8px) / 4);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 0.5px solid rgba(255, 255, 255, 0.32);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.36);
+  transition: transform 340ms cubic-bezier(0.22, 1.18, 0.36, 1);
+  pointer-events: none;
+}
+
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .ios-liquid-bottom-pill {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+html.jatext-ios-liquid-glass .ios-liquid-bottom-tab {
+  position: relative;
+  z-index: 1;
+  height: 56px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text, #f2f2f7) 84%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color 180ms ease,
+    transform 200ms cubic-bezier(0.22, 1.25, 0.36, 1);
+}
+
+html.jatext-ios-liquid-glass .ios-liquid-bottom-tab:active {
+  transform: scale(1.12);
+}
+
+html.jatext-ios-liquid-glass .ios-liquid-bottom-tab.active {
+  color: var(--accent, #0091ff);
+}
+
+html.jatext-ios-liquid-glass .ios-liquid-bottom-icon-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+html.jatext-ios-liquid-glass .ios-liquid-bottom-badge {
+  position: absolute;
+  top: -4px;
+  right: -10px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #ff3b30;
+  color: #ffffff;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+}
+

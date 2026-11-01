@@ -22,6 +22,7 @@ import { useDraftsMap } from "../lib/drafts";
 import { useGroupCall } from "../lib/groupCalling";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
+import { isAuthorizedIosChatsRuntime } from "../lib/iosDetection";
 import { OFFICIAL_COMMUNITY_ID, type GroupSummary, type JaUser } from "../lib/types";
 import { AnimatedMediaImg, Avatar } from "./Avatar";
 import {
@@ -36,6 +37,8 @@ import {
   ChevronUpDownIcon,
   ClockIcon,
   FlaskIcon,
+  IosPlusCircleIcon,
+  IosSettingsGearIcon,
   MessageCircleIcon,
   PlusIcon,
   SettingsIcon,
@@ -417,116 +420,191 @@ export function Sidebar({
     );
   }
 
-  return (
-    <aside className="sidebar">
-      <header className="sidebar-header">
-        <div className="brand">
-          <img className="logo-icon" src="/jatext-logo-icon.png" alt="" />
-          <span>JaText</span>
-        </div>
-        <div className="sidebar-header-actions">
-          {onOpenAccountSwitcher && (
-            <button
-              type="button"
-              className="icon-btn account-switch-header-btn"
-              onClick={onOpenAccountSwitcher}
-              title="Switch or add account"
-              aria-label="Switch or add account"
-            >
-              <SwitchAccountIcon size={17} />
-              {accounts.length > 1 && (
-                <span className="account-count-badge" aria-hidden="true">
-                  {accounts.length}
-                </span>
-              )}
-            </button>
-          )}
-          <button className="icon-btn" onClick={onOpenSettings} title="Settings" aria-label="Settings">
-            <SettingsIcon size={18} />
-          </button>
-        </div>
-      </header>
+  const isIosChats = isAuthorizedIosChatsRuntime();
 
-      <div className="greeting">
-        <Avatar
-          user={me}
-          size={52}
-          status={
-            me.statusPreference === "offline"
-              ? "offline"
-              : me.statusPreference === "dnd"
-                ? "dnd"
-                : "online"
-          }
-          onClick={() => onOpenProfile(me)}
-        />
-        <div className="greeting-text">
-          <span className="greeting-title">
-            Good {dayPart(now)}, {me.displayName}!
-          </span>
-          {onOpenAccountSwitcher ? (
-            <button
-              type="button"
-              className="greeting-account-btn"
-              onClick={onOpenAccountSwitcher}
-              title="Switch or add account"
-            >
-              <span className="greeting-username">@{me.username}</span>
-              <ChevronUpDownIcon size={13} />
-            </button>
-          ) : (
-            <span className="greeting-username">@{me.username}</span>
-          )}
-        </div>
-        {onOpenAccountSwitcher && otherSavedAccounts.length > 0 && (
-          <div className="greeting-quick-accounts">
-            {otherSavedAccounts.slice(0, 2).map((acct) => (
+  return (
+    <aside className={`sidebar ${isIosChats ? "ios-bottom-nav-layout" : ""}`}>
+      {isIosChats ? (
+        <header className="sidebar-header ios-compact-profile-header">
+          <div className="ios-profile-header-left">
+            <Avatar
+              user={me}
+              size={44}
+              status={
+                me.statusPreference === "offline"
+                  ? "offline"
+                  : me.statusPreference === "dnd"
+                    ? "dnd"
+                    : "online"
+              }
+              onClick={() => onOpenProfile(me)}
+            />
+            <div className="ios-profile-header-titles">
+              <strong className="ios-profile-header-heading">
+                {tab === "calls" ? "Calls" : tab === "add" ? "Add" : "Chats"}
+              </strong>
+              {onOpenAccountSwitcher ? (
+                <button
+                  type="button"
+                  className="greeting-account-btn"
+                  onClick={onOpenAccountSwitcher}
+                  title="Switch or add account"
+                >
+                  <span className="greeting-username">@{me.username}</span>
+                  <ChevronUpDownIcon size={13} />
+                </button>
+              ) : (
+                <span className="greeting-username">@{me.username}</span>
+              )}
+            </div>
+          </div>
+          <div className="sidebar-header-actions">
+            {onOpenAccountSwitcher && otherSavedAccounts.length > 0 && (
+              <div className="greeting-quick-accounts">
+                {otherSavedAccounts.slice(0, 2).map((acct) => (
+                  <button
+                    key={acct.slotId}
+                    type="button"
+                    className="quick-account-avatar-btn"
+                    title={`Switch directly to ${acct.displayName || `@${acct.username}`}`}
+                    aria-label={`Switch directly to ${acct.displayName || acct.username}`}
+                    onClick={() => void handleDirectQuickSwitch(acct.slotId)}
+                  >
+                    <Avatar user={savedEntryToAvatarUser(acct)} size={28} />
+                  </button>
+                ))}
+              </div>
+            )}
+            {onOpenAccountSwitcher && (
               <button
-                key={acct.slotId}
                 type="button"
-                className="quick-account-avatar-btn"
-                title={`Switch directly to ${acct.displayName || `@${acct.username}`}`}
-                aria-label={`Switch directly to ${acct.displayName || acct.username}`}
-                onClick={() => void handleDirectQuickSwitch(acct.slotId)}
-              >
-                <Avatar user={savedEntryToAvatarUser(acct)} size={30} />
-              </button>
-            ))}
-            {otherSavedAccounts.length > 2 && (
-              <button
-                type="button"
-                className="quick-account-more-btn"
-                title="All saved accounts"
-                aria-label="All saved accounts"
+                className="icon-btn account-switch-header-btn"
                 onClick={onOpenAccountSwitcher}
+                title="Switch or add account"
+                aria-label="Switch or add account"
               >
-                +{otherSavedAccounts.length - 2}
+                <SwitchAccountIcon size={17} />
+                {accounts.length > 1 && (
+                  <span className="account-count-badge" aria-hidden="true">
+                    {accounts.length}
+                  </span>
+                )}
               </button>
             )}
           </div>
-        )}
-      </div>
+        </header>
+      ) : (
+        <>
+          <header className="sidebar-header">
+            <div className="brand">
+              <img className="logo-icon" src="/jatext-logo-icon.png" alt="" />
+              <span>JaText</span>
+            </div>
+            <div className="sidebar-header-actions">
+              {onOpenAccountSwitcher && (
+                <button
+                  type="button"
+                  className="icon-btn account-switch-header-btn"
+                  onClick={onOpenAccountSwitcher}
+                  title="Switch or add account"
+                  aria-label="Switch or add account"
+                >
+                  <SwitchAccountIcon size={17} />
+                  {accounts.length > 1 && (
+                    <span className="account-count-badge" aria-hidden="true">
+                      {accounts.length}
+                    </span>
+                  )}
+                </button>
+              )}
+              <button className="icon-btn" onClick={onOpenSettings} title="Settings" aria-label="Settings">
+                <SettingsIcon size={18} />
+              </button>
+            </div>
+          </header>
 
-      <div className="tabs sidebar-tabs">
-        <button className={tab === "chats" ? "active" : ""} onClick={() => setTab("chats")}>
-          <MessageCircleIcon size={15} />
-          <span>Chats</span>
-          {totalUnreadCount > 0 && (
-            <span className="badge unread-tab-badge">
-              {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
-            </span>
-          )}
-        </button>
-        <button className={tab === "calls" ? "active" : ""} onClick={() => setTab("calls")}>
-          <Phone size={15} />
-          <span>Calls</span>
-        </button>
-        <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}>
-          <PlusIcon size={15} />
-          <span>Add</span>
-          {incoming.length > 0 && <span className="badge">{incoming.length}</span>}
-        </button>
-      </div>
+          <div className="greeting">
+            <Avatar
+              user={me}
+              size={52}
+              status={
+                me.statusPreference === "offline"
+                  ? "offline"
+                  : me.statusPreference === "dnd"
+                    ? "dnd"
+                    : "online"
+              }
+              onClick={() => onOpenProfile(me)}
+            />
+            <div className="greeting-text">
+              <span className="greeting-title">
+                Good {dayPart(now)}, {me.displayName}!
+              </span>
+              {onOpenAccountSwitcher ? (
+                <button
+                  type="button"
+                  className="greeting-account-btn"
+                  onClick={onOpenAccountSwitcher}
+                  title="Switch or add account"
+                >
+                  <span className="greeting-username">@{me.username}</span>
+                  <ChevronUpDownIcon size={13} />
+                </button>
+              ) : (
+                <span className="greeting-username">@{me.username}</span>
+              )}
+            </div>
+            {onOpenAccountSwitcher && otherSavedAccounts.length > 0 && (
+              <div className="greeting-quick-accounts">
+                {otherSavedAccounts.slice(0, 2).map((acct) => (
+                  <button
+                    key={acct.slotId}
+                    type="button"
+                    className="quick-account-avatar-btn"
+                    title={`Switch directly to ${acct.displayName || `@${acct.username}`}`}
+                    aria-label={`Switch directly to ${acct.displayName || acct.username}`}
+                    onClick={() => void handleDirectQuickSwitch(acct.slotId)}
+                  >
+                    <Avatar user={savedEntryToAvatarUser(acct)} size={30} />
+                  </button>
+                ))}
+                {otherSavedAccounts.length > 2 && (
+                  <button
+                    type="button"
+                    className="quick-account-more-btn"
+                    title="All saved accounts"
+                    aria-label="All saved accounts"
+                    onClick={onOpenAccountSwitcher}
+                  >
+                    +{otherSavedAccounts.length - 2}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="tabs sidebar-tabs">
+            <button className={tab === "chats" ? "active" : ""} onClick={() => setTab("chats")}>
+              <MessageCircleIcon size={15} />
+              <span>Chats</span>
+              {totalUnreadCount > 0 && (
+                <span className="badge unread-tab-badge">
+                  {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
+                </span>
+              )}
+            </button>
+            <button className={tab === "calls" ? "active" : ""} onClick={() => setTab("calls")}>
+              <Phone size={15} />
+              <span>Calls</span>
+            </button>
+            <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}>
+              <PlusIcon size={15} />
+              <span>Add</span>
+              {incoming.length > 0 && <span className="badge">{incoming.length}</span>}
+            </button>
+          </div>
+        </>
+      )}
 
       {tab === "chats" && (
         <div className="sidebar-tab-pane" key="pane-chats">
@@ -1428,6 +1506,68 @@ export function Sidebar({
             }
           }}
         />
+      )}
+
+      {isIosChats && (
+        <nav className="ios-liquid-bottom-nav" aria-label="Primary navigation">
+          <div
+            className="ios-liquid-bottom-pill"
+            style={{
+              transform: `translateX(${
+                (tab === "chats" ? 0 : tab === "calls" ? 1 : 2) * 100
+              }%)`,
+            }}
+            aria-hidden="true"
+          />
+          <button
+            type="button"
+            className={`ios-liquid-bottom-tab ${tab === "chats" ? "active" : ""}`}
+            onClick={() => setTab("chats")}
+          >
+            <span className="ios-liquid-bottom-icon-wrap">
+              <MessageCircleIcon size={22} />
+              {totalUnreadCount > 0 && (
+                <span className="ios-liquid-bottom-badge">
+                  {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
+                </span>
+              )}
+            </span>
+            <span>Chats</span>
+          </button>
+          <button
+            type="button"
+            className={`ios-liquid-bottom-tab ${tab === "calls" ? "active" : ""}`}
+            onClick={() => setTab("calls")}
+          >
+            <span className="ios-liquid-bottom-icon-wrap">
+              <Phone size={22} />
+            </span>
+            <span>Calls</span>
+          </button>
+          <button
+            type="button"
+            className={`ios-liquid-bottom-tab ${tab === "add" ? "active" : ""}`}
+            onClick={() => setTab("add")}
+          >
+            <span className="ios-liquid-bottom-icon-wrap">
+              <IosPlusCircleIcon size={22} />
+              {incoming.length > 0 && (
+                <span className="ios-liquid-bottom-badge">{incoming.length}</span>
+              )}
+            </span>
+            <span>Add</span>
+          </button>
+          <button
+            type="button"
+            className="ios-liquid-bottom-tab"
+            onClick={onOpenSettings}
+          >
+            <span className="ios-liquid-bottom-icon-wrap">
+              <IosSettingsGearIcon size={22} />
+            </span>
+            <span>Settings</span>
+          </button>
+        </nav>
       )}
     </aside>
   );
