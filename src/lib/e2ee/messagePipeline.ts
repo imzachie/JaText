@@ -1191,11 +1191,23 @@ export function hydrateDecryptedGroupSummary(
   };
 }
 
+function isCallSignalDescriptor(att?: EncryptedBlobDescriptor): boolean {
+  if (!att) return false;
+  const mime = (att.t || "").toLowerCase();
+  const name = (att.n || "").toLowerCase();
+  return (
+    mime.includes("jatext-call") ||
+    mime.includes("jatext-gcall") ||
+    name.startsWith("call-") ||
+    name.startsWith("gcall-")
+  );
+}
+
 export async function hydrateDecryptedDmMessageAsync(
   raw: ChatMessage,
   peerUserId: string,
   triggerRerender: () => void,
-  options?: { skipRemoteAttachments?: boolean },
+  options?: { skipRemoteAttachments?: boolean; onlyCallSignalAttachments?: boolean },
 ): Promise<ChatMessage> {
   if (!raw.unsentAt && isEncryptedWireBody(raw.body)) {
     const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
@@ -1207,13 +1219,21 @@ export async function hydrateDecryptedDmMessageAsync(
       fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
     });
     if (!options?.skipRemoteAttachments) {
-      if (cached.payload?.att && raw.attachmentUrl) {
+      if (
+        cached.payload?.att &&
+        raw.attachmentUrl &&
+        (!options?.onlyCallSignalAttachments || isCallSignalDescriptor(cached.payload.att))
+      ) {
         try {
           await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.att);
         } catch {
           // Ignore transient attachment fetch failure
         }
-      } else if (cached.payload?.stk?.att && raw.attachmentUrl) {
+      } else if (
+        cached.payload?.stk?.att &&
+        raw.attachmentUrl &&
+        !options?.onlyCallSignalAttachments
+      ) {
         try {
           await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.stk.att);
         } catch {
@@ -1230,7 +1250,7 @@ export async function hydrateDecryptedGroupMessageAsync(
   groupId: string,
   groupDetails: GroupDetails | null,
   triggerRerender: () => void,
-  options?: { skipRemoteAttachments?: boolean },
+  options?: { skipRemoteAttachments?: boolean; onlyCallSignalAttachments?: boolean },
 ): Promise<GroupMessage> {
   if (!raw.unsentAt && isEncryptedWireBody(raw.body)) {
     const cacheKey = buildMessageDecryptCacheKey(raw.id, raw.body, raw.editedAt);
@@ -1242,13 +1262,21 @@ export async function hydrateDecryptedGroupMessageAsync(
       fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
     });
     if (!options?.skipRemoteAttachments) {
-      if (cached.payload?.att && raw.attachmentUrl) {
+      if (
+        cached.payload?.att &&
+        raw.attachmentUrl &&
+        (!options?.onlyCallSignalAttachments || isCallSignalDescriptor(cached.payload.att))
+      ) {
         try {
           await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.att);
         } catch {
           // Ignore transient attachment fetch failure
         }
-      } else if (cached.payload?.stk?.att && raw.attachmentUrl) {
+      } else if (
+        cached.payload?.stk?.att &&
+        raw.attachmentUrl &&
+        !options?.onlyCallSignalAttachments
+      ) {
         try {
           await decryptRemoteAttachmentToObjectUrl(raw.attachmentUrl, cached.payload.stk.att);
         } catch {

@@ -840,3 +840,29 @@ data class SealedDeviceLinkBundle(
     val iv: String = "",
     val ct: String = "",
 )
+
+@Serializable
+data class ScheduledMessageItem(
+    val id: String = "",
+    val senderId: String = "",
+    val targetKind: String = "dm",
+    val targetId: String = "",
+    val body: String = "",
+    val attachmentUrl: String? = null,
+    val attachmentName: String? = null,
+    val attachmentType: String? = null,
+    val replyToId: String? = null,
+    val scheduledAt: Long = 0L,
+    val createdAt: Long = 0L,
+)
+
+@Serializable
+data class ListScheduledMessagesResponse(
+    val items: List<ScheduledMessageItem> = emptyList(),
+)
+
+@Serializable
+data class ScheduleMessageResponse(
+    val item: ScheduledMessageItem = ScheduledMessageItem(),
+)
+

@@ -94,7 +94,16 @@ const MUTATION_OPS = new Set([
   "sendGroupMessage",
   "mutateGroupMessage",
   "manageGroup",
+  "scheduleMessage",
+  "deleteScheduledMessage",
+  "flushScheduledMessages",
 ]);
+
+let inFlightUserMutations = 0;
+
+export function hasInFlightTursoMutation(): boolean {
+  return inFlightUserMutations > 0;
+}
 
 export async function tursoRpc<T = unknown>(
   op: string,
@@ -104,40 +113,101 @@ export async function tursoRpc<T = unknown>(
   const slotId = options?.slotId ?? getActiveAccountSlotId();
   const token = await resolveSlotToken(slotId);
   const base = getTursoApiBase();
-  const res = await fetch(`${base}/api/turso`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ op, args }),
-  });
+  const isMutation = MUTATION_OPS.has(op);
+  const maxAttempts = isMutation ? 3 : op === "sync" ? 1 : 2;
+  const timeoutMs = isMutation ? 9000 : op === "sync" ? 7000 : 8500;
+  const bodyJson = JSON.stringify({ op, args });
 
-  let payload: { ok?: boolean; data?: T; error?: string } | null = null;
+  if (isMutation) {
+    inFlightUserMutations += 1;
+  }
+
   try {
-    payload = (await res.json()) as { ok?: boolean; data?: T; error?: string };
-  } catch {
-    payload = null;
-  }
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      try {
+        const res = await fetch(`${base}/api/turso`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: bodyJson,
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+        if (timer !== null) clearTimeout(timer);
 
-  if (res.status === 401 && token && !options?.skipAuthClear && op !== "signInEmail" && op !== "signUpEmail") {
-    await clearDeadSlotTokensOnAuthFailure(slotId, PUBLIC_TURSO_API_ORIGIN);
-  }
+        if ((res.status === 429 || res.status >= 502) && attempt + 1 < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 180 * (attempt + 1)));
+          continue;
+        }
 
-  if (!res.ok || !payload?.ok) {
-    throw new Error(payload?.error || `Request failed (${res.status})`);
-  }
+        let payload: { ok?: boolean; data?: T; error?: string } | null = null;
+        try {
+          payload = (await res.json()) as { ok?: boolean; data?: T; error?: string };
+        } catch {
+          payload = null;
+        }
 
-  const data = payload.data as T & { refreshedToken?: string };
-  if (data && typeof data === "object" && "refreshedToken" in data && typeof data.refreshedToken === "string") {
-    await setTursoTokenForSlot(slotId, data.refreshedToken, PUBLIC_TURSO_API_ORIGIN);
-  }
+        if (
+          res.status === 401 &&
+          token &&
+          !options?.skipAuthClear &&
+          op !== "signInEmail" &&
+          op !== "signUpEmail"
+        ) {
+          await clearDeadSlotTokensOnAuthFailure(slotId, PUBLIC_TURSO_API_ORIGIN);
+        }
 
-  if (MUTATION_OPS.has(op)) {
-    triggerImmediateTursoSync(true);
-  }
+        if (!res.ok || !payload?.ok) {
+          throw new Error(payload?.error || `Request failed (${res.status})`);
+        }
 
-  return payload.data as T;
+        const data = payload.data as T & { refreshedToken?: string };
+        if (
+          data &&
+          typeof data === "object" &&
+          "refreshedToken" in data &&
+          typeof data.refreshedToken === "string"
+        ) {
+          await setTursoTokenForSlot(slotId, data.refreshedToken, PUBLIC_TURSO_API_ORIGIN);
+        }
+
+        if (isMutation) {
+          triggerImmediateTursoSync(true);
+        }
+
+        return payload.data as T;
+      } catch (err) {
+        if (timer !== null) clearTimeout(timer);
+        lastErr = err;
+        const isNetOrAbort =
+          err instanceof TypeError ||
+          (err instanceof Error &&
+            (err.name === "AbortError" || /failed to fetch|network|load failed/i.test(err.message)));
+        if (isNetOrAbort && attempt + 1 < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 180 * (attempt + 1)));
+          continue;
+        }
+        break;
+      }
+    }
+
+    if (
+      lastErr instanceof TypeError ||
+      (lastErr instanceof Error &&
+        (lastErr.name === "AbortError" || /failed to fetch|load failed/i.test(lastErr.message)))
+    ) {
+      throw new Error("Connection hiccup while reaching JaText. Please try again.");
+    }
+    throw lastErr instanceof Error ? lastErr : new Error("Request could not be completed.");
+  } finally {
+    if (isMutation) {
+      inFlightUserMutations = Math.max(0, inFlightUserMutations - 1);
+    }
+  }
 }
 
 const CLIENT_MEDIA_CHUNK_BYTES = 768 * 1024; // 768 KB per chunk (matches api/media.js)

@@ -243,6 +243,24 @@ export interface PollVoter {
   avatarUrl?: string;
 }
 
+export type ScheduledTargetKind = "dm" | "group" | "community";
+
+export interface ScheduledMessage {
+  id: string;
+  senderId: string;
+  targetKind: ScheduledTargetKind;
+  targetId: string;
+  body: string;
+  replyToId?: string;
+  scheduledAt: number;
+  createdAt: number;
+}
+
+export interface FetchMessagesOptions {
+  callPollOnly?: boolean;
+  limit?: number;
+}
+
 export interface JaTextStore {
   /** "turso" on live Turso backend, or "demo" in local fallback mode */
   mode: "demo" | "convex" | "turso";
@@ -303,7 +321,7 @@ export interface JaTextStore {
   removeFriend: (friendId: string) => Promise<void>;
 
   sendMessage: (receiverId: string, body: string, file?: File, replyToId?: string) => Promise<void>;
-  fetchMessagesWithUser: (otherId: string) => Promise<ChatMessage[]>;
+  fetchMessagesWithUser: (otherId: string, options?: FetchMessagesOptions) => Promise<ChatMessage[]>;
   forwardMessage: (messageId: string, receiverId: string) => Promise<void>;
   forwardDmToTarget?: (messageId: string, target: { userId?: string; groupId?: string }) => Promise<void>;
   toggleMessageReaction: (messageId: string, emoji: string) => Promise<void>;
@@ -343,7 +361,7 @@ export interface JaTextStore {
   createGroup: (name: string, memberIds: string[]) => Promise<string>;
   addGroupMembers: (groupId: string, memberIds: string[]) => Promise<void>;
   sendGroupMessage: (groupId: string, body: string, file?: File, replyToId?: string, forwardedFromId?: string) => Promise<void>;
-  fetchGroupMessages: (groupId: string) => Promise<GroupMessage[]>;
+  fetchGroupMessages: (groupId: string, options?: FetchMessagesOptions) => Promise<GroupMessage[]>;
   fetchGroupDetails: (groupId: string) => Promise<GroupDetails | null>;
   sendGroupSticker: (groupId: string, sticker: StickerMedia, replyToId?: string) => Promise<void>;
   setGroupTyping: (groupId: string, isTyping: boolean) => Promise<void>;
@@ -379,6 +397,19 @@ export interface JaTextStore {
   requestLiveDeviceSync?: () => Promise<string>;
   approveDeviceSyncRequest?: (request: DeviceSyncRequest) => Promise<void>;
   verifyFriendSecurityCode?: (friendId: string, verified?: boolean) => Promise<boolean>;
+
+  /** Scheduled Messages */
+  scheduledMessages?: ScheduledMessage[];
+  scheduleMessage?: (
+    targetKind: ScheduledTargetKind,
+    targetId: string,
+    body: string,
+    scheduledAt: number,
+    replyToId?: string,
+  ) => Promise<ScheduledMessage>;
+  refreshScheduledMessages?: () => Promise<ScheduledMessage[]>;
+  deleteScheduledMessage?: (scheduledId: string) => Promise<void>;
+  flushScheduledMessages?: () => Promise<number>;
 }
 
 export const USERNAME_REGEX = /^[a-z0-9._]{3,20}$/;

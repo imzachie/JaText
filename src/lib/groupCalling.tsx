@@ -37,6 +37,7 @@ import {
   type ScreenAudioMixer,
 } from "./screenShareMedia";
 import { useJaText } from "./store";
+import { hasInFlightTursoMutation } from "./tursoClient";
 import type { GroupMessage, GroupSummary, JaUser } from "./types";
 
 const GROUP_RING_TIMEOUT_MS = 60_000;
@@ -1070,16 +1071,20 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     if (activeGroupId === groupSession.group.id && groupMessages.length > 0) {
       void checkIncomingSignals(groupMessages);
     }
-    const poll = window.setInterval(() => {
+    let incomingPollInFlight = false;
+    const runIncomingPoll = () => {
+      if (incomingPollInFlight || hasInFlightTursoMutation()) return;
+      incomingPollInFlight = true;
       void store
-        .fetchGroupMessages(groupSession.group.id)
+        .fetchGroupMessages(groupSession.group.id, { callPollOnly: true, limit: 28 })
         .then((rows) => checkIncomingSignals(rows))
-        .catch(() => undefined);
-    }, 500);
-    void store
-      .fetchGroupMessages(groupSession.group.id)
-      .then((rows) => checkIncomingSignals(rows))
-      .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          incomingPollInFlight = false;
+        });
+    };
+    const poll = window.setInterval(runIncomingPoll, 750);
+    runIncomingPoll();
 
     return () => {
       cancelled = true;
@@ -1508,17 +1513,22 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       void inspectGroupMessages(groupMessages);
     }
 
-    const pollId = window.setInterval(() => {
+    let meshPollInFlight = false;
+    const runMeshPoll = () => {
+      if (meshPollInFlight || hasInFlightTursoMutation()) return;
+      meshPollInFlight = true;
       void store
-        .fetchGroupMessages(groupSession.group.id)
+        .fetchGroupMessages(groupSession.group.id, { callPollOnly: true, limit: 28 })
         .then((rows) => inspectGroupMessages(rows))
-        .catch(() => undefined);
-    }, 1200);
+        .catch(() => undefined)
+        .finally(() => {
+          meshPollInFlight = false;
+        });
+    };
 
-    void store
-      .fetchGroupMessages(groupSession.group.id)
-      .then((rows) => inspectGroupMessages(rows))
-      .catch(() => undefined);
+    const pollId = window.setInterval(runMeshPoll, 1400);
+
+    runMeshPoll();
 
     return () => {
       cancelled = true;

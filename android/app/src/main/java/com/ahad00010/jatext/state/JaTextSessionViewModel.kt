@@ -41,11 +41,14 @@ import com.ahad00010.jatext.data.JaTextJson
 import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.data.LinkedWebDevice
 import com.ahad00010.jatext.data.ListLinkedDevicesResponse
+import com.ahad00010.jatext.data.ListScheduledMessagesResponse
 import com.ahad00010.jatext.data.LocalCacheStore
 import com.ahad00010.jatext.data.MessageReaction
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
 import com.ahad00010.jatext.data.PollVoter
 import com.ahad00010.jatext.data.ReplySummary
+import com.ahad00010.jatext.data.ScheduleMessageResponse
+import com.ahad00010.jatext.data.ScheduledMessageItem
 import com.ahad00010.jatext.data.StickerMedia
 import com.ahad00010.jatext.data.SyncResponse
 import com.ahad00010.jatext.data.SyncedThemePayload
@@ -143,6 +146,7 @@ data class SessionUiState(
     val deviceLinkBrowserName: String = "",
     val deviceLinkError: String? = null,
     val disconnectingDeviceId: String? = null,
+    val scheduledMessages: List<ScheduledMessageItem> = emptyList(),
 )
 
 class JaTextSessionViewModel(app: Application) :
@@ -310,6 +314,7 @@ class JaTextSessionViewModel(app: Application) :
                 applyBootstrapState(targetSlotId, boot.refreshedToken ?: token, boot, fromCache = false)
                 cache.saveBootstrapCache(targetSlotId, boot)
                 ensureE2EEPublishedAndSynced(boot.me, boot.friends, boot.refreshedToken ?: token)
+                refreshScheduledMessages()
                 registerFcmDeviceTokenIfAvailable(boot.refreshedToken ?: token)
                 startDeltaSyncLoop()
             } catch (e: TursoApiException) {
@@ -3938,6 +3943,210 @@ class JaTextSessionViewModel(app: Application) :
                         deviceLinkError = e.message ?: "Failed to link device. Please try scanning again.",
                     )
                 }
+            }
+        }
+    }
+
+    /* ==================== Scheduled Messages (v3.8.7) ==================== */
+
+    private var scheduledFlushJob: Job? = null
+
+    private suspend fun hydrateScheduledItems(
+        meId: String,
+        rawItems: List<ScheduledMessageItem>,
+        token: String,
+    ): List<ScheduledMessageItem> {
+        if (rawItems.isEmpty()) return emptyList()
+        return rawItems.map { item ->
+            val rawBody = item.body
+            if (rawBody.isBlank()) return@map item
+            val plainBody = when (item.targetKind) {
+                "dm" -> {
+                    if (rawBody.startsWith("__JATEXT_E2EE_")) {
+                        val syn = ChatMessage(
+                            id = "sched-${item.id}",
+                            senderId = item.senderId.ifBlank { meId },
+                            receiverId = item.targetId,
+                            body = rawBody,
+                            createdAt = item.createdAt,
+                        )
+                        val hydrated = runCatching {
+                            JaTextCryptoEngine.hydrateDmMessages(appCtx, meId, listOf(syn), token)
+                        }.getOrNull()?.firstOrNull()
+                        hydrated?.body?.let { JaTextCryptoEngine.stripBubbleStyleFromText(it) }
+                            ?: "Encrypted scheduled message"
+                    } else {
+                        JaTextCryptoEngine.stripBubbleStyleFromText(rawBody)
+                    }
+                }
+                "group" -> {
+                    if (rawBody.startsWith("__JATEXT_E2EE_")) {
+                        val syn = GroupMessage(
+                            id = "sched-${item.id}",
+                            senderId = item.senderId.ifBlank { meId },
+                            body = rawBody,
+                            createdAt = item.createdAt,
+                        )
+                        val hydrated = runCatching {
+                            JaTextCryptoEngine.hydrateGroupMessages(appCtx, meId, item.targetId, listOf(syn))
+                        }.getOrNull()?.firstOrNull()
+                        hydrated?.body?.let { JaTextCryptoEngine.stripBubbleStyleFromText(it) }
+                            ?: "Encrypted scheduled message"
+                    } else {
+                        JaTextCryptoEngine.stripBubbleStyleFromText(rawBody)
+                    }
+                }
+                else -> JaTextCryptoEngine.stripBubbleStyleFromText(rawBody)
+            }
+            item.copy(body = plainBody)
+        }
+    }
+
+    private fun rearmScheduledFlushTimer(items: List<ScheduledMessageItem>) {
+        scheduledFlushJob?.cancel()
+        scheduledFlushJob = null
+        if (items.isEmpty()) return
+        val earliest = items.minOfOrNull { it.scheduledAt } ?: return
+        scheduledFlushJob = viewModelScope.launch {
+            while (true) {
+                val now = System.currentTimeMillis()
+                val remaining = earliest - now
+                if (remaining <= 0L) break
+                delay(remaining.coerceIn(150L, 45_000L))
+            }
+            val token = currentAuthToken() ?: return@launch
+            runCatching {
+                TursoApiClient.rpcRaw("flushScheduledMessages", emptyMap(), token)
+            }
+            refreshScheduledMessages()
+            triggerImmediateSync(true)
+        }
+    }
+
+    fun refreshScheduledMessages() {
+        val me = _state.value.me ?: return
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            try {
+                val resp = TursoApiClient.rpc<ListScheduledMessagesResponse>(
+                    op = "listScheduledMessages",
+                    token = token,
+                )
+                val hydrated = hydrateScheduledItems(me.id, resp.items, token)
+                    .sortedBy { it.scheduledAt }
+                _state.update { it.copy(scheduledMessages = hydrated) }
+                rearmScheduledFlushTimer(hydrated)
+            } catch (_: Throwable) {
+                // Keep existing scheduled state on transient network failure
+            }
+        }
+    }
+
+    fun scheduleChatMessage(
+        targetKind: String,
+        targetId: String,
+        text: String,
+        scheduledAt: Long,
+        replyToId: String? = null,
+        onScheduled: ((ScheduledMessageItem) -> Unit)? = null,
+        onError: ((String) -> Unit)? = null,
+    ) {
+        val st = _state.value
+        val me = st.me ?: return
+        val token = currentAuthToken() ?: return
+        val cleanText = text.trim()
+        if (cleanText.isEmpty()) {
+            onError?.invoke("Type a message to schedule.")
+            return
+        }
+        if (scheduledAt <= System.currentTimeMillis() + 2_500L) {
+            onError?.invoke("Pick a time in the future.")
+            return
+        }
+        val bubble = st.outgoingBubbleStyle
+
+        viewModelScope.launch {
+            try {
+                val wireBody = when (targetKind) {
+                    "dm" -> {
+                        val payload = E2EEPlainPayload(
+                            v = 1,
+                            b = JaTextCryptoEngine.attachBubbleStyleToOutgoing(cleanText, bubble),
+                            bs = bubble.takeIf { it != "default" },
+                        )
+                        val enc = JaTextCryptoEngine.encryptDmMessage(appCtx, me.id, targetId, payload, token)
+                        enc ?: JaTextCryptoEngine.attachBubbleStyleToOutgoing(cleanText, bubble)
+                    }
+                    "group" -> {
+                        val memberIds = _state.value.groupDetails
+                            ?.takeIf { _state.value.activeGroupId == targetId }
+                            ?.members
+                            ?.map { it.id }
+                            .orEmpty()
+                        val effectiveMembers = if (memberIds.isNotEmpty()) {
+                            memberIds
+                        } else {
+                            runCatching {
+                                TursoApiClient.rpc<GroupDetails>(
+                                    op = "getGroupDetails",
+                                    args = mapOf("groupId" to targetId),
+                                    token = token,
+                                ).members.map { it.id }
+                            }.getOrDefault(emptyList())
+                        }
+                        val payload = E2EEPlainPayload(
+                            v = 1,
+                            b = JaTextCryptoEngine.attachBubbleStyleToOutgoing(cleanText, bubble),
+                            bs = bubble.takeIf { it != "default" },
+                        )
+                        JaTextCryptoEngine.encryptGroupMessage(appCtx, me.id, targetId, effectiveMembers, payload, token)
+                    }
+                    else -> JaTextCryptoEngine.attachBubbleStyleToOutgoing(cleanText, bubble)
+                }
+
+                val args = mutableMapOf<String, Any?>(
+                    "targetKind" to targetKind,
+                    "targetId" to targetId,
+                    "body" to wireBody,
+                    "scheduledAt" to scheduledAt,
+                )
+                if (!replyToId.isNullOrBlank()) {
+                    args["replyToId"] = replyToId
+                }
+
+                val resp = TursoApiClient.rpc<ScheduleMessageResponse>(
+                    op = "scheduleMessage",
+                    args = args,
+                    token = token,
+                )
+                val uiItem = resp.item.copy(body = cleanText)
+                val updated = (_state.value.scheduledMessages.filterNot { it.id == uiItem.id } + uiItem)
+                    .sortedBy { it.scheduledAt }
+                _state.update { it.copy(scheduledMessages = updated) }
+                rearmScheduledFlushTimer(updated)
+                onScheduled?.invoke(uiItem)
+            } catch (e: Throwable) {
+                val msg = e.message ?: "Failed to schedule message."
+                onError?.invoke(msg)
+                showToast(msg)
+            }
+        }
+    }
+
+    fun deleteScheduledMessage(scheduledId: String) {
+        val token = currentAuthToken() ?: return
+        val updated = _state.value.scheduledMessages.filterNot { it.id == scheduledId }
+        _state.update { it.copy(scheduledMessages = updated) }
+        rearmScheduledFlushTimer(updated)
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw(
+                    op = "deleteScheduledMessage",
+                    args = mapOf("scheduledId" to scheduledId),
+                    token = token,
+                )
+            }.onFailure {
+                refreshScheduledMessages()
             }
         }
     }

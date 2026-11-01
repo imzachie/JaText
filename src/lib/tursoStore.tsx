@@ -131,6 +131,7 @@ import {
   useE2EESnapshot,
 } from "./e2ee/keystore";
 import {
+  decryptWirePreviewAsync,
   hydrateDecryptedChatPreview,
   hydrateDecryptedDmMessage,
   hydrateDecryptedDmMessageAsync,
@@ -152,6 +153,8 @@ import type {
   JaTextStore,
   JaUser,
   ProfileInput,
+  ScheduledMessage,
+  ScheduledTargetKind,
   StickerMedia,
   StatusPreference,
 } from "./types";
@@ -363,11 +366,17 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     queryDmMessages,
     queryGroupMessages,
     queryGroupDetails,
+    scheduleMessageMut,
+    listScheduledMessagesQuery,
+    deleteScheduledMessageMut,
+    flushScheduledMessagesMut,
     publishE2EEIdentity,
     getUserE2EEIdentities,
     saveE2EEVault,
     getMyE2EEVault,
   } = useTursoReactiveSession(slotId, activeChatId, activeGroupId);
+  const [rawScheduledMessages, setRawScheduledMessages] = useState<ScheduledMessage[]>([]);
+  const [decryptedScheduledBodies, setDecryptedScheduledBodies] = useState<Record<string, string>>({});
   const [notificationPreferences, setNotificationPreferences] = useState(loadNotificationPreferences);
   const [pushRegistrationStatus, setPushRegistrationStatus] =
     useState<JaTextStore["pushRegistrationStatus"]>("idle");
@@ -3167,12 +3176,26 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const fetchMessagesWithUser = useCallback<JaTextStore["fetchMessagesWithUser"]>(
-    async (otherId) => {
+    async (otherId, options) => {
       if (!otherId || otherId === OFFICIAL_COMMUNITY_ID) return [];
       if (!isAuthenticated) {
         return getCachedDmConversation(slotId, otherId)?.messages ?? [];
       }
-      const rows = await queryDmMessages(otherId);
+      if (options?.callPollOnly) {
+        const rows = await queryDmMessages(otherId, options.limit ?? 28);
+        const cutoff = Date.now() - 120_000;
+        const recentRows = rows.filter((r) => r.createdAt >= cutoff);
+        await scanDmRowsForE2EESignalsAsync(recentRows);
+        const decryptedRows = await Promise.all(
+          recentRows.map((r) =>
+            hydrateDecryptedDmMessageAsync(r, otherId, triggerE2EERerender, {
+              onlyCallSignalAttachments: true,
+            }),
+          ),
+        );
+        return decryptedRows.map((r) => normalizeDirectMessage(r));
+      }
+      const rows = await queryDmMessages(otherId, options?.limit);
       await scanDmRowsForE2EESignalsAsync(rows);
       const decryptedRows = await Promise.all(
         rows.map((r) => hydrateDecryptedDmMessageAsync(r, otherId, triggerE2EERerender)),
@@ -3190,16 +3213,30 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
   );
 
   const fetchGroupMessages = useCallback<JaTextStore["fetchGroupMessages"]>(
-    async (groupId) => {
+    async (groupId, options) => {
       if (!groupId) return [];
       if (!isAuthenticated) {
         return getCachedGroupConversation(slotId, groupId)?.messages ?? [];
       }
-      const rows = await queryGroupMessages(groupId);
-      await scanGroupRowsForE2EESignalsAsync(rows);
       const existingCached = getCachedGroupConversation(slotId, groupId);
       const details =
         activeGroupId === groupId ? groupDetails : (existingCached?.details ?? null);
+      if (options?.callPollOnly) {
+        const rows = await queryGroupMessages(groupId, options.limit ?? 28);
+        const cutoff = Date.now() - 120_000;
+        const recentRows = rows.filter((r) => r.createdAt >= cutoff);
+        await scanGroupRowsForE2EESignalsAsync(recentRows);
+        const decryptedRows = await Promise.all(
+          recentRows.map((r) =>
+            hydrateDecryptedGroupMessageAsync(r, groupId, details, triggerE2EERerender, {
+              onlyCallSignalAttachments: true,
+            }),
+          ),
+        );
+        return decryptedRows.map((r) => normalizeGroupMessage(r));
+      }
+      const rows = await queryGroupMessages(groupId, options?.limit);
+      await scanGroupRowsForE2EESignalsAsync(rows);
       const decryptedRows = await Promise.all(
         rows.map((r) => hydrateDecryptedGroupMessageAsync(r, groupId, details, triggerE2EERerender)),
       );
@@ -4060,6 +4097,178 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
 
   const loadingStore =
     (authLoading && !cachedSlotMe) || (isAuthenticated && me === undefined);
+  const hydrateScheduledBatch = useCallback(
+    async (items: ScheduledMessage[]) => {
+      if (!me?.id || items.length === 0) return;
+      const updates: Record<string, string> = {};
+      await Promise.all(
+        items.map(async (item) => {
+          try {
+            const plain = await decryptWirePreviewAsync({
+              rawBody: item.body,
+              senderId: item.senderId || me.id,
+              receiverId: item.targetKind === "dm" ? item.targetId : undefined,
+              groupId: item.targetKind === "group" ? item.targetId : undefined,
+              cacheHint: `sched:${item.id}`,
+            });
+            if (plain) {
+              updates[item.id] = plain;
+            }
+          } catch {
+            // Keep existing or raw fallback
+          }
+        }),
+      );
+      if (Object.keys(updates).length > 0) {
+        setDecryptedScheduledBodies((prev) => ({ ...prev, ...updates }));
+      }
+    },
+    [me?.id],
+  );
+
+  const refreshScheduledMessages = useCallback<
+    NonNullable<JaTextStore["refreshScheduledMessages"]>
+  >(async () => {
+    if (!isAuthenticated) {
+      setRawScheduledMessages([]);
+      return [];
+    }
+    const items = await listScheduledMessagesQuery();
+    setRawScheduledMessages(items);
+    void hydrateScheduledBatch(items);
+    return items;
+  }, [hydrateScheduledBatch, isAuthenticated, listScheduledMessagesQuery]);
+
+  const scheduleMessage = useCallback<NonNullable<JaTextStore["scheduleMessage"]>>(
+    async (
+      targetKind: ScheduledTargetKind,
+      targetId: string,
+      body: string,
+      scheduledAt: number,
+      replyToId?: string,
+    ) => {
+      const trimmed = body.trim();
+      if (!trimmed) throw new Error("Message cannot be empty.");
+      if (!Number.isFinite(scheduledAt) || scheduledAt <= Date.now() + 2500) {
+        throw new Error("Please choose a future date and time.");
+      }
+
+      const style = getSavedOutgoingBubbleStyle();
+      const wireBody = style === "default" ? trimmed : attachBubbleStyleToOutgoing(trimmed, style);
+      let finalWireBody = wireBody;
+
+      if (targetKind === "dm") {
+        const enc = await prepareOutgoingDmEncrypted({
+          receiverId: targetId,
+          wireBody,
+          uploadFile: upload,
+        });
+        if (enc) finalWireBody = enc.wireBody;
+      } else if (targetKind === "group") {
+        const summaryRole = groupsQuery?.find((g) => g.id === targetId)?.role;
+        const effectiveRole =
+          activeGroupId === targetId && groupDetails?.role ? groupDetails.role : summaryRole;
+        const canMentionEveryone = effectiveRole === "owner" || effectiveRole === "moderator";
+        if (/(^|\s)@everyone\b/i.test(trimmed) && !canMentionEveryone) {
+          throw new Error("Only the group owner or moderators can mention @everyone.");
+        }
+        await ensureGroupEpochReadyForSend(targetId);
+        const enc = await prepareOutgoingGroupEncrypted({
+          groupId: targetId,
+          wireBody,
+          canMentionEveryone,
+          uploadFile: upload,
+        });
+        if (enc) finalWireBody = enc.wireBody;
+      }
+
+      const created = await scheduleMessageMut({
+        targetKind,
+        targetId,
+        body: finalWireBody,
+        scheduledAt: Math.round(scheduledAt),
+        replyToId,
+      });
+      setDecryptedScheduledBodies((prev) => ({ ...prev, [created.id]: trimmed }));
+      setRawScheduledMessages((prev) =>
+        [...prev.filter((m) => m.id !== created.id), created].sort(
+          (a, b) => a.scheduledAt - b.scheduledAt,
+        ),
+      );
+      return { ...created, body: trimmed };
+    },
+    [
+      activeGroupId,
+      ensureGroupEpochReadyForSend,
+      groupDetails?.role,
+      groupsQuery,
+      scheduleMessageMut,
+      upload,
+    ],
+  );
+
+  const deleteScheduledMessage = useCallback<
+    NonNullable<JaTextStore["deleteScheduledMessage"]>
+  >(
+    async (scheduledId: string) => {
+      setRawScheduledMessages((prev) => prev.filter((m) => m.id !== scheduledId));
+      return deleteScheduledMessageMut(scheduledId);
+    },
+    [deleteScheduledMessageMut],
+  );
+
+  const flushScheduledMessages = useCallback<
+    NonNullable<JaTextStore["flushScheduledMessages"]>
+  >(async () => {
+    if (!isAuthenticated) return 0;
+    const count = await flushScheduledMessagesMut();
+    if (count > 0) {
+      await refreshScheduledMessages().catch(() => undefined);
+    }
+    return count;
+  }, [flushScheduledMessagesMut, isAuthenticated, refreshScheduledMessages]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !me?.id) {
+      setRawScheduledMessages([]);
+      return;
+    }
+    void refreshScheduledMessages().catch(() => undefined);
+  }, [isAuthenticated, me?.id, refreshScheduledMessages]);
+
+  useEffect(() => {
+    if (!isAuthenticated || rawScheduledMessages.length === 0) return;
+    const earliest = rawScheduledMessages.reduce(
+      (min, item) => (item.scheduledAt < min ? item.scheduledAt : min),
+      rawScheduledMessages[0].scheduledAt,
+    );
+    const delayMs = Math.max(150, Math.min(60_000, earliest - Date.now() + 200));
+    const timer = window.setTimeout(() => {
+      if (Date.now() + 250 >= earliest) {
+        void flushScheduledMessages()
+          .then(() => refreshScheduledMessages())
+          .catch(() => undefined);
+      } else {
+        // Re-arm for remaining window (>60s away)
+        setRawScheduledMessages((prev) => [...prev]);
+      }
+    }, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [flushScheduledMessages, isAuthenticated, rawScheduledMessages, refreshScheduledMessages]);
+
+  const scheduledMessages = useMemo<ScheduledMessage[]>(
+    () =>
+      rawScheduledMessages.map((item) => ({
+        ...item,
+        body:
+          decryptedScheduledBodies[item.id] ??
+          (item.body.startsWith("__JATEXT_E2EE_")
+            ? "Decrypting scheduled message..."
+            : stripBubbleStyleFromText(item.body)),
+      })),
+    [decryptedScheduledBodies, rawScheduledMessages],
+  );
+
   const resolvedMe = canUseCachedSession ? (me ?? null) : null;
   const previewsReady = canUseCachedSession
     ? Boolean(isAuthenticated && previewsQuery !== undefined && groupsQuery !== undefined)
@@ -4212,6 +4421,11 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       requestLiveDeviceSync,
       approveDeviceSyncRequest,
       verifyFriendSecurityCode,
+      scheduledMessages,
+      scheduleMessage,
+      refreshScheduledMessages,
+      deleteScheduledMessage,
+      flushScheduledMessages,
     }),
     [
       activeChatId,
@@ -4341,6 +4555,11 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       visibleRecentStickers,
       visibleStickerFavorites,
       voteCommunityPoll,
+      scheduledMessages,
+      scheduleMessage,
+      refreshScheduledMessages,
+      deleteScheduledMessage,
+      flushScheduledMessages,
     ],
   );
 
