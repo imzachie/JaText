@@ -8,11 +8,6 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -81,6 +76,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -129,12 +125,12 @@ import com.ahad00010.jatext.ui.theme.JaTextPalette
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
 import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.backdrops.emptyBackdrop
 import com.kyant.backdrop.components.LiquidAmbientMeshBackdrop
 import com.kyant.backdrop.components.LiquidButton
 import com.kyant.backdrop.components.LiquidGlassCard
 import com.kyant.backdrop.components.LiquidIconButton
+import com.kyant.backdrop.components.LiquidOpticsLivePreview
 import com.kyant.backdrop.components.LiquidPillChip
 import com.kyant.backdrop.components.LiquidSlider
 import com.kyant.backdrop.components.LiquidTextFieldBar
@@ -169,7 +165,7 @@ fun SettingsModalScreen(
     val me = state.me ?: return
 
     val liquidOptics = rememberPersistedLiquidGlassOptics(context)
-    val settingsBackdrop = rememberLayerBackdrop()
+    val settingsBackdrop = remember { emptyBackdrop() }
     val systemNavBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     var activeCategory by remember { mutableStateOf("profile") } // profile | appearance | devices | socials | audio | encryption | legal
@@ -208,11 +204,10 @@ fun SettingsModalScreen(
 
     CompositionLocalProvider(LocalLiquidGlassOptics provides liquidOptics) {
         Box(modifier = Modifier.fillMaxSize()) {
-            /* ==================== Layer 0: Ambient iOS 26 Liquid Glass Refraction Backdrop ==================== */
+            /* ==================== Layer 0: Ambient iOS 26 Liquid Glass Background ==================== */
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .layerBackdrop(settingsBackdrop)
                     .then(
                         if (palette.rootGradientBrush != null) Modifier.background(palette.rootGradientBrush)
                         else Modifier.background(palette.bgPrimary)
@@ -327,22 +322,16 @@ fun SettingsModalScreen(
 
                 Spacer(Modifier.height(4.dp))
 
-                /* ==================== Animated Category Body ==================== */
-                AnimatedContent(
-                    targetState = activeCategory,
-                    transitionSpec = {
-                        fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(120))
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                    label = "settingsCategoryBody",
-                ) { currentCat ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp, vertical = 10.dp)
-                    ) {
-                        when (currentCat) {
+                /* ==================== 120 FPS Category Body (No Dual-Tab Crossfade Overhead) ==================== */
+                val categoryScrollState = key(activeCategory) { rememberScrollState() }
+                val currentCat = activeCategory
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(categoryScrollState)
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                ) {
+                    when (currentCat) {
                             "profile" -> {
                                 var displayName by remember(me.id) { mutableStateOf(me.displayName) }
                                 var username by remember(me.id) { mutableStateOf(me.username) }
@@ -1193,7 +1182,6 @@ fun SettingsModalScreen(
                                 else 36.dp
                             )
                         )
-                    }
                 }
             }
 
@@ -2034,6 +2022,11 @@ private fun AppearanceSettingsTab(
             }
         }
 
+        LiquidOpticsLivePreview(
+            accentColor = tintedActionColor,
+            isDark = palette.isDark,
+        )
+
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2103,7 +2096,7 @@ private fun WebParityCustomThemeDrawerOverlay(
     val palette = LocalJaTextPalette.current
     val cfg = state.themeConfig
     val initialCustom = cfg.custom
-    val studioBackdrop = rememberLayerBackdrop()
+    val studioBackdrop = remember { emptyBackdrop() }
     val tintedActionColor = if (palette.isDark) palette.accent else IOS_LIQUID_BLUE
 
     var appearance by remember { mutableStateOf(initialCustom.appearance.ifBlank { "dark" }) }
@@ -2191,7 +2184,6 @@ private fun WebParityCustomThemeDrawerOverlay(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .layerBackdrop(studioBackdrop)
                 .then(
                     if (palette.rootGradientBrush != null) Modifier.background(palette.rootGradientBrush)
                     else Modifier.background(palette.bgPrimary)

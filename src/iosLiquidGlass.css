@@ -1459,9 +1459,7 @@ html.jatext-ios-liquid-glass .username-input-wrap,
 html.jatext-ios-liquid-glass .website-url-wrap,
 html.jatext-ios-liquid-glass .custom-theme-hex-input {
   border-radius: 999px !important;
-  background: color-mix(in srgb, var(--bg-primary, #0e0f17) 54%, transparent) !important;
-  backdrop-filter: blur(20px) saturate(190%) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(190%) !important;
+  background: color-mix(in srgb, var(--bg-primary, #0e0f17) 64%, transparent) !important;
   border: 1px solid rgba(255, 255, 255, 0.18) !important;
   box-shadow:
     inset 0 2px 6px rgba(0, 0, 0, 0.18),
@@ -1473,9 +1471,7 @@ html.jatext-ios-liquid-glass .profile-form textarea,
 html.jatext-ios-liquid-glass .settings-modal textarea,
 html.jatext-ios-liquid-glass .embedded-settings-pane textarea {
   border-radius: 20px !important;
-  background: color-mix(in srgb, var(--bg-primary, #0e0f17) 54%, transparent) !important;
-  backdrop-filter: blur(20px) saturate(190%) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(190%) !important;
+  background: color-mix(in srgb, var(--bg-primary, #0e0f17) 64%, transparent) !important;
   border: 1px solid rgba(255, 255, 255, 0.18) !important;
   box-shadow:
     inset 0 2px 6px rgba(0, 0, 0, 0.18),
@@ -1515,9 +1511,7 @@ html.jatext-ios-liquid-glass .embedded-settings-pane .ghost,
 html.jatext-ios-liquid-glass .custom-theme-drawer .ghost,
 html.jatext-ios-liquid-glass .settings-nav-btn {
   border-radius: 999px !important;
-  background: rgba(255, 255, 255, 0.12) !important;
-  backdrop-filter: blur(18px) saturate(185%) !important;
-  -webkit-backdrop-filter: blur(18px) saturate(185%) !important;
+  background: rgba(255, 255, 255, 0.14) !important;
   border: 1px solid rgba(255, 255, 255, 0.24) !important;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32) !important;
 }
