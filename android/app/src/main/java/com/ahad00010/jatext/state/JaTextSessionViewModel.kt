@@ -190,6 +190,9 @@ class JaTextSessionViewModel(app: Application) :
             )
             cache.upsertCallHistory(_state.value.slotId, entry)
             _state.update { it.copy(callHistory = cache.getCallHistory(it.slotId)) }
+        },
+        requestRecentCallSignals = { peerId, groupId ->
+            fetchRecentCallSignalsNow(peerId, groupId)
         }
     )
 
@@ -435,6 +438,29 @@ class JaTextSessionViewModel(app: Application) :
             g.copy(lastMessage = text)
         }
         _state.update { it.copy(previews = hydratedPreviews, groups = hydratedGroups) }
+
+        // If the app opened during an active/ringing incoming call (<60s old), immediately inspect recent signals!
+        val nowMs = System.currentTimeMillis()
+        for (p in rawPreviews) {
+            if (p.senderId != myId && nowMs - p.createdAt in 0L..60_000L) {
+                if (
+                    p.body.contains("(__JATEXT_CALL_DM_RINGING__") ||
+                    (p.body.startsWith(JaTextCryptoEngine.CALL_INVITE_PREFIX) && p.body.contains("\"state\":\"ringing\""))
+                ) {
+                    fetchRecentCallSignalsNow(p.friendId, null)
+                }
+            }
+        }
+        for (g in rawGroups) {
+            if (g.lastSenderId != myId && nowMs - g.lastMessageAt in 0L..60_000L) {
+                if (
+                    g.lastMessage.contains("(__JATEXT_CALL_GRP_ACTIVE__") ||
+                    (g.lastMessage.startsWith(JaTextCryptoEngine.GROUP_CALL_INVITE_PREFIX) && g.lastMessage.contains("\"state\":\"active\""))
+                ) {
+                    fetchRecentCallSignalsNow(null, g.id)
+                }
+            }
+        }
     }
 
     private fun extractSyncedBubbleStyle(items: List<StickerMedia>): String? {
@@ -659,6 +685,7 @@ class JaTextSessionViewModel(app: Application) :
             while (true) {
                 val now = System.currentTimeMillis()
                 val delayMs = when {
+                    callEngine.uiState.value.active -> 420L
                     now - lastActivityBurstAt < 10_000L -> 500L
                     _state.value.activeChatId != null || _state.value.activeGroupId != null -> 950L
                     else -> 1800L
@@ -683,13 +710,16 @@ class JaTextSessionViewModel(app: Application) :
             val shouldBeat = now - lastPresenceBeatAt >= 25_000L
             if (shouldBeat) lastPresenceBeatAt = now
             val activeFriend = st.activeChatId?.takeIf { it != OFFICIAL_COMMUNITY_ID }
+            val callUi = callEngine.uiState.value
+            val syncFriend = activeFriend ?: callUi.peer?.id?.takeIf { callUi.active && !callUi.isGroup }
+            val syncGroup = st.activeGroupId ?: callUi.group?.id?.takeIf { callUi.active && callUi.isGroup }
 
             val sync = TursoApiClient.rpc<SyncResponse>(
                 op = "sync",
                 args = mapOf(
                     "sinceTs" to sinceTs,
-                    "activeFriendId" to activeFriend,
-                    "activeGroupId" to st.activeGroupId,
+                    "activeFriendId" to syncFriend,
+                    "activeGroupId" to syncGroup,
                     "includeCommunity" to (st.activeChatId == OFFICIAL_COMMUNITY_ID),
                     "touchPresence" to shouldBeat,
                     "includePresence" to shouldBeat,
@@ -733,12 +763,20 @@ class JaTextSessionViewModel(app: Application) :
                 reconcileMultiDeviceKeyringAndRehydrate(myUser, combinedStickers, token)
             }
 
-            // Inspect incoming call signals & pre-decrypt active DM/Group deltas before state update!
-            val hydratedDmDelta = if (!sync.changedDmMessages.isNullOrEmpty()) {
-                for (raw in sync.changedDmMessages) {
+            // Inspect incoming call signals (global + active thread) & pre-decrypt active DM/Group deltas!
+            val seenCallDmIds = HashSet<String>()
+            for (raw in sync.callDmMessages.orEmpty()) {
+                if (seenCallDmIds.add(raw.id)) {
                     inspectRawDmForCallSignal(myUser, raw, token)
                 }
-                if (_state.value.activeChatId == activeFriend && activeFriend != null) {
+            }
+            val hydratedDmDelta = if (!sync.changedDmMessages.isNullOrEmpty()) {
+                for (raw in sync.changedDmMessages) {
+                    if (seenCallDmIds.add(raw.id)) {
+                        inspectRawDmForCallSignal(myUser, raw, token)
+                    }
+                }
+                if (_state.value.activeChatId == syncFriend && syncFriend != null && activeFriend == syncFriend) {
                     JaTextCryptoEngine.hydrateDmMessages(appCtx, myUser.id, sync.changedDmMessages, token)
                 } else {
                     emptyList()
@@ -747,26 +785,45 @@ class JaTextSessionViewModel(app: Application) :
                 emptyList()
             }
 
-            var deltaGroupSeen: Map<String, List<GroupSeenReader>>? = null
-            val hydratedGrpDelta = if (!sync.changedGroupMessages.isNullOrEmpty() && st.activeGroupId != null) {
-                val grpSummary = (_state.value.groups).firstOrNull { it.id == st.activeGroupId }
-                if (grpSummary != null) {
-                    for (raw in sync.changedGroupMessages) {
+            val allKnownGroups = sync.groups ?: _state.value.groups
+            val seenCallGrpIds = HashSet<String>()
+            for (raw in sync.callGroupMessages.orEmpty()) {
+                if (seenCallGrpIds.add(raw.id)) {
+                    val gid = raw.groupId ?: syncGroup
+                    val grpSummary = allKnownGroups.firstOrNull { it.id == gid }
+                        ?: gid?.let { GroupSummary(id = it, name = "Group") }
+                    if (grpSummary != null) {
                         inspectRawGroupForCallSignal(myUser, grpSummary, raw)
                     }
                 }
-                val members = _state.value.groupDetails?.members.orEmpty()
-                val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(
-                    appCtx,
-                    myUser.id,
-                    st.activeGroupId,
-                    sync.changedGroupMessages,
-                    members
-                )
-                if (outcome.seenByMessageId.isNotEmpty()) {
-                    deltaGroupSeen = outcome.seenByMessageId
+            }
+
+            var deltaGroupSeen: Map<String, List<GroupSeenReader>>? = null
+            val hydratedGrpDelta = if (!sync.changedGroupMessages.isNullOrEmpty() && syncGroup != null) {
+                val grpSummary = allKnownGroups.firstOrNull { it.id == syncGroup }
+                if (grpSummary != null) {
+                    for (raw in sync.changedGroupMessages) {
+                        if (seenCallGrpIds.add(raw.id)) {
+                            inspectRawGroupForCallSignal(myUser, grpSummary, raw)
+                        }
+                    }
                 }
-                outcome.messages
+                if (st.activeGroupId == syncGroup) {
+                    val members = _state.value.groupDetails?.members.orEmpty()
+                    val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(
+                        appCtx,
+                        myUser.id,
+                        syncGroup,
+                        sync.changedGroupMessages,
+                        members
+                    )
+                    if (outcome.seenByMessageId.isNotEmpty()) {
+                        deltaGroupSeen = outcome.seenByMessageId
+                    }
+                    outcome.messages
+                } else {
+                    emptyList()
+                }
             } else {
                 emptyList()
             }
@@ -895,26 +952,159 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
+    private fun fetchRecentCallSignalsNow(peerId: String?, groupId: String?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val me = _state.value.me ?: return@launch
+            val token = currentAuthToken() ?: return@launch
+            val cutoff = System.currentTimeMillis() - 90_000L
+            try {
+                if (!peerId.isNullOrBlank()) {
+                    val root = TursoApiClient.rpcRaw(
+                        op = "listMessages",
+                        args = mapOf("otherId" to peerId, "limit" to 25),
+                        token = token,
+                    ).jsonObject
+                    val rows = root["messages"]?.let {
+                        JaTextJson.decodeFromJsonElement(
+                            kotlinx.serialization.builtins.ListSerializer(ChatMessage.serializer()),
+                            it,
+                        )
+                    }.orEmpty()
+                    for (row in rows.sortedBy { it.createdAt }) {
+                        if (row.createdAt >= cutoff) {
+                            inspectRawDmForCallSignal(me, row, token)
+                        }
+                    }
+                }
+                if (!groupId.isNullOrBlank()) {
+                    val grp = _state.value.groups.firstOrNull { it.id == groupId }
+                        ?: GroupSummary(id = groupId, name = "Group")
+                    val root = TursoApiClient.rpcRaw(
+                        op = "listGroupMessages",
+                        args = mapOf("groupId" to groupId, "limit" to 25),
+                        token = token,
+                    ).jsonObject
+                    val rows = root["messages"]?.let {
+                        JaTextJson.decodeFromJsonElement(
+                            kotlinx.serialization.builtins.ListSerializer(GroupMessage.serializer()),
+                            it,
+                        )
+                    }.orEmpty()
+                    for (row in rows.sortedBy { it.createdAt }) {
+                        if (row.createdAt >= cutoff) {
+                            inspectRawGroupForCallSignal(me, grp, row)
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     private suspend fun inspectRawDmForCallSignal(me: JaUser, msg: ChatMessage, token: String) {
+        if (System.currentTimeMillis() - msg.createdAt > 95_000L) return
         val peerId = if (msg.senderId == me.id) msg.receiverId else msg.senderId
         val peer = _state.value.friends.firstOrNull { it.id == peerId } ?: JaUser(id = peerId, displayName = "Contact")
         val raw = msg.rawWireBody ?: msg.body
-        val plain = if (JaTextCryptoEngine.isEncryptedWireBody(raw)) {
-            JaTextCryptoEngine.decryptDmWire(appCtx, me.id, msg.id, msg.senderId, msg.receiverId, raw, token)?.payload?.b
+        val dec = if (JaTextCryptoEngine.isEncryptedWireBody(raw)) {
+            JaTextCryptoEngine.decryptDmWire(appCtx, me.id, msg.id, msg.senderId, msg.receiverId, raw, token)
         } else {
-            raw
+            null
+        }
+        val plain = when {
+            dec != null -> {
+                val p = dec.payload
+                if (p.b.isBlank() && p.msgBlob != null && !msg.attachmentUrl.isNullOrBlank()) {
+                    JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(appCtx, msg.attachmentUrl, p.msgBlob)
+                        ?.readText(Charsets.UTF_8)
+                } else {
+                    p.b
+                }
+            }
+            !JaTextCryptoEngine.isEncryptedWireBody(raw) -> raw
+            else -> null
         } ?: return
+
         callEngine.inspectDmWireSignal(me, peer, msg.senderId, msg.createdAt, plain)
+
+        // Web/Desktop attaches SDP offer/answer/renegotiate envelopes in encrypted call-offer.json / call-signal.json!
+        val attUrl = msg.attachmentUrl
+        val attDesc = dec?.payload?.att
+        val isCallRelated =
+            plain.startsWith(NativeCallEngine.CALL_INVITE_PREFIX) ||
+                (plain.startsWith(NativeCallEngine.CALL_SIGNAL_PREFIX) &&
+                    !plain.startsWith(NativeCallEngine.GROUP_CALL_SIGNAL_PREFIX)) ||
+                attDesc?.t?.contains("jatext-call") == true ||
+                attDesc?.n?.startsWith("call-") == true ||
+                msg.attachmentType?.contains("jatext-call") == true
+        if (!attUrl.isNullOrBlank() && isCallRelated) {
+            val attFile = JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(appCtx, attUrl, attDesc)
+            val attJson = attFile?.takeIf { it.exists() }?.readText(Charsets.UTF_8)?.trim()
+            if (
+                !attJson.isNullOrBlank() &&
+                attJson.startsWith("{") &&
+                attJson.contains("\"callId\"") &&
+                attJson.contains("\"type\"")
+            ) {
+                callEngine.inspectDmWireSignal(
+                    me = me,
+                    peer = peer,
+                    senderId = msg.senderId,
+                    createdAt = msg.createdAt,
+                    plainBody = "${NativeCallEngine.CALL_SIGNAL_PREFIX}$attJson",
+                )
+            }
+        }
     }
 
     private suspend fun inspectRawGroupForCallSignal(me: JaUser, group: GroupSummary, msg: GroupMessage) {
+        if (System.currentTimeMillis() - msg.createdAt > 95_000L) return
         val raw = msg.rawWireBody ?: msg.body
-        val plain = if (JaTextCryptoEngine.isEncryptedWireBody(raw)) {
-            JaTextCryptoEngine.decryptGroupWire(group.id, msg.id, msg.senderId, raw)?.payload?.b
+        val dec = if (JaTextCryptoEngine.isEncryptedWireBody(raw)) {
+            JaTextCryptoEngine.decryptGroupWire(group.id, msg.id, msg.senderId, raw)
         } else {
-            raw
+            null
+        }
+        val plain = when {
+            dec != null -> {
+                val p = dec.payload
+                if (p.b.isBlank() && p.msgBlob != null && !msg.attachmentUrl.isNullOrBlank()) {
+                    JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(appCtx, msg.attachmentUrl, p.msgBlob)
+                        ?.readText(Charsets.UTF_8)
+                } else {
+                    p.b
+                }
+            }
+            !JaTextCryptoEngine.isEncryptedWireBody(raw) -> raw
+            else -> null
         } ?: return
+
         callEngine.inspectGroupWireSignal(me, group, msg.createdAt, plain)
+
+        val attUrl = msg.attachmentUrl
+        val attDesc = dec?.payload?.att
+        val isGroupCallSig =
+            plain.startsWith(NativeCallEngine.GROUP_CALL_SIGNAL_PREFIX) ||
+                attDesc?.t?.contains("jatext-gcall") == true ||
+                attDesc?.n?.startsWith("gcall-") == true ||
+                msg.attachmentType?.contains("jatext-gcall") == true
+        if (!attUrl.isNullOrBlank() && isGroupCallSig) {
+            val attFile = JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(appCtx, attUrl, attDesc)
+            val attJson = attFile?.takeIf { it.exists() }?.readText(Charsets.UTF_8)?.trim()
+            if (
+                !attJson.isNullOrBlank() &&
+                attJson.startsWith("{") &&
+                attJson.contains("\"callId\"") &&
+                attJson.contains("\"type\"")
+            ) {
+                callEngine.inspectGroupWireSignal(
+                    me = me,
+                    group = group,
+                    createdAt = msg.createdAt,
+                    plainBody = "${NativeCallEngine.GROUP_CALL_SIGNAL_PREFIX}$attJson",
+                )
+            }
+        }
     }
 
     /* ==================== Auth & In-App Google Sign-In ==================== */

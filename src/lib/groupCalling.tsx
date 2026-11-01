@@ -1026,7 +1026,20 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (!msg.body.startsWith(GROUP_CALL_SIGNAL_PREFIX)) continue;
-        const env = await readGroupSignalEnvelope(msg);
+        let env: GroupSignalEnvelope | null = null;
+        try {
+          const parsedHeader = JSON.parse(
+            msg.body.slice(GROUP_CALL_SIGNAL_PREFIX.length),
+          ) as GroupSignalEnvelope;
+          if (parsedHeader && parsedHeader.callId && parsedHeader.type) {
+            env = parsedHeader;
+          }
+        } catch {
+          env = null;
+        }
+        if (!env) {
+          env = await readGroupSignalEnvelope(msg);
+        }
         if (!env || env.callId !== groupSession.callId) continue;
 
         if (env.type === "ended") {
@@ -1062,7 +1075,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
         .fetchGroupMessages(groupSession.group.id)
         .then((rows) => checkIncomingSignals(rows))
         .catch(() => undefined);
-    }, 1000);
+    }, 500);
     void store
       .fetchGroupMessages(groupSession.group.id)
       .then((rows) => checkIncomingSignals(rows))
@@ -1425,6 +1438,10 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
               rawMicTrackRef.current;
             const activeVideo = screenTrackRef.current ?? cameraTrackRef.current;
 
+            const outbound = new MediaStream();
+            if (activeAudio) outbound.addTrack(activeAudio);
+            if (activeVideo) outbound.addTrack(activeVideo);
+
             for (const tx of entry.pc.getTransceivers()) {
               const kind = tx.receiver.track?.kind;
               if (kind === "audio") {
@@ -1436,6 +1453,12 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
                 if (activeVideo) await tx.sender.replaceTrack(activeVideo);
                 tx.direction = "sendrecv";
               }
+            }
+            if (!entry.audioSender && activeAudio) {
+              entry.audioSender = entry.pc.addTrack(activeAudio, outbound);
+            }
+            if (!entry.videoSender && activeVideo) {
+              entry.videoSender = entry.pc.addTrack(activeVideo, outbound);
             }
 
             const answer = await entry.pc.createAnswer();

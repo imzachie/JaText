@@ -5,8 +5,10 @@ import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.net.Uri
-import android.widget.MediaController
 import android.widget.VideoView
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -17,6 +19,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +49,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.Pause
@@ -53,6 +59,8 @@ import androidx.compose.material.icons.rounded.PhoneMissed
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Poll
 import androidx.compose.material.icons.rounded.Videocam
+import androidx.compose.material.icons.rounded.VolumeOff
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -73,9 +81,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isUnspecified
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -798,8 +809,11 @@ fun InlineVideoAttachmentPlayer(
     var loading by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf(true) }
     var thumbBitmap by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf<Bitmap?>(null) }
     var durationSec by remember(attachmentUrl, encryptedAttachment?.h) { mutableIntStateOf(0) }
-    var playingInline by remember { mutableStateOf(false) }
-    var fullscreenOpen by remember { mutableStateOf(false) }
+    var playingInline by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf(false) }
+    var fullscreenOpen by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf(false) }
+    var savedPositionMs by remember(attachmentUrl, encryptedAttachment?.h) { mutableIntStateOf(0) }
+    var isMuted by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf(false) }
+    var playbackSpeed by remember(attachmentUrl, encryptedAttachment?.h) { mutableFloatStateOf(1f) }
 
     LaunchedEffect(attachmentUrl, encryptedAttachment?.h) {
         loading = true
@@ -844,8 +858,8 @@ fun InlineVideoAttachmentPlayer(
     Box(
         modifier = Modifier
             .padding(bottom = 4.dp)
-            .widthIn(min = 210.dp, max = 265.dp)
-            .height(178.dp)
+            .widthIn(min = 228.dp, max = 278.dp)
+            .height(192.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(Color(0xFF0E0F16)),
         contentAlignment = Alignment.Center,
@@ -858,44 +872,28 @@ fun InlineVideoAttachmentPlayer(
                     modifier = Modifier.size(26.dp),
                 )
             }
-            resolvedFile != null && playingInline -> {
-                val videoFile = resolvedFile!!
-                AndroidView(
-                    factory = { ctx ->
-                        VideoView(ctx).apply {
-                            setVideoPath(videoFile.absolutePath)
-                            setOnPreparedListener { mp ->
-                                mp.isLooping = false
-                                start()
-                            }
-                            setOnCompletionListener {
-                                playingInline = false
-                            }
-                        }
+            resolvedFile != null && playingInline && !fullscreenOpen -> {
+                JaTextControlledVideoSurface(
+                    videoFile = resolvedFile!!,
+                    title = attachmentName ?: encryptedAttachment?.n,
+                    initialDurationSec = durationSec,
+                    initialPositionMs = savedPositionMs,
+                    isFullscreen = false,
+                    isMuted = isMuted,
+                    onToggleMute = { isMuted = !isMuted },
+                    playbackSpeed = playbackSpeed,
+                    onCycleSpeed = {
+                        playbackSpeed = nextVideoPlaybackSpeed(playbackSpeed)
                     },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable { playingInline = false },
-                )
-                IconButton(
-                    onClick = {
+                    onPositionUpdate = { pos -> savedPositionMs = pos },
+                    onToggleFullscreen = { pos ->
+                        savedPositionMs = pos
                         playingInline = false
                         fullscreenOpen = true
                     },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x88000000)),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Fullscreen,
-                        contentDescription = "Fullscreen video",
-                        tint = Color.White,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+                    onCloseFullscreen = null,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             resolvedFile != null -> {
                 thumbBitmap?.let { bmp ->
@@ -909,7 +907,15 @@ fun InlineVideoAttachmentPlayer(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color(0x40000000))
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color(0x26000000),
+                                    Color(0x38000000),
+                                    Color(0xB806070C),
+                                )
+                            )
+                        )
                         .clickable { playingInline = true }
                 )
                 Box(
@@ -917,8 +923,8 @@ fun InlineVideoAttachmentPlayer(
                         .size(50.dp)
                         .jaBouncyClick(pressedScale = 0.92f) { playingInline = true }
                         .clip(CircleShape)
-                        .background(Color(0xAA10121B))
-                        .border(1.5.dp, Color(0x55FFFFFF), CircleShape),
+                        .background(Color(0xBB10121B))
+                        .border(1.5.dp, Color(0x66FFFFFF), CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -928,38 +934,88 @@ fun InlineVideoAttachmentPlayer(
                         modifier = Modifier.size(28.dp),
                     )
                 }
-                if (durationSec > 0) {
+
+                // Bottom preview bar with play icon, progress preview & duration + fullscreen toggle
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    val previewDurMs = (durationSec * 1000).coerceAtLeast(1)
+                    val previewFrac = if (durationSec > 0) {
+                        (savedPositionMs.toFloat() / previewDurMs.toFloat()).coerceIn(0f, 1f)
+                    } else 0f
                     Box(
                         modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(8.dp)
+                            .fillMaxWidth()
+                            .height(3.5.dp)
                             .clip(RoundedCornerShape(999.dp))
-                            .background(Color(0x99000000))
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                            .background(Color(0x55FFFFFF))
+                    ) {
+                        if (previewFrac > 0f) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(previewFrac)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(JaTextPalette.AccentBlue)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text(
-                            text = "%d:%02d".format(durationSec / 60, durationSec % 60),
+                            text = if (durationSec > 0) {
+                                "${formatVideoClockMs(savedPositionMs)} / ${formatVideoClockMs(durationSec * 1000)}"
+                            } else {
+                                "0:00"
+                            },
                             color = Color.White,
-                            fontSize = 11.sp,
+                            fontSize = 10.5.sp,
                             fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace,
                         )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(26.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0x88000000))
+                                    .clickable { isMuted = !isMuted },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = if (isMuted) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+                                    contentDescription = if (isMuted) "Unmute video" else "Mute video",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(15.dp),
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(26.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0x88000000))
+                                    .clickable { fullscreenOpen = true },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Fullscreen,
+                                    contentDescription = "Fullscreen",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
                     }
-                }
-                IconButton(
-                    onClick = { fullscreenOpen = true },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(6.dp)
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x99000000)),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Fullscreen,
-                        contentDescription = "Fullscreen",
-                        tint = Color.White,
-                        modifier = Modifier.size(18.dp),
-                    )
                 }
             }
             else -> {
@@ -976,43 +1032,668 @@ fun InlineVideoAttachmentPlayer(
         val file = resolvedFile!!
         Dialog(
             onDismissRequest = { fullscreenOpen = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false,
+            ),
+        ) {
+            JaTextControlledVideoSurface(
+                videoFile = file,
+                title = attachmentName ?: encryptedAttachment?.n,
+                initialDurationSec = durationSec,
+                initialPositionMs = savedPositionMs,
+                isFullscreen = true,
+                isMuted = isMuted,
+                onToggleMute = { isMuted = !isMuted },
+                playbackSpeed = playbackSpeed,
+                onCycleSpeed = {
+                    playbackSpeed = nextVideoPlaybackSpeed(playbackSpeed)
+                },
+                onPositionUpdate = { pos -> savedPositionMs = pos },
+                onToggleFullscreen = { pos ->
+                    savedPositionMs = pos
+                    fullscreenOpen = false
+                },
+                onCloseFullscreen = { pos ->
+                    savedPositionMs = pos
+                    fullscreenOpen = false
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFA05060A)),
+            )
+        }
+    }
+}
+
+private fun nextVideoPlaybackSpeed(current: Float): Float = when {
+    current < 0.7f -> 1f
+    current < 1.1f -> 1.25f
+    current < 1.4f -> 1.5f
+    current < 1.8f -> 2f
+    else -> 0.5f
+}
+
+private fun formatVideoSpeedLabel(speed: Float): String = when {
+    speed == 0.5f -> "0.5x"
+    speed == 1.25f -> "1.25x"
+    speed == 1.5f -> "1.5x"
+    speed == 2f -> "2x"
+    else -> "1x"
+}
+
+private fun formatVideoClockMs(ms: Int): String {
+    val totalSec = (ms.coerceAtLeast(0) / 1000)
+    val hrs = totalSec / 3600
+    val mins = (totalSec % 3600) / 60
+    val secs = totalSec % 60
+    return if (hrs > 0) {
+        "%d:%02d:%02d".format(hrs, mins, secs)
+    } else {
+        "%d:%02d".format(mins, secs)
+    }
+}
+
+@Composable
+private fun JaTextControlledVideoSurface(
+    videoFile: File,
+    title: String?,
+    initialDurationSec: Int,
+    initialPositionMs: Int,
+    isFullscreen: Boolean,
+    isMuted: Boolean,
+    onToggleMute: () -> Unit,
+    playbackSpeed: Float,
+    onCycleSpeed: () -> Unit,
+    onPositionUpdate: (Int) -> Unit,
+    onToggleFullscreen: (Int) -> Unit,
+    onCloseFullscreen: ((Int) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
+    var mediaPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
+    var isPlaying by remember { mutableStateOf(true) }
+    var durationMs by remember { mutableIntStateOf((initialDurationSec * 1000).coerceAtLeast(0)) }
+    var positionMs by remember { mutableIntStateOf(initialPositionMs.coerceAtLeast(0)) }
+    var isScrubbing by remember { mutableStateOf(false) }
+    var scrubFraction by remember { mutableFloatStateOf(0f) }
+    var controlsVisible by remember { mutableStateOf(true) }
+    var interactionTick by remember { mutableIntStateOf(0) }
+
+    val bumpInteraction = {
+        controlsVisible = true
+        interactionTick += 1
+    }
+
+    val seekToPosition = { targetMs: Int ->
+        val safeMax = durationMs.coerceAtLeast(1)
+        val clamped = targetMs.coerceIn(0, safeMax)
+        positionMs = clamped
+        onPositionUpdate(clamped)
+        try {
+            val mp = mediaPlayerRef
+            if (mp != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                mp.seekTo(clamped.toLong(), MediaPlayer.SEEK_CLOSEST)
+            } else {
+                videoViewRef?.seekTo(clamped)
+            }
+        } catch (_: Throwable) {
+            try {
+                videoViewRef?.seekTo(clamped)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    val togglePlayPause = {
+        bumpInteraction()
+        val vv = videoViewRef
+        if (vv != null) {
+            if (vv.isPlaying) {
+                vv.pause()
+                isPlaying = false
+                onPositionUpdate(vv.currentPosition.coerceAtLeast(0))
+            } else {
+                if (durationMs > 0 && positionMs >= durationMs - 200) {
+                    seekToPosition(0)
+                }
+                vv.start()
+                isPlaying = true
+                mediaPlayerRef?.let { mp ->
+                    try {
+                        mp.playbackParams = mp.playbackParams.setSpeed(playbackSpeed)
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(isMuted, mediaPlayerRef) {
+        val vol = if (isMuted) 0f else 1f
+        try {
+            mediaPlayerRef?.setVolume(vol, vol)
+        } catch (_: Throwable) {
+        }
+    }
+
+    LaunchedEffect(playbackSpeed, mediaPlayerRef, isPlaying) {
+        if (isPlaying) {
+            try {
+                mediaPlayerRef?.let { mp ->
+                    mp.playbackParams = mp.playbackParams.setSpeed(playbackSpeed)
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    // Live 60/10Hz playback playhead tracker
+    LaunchedEffect(videoViewRef, isPlaying, isScrubbing) {
+        while (isPlaying && !isScrubbing) {
+            val vv = videoViewRef
+            if (vv != null) {
+                try {
+                    val dur = vv.duration
+                    if (dur > 0) durationMs = dur
+                    val cur = vv.currentPosition.coerceAtLeast(0)
+                    positionMs = if (durationMs > 0) cur.coerceAtMost(durationMs) else cur
+                    onPositionUpdate(positionMs)
+                } catch (_: Throwable) {
+                }
+            }
+            delay(80L)
+        }
+    }
+
+    // Auto-hide controls after 3.2s of uninterrupted playback
+    LaunchedEffect(controlsVisible, isPlaying, isScrubbing, interactionTick) {
+        if (controlsVisible && isPlaying && !isScrubbing) {
+            delay(3200L)
+            if (isPlaying && !isScrubbing) {
+                controlsVisible = false
+            }
+        }
+    }
+
+    DisposableEffect(videoFile.absolutePath) {
+        onDispose {
+            try {
+                val cur = videoViewRef?.currentPosition ?: positionMs
+                if (cur > 0) onPositionUpdate(cur)
+                videoViewRef?.stopPlayback()
+            } catch (_: Throwable) {
+            }
+            mediaPlayerRef = null
+            videoViewRef = null
+        }
+    }
+
+    val effectiveDuration = durationMs.coerceAtLeast(1)
+    val displayFraction = if (isScrubbing) {
+        scrubFraction.coerceIn(0f, 1f)
+    } else if (durationMs > 0) {
+        (positionMs.toFloat() / effectiveDuration.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val displayPositionMs = if (isScrubbing && durationMs > 0) {
+        (scrubFraction * durationMs).toInt().coerceIn(0, durationMs)
+    } else {
+        positionMs
+    }
+
+    Box(
+        modifier = modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+        ) {
+            if (controlsVisible && isPlaying) {
+                controlsVisible = false
+            } else {
+                bumpInteraction()
+            }
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                VideoView(ctx).apply {
+                    videoViewRef = this
+                    setVideoPath(videoFile.absolutePath)
+                    setOnPreparedListener { mp ->
+                        mediaPlayerRef = mp
+                        mp.isLooping = false
+                        val dur = mp.duration
+                        if (dur > 0) durationMs = dur
+                        val vol = if (isMuted) 0f else 1f
+                        try {
+                            mp.setVolume(vol, vol)
+                        } catch (_: Throwable) {
+                        }
+                        if (initialPositionMs > 0 && (dur <= 0 || initialPositionMs < dur - 250)) {
+                            try {
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                    mp.seekTo(initialPositionMs.toLong(), MediaPlayer.SEEK_CLOSEST)
+                                } else {
+                                    seekTo(initialPositionMs)
+                                }
+                            } catch (_: Throwable) {
+                            }
+                        }
+                        start()
+                        isPlaying = true
+                        if (playbackSpeed != 1f) {
+                            try {
+                                mp.playbackParams = mp.playbackParams.setSpeed(playbackSpeed)
+                            } catch (_: Throwable) {
+                            }
+                        }
+                    }
+                    setOnCompletionListener {
+                        isPlaying = false
+                        if (durationMs > 0) {
+                            positionMs = durationMs
+                        }
+                        onPositionUpdate(0)
+                        controlsVisible = true
+                    }
+                }
+            },
+            modifier = if (isFullscreen) Modifier.fillMaxWidth() else Modifier.fillMaxSize(),
+        )
+
+        AnimatedVisibility(
+            visible = controlsVisible || !isPlaying || isScrubbing,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.fillMaxSize(),
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xF207080D)),
-                contentAlignment = Alignment.Center,
-            ) {
-                AndroidView(
-                    factory = { ctx ->
-                        VideoView(ctx).apply {
-                            val mc = MediaController(ctx)
-                            mc.setAnchorView(this)
-                            setMediaController(mc)
-                            setVideoPath(file.absolutePath)
-                            setOnPreparedListener { start() }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                IconButton(
-                    onClick = { fullscreenOpen = false },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(18.dp)
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x9914141D)),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "Close video",
-                        tint = Color.White,
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0x8804050A),
+                                Color(0x1804050A),
+                                Color(0x1804050A),
+                                Color(0xCC04050A),
+                            )
+                        )
                     )
+            ) {
+                // Top action bar
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(
+                            horizontal = if (isFullscreen) 16.dp else 8.dp,
+                            vertical = if (isFullscreen) 28.dp else 6.dp,
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    if (isFullscreen && !title.isNullOrBlank()) {
+                        Text(
+                            text = title,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .padding(end = 10.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0x9912141E))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    } else {
+                        Spacer(Modifier.width(1.dp))
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(if (isFullscreen) 8.dp else 5.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xAA12141E))
+                                .border(0.8.dp, Color(0x38FFFFFF), RoundedCornerShape(999.dp))
+                                .clickable {
+                                    bumpInteraction()
+                                    onCycleSpeed()
+                                }
+                                .padding(
+                                    horizontal = if (isFullscreen) 10.dp else 7.dp,
+                                    vertical = if (isFullscreen) 6.dp else 3.dp,
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = formatVideoSpeedLabel(playbackSpeed),
+                                color = Color.White,
+                                fontSize = if (isFullscreen) 12.sp else 10.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(if (isFullscreen) 36.dp else 28.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xAA12141E))
+                                .border(0.8.dp, Color(0x38FFFFFF), CircleShape)
+                                .clickable {
+                                    bumpInteraction()
+                                    onToggleMute()
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = if (isMuted) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+                                contentDescription = if (isMuted) "Unmute video" else "Mute video",
+                                tint = Color.White,
+                                modifier = Modifier.size(if (isFullscreen) 19.dp else 15.dp),
+                            )
+                        }
+
+                        if (isFullscreen && onCloseFullscreen != null) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xAA12141E))
+                                    .border(0.8.dp, Color(0x38FFFFFF), CircleShape)
+                                    .clickable { onCloseFullscreen(positionMs) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "Close fullscreen video",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xAA12141E))
+                                    .border(0.8.dp, Color(0x38FFFFFF), CircleShape)
+                                    .clickable { onToggleFullscreen(positionMs) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Fullscreen,
+                                    contentDescription = "Fullscreen video",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Center transport controls (Play/Pause + Fullscreen -10s / +10s)
+                Row(
+                    modifier = Modifier.align(Alignment.Center),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(22.dp),
+                ) {
+                    if (isFullscreen) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xAA12141E))
+                                .border(1.dp, Color(0x40FFFFFF), RoundedCornerShape(999.dp))
+                                .jaBouncyClick(pressedScale = 0.92f) {
+                                    bumpInteraction()
+                                    seekToPosition(positionMs - 10_000)
+                                }
+                                .padding(horizontal = 13.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "-10s",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(if (isFullscreen) 58.dp else 42.dp)
+                            .jaBouncyClick(pressedScale = 0.90f) { togglePlayPause() }
+                            .clip(CircleShape)
+                            .background(Color(0xC610121B))
+                            .border(1.4.dp, Color(0x66FFFFFF), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause video" else "Play video",
+                            tint = Color.White,
+                            modifier = Modifier.size(if (isFullscreen) 32.dp else 24.dp),
+                        )
+                    }
+
+                    if (isFullscreen) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xAA12141E))
+                                .border(1.dp, Color(0x40FFFFFF), RoundedCornerShape(999.dp))
+                                .jaBouncyClick(pressedScale = 0.92f) {
+                                    bumpInteraction()
+                                    seekToPosition(positionMs + 10_000)
+                                }
+                                .padding(horizontal = 13.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "+10s",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+
+                // Bottom controller bar + scrubbable progress bar!
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(
+                            horizontal = if (isFullscreen) 18.dp else 8.dp,
+                            vertical = if (isFullscreen) 26.dp else 6.dp,
+                        ),
+                ) {
+                    JaTextVideoScrubBar(
+                        progress = displayFraction,
+                        isScrubbing = isScrubbing,
+                        isFullscreen = isFullscreen,
+                        onScrubStart = { frac ->
+                            isScrubbing = true
+                            scrubFraction = frac
+                            bumpInteraction()
+                        },
+                        onScrubChange = { frac ->
+                            isScrubbing = true
+                            scrubFraction = frac
+                            bumpInteraction()
+                            if (durationMs > 0) {
+                                val target = (frac * durationMs).toInt().coerceIn(0, durationMs)
+                                positionMs = target
+                            }
+                        },
+                        onScrubEnd = { frac ->
+                            if (durationMs > 0) {
+                                seekToPosition((frac * durationMs).toInt())
+                            }
+                            isScrubbing = false
+                            bumpInteraction()
+                        },
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(if (isFullscreen) 30.dp else 22.dp)
+                                    .clip(CircleShape)
+                                    .clickable { togglePlayPause() },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = if (isPlaying) "Pause" else "Play",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(if (isFullscreen) 20.dp else 16.dp),
+                                )
+                            }
+                            Text(
+                                text = "${formatVideoClockMs(displayPositionMs)} / ${formatVideoClockMs(durationMs)}",
+                                color = Color.White,
+                                fontSize = if (isFullscreen) 12.5.sp else 10.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
+
+                        if (isFullscreen) {
+                            Box(
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .clip(CircleShape)
+                                    .clickable { onToggleFullscreen(positionMs) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.FullscreenExit,
+                                    contentDescription = "Exit fullscreen",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun JaTextVideoScrubBar(
+    progress: Float,
+    isScrubbing: Boolean,
+    isFullscreen: Boolean,
+    onScrubStart: (Float) -> Unit,
+    onScrubChange: (Float) -> Unit,
+    onScrubEnd: (Float) -> Unit,
+) {
+    val clamped = progress.coerceIn(0f, 1f)
+    var dragFraction by remember { mutableFloatStateOf(clamped) }
+    val thumbScale by animateFloatAsState(
+        targetValue = if (isScrubbing) 1.32f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "videoThumbScale",
+    )
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(if (isFullscreen) 28.dp else 22.dp)
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    val width = size.width.toFloat().coerceAtLeast(1f)
+                    val frac = (offset.x / width).coerceIn(0f, 1f)
+                    dragFraction = frac
+                    onScrubStart(frac)
+                    onScrubEnd(frac)
+                }
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { startOffset ->
+                        val width = size.width.toFloat().coerceAtLeast(1f)
+                        val frac = (startOffset.x / width).coerceIn(0f, 1f)
+                        dragFraction = frac
+                        onScrubStart(frac)
+                    },
+                    onHorizontalDrag = { change, _ ->
+                        change.consume()
+                        val width = size.width.toFloat().coerceAtLeast(1f)
+                        val frac = (change.position.x / width).coerceIn(0f, 1f)
+                        dragFraction = frac
+                        onScrubChange(frac)
+                    },
+                    onDragEnd = {
+                        onScrubEnd(dragFraction)
+                    },
+                    onDragCancel = {
+                        onScrubEnd(dragFraction)
+                    },
+                )
+            }
+    ) {
+        if (size.isUnspecified || size.width <= 0f || size.height <= 0f) return@Canvas
+        val trackHeight = (if (isScrubbing) 6.dp else 4.dp).toPx()
+        val thumbRadius = (if (isFullscreen) 7.dp else 5.5.dp).toPx() * thumbScale
+        val padX = thumbRadius.coerceAtMost(size.width * 0.1f)
+        val usableWidth = (size.width - padX * 2f).coerceAtLeast(1f)
+        val centerY = size.height / 2f
+        val topY = centerY - trackHeight / 2f
+        val corner = CornerRadius(trackHeight / 2f, trackHeight / 2f)
+
+        // Background track
+        drawRoundRect(
+            color = Color(0x58FFFFFF),
+            topLeft = Offset(padX, topY),
+            size = Size(usableWidth, trackHeight),
+            cornerRadius = corner,
+        )
+
+        // Filled progress track
+        val activeW = (usableWidth * clamped).coerceIn(0f, usableWidth)
+        if (activeW > 0f) {
+            drawRoundRect(
+                color = JaTextPalette.AccentBlue,
+                topLeft = Offset(padX, topY),
+                size = Size(activeW, trackHeight),
+                cornerRadius = corner,
+            )
+        }
+
+        // Scrub thumb with subtle halo
+        val thumbX = padX + activeW
+        if (isScrubbing) {
+            drawCircle(
+                color = JaTextPalette.AccentBlue.copy(alpha = 0.32f),
+                radius = thumbRadius * 1.65f,
+                center = Offset(thumbX, centerY),
+            )
+        }
+        drawCircle(
+            color = Color.White,
+            radius = thumbRadius,
+            center = Offset(thumbX, centerY),
+        )
     }
 }
 

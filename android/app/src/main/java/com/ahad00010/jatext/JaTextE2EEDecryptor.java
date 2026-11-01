@@ -237,7 +237,8 @@ public final class JaTextE2EEDecryptor {
             (rawBody != null && (
                 rawBody.contains("(__JATEXT_CALL_CANCEL__") ||
                 rawBody.contains("(__JATEXT_CALL_CLAIM__") ||
-                rawBody.contains("(__JATEXT_CALL_DM_ENDED__")
+                rawBody.contains("(__JATEXT_CALL_DM_ENDED__") ||
+                rawBody.contains("(__JATEXT_CALL_GRP_ENDED__")
             ))
         ) {
             JaTextSoundManager.cancelIncomingCallWakeup(ctx, true);

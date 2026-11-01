@@ -57,6 +57,7 @@ import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } fr
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { ChatAttachmentImage } from "./ChatAttachmentImage";
+import { ChatVideoPlayer } from "./ChatVideoPlayer";
 import {
   ArchiveIcon,
   ArrowLeftIcon,
@@ -774,37 +775,10 @@ const GroupChatHistory = memo(function GroupChatHistory({
                               />
                             </button>
                           ) : isVideo ? (
-                            <div className="video-attachment">
-                              <video
-                                className="msg-video"
-                                controls
-                                playsInline
-                                preload="metadata"
-                                src={message.attachmentUrl}
-                              >
-                                Your browser does not support video playback.
-                              </video>
-                              <label className="video-speed-control">
-                                <span>Speed</span>
-                                <select
-                                  defaultValue="1"
-                                  aria-label="Video playback speed"
-                                  onChange={(event) => {
-                                    const video = event.currentTarget
-                                      .closest(".video-attachment")
-                                      ?.querySelector("video");
-                                    if (video) video.playbackRate = Number(event.target.value);
-                                  }}
-                                >
-                                  <option value="0.5">0.5×</option>
-                                  <option value="0.75">0.75×</option>
-                                  <option value="1">1×</option>
-                                  <option value="1.25">1.25×</option>
-                                  <option value="1.5">1.5×</option>
-                                  <option value="2">2×</option>
-                                </select>
-                              </label>
-                            </div>
+                            <ChatVideoPlayer
+                              src={message.attachmentUrl}
+                              name={message.attachmentName}
+                            />
                           ) : (
                             <a
                               className="file-chip"

@@ -879,6 +879,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
     [store],
   );
 
+  const readControlSignalHeader = useCallback((msg: ChatMessage): SignalEnvelope | null => {
+    if (msg.body.startsWith(CALL_SIGNAL_PREFIX)) {
+      try {
+        const parsed = JSON.parse(msg.body.slice(CALL_SIGNAL_PREFIX.length)) as SignalEnvelope;
+        if (parsed && parsed.callId && parsed.type) return parsed;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }, []);
+
   const readSignalEnvelope = useCallback(async (msg: ChatMessage): Promise<SignalEnvelope | null> => {
     if (msg.e2ee?.encrypted && !msg.e2ee.decrypted) {
       return null;
@@ -902,7 +914,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
       try {
         const parsed = JSON.parse(msg.body.slice(CALL_SIGNAL_PREFIX.length)) as SignalEnvelope;
         if (
-          (parsed.type === "answer" ||
+          (parsed.type === "offer" ||
+            parsed.type === "answer" ||
             parsed.type === "renegotiate-offer" ||
             parsed.type === "renegotiate-answer") &&
           !parsed.sdp
@@ -1529,14 +1542,38 @@ export function CallProvider({ children }: { children: ReactNode }) {
       for (const msg of messages) {
         // Multi-device dominance: inspect signals emitted by ANOTHER device logged into our same account!
         if (msg.senderId === me.id) {
+          // If another device on our account updated the invite card to connected/declined/ended
+          const ownInvite = parseCallInvite(msg.body);
+          if (ownInvite && ownInvite.callId === session.callId) {
+            if (
+              session.phase === "incoming" &&
+              (ownInvite.state === "connected" ||
+                ownInvite.state === "declined" ||
+                ownInvite.state === "ended" ||
+                ownInvite.state === "missed")
+            ) {
+              handledCallIdsRef.current.add(session.callId);
+              updateCallHistoryStatus(session.callId, {
+                state: ownInvite.state === "declined" ? "declined" : "connected",
+              });
+              cleanupCallResources();
+              setSession(null);
+              return;
+            }
+          }
+
           if (!isHiddenCallSignal(msg.body) || processedSignalIdsRef.current.has(msg.id)) {
             continue;
           }
-          const ownEnv = await readSignalEnvelope(msg);
+          const ownEnv = readControlSignalHeader(msg) ?? (await readSignalEnvelope(msg));
           if (!ownEnv || ownEnv.callId !== session.callId) continue;
           processedSignalIdsRef.current.add(msg.id);
 
-          if (ownEnv.deviceSessionId && ownEnv.deviceSessionId !== CALL_DEVICE_SESSION_ID) {
+          if (
+            ownEnv.deviceSessionId !== CALL_DEVICE_SESSION_ID &&
+            (Boolean(ownEnv.deviceSessionId) ||
+              (session.phase === "incoming" && myInteractionTsRef.current === null))
+          ) {
             if (
               ownEnv.type === "claim" ||
               ownEnv.type === "answer" ||
@@ -1549,7 +1586,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
                 (session.phase === "outgoing" && ownEnv.type === "hangup") ||
                 myTs === null ||
                 ownEnv.ts < myTs ||
-                (ownEnv.ts === myTs && ownEnv.deviceSessionId < CALL_DEVICE_SESSION_ID);
+                (ownEnv.ts === myTs && (ownEnv.deviceSessionId ?? "") < CALL_DEVICE_SESSION_ID);
 
               if (otherDominates) {
                 handledCallIdsRef.current.add(session.callId);
@@ -1594,10 +1631,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (!env || env.callId !== session.callId) continue;
 
         processedSignalIdsRef.current.add(msg.id);
-        // Defer deleting signal for 45s so any sibling devices logged into our account also see it!
+        // Defer deleting signal for 120s (past 60s ring timeout) so sibling devices also see it!
         window.setTimeout(() => {
           void store.deleteMessageForMe(msg.id).catch(() => undefined);
-        }, 45_000);
+        }, 120_000);
 
         if (env.type === "claim" && session.isCaller) {
           if (!dominantPeerDeviceRef.current && env.deviceSessionId) {
@@ -1784,7 +1821,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         .fetchMessagesWithUser(session.peer.id)
         .then((rows) => inspectMessages(rows))
         .catch(() => undefined);
-    }, session.phase === "connected" ? 2800 : 900);
+    }, session.phase === "connected" ? 2800 : 480);
 
     // Run one immediate check as well
     void store
@@ -1801,6 +1838,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     activeMessages,
     cleanupCallResources,
     me,
+    readControlSignalHeader,
     readSignalEnvelope,
     sendDataChannelPacket,
     sendSignalPacket,
@@ -1838,22 +1876,45 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        let inviteMsg: ChatMessage | undefined;
-        for (let attempt = 0; attempt < 5; attempt++) {
+        let offerEnv: SignalEnvelope | null = null;
+        for (let attempt = 0; attempt < 16; attempt++) {
           const rows = await store.fetchMessagesWithUser(cur.peer.id);
-          inviteMsg = [...rows]
-            .reverse()
-            .find((m) => parseCallInvite(m.body)?.callId === cur.callId);
-          if (inviteMsg?.attachmentUrl) break;
-          await new Promise((r) => window.setTimeout(r, 250));
+          const reversed = [...rows].reverse();
+
+          // Path A: Web/Desktop caller attached call-offer.json directly to the invite message
+          const inviteMsg = reversed.find((m) => parseCallInvite(m.body)?.callId === cur.callId);
+          if (inviteMsg?.attachmentUrl) {
+            try {
+              const offerRes = await fetch(inviteMsg.attachmentUrl);
+              if (offerRes.ok) {
+                const parsedOffer = (await offerRes.json()) as SignalEnvelope;
+                if (parsedOffer?.sdp) {
+                  offerEnv = parsedOffer;
+                  break;
+                }
+              }
+            } catch {
+              // Retry on next poll
+            }
+          }
+
+          // Path B: Mobile APK caller sent a separate __JATEXT_CALL_SIG__ offer packet (inline or E2EE overflow)
+          for (const m of reversed) {
+            if (m.senderId === me?.id) continue;
+            if (!isHiddenCallSignal(m.body)) continue;
+            const sigEnv = await readSignalEnvelope(m);
+            if (sigEnv && sigEnv.callId === cur.callId && sigEnv.type === "offer" && sigEnv.sdp) {
+              offerEnv = sigEnv;
+              break;
+            }
+          }
+          if (offerEnv?.sdp) break;
+
+          await new Promise((r) => window.setTimeout(r, 300));
         }
-        if (!inviteMsg || !inviteMsg.attachmentUrl) {
+        if (!offerEnv || !offerEnv.sdp) {
           throw new Error("Call offer is no longer available.");
         }
-        const offerRes = await fetch(inviteMsg.attachmentUrl);
-        if (!offerRes.ok) throw new Error("Could not read call offer.");
-        const offerEnv = (await offerRes.json()) as SignalEnvelope;
-        if (!offerEnv.sdp) throw new Error("Invalid call offer.");
 
         let media: MediaStream;
         try {
@@ -1918,6 +1979,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
             transceiver.direction = "sendrecv";
           }
         }
+        if (!audioSenderRef.current && micTrack) {
+          audioSenderRef.current = pc.addTrack(micTrack, outbound);
+        }
+        if (!videoSenderRef.current && camTrack) {
+          videoSenderRef.current = pc.addTrack(camTrack, outbound);
+        }
 
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -1957,6 +2024,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       cleanupCallResources,
       createConfiguredPeerConnection,
       me?.id,
+      readSignalEnvelope,
       refreshLocalPreviewStream,
       sendSignalPacket,
       stopRingingTimers,

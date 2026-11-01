@@ -382,6 +382,7 @@ data class GroupDetails(
 @Serializable
 data class GroupMessage(
     val id: String = "",
+    val groupId: String? = null,
     val renderKey: String? = null,
     val senderId: String = "",
     val senderName: String = "",
@@ -504,7 +505,9 @@ data class SyncResponse(
     val social: SyncSocialPayload? = null,
     val stickers: SyncStickersPayload? = null,
     val changedDmMessages: List<ChatMessage>? = null,
+    val callDmMessages: List<ChatMessage>? = null,
     val changedGroupMessages: List<GroupMessage>? = null,
+    val callGroupMessages: List<GroupMessage>? = null,
     val changedCommunityMessages: List<CommunityMessage>? = null,
     val groups: List<GroupSummary>? = null,
     val groupTypingUsers: List<ChatTypingUser> = emptyList(),
