@@ -16,6 +16,7 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { playMessageSound } from "../lib/alerts";
+import { ComposerPlusMenu } from "./ComposerPlusMenu";
 import { CONVERSATION_MARKED_READ_EVENT } from "../lib/convexStore";
 import { getUserChatPrefs } from "../lib/userChatPrefs";
 import { isChatActivelyVisibleToUser } from "../lib/nativeBridge";
@@ -1188,16 +1189,15 @@ const GroupChatComposer = memo(function GroupChatComposer({
               event.currentTarget.value = "";
             }}
           />
-          <button
-            type="button"
-            className="icon-btn attach-btn"
-            title="Attach a photo or file"
-            aria-label="Attach a photo or file"
-            disabled={isEditing}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <PaperclipIcon size={18} />
-          </button>
+          <ComposerPlusMenu
+            targetKind="group"
+            targetId={groupId}
+            targetLabel="Group chat"
+            disabled={busy || isEditing}
+            currentDraft={draft}
+            onConsumeDraft={() => handleDraftChange("", 0)}
+            onUploadAttachment={() => fileInputRef.current?.click()}
+          />
           <StickerPicker
             friendId=""
             disabled={busy || isEditing}

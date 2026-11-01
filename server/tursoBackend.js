@@ -399,6 +399,20 @@ async function initSchema(db) {
       expires_at INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS idx_device_link_expires ON device_link_sessions(expires_at)`,
+
+    `CREATE TABLE IF NOT EXISTS scheduled_messages (
+      id TEXT PRIMARY KEY,
+      sender_id TEXT NOT NULL,
+      target_kind TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      reply_to_id TEXT,
+      scheduled_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      dispatched_at INTEGER
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_sched_due ON scheduled_messages(dispatched_at, scheduled_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_sched_sender ON scheduled_messages(sender_id, dispatched_at, scheduled_at)`,
   ];
 
   await db.batch(statements, "write");
@@ -689,6 +703,14 @@ function isCallClaimWire(body) {
 }
 
 async function dispatchPushToUsers(db, targetUserIds, payload) {
+  if (!targetUserIds?.length) return;
+  await Promise.race([
+    dispatchPushToUsersImpl(db, targetUserIds, payload),
+    new Promise((resolve) => setTimeout(resolve, 1800)),
+  ]).catch(() => undefined);
+}
+
+async function dispatchPushToUsersImpl(db, targetUserIds, payload) {
   if (!targetUserIds?.length) return;
   const uniqueUserIds = [...new Set(targetUserIds.map((id) => String(id || "")).filter(Boolean))];
   if (!uniqueUserIds.length) return;
@@ -1088,18 +1110,15 @@ async function listMyGroupsHydrated(db, meId) {
   const groupIds = memRes.rows.map((r) => String(r.group_id));
   const ph = groupIds.map(() => "?").join(",");
 
-  const [countsRes, latestMsgsRes] = await Promise.all([
+  const [countsRes, latestBatchRes] = await Promise.all([
     db.execute({
       sql: `SELECT group_id, COUNT(*) AS cnt FROM group_members WHERE group_id IN (${ph}) GROUP BY group_id`,
       args: groupIds,
     }),
-    db.execute({
-      sql: `SELECT gm1.*
-            FROM group_messages gm1
-            INNER JOIN (
-              SELECT group_id, MAX(created_at) AS max_created
-              FROM group_messages
-              WHERE group_id IN (${ph})
+    db.batch(
+      groupIds.map((gid) => ({
+        sql: `SELECT * FROM group_messages
+              WHERE group_id = ?
                 AND body NOT LIKE '__JATEXT_SIG__:%'
                 AND body NOT LIKE '__JATEXT_CALL_SIG__:%'
                 AND body NOT LIKE '__JATEXT_REACT__:%'
@@ -1110,10 +1129,11 @@ async function listMyGroupsHydrated(db, meId) {
                 AND body NOT LIKE '__JATEXT_GK_V1__:%'
                 AND body NOT LIKE '__JATEXT_E2EE_IK__:%'
                 AND body NOT LIKE '__JATEXT_E2EE_GK__:%'
-              GROUP BY group_id
-            ) gm2 ON gm1.group_id = gm2.group_id AND gm1.created_at = gm2.max_created`,
-      args: groupIds,
-    }),
+              ORDER BY created_at DESC
+              LIMIT 1`,
+        args: [gid],
+      })),
+    ),
   ]);
 
   const countMap = new Map();
@@ -1121,9 +1141,12 @@ async function listMyGroupsHydrated(db, meId) {
 
   const latestMap = new Map();
   const senderIds = [];
-  for (const m of latestMsgsRes.rows) {
-    latestMap.set(String(m.group_id), m);
-    senderIds.push(String(m.sender_id));
+  for (const subRes of latestBatchRes) {
+    const m = subRes.rows[0];
+    if (m) {
+      latestMap.set(String(m.group_id), m);
+      senderIds.push(String(m.sender_id));
+    }
   }
   const sendersMap = await getUsersMap(db, senderIds);
 
@@ -1208,7 +1231,7 @@ async function buildSocialAndPreviews(db, meId) {
   const friendPh = friendIds.map(() => "?").join(",");
   const pairPh = pairKeys.map(() => "?").join(",");
 
-  const [usersMap, presRes, latestRes] = await Promise.all([
+  const [usersMap, presRes, latestBatchRes] = await Promise.all([
     getUsersMap(db, [...relatedUserIds]),
     friendIds.length
       ? db.execute({
@@ -1217,13 +1240,10 @@ async function buildSocialAndPreviews(db, meId) {
         })
       : Promise.resolve({ rows: [] }),
     pairKeys.length
-      ? db.execute({
-          sql: `SELECT m1.*
-                FROM messages m1
-                INNER JOIN (
-                  SELECT pair_key, MAX(created_at) AS max_created
-                  FROM messages
-                  WHERE pair_key IN (${pairPh})
+      ? db.batch(
+          pairKeys.map((pk) => ({
+            sql: `SELECT * FROM messages
+                  WHERE pair_key = ?
                     AND body NOT LIKE '__JATEXT_SIG__:%'
                     AND body NOT LIKE '__JATEXT_CALL_SIG__:%'
                     AND body NOT LIKE '__JATEXT_REACT__:%'
@@ -1232,12 +1252,16 @@ async function buildSocialAndPreviews(db, meId) {
                     AND body NOT LIKE '__JATEXT_GK_V1__:%'
                     AND body NOT LIKE '__JATEXT_E2EE_IK__:%'
                     AND body NOT LIKE '__JATEXT_E2EE_GK__:%'
-                  GROUP BY pair_key
-                ) m2 ON m1.pair_key = m2.pair_key AND m1.created_at = m2.max_created`,
-          args: pairKeys,
-        })
-      : Promise.resolve({ rows: [] }),
+                  ORDER BY created_at DESC
+                  LIMIT 1`,
+            args: [pk],
+          })),
+        )
+      : Promise.resolve([]),
   ]);
+  const latestRes = {
+    rows: latestBatchRes.map((sub) => sub.rows[0]).filter(Boolean),
+  };
 
   const incoming = [];
   const outgoing = [];
@@ -1697,6 +1721,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
       const syncStartedAt = Date.now();
+      void flushDueScheduledMessages(db, false).catch(() => undefined);
       const sinceTs = Math.max(0, Number(args.sinceTs || 0) - 8000);
       const activeFriendId = args.activeFriendId ? String(args.activeFriendId) : null;
       const activeGroupId = args.activeGroupId ? String(args.activeGroupId) : null;
@@ -1718,8 +1743,12 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         stickerDeltaRes,
       ] = await Promise.all([
         db.execute({
-          sql: `SELECT id FROM messages WHERE (receiver_id = ? OR sender_id = ?) AND updated_at > ? LIMIT 1`,
-          args: [meId, meId, sinceTs],
+          sql: `SELECT id FROM (
+                  SELECT id FROM messages WHERE receiver_id = ? AND updated_at > ? LIMIT 1
+                ) UNION ALL SELECT id FROM (
+                  SELECT id FROM messages WHERE sender_id = ? AND updated_at > ? LIMIT 1
+                ) LIMIT 1`,
+          args: [meId, sinceTs, meId, sinceTs],
         }),
         activePairKey
           ? db.execute({
@@ -1728,14 +1757,16 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
             })
           : Promise.resolve({ rows: [] }),
         db.execute({
-          sql: `SELECT * FROM messages
-                WHERE (receiver_id = ? OR sender_id = ?)
-                  AND updated_at > ?
-                  AND created_at > ?
-                  AND (body LIKE '__JATEXT_CALL%' OR body LIKE '%(__JATEXT_CALL_%')
-                ORDER BY created_at ASC
-                LIMIT 60`,
-          args: [meId, meId, sinceTs, recentCallWindowTs],
+          sql: `SELECT * FROM (
+                  SELECT * FROM messages
+                  WHERE receiver_id = ? AND updated_at > ? AND created_at > ?
+                    AND (body LIKE '__JATEXT_CALL%' OR body LIKE '%(__JATEXT_CALL_%')
+                  UNION
+                  SELECT * FROM messages
+                  WHERE sender_id = ? AND updated_at > ? AND created_at > ?
+                    AND (body LIKE '__JATEXT_CALL%' OR body LIKE '%(__JATEXT_CALL_%')
+                ) ORDER BY created_at ASC LIMIT 60`,
+          args: [meId, sinceTs, recentCallWindowTs, meId, sinceTs, recentCallWindowTs],
         }),
         db.execute({
           sql: `SELECT id FROM friend_requests WHERE (from_id = ? OR to_id = ?) AND updated_at > ? LIMIT 1`,
@@ -3917,7 +3948,284 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       };
     }
 
+    case "scheduleMessage": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const targetKind = String(args.targetKind || "dm");
+      const targetId = String(args.targetId || "").trim();
+      const body = String(args.body || "");
+      const replyToId = args.replyToId ? String(args.replyToId) : null;
+      const scheduledAt = Math.floor(Number(args.scheduledAt || 0));
+
+      if (!["dm", "group", "community"].includes(targetKind)) {
+        throw new TursoAppError("Invalid scheduled message target.");
+      }
+      if (!targetId) {
+        throw new TursoAppError("Target conversation is required.");
+      }
+      if (!body.trim()) {
+        throw new TursoAppError("Please enter a message to schedule.");
+      }
+      if (!Number.isFinite(scheduledAt) || scheduledAt < now + 3_000) {
+        throw new TursoAppError("Choose a future time at least a few seconds from now.");
+      }
+      if (scheduledAt > now + 366 * 24 * 60 * 60 * 1000) {
+        throw new TursoAppError("Scheduled time must be within 1 year.");
+      }
+
+      if (targetKind === "dm") {
+        const [blocked, friendsOk] = await Promise.all([
+          isBlockedEitherWay(db, meId, targetId),
+          areFriendsInDb(db, meId, targetId),
+        ]);
+        if (blocked) throw new TursoAppError("Cannot schedule messages to this user.");
+        if (!friendsOk) throw new TursoAppError("You can only schedule messages to accepted friends.");
+      } else if (targetKind === "group") {
+        const memRes = await db.execute({
+          sql: `SELECT muted FROM group_members WHERE group_id = ? AND user_id = ? LIMIT 1`,
+          args: [targetId, meId],
+        });
+        if (!memRes.rows.length) throw new TursoAppError("You are not a member of this group.");
+        if (Number(memRes.rows[0].muted || 0)) {
+          throw new TursoAppError("You are muted in this group.");
+        }
+      } else if (targetKind === "community") {
+        const role = await getCommunityRole(db, meRow);
+        if (!role.canModerate) {
+          throw new TursoAppError("Only JaText Official moderators can schedule announcements.", 403);
+        }
+      }
+
+      const countRes = await db.execute({
+        sql: `SELECT COUNT(*) AS cnt FROM scheduled_messages WHERE sender_id = ? AND dispatched_at IS NULL`,
+        args: [meId],
+      });
+      if (Number(countRes.rows[0]?.cnt || 0) >= 50) {
+        throw new TursoAppError("You can have up to 50 pending scheduled messages at once.");
+      }
+
+      const schedId = newId();
+      await db.execute({
+        sql: `INSERT INTO scheduled_messages (
+                id, sender_id, target_kind, target_id, body, reply_to_id, scheduled_at, created_at, dispatched_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+        args: [schedId, meId, targetKind, targetId, body, replyToId, scheduledAt, now],
+      });
+
+      return {
+        scheduled: {
+          id: schedId,
+          senderId: meId,
+          targetKind,
+          targetId,
+          body,
+          ...(replyToId ? { replyToId } : {}),
+          scheduledAt,
+          createdAt: now,
+        },
+      };
+    }
+
+    case "listScheduledMessages": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      await flushDueScheduledMessages(db, true);
+
+      const targetKind = args.targetKind ? String(args.targetKind) : "";
+      const targetId = args.targetId ? String(args.targetId) : "";
+      const res =
+        targetKind && targetId
+          ? await db.execute({
+              sql: `SELECT * FROM scheduled_messages
+                    WHERE sender_id = ? AND dispatched_at IS NULL AND target_kind = ? AND target_id = ?
+                    ORDER BY scheduled_at ASC
+                    LIMIT 100`,
+              args: [meId, targetKind, targetId],
+            })
+          : await db.execute({
+              sql: `SELECT * FROM scheduled_messages
+                    WHERE sender_id = ? AND dispatched_at IS NULL
+                    ORDER BY scheduled_at ASC
+                    LIMIT 100`,
+              args: [meId],
+            });
+
+      return {
+        scheduled: res.rows.map(mapScheduledMessageRow),
+      };
+    }
+
+    case "deleteScheduledMessage": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const scheduledId = String(args.scheduledId || "").trim();
+      if (!scheduledId) throw new TursoAppError("Scheduled message ID is required.");
+      const res = await db.execute({
+        sql: `DELETE FROM scheduled_messages WHERE id = ? AND sender_id = ? AND dispatched_at IS NULL`,
+        args: [scheduledId, meId],
+      });
+      return { ok: true, removed: Number(res.rowsAffected || 0) > 0 };
+    }
+
+    case "flushScheduledMessages": {
+      await requireMeRow(db, auth);
+      const sentCount = await flushDueScheduledMessages(db, true);
+      return { ok: true, sentCount };
+    }
+
     default:
       throw new TursoAppError(`Unknown operation: ${op}`);
   }
+}
+
+let lastScheduledSweepAt = 0;
+
+function mapScheduledMessageRow(r) {
+  return {
+    id: String(r.id),
+    senderId: String(r.sender_id),
+    targetKind: String(r.target_kind),
+    targetId: String(r.target_id),
+    body: String(r.body || ""),
+    ...(r.reply_to_id ? { replyToId: String(r.reply_to_id) } : {}),
+    scheduledAt: Number(r.scheduled_at),
+    createdAt: Number(r.created_at),
+  };
+}
+
+async function flushDueScheduledMessages(db, force = false) {
+  const now = Date.now();
+  if (!force && now - lastScheduledSweepAt < 2000) return 0;
+  lastScheduledSweepAt = now;
+
+  const dueRes = await db.execute({
+    sql: `SELECT * FROM scheduled_messages WHERE dispatched_at IS NULL AND scheduled_at <= ? ORDER BY scheduled_at ASC LIMIT 25`,
+    args: [now],
+  });
+  if (!dueRes.rows.length) return 0;
+
+  let dispatchedCount = 0;
+  for (const r of dueRes.rows) {
+    const schedId = String(r.id);
+    const writeAt = Date.now();
+    const claimRes = await db.execute({
+      sql: `UPDATE scheduled_messages SET dispatched_at = ? WHERE id = ? AND dispatched_at IS NULL`,
+      args: [writeAt, schedId],
+    });
+    if (!Number(claimRes.rowsAffected || 0)) continue;
+
+    const senderId = String(r.sender_id);
+    const targetKind = String(r.target_kind);
+    const targetId = String(r.target_id);
+    const body = String(r.body || "");
+    const replyToId = r.reply_to_id ? String(r.reply_to_id) : null;
+
+    const senderUserRes = await db.execute({
+      sql: `SELECT * FROM users WHERE id = ? LIMIT 1`,
+      args: [senderId],
+    });
+    const senderRow = senderUserRes.rows[0];
+    if (!senderRow) continue;
+    const senderName = String(senderRow.display_name || senderRow.username || "JaText");
+
+    if (targetKind === "dm") {
+      const [blocked, friendsOk, recvPresRes, recvUserRes, recvSettingsRes] = await Promise.all([
+        isBlockedEitherWay(db, senderId, targetId),
+        areFriendsInDb(db, senderId, targetId),
+        db.execute({ sql: `SELECT * FROM presence WHERE user_id = ? LIMIT 1`, args: [targetId] }),
+        db.execute({ sql: `SELECT * FROM users WHERE id = ? LIMIT 1`, args: [targetId] }),
+        db.execute({
+          sql: `SELECT * FROM conversation_settings WHERE user_id = ? AND friend_id = ? LIMIT 1`,
+          args: [targetId, senderId],
+        }),
+      ]);
+      if (blocked || !friendsOk) continue;
+
+      const recvOnline =
+        recvPresRes.rows[0] && writeAt - Number(recvPresRes.rows[0].last_seen_at || 0) < 90_000;
+      const deliveryStatus = recvOnline ? "delivered" : "sent";
+      const msgId = newId();
+      await db.execute({
+        sql: `INSERT INTO messages (
+                id, sender_id, receiver_id, pair_key, body, attachment_url, attachment_name,
+                attachment_type, sticker_key, delivery_status, reply_to_id, forwarded_from_id,
+                created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, NULL, ?, ?)`,
+        args: [
+          msgId,
+          senderId,
+          targetId,
+          pairKey(senderId, targetId),
+          body,
+          deliveryStatus,
+          replyToId,
+          writeAt,
+          writeAt,
+        ],
+      });
+      dispatchedCount += 1;
+
+      const recvUser = recvUserRes.rows[0];
+      const recvSettings = recvSettingsRes.rows[0];
+      const shouldPush =
+        recvUser &&
+        String(recvUser.status_preference || "online") !== "dnd" &&
+        !Number(recvSettings?.is_muted || 0) &&
+        !Number(recvSettings?.is_archived || 0);
+
+      await Promise.all([
+        shouldPush
+          ? dispatchPushToUsers(db, [targetId], { senderId, senderName, body })
+          : dispatchPushToUsers(db, [targetId], { type: "sync_poke", senderId }),
+        dispatchPushToUsers(db, [senderId], { type: "sync_poke", senderId }),
+      ]);
+    } else if (targetKind === "group") {
+      const [grpRes, memRes] = await Promise.all([
+        db.execute({ sql: `SELECT * FROM groups WHERE id = ? LIMIT 1`, args: [targetId] }),
+        db.execute({ sql: `SELECT * FROM group_members WHERE group_id = ?`, args: [targetId] }),
+      ]);
+      if (!grpRes.rows.length) continue;
+      const myMem = memRes.rows.find((m) => String(m.user_id) === senderId);
+      if (!myMem || Number(myMem.muted || 0)) continue;
+
+      const msgId = newId();
+      await db.batch([
+        {
+          sql: `INSERT INTO group_messages (
+                  id, group_id, sender_id, body, reply_to_id, forwarded_from_name,
+                  forwarded_from_id, sticker_url, sticker_name, sticker_key,
+                  attachment_url, attachment_name, attachment_type,
+                  mentions_everyone, mentioned_user_ids_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, '[]', ?, ?)`,
+          args: [msgId, targetId, senderId, body, replyToId, writeAt, writeAt],
+        },
+        {
+          sql: `UPDATE groups SET updated_at = ? WHERE id = ?`,
+          args: [writeAt, targetId],
+        },
+      ]);
+      dispatchedCount += 1;
+
+      const memberIds = memRes.rows.map((m) => String(m.user_id));
+      await dispatchPushToUsers(db, memberIds, {
+        type: "sync_poke",
+        senderId,
+        groupId: targetId,
+      });
+    } else if (targetKind === "community") {
+      const role = await getCommunityRole(db, senderRow);
+      if (!role.canModerate) continue;
+      const msgId = newId();
+      await db.execute({
+        sql: `INSERT INTO community_messages (
+                id, sender_id, body, type, poll_options_json, sticker_url, sticker_name,
+                sticker_key, attachment_url, attachment_name, attachment_type, reply_to_id,
+                forwarded_from_name, forwarded_from_id, created_at, updated_at
+              ) VALUES (?, ?, ?, 'text', '[]', NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL, NULL, ?, ?)`,
+        args: [msgId, senderId, body, replyToId, writeAt, writeAt],
+      });
+      dispatchedCount += 1;
+    }
+  }
+  return dispatchedCount;
 }

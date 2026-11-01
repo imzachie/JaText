@@ -1,6 +1,8 @@
 package com.ahad00010.jatext.ui.screens
 
 import android.Manifest
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -9,14 +11,21 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -24,6 +33,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -84,6 +96,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Poll
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
@@ -125,6 +138,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -166,6 +180,7 @@ import com.ahad00010.jatext.data.MessageReaction
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
 import com.ahad00010.jatext.data.PollVoter
 import com.ahad00010.jatext.data.ReplySummary
+import com.ahad00010.jatext.data.ScheduledMessageItem
 import com.ahad00010.jatext.data.StickerMedia
 import com.ahad00010.jatext.data.TursoApiClient
 import com.ahad00010.jatext.data.UNSEND_WINDOW_MS
@@ -202,6 +217,7 @@ import com.ahad00010.jatext.ui.components.parseDmCallInvitePayload
 import com.ahad00010.jatext.ui.components.parseGroupCallInvitePayload
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -444,6 +460,36 @@ fun ChatThreadScreen(
     var showModeratorsModal by remember { mutableStateOf(false) }
     var confirmUnfriendTarget by remember { mutableStateOf<JaUser?>(null) }
     var confirmDeleteGroupTarget by remember { mutableStateOf<GroupSummary?>(null) }
+    var showComposerPlusMenu by remember { mutableStateOf(false) }
+    var showScheduleSheet by remember { mutableStateOf(false) }
+    var scheduleInitialTab by remember { mutableStateOf("compose") }
+
+    BackHandler(enabled = showComposerPlusMenu) {
+        showComposerPlusMenu = false
+    }
+
+    val activeSchedTargetKind = when {
+        isCommunity -> "community"
+        activeGroup != null -> "group"
+        else -> "dm"
+    }
+    val activeSchedTargetId = when {
+        isCommunity -> OFFICIAL_COMMUNITY_ID
+        activeGroup != null -> activeGroup.id
+        else -> activeFriend?.id.orEmpty()
+    }
+    val activeSchedTargetLabel = when {
+        isCommunity -> "Official Community"
+        activeGroup != null -> activeGroup.name
+        activeFriend != null -> "@${activeFriend.username}"
+        else -> "Chat"
+    }
+    val chatScheduledItems = remember(state.scheduledMessages, activeSchedTargetKind, activeSchedTargetId) {
+        state.scheduledMessages.filter { item ->
+            item.targetKind == activeSchedTargetKind &&
+                (activeSchedTargetKind == "community" || item.targetId == activeSchedTargetId)
+        }
+    }
 
     val anyThreadOverlayOpen =
         contextMenuMessage != null ||
@@ -455,6 +501,7 @@ fun ChatThreadScreen(
             showBubbleStyleModal ||
             showWallpaperModal ||
             showCreatePollModal ||
+            showScheduleSheet ||
             pollVotersTarget != null ||
             showModeratorsModal ||
             confirmUnfriendTarget != null ||
@@ -1298,6 +1345,96 @@ fun ChatThreadScreen(
                 val composerPillBorder = if (hasWallpaper) Color(0x36FFFFFF) else palette.border
                 val composerTextCol = if (hasWallpaper) Color(0xFFF8FAFC) else palette.textPrimary
                 val composerHintCol = if (hasWallpaper) Color(0xB8E2E8F0) else palette.textTertiary
+                val plusRotation by animateFloatAsState(
+                    targetValue = if (showComposerPlusMenu) 45f else 0f,
+                    animationSpec = spring(
+                        dampingRatio = 0.62f,
+                        stiffness = 540f,
+                    ),
+                    label = "composerPlusRotation",
+                )
+
+                AnimatedVisibility(
+                    visible = showComposerPlusMenu && editingTarget == null,
+                    enter = expandVertically(
+                        expandFrom = Alignment.Bottom,
+                        animationSpec = spring(dampingRatio = 0.78f, stiffness = 540f),
+                    ) + scaleIn(
+                        initialScale = 0.86f,
+                        transformOrigin = TransformOrigin(0.06f, 1f),
+                        animationSpec = spring(dampingRatio = 0.76f, stiffness = 520f),
+                    ) + fadeIn(animationSpec = tween(150)),
+                    exit = shrinkVertically(
+                        shrinkTowards = Alignment.Bottom,
+                        animationSpec = tween(160),
+                    ) + scaleOut(
+                        targetScale = 0.90f,
+                        transformOrigin = TransformOrigin(0.06f, 1f),
+                        animationSpec = tween(150),
+                    ) + fadeOut(animationSpec = tween(140)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(composerBarBg)
+                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 2.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .widthIn(max = 285.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(palette.surface)
+                                .border(1.dp, palette.borderStrong, RoundedCornerShape(20.dp))
+                                .padding(7.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            ComposerPlusMenuRow(
+                                icon = Icons.Rounded.FileUpload,
+                                iconTint = Color(0xFF60B4FF),
+                                iconBg = Color(0x2B3897F0),
+                                title = "Upload attachment",
+                                subtitle = "Photos, videos, or files",
+                                onClick = {
+                                    showComposerPlusMenu = false
+                                    attachmentLauncher.launch("*/*")
+                                },
+                            )
+                            ComposerPlusMenuRow(
+                                icon = Icons.Rounded.Schedule,
+                                iconTint = palette.accent,
+                                iconBg = palette.accent.copy(alpha = 0.18f),
+                                title = "Schedule message",
+                                subtitle = if (chatScheduledItems.isNotEmpty()) {
+                                    "${chatScheduledItems.size} queued · View or add"
+                                } else {
+                                    "Choose a future send time"
+                                },
+                                badgeCount = chatScheduledItems.size,
+                                onClick = {
+                                    showComposerPlusMenu = false
+                                    scheduleInitialTab = "compose"
+                                    vm.refreshScheduledMessages()
+                                    showScheduleSheet = true
+                                },
+                            )
+                            if (chatScheduledItems.isNotEmpty()) {
+                                ComposerPlusMenuRow(
+                                    icon = Icons.Rounded.History,
+                                    iconTint = Color(0xFF4ADE80),
+                                    iconBg = Color(0x2622C55E),
+                                    title = "Scheduled message",
+                                    subtitle = "Manage ${chatScheduledItems.size} pending",
+                                    onClick = {
+                                        showComposerPlusMenu = false
+                                        scheduleInitialTab = "list"
+                                        vm.refreshScheduledMessages()
+                                        showScheduleSheet = true
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
 
                 Row(
                     modifier = Modifier
@@ -1307,20 +1444,70 @@ fun ChatThreadScreen(
                     verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    JaWebIconButton(
-                        icon = Icons.Rounded.Add,
-                        contentDescription = "Attach file",
-                        size = 40.dp,
-                        iconSize = 18.dp,
-                        containerColor = composerPillBg,
-                        borderColor = composerPillBorder,
-                        iconTint = composerTextCol,
-                        onClick = { attachmentLauncher.launch("*/*") },
-                    )
+                    Box(modifier = Modifier.size(40.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .jaBouncyClick(pressedScale = 0.90f) {
+                                    if (editingTarget == null) {
+                                        showComposerPlusMenu = !showComposerPlusMenu
+                                    }
+                                }
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (showComposerPlusMenu) {
+                                        palette.accent.copy(alpha = 0.22f)
+                                    } else {
+                                        composerPillBg
+                                    }
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (showComposerPlusMenu) palette.accent else composerPillBorder,
+                                    shape = RoundedCornerShape(14.dp),
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Add,
+                                contentDescription = "More actions",
+                                tint = if (showComposerPlusMenu) palette.accent else composerTextCol,
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .graphicsLayer {
+                                        rotationZ = plusRotation
+                                    },
+                            )
+                        }
+                        if (chatScheduledItems.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 4.dp, y = (-4).dp)
+                                    .height(17.dp)
+                                    .widthIn(min = 17.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.accent)
+                                    .border(1.5.dp, palette.bgSecondary, CircleShape)
+                                    .padding(horizontal = 4.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = if (chatScheduledItems.size > 9) "9+" else chatScheduledItems.size.toString(),
+                                    color = Color.White,
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                )
+                            }
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .size(40.dp)
-                            .jaBouncyClick(pressedScale = 0.92f) { showStickerSheet = true }
+                            .jaBouncyClick(pressedScale = 0.92f) {
+                                showComposerPlusMenu = false
+                                showStickerSheet = true
+                            }
                             .clip(RoundedCornerShape(14.dp))
                             .background(composerPillBg)
                             .border(1.dp, composerPillBorder, RoundedCornerShape(14.dp)),
@@ -1358,7 +1545,10 @@ fun ChatThreadScreen(
                     ) {
                         BasicTextField(
                             value = draftText,
-                            onValueChange = { draftText = it },
+                            onValueChange = {
+                                if (showComposerPlusMenu) showComposerPlusMenu = false
+                                draftText = it
+                            },
                             textStyle = TextStyle(
                                 color = composerTextCol,
                                 fontSize = 15.sp,
@@ -2548,12 +2738,894 @@ fun ChatThreadScreen(
         }
     }
 
+    /* ==================== Scheduled Message Composer & List Sheet (v3.8.7) ==================== */
+    if (showScheduleSheet && activeSchedTargetId.isNotBlank()) {
+        ScheduleMessageBottomSheet(
+            vm = vm,
+            state = state,
+            targetKind = activeSchedTargetKind,
+            targetId = activeSchedTargetId,
+            targetLabel = activeSchedTargetLabel,
+            initialTab = scheduleInitialTab,
+            initialDraft = draftText,
+            replyToId = replyingTo?.id,
+            chatScheduledItems = chatScheduledItems,
+            onConsumeComposerDraft = {
+                draftText = ""
+                replyingTo = null
+            },
+            onDismiss = { showScheduleSheet = false },
+        )
+    }
+
     /* ==================== Fullscreen Image Lightbox ==================== */
     fullscreenImageModel?.let { model ->
         ZoomableFullscreenImageDialog(
             model = model,
             onDismiss = { fullscreenImageModel = null },
         )
+    }
+}
+
+@Composable
+private fun ComposerPlusMenuRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconTint: Color,
+    iconBg: Color,
+    title: String,
+    subtitle: String,
+    badgeCount: Int = 0,
+    onClick: () -> Unit,
+) {
+    val palette = LocalJaTextPalette.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .jaBouncyClick(pressedScale = 0.96f, onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(iconBg)
+                .border(1.dp, iconTint.copy(alpha = 0.32f), RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(19.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = palette.textPrimary,
+                fontSize = 13.8.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = subtitle,
+                color = palette.textSecondary,
+                fontSize = 11.5.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (badgeCount > 0) {
+            Box(
+                modifier = Modifier
+                    .height(22.dp)
+                    .widthIn(min = 22.dp)
+                    .clip(CircleShape)
+                    .background(palette.accent.copy(alpha = 0.22f))
+                    .padding(horizontal = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = badgeCount.toString(),
+                    color = palette.textPrimary,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+            }
+        }
+    }
+}
+
+private fun defaultFutureScheduledAt(nowMs: Long = System.currentTimeMillis()): Long {
+    val base = nowMs + 30L * 60_000L
+    val fiveMin = 5L * 60_000L
+    return ((base + fiveMin - 1L) / fiveMin) * fiveMin
+}
+
+private fun formatAndroidScheduledWhen(ts: Long, nowMs: Long = System.currentTimeMillis()): String {
+    val targetCal = Calendar.getInstance().apply { timeInMillis = ts }
+    val nowCal = Calendar.getInstance().apply { timeInMillis = nowMs }
+    val tomorrowCal = (nowCal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
+
+    val timeFmt = SimpleDateFormat("h:mm a", Locale.getDefault())
+    val timePart = timeFmt.format(Date(ts))
+
+    val sameDay = targetCal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) &&
+        targetCal.get(Calendar.DAY_OF_YEAR) == nowCal.get(Calendar.DAY_OF_YEAR)
+    val isTomorrow = targetCal.get(Calendar.YEAR) == tomorrowCal.get(Calendar.YEAR) &&
+        targetCal.get(Calendar.DAY_OF_YEAR) == tomorrowCal.get(Calendar.DAY_OF_YEAR)
+
+    return when {
+        sameDay -> "Today at $timePart"
+        isTomorrow -> "Tomorrow at $timePart"
+        targetCal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) -> {
+            val dayFmt = SimpleDateFormat("EEE, MMM d", Locale.getDefault())
+            "${dayFmt.format(Date(ts))} at $timePart"
+        }
+        else -> {
+            val fullFmt = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+            "${fullFmt.format(Date(ts))} at $timePart"
+        }
+    }
+}
+
+private fun formatAndroidRelativeEta(targetTs: Long, nowMs: Long = System.currentTimeMillis()): String {
+    val diff = targetTs - nowMs
+    if (diff <= 0L) return "Sending now"
+    val sec = (diff + 999L) / 1000L
+    if (sec < 60L) return "in ${sec}s"
+    val mins = ((diff + 30_000L) / 60_000L).coerceAtLeast(1L)
+    if (mins < 60L) return "in ${mins}m"
+    val hours = mins / 60L
+    val remMins = mins % 60L
+    if (hours < 24L) {
+        return if (remMins > 0L) "in ${hours}h ${remMins}m" else "in ${hours}h"
+    }
+    val days = hours / 24L
+    val remHours = hours % 24L
+    return if (remHours > 0L) "in ${days}d ${remHours}h" else "in ${days}d"
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ScheduleMessageBottomSheet(
+    vm: JaTextSessionViewModel,
+    state: SessionUiState,
+    targetKind: String,
+    targetId: String,
+    targetLabel: String,
+    initialTab: String,
+    initialDraft: String,
+    replyToId: String?,
+    chatScheduledItems: List<ScheduledMessageItem>,
+    onConsumeComposerDraft: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val palette = LocalJaTextPalette.current
+    val scope = rememberCoroutineScope()
+
+    var activeTab by remember(initialTab) { mutableStateOf(initialTab) }
+    var scopeFilter by remember { mutableStateOf("chat") }
+    var messageBody by remember { mutableStateOf(initialDraft) }
+    var scheduledAtMs by remember { mutableLongStateOf(defaultFutureScheduledAt()) }
+    var selectedPresetId by remember { mutableStateOf<String?>(null) }
+    var errorBanner by remember { mutableStateOf<String?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
+    var nowTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val removingIds = remember { mutableStateMapOf<String, Boolean>() }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(10_000L)
+            nowTick = System.currentTimeMillis()
+        }
+    }
+
+    val isFutureValid = scheduledAtMs > nowTick + 3_000L
+    val visibleItems = if (scopeFilter == "all") state.scheduledMessages else chatScheduledItems
+
+    fun removeWithAnimation(itemId: String) {
+        if (removingIds[itemId] == true) return
+        removingIds[itemId] = true
+        scope.launch {
+            delay(250L)
+            vm.deleteScheduledMessage(itemId)
+            removingIds.remove(itemId)
+        }
+    }
+
+    fun resolveTargetChip(item: ScheduledMessageItem): String {
+        return when (item.targetKind) {
+            "community" -> "Official Community"
+            "group" -> state.groups.firstOrNull { it.id == item.targetId }?.name ?: "Group chat"
+            else -> state.friends.firstOrNull { it.id == item.targetId }?.let { "@${it.username}" } ?: "Direct chat"
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = palette.surface,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(13.dp),
+        ) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(11.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(13.dp))
+                            .background(palette.accent.copy(alpha = 0.18f))
+                            .border(1.dp, palette.accent.copy(alpha = 0.4f), RoundedCornerShape(13.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Schedule,
+                            contentDescription = null,
+                            tint = palette.accent,
+                            modifier = Modifier.size(21.dp),
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Schedule message",
+                            color = palette.textPrimary,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                        Text(
+                            text = "Sending to $targetLabel",
+                            color = palette.textSecondary,
+                            fontSize = 12.2.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Close",
+                        tint = palette.textSecondary,
+                    )
+                }
+            }
+
+            // Segmented Tabs ("New schedule" | "Scheduled message")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(palette.bgTertiary)
+                    .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                val composeSelected = activeTab == "compose"
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (composeSelected) palette.accent.copy(alpha = 0.24f) else Color.Transparent
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = if (composeSelected) palette.accent.copy(alpha = 0.55f) else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        .jaBouncyClick(pressedScale = 0.96f) { activeTab = "compose" }
+                        .padding(vertical = 9.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "New schedule",
+                        color = if (composeSelected) palette.textPrimary else palette.textSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+
+                val listSelected = activeTab == "list"
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (listSelected) palette.accent.copy(alpha = 0.24f) else Color.Transparent
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = if (listSelected) palette.accent.copy(alpha = 0.55f) else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        .jaBouncyClick(pressedScale = 0.96f) { activeTab = "list" }
+                        .padding(vertical = 9.dp, horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = "Scheduled message",
+                        color = if (listSelected) palette.textPrimary else palette.textSecondary,
+                        fontSize = 12.8.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Box(
+                        modifier = Modifier
+                            .height(18.dp)
+                            .widthIn(min = 18.dp)
+                            .clip(CircleShape)
+                            .background(palette.surface)
+                            .padding(horizontal = 5.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = chatScheduledItems.size.toString(),
+                            color = palette.textPrimary,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
+                }
+            }
+
+            AnimatedContent(
+                targetState = activeTab,
+                transitionSpec = {
+                    (fadeIn(tween(200)) + scaleIn(initialScale = 0.97f, animationSpec = tween(200)))
+                        .togetherWith(fadeOut(tween(150)))
+                },
+                label = "scheduleSheetTabTransition",
+            ) { tab ->
+                if (tab == "compose") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "MESSAGE",
+                            color = palette.textSecondary,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        OutlinedTextField(
+                            value = messageBody,
+                            onValueChange = {
+                                messageBody = it
+                                if (errorBanner != null) errorBanner = null
+                            },
+                            placeholder = {
+                                Text(
+                                    text = "Write your message for $targetLabel…",
+                                    color = palette.textTertiary,
+                                    fontSize = 14.sp,
+                                )
+                            },
+                            minLines = 3,
+                            maxLines = 6,
+                            shape = RoundedCornerShape(15.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        Text(
+                            text = "QUICK TIME",
+                            color = palette.textSecondary,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            val presets = listOf(
+                                Triple("15m", "In 15 min") { now: Long ->
+                                    ((now + 15L * 60_000L + 59_999L) / 60_000L) * 60_000L
+                                },
+                                Triple("1h", "In 1 hour") { now: Long ->
+                                    ((now + 60L * 60_000L + 59_999L) / 60_000L) * 60_000L
+                                },
+                                Triple("9pm", "9:00 PM") { now: Long ->
+                                    val c = Calendar.getInstance().apply {
+                                        timeInMillis = now
+                                        set(Calendar.HOUR_OF_DAY, 21)
+                                        set(Calendar.MINUTE, 0)
+                                        set(Calendar.SECOND, 0)
+                                        set(Calendar.MILLISECOND, 0)
+                                    }
+                                    if (c.timeInMillis <= now + 5L * 60_000L) {
+                                        c.add(Calendar.DAY_OF_YEAR, 1)
+                                    }
+                                    c.timeInMillis
+                                },
+                                Triple("tom9", "Tomorrow 9 AM") { now: Long ->
+                                    Calendar.getInstance().apply {
+                                        timeInMillis = now
+                                        add(Calendar.DAY_OF_YEAR, 1)
+                                        set(Calendar.HOUR_OF_DAY, 9)
+                                        set(Calendar.MINUTE, 0)
+                                        set(Calendar.SECOND, 0)
+                                        set(Calendar.MILLISECOND, 0)
+                                    }.timeInMillis
+                                },
+                                Triple("24h", "In 24 hours") { now: Long ->
+                                    ((now + 24L * 3_600_000L + 59_999L) / 60_000L) * 60_000L
+                                },
+                            )
+                            presets.forEach { (id, label, calc) ->
+                                val isSel = selectedPresetId == id
+                                Box(
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (isSel) palette.accent.copy(alpha = 0.24f) else palette.bgTertiary
+                                        )
+                                        .border(
+                                            width = 1.dp,
+                                            color = if (isSel) palette.accent else palette.border,
+                                            shape = CircleShape,
+                                        )
+                                        .jaBouncyClick(pressedScale = 0.93f) {
+                                            val now = System.currentTimeMillis()
+                                            scheduledAtMs = calc(now)
+                                            nowTick = now
+                                            selectedPresetId = id
+                                            errorBanner = null
+                                        }
+                                        .padding(horizontal = 13.dp, vertical = 7.dp),
+                                ) {
+                                    Text(
+                                        text = label,
+                                        color = if (isSel) palette.textPrimary else palette.textSecondary,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
+                        }
+
+                        // Native Date & Time Picker buttons
+                        val dateFmt = remember { SimpleDateFormat("EEE, MMM d, yyyy", Locale.getDefault()) }
+                        val timeFmt = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(palette.bgTertiary)
+                                    .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+                                    .jaBouncyClick(pressedScale = 0.96f) {
+                                        val cal = Calendar.getInstance().apply { timeInMillis = scheduledAtMs }
+                                        DatePickerDialog(
+                                            context,
+                                            { _, year, month, dayOfMonth ->
+                                                val updated = Calendar.getInstance().apply {
+                                                    timeInMillis = scheduledAtMs
+                                                    set(Calendar.YEAR, year)
+                                                    set(Calendar.MONTH, month)
+                                                    set(Calendar.DAY_OF_MONTH, dayOfMonth)
+                                                    set(Calendar.SECOND, 0)
+                                                    set(Calendar.MILLISECOND, 0)
+                                                }
+                                                scheduledAtMs = updated.timeInMillis
+                                                selectedPresetId = null
+                                                nowTick = System.currentTimeMillis()
+                                                errorBanner = null
+                                            },
+                                            cal.get(Calendar.YEAR),
+                                            cal.get(Calendar.MONTH),
+                                            cal.get(Calendar.DAY_OF_MONTH),
+                                        ).apply {
+                                            datePicker.minDate = System.currentTimeMillis() - 60_000L
+                                        }.show()
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                            ) {
+                                Text("Date", color = palette.textSecondary, fontSize = 11.2.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = dateFmt.format(Date(scheduledAtMs)),
+                                    color = palette.textPrimary,
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .weight(0.85f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(palette.bgTertiary)
+                                    .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+                                    .jaBouncyClick(pressedScale = 0.96f) {
+                                        val cal = Calendar.getInstance().apply { timeInMillis = scheduledAtMs }
+                                        TimePickerDialog(
+                                            context,
+                                            { _, hourOfDay, minute ->
+                                                val updated = Calendar.getInstance().apply {
+                                                    timeInMillis = scheduledAtMs
+                                                    set(Calendar.HOUR_OF_DAY, hourOfDay)
+                                                    set(Calendar.MINUTE, minute)
+                                                    set(Calendar.SECOND, 0)
+                                                    set(Calendar.MILLISECOND, 0)
+                                                }
+                                                scheduledAtMs = updated.timeInMillis
+                                                selectedPresetId = null
+                                                nowTick = System.currentTimeMillis()
+                                                errorBanner = null
+                                            },
+                                            cal.get(Calendar.HOUR_OF_DAY),
+                                            cal.get(Calendar.MINUTE),
+                                            false,
+                                        ).show()
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                            ) {
+                                Text("Time", color = palette.textSecondary, fontSize = 11.2.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = timeFmt.format(Date(scheduledAtMs)),
+                                    color = palette.textPrimary,
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+
+                        // Live Send Preview Pill
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(13.dp))
+                                .background(
+                                    if (isFutureValid) palette.accent.copy(alpha = 0.13f) else palette.danger.copy(alpha = 0.13f)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isFutureValid) palette.accent.copy(alpha = 0.35f) else palette.danger.copy(alpha = 0.4f),
+                                    shape = RoundedCornerShape(13.dp),
+                                )
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isFutureValid) Color(0xFF22C55E) else palette.danger),
+                            )
+                            Text(
+                                text = if (isFutureValid) {
+                                    "Sends ${formatAndroidScheduledWhen(scheduledAtMs, nowTick)} · ${formatAndroidRelativeEta(scheduledAtMs, nowTick)}"
+                                } else {
+                                    "Select a time in the future"
+                                },
+                                color = if (isFutureValid) palette.textPrimary else palette.danger,
+                                fontSize = 12.6.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+
+                        errorBanner?.let { err ->
+                            Text(
+                                text = err,
+                                color = palette.danger,
+                                fontSize = 12.8.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            JaWebGhostButton(text = "Cancel", onClick = onDismiss)
+                            Spacer(Modifier.width(8.dp))
+                            Button(
+                                onClick = {
+                                    val trimmed = messageBody.trim()
+                                    if (trimmed.isEmpty()) {
+                                        errorBanner = "Type a message to schedule."
+                                        return@Button
+                                    }
+                                    if (scheduledAtMs <= System.currentTimeMillis() + 2_500L) {
+                                        errorBanner = "Pick a time in the future."
+                                        return@Button
+                                    }
+                                    isSubmitting = true
+                                    errorBanner = null
+                                    val matchesComposerDraft =
+                                        initialDraft.trim().isNotEmpty() && initialDraft.trim() == trimmed
+                                    vm.scheduleChatMessage(
+                                        targetKind = targetKind,
+                                        targetId = targetId,
+                                        text = trimmed,
+                                        scheduledAt = scheduledAtMs,
+                                        replyToId = replyToId,
+                                        onScheduled = {
+                                            isSubmitting = false
+                                            if (matchesComposerDraft) {
+                                                onConsumeComposerDraft()
+                                            }
+                                            messageBody = ""
+                                            activeTab = "list"
+                                        },
+                                        onError = { msg ->
+                                            isSubmitting = false
+                                            errorBanner = msg
+                                        },
+                                    )
+                                },
+                                enabled = !isSubmitting && messageBody.isNotBlank() && isFutureValid,
+                                shape = RoundedCornerShape(13.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                            ) {
+                                Text(
+                                    text = if (isSubmitting) "Scheduling…" else "Schedule message",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+
+                        if (chatScheduledItems.isNotEmpty()) {
+                            HorizontalDivider(color = palette.border)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Scheduled message (${chatScheduledItems.size})",
+                                    color = palette.textSecondary,
+                                    fontSize = 12.2.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "Manage all",
+                                    color = palette.accent,
+                                    fontSize = 12.2.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.clickable { activeTab = "list" },
+                                )
+                            }
+                            chatScheduledItems.take(2).forEach { item ->
+                                ScheduledMessageRowCard(
+                                    item = item,
+                                    nowTick = nowTick,
+                                    targetChip = null,
+                                    isRemoving = removingIds[item.id] == true,
+                                    onRemove = { removeWithAnimation(item.id) },
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (state.scheduledMessages.size > chatScheduledItems.size) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf(
+                                    "chat" to "This chat (${chatScheduledItems.size})",
+                                    "all" to "All chats (${state.scheduledMessages.size})",
+                                ).forEach { (key, label) ->
+                                    val sel = scopeFilter == key
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (sel) palette.accent.copy(alpha = 0.22f) else palette.bgTertiary
+                                            )
+                                            .border(
+                                                width = 1.dp,
+                                                color = if (sel) palette.accent else palette.border,
+                                                shape = CircleShape,
+                                            )
+                                            .clickable { scopeFilter = key }
+                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            color = if (sel) palette.textPrimary else palette.textSecondary,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (visibleItems.isEmpty()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 26.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(palette.accent.copy(alpha = 0.16f))
+                                        .border(1.dp, palette.accent.copy(alpha = 0.34f), RoundedCornerShape(18.dp)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Schedule,
+                                        contentDescription = null,
+                                        tint = palette.accent,
+                                        modifier = Modifier.size(26.dp),
+                                    )
+                                }
+                                Text(
+                                    text = "No scheduled messages",
+                                    color = palette.textPrimary,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                )
+                                Text(
+                                    text = "Messages you schedule appear here until their send time arrives.",
+                                    color = palette.textSecondary,
+                                    fontSize = 12.8.sp,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(horizontal = 20.dp),
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Button(
+                                    onClick = { activeTab = "compose" },
+                                    shape = RoundedCornerShape(13.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent),
+                                ) {
+                                    Text("Schedule a message", color = Color.White, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        } else {
+                            visibleItems.forEach { item ->
+                                ScheduledMessageRowCard(
+                                    item = item,
+                                    nowTick = nowTick,
+                                    targetChip = if (scopeFilter == "all") resolveTargetChip(item) else null,
+                                    isRemoving = removingIds[item.id] == true,
+                                    onRemove = { removeWithAnimation(item.id) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduledMessageRowCard(
+    item: ScheduledMessageItem,
+    nowTick: Long,
+    targetChip: String?,
+    isRemoving: Boolean,
+    onRemove: () -> Unit,
+) {
+    val palette = LocalJaTextPalette.current
+    AnimatedVisibility(
+        visible = !isRemoving,
+        enter = expandVertically() + fadeIn(),
+        exit = slideOutHorizontally(
+            targetOffsetX = { fullWidth -> fullWidth / 2 },
+            animationSpec = tween(230),
+        ) + shrinkVertically(animationSpec = tween(230)) + fadeOut(animationSpec = tween(200)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(palette.bgTertiary)
+                .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                .padding(horizontal = 13.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (!targetChip.isNullOrBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(palette.surface)
+                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                text = targetChip,
+                                color = palette.textPrimary,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                            )
+                        }
+                    }
+                    Text(
+                        text = formatAndroidScheduledWhen(item.scheduledAt, nowTick),
+                        color = palette.accent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(palette.accent.copy(alpha = 0.15f))
+                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = formatAndroidRelativeEta(item.scheduledAt, nowTick),
+                            color = palette.textSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                Text(
+                    text = item.body,
+                    color = palette.textPrimary,
+                    fontSize = 13.6.sp,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(palette.danger.copy(alpha = 0.13f))
+                    .border(1.dp, palette.danger.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                    .jaBouncyClick(pressedScale = 0.92f, onClick = onRemove)
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.DeleteOutline,
+                    contentDescription = "Remove scheduled message",
+                    tint = palette.danger,
+                    modifier = Modifier.size(15.dp),
+                )
+                Text(
+                    text = "Remove",
+                    color = palette.danger,
+                    fontSize = 11.8.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
     }
 }
 

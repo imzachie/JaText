@@ -124,21 +124,25 @@ export function resolveRpcRateTier(op) {
 
     case "sendMessage":
     case "sendGroupMessage":
+    case "sendCommunityMessage":
     case "sendCommunityPost":
     case "sendCommunityReply":
     case "mutateMessage":
     case "mutateGroupMessage":
+    case "mutateCommunityMessage":
     case "manageGroup":
     case "createGroup":
     case "deleteMessageForMe":
     case "restoreMessageForMe":
     case "unsendMessage":
     case "editMessage":
-      return { tier: "messaging", limit: 180, windowMs: 60_000 };
+    case "scheduleMessage":
+    case "deleteScheduledMessage":
+      return { tier: "messaging", limit: 360, windowMs: 60_000 };
 
     default:
       // syncDelta, bootstrap, listMessages, listGroupMessages, setTyping, heartbeat, etc.
-      return { tier: "sync_read", limit: 420, windowMs: 60_000 };
+      return { tier: "sync_read", limit: 1200, windowMs: 60_000 };
   }
 }
 
@@ -150,8 +154,8 @@ export function resolveRpcRateTier(op) {
 export function enforceHttpRateLimit(req, res, { scope, limit, windowMs = 60_000, subject = "" }) {
   const ip = extractClientIp(req);
 
-  // 1. Global per-IP volumetric flood shield across all endpoints (900 req/min)
-  const globalRes = consumeRateLimit(`global_ip:${ip}`, 900, 60_000);
+  // 1. Global per-IP volumetric flood shield across all endpoints (2400 req/min)
+  const globalRes = consumeRateLimit(`global_ip:${ip}`, 2400, 60_000);
   if (!globalRes.allowed) {
     if (res) {
       res.setHeader("Retry-After", String(globalRes.retryAfterSec));

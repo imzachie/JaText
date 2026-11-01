@@ -25,6 +25,7 @@ import {
   type ScreenAudioMixer,
 } from "./screenShareMedia";
 import { useJaText } from "./store";
+import { hasInFlightTursoMutation } from "./tursoClient";
 import type { ChatMessage, JaUser } from "./types";
 
 export const CALL_INVITE_PREFIX = "__JATEXT_CALL__:";
@@ -1816,18 +1817,26 @@ export function CallProvider({ children }: { children: ReactNode }) {
       void inspectMessages(activeMessages);
     }
 
-    const pollInterval = window.setInterval(() => {
+    let pollInFlight = false;
+    const runSignalPoll = () => {
+      if (pollInFlight || hasInFlightTursoMutation()) return;
+      pollInFlight = true;
       void store
-        .fetchMessagesWithUser(session.peer.id)
+        .fetchMessagesWithUser(session.peer.id, { callPollOnly: true, limit: 28 })
         .then((rows) => inspectMessages(rows))
-        .catch(() => undefined);
-    }, session.phase === "connected" ? 2800 : 480);
+        .catch(() => undefined)
+        .finally(() => {
+          pollInFlight = false;
+        });
+    };
+
+    const pollInterval = window.setInterval(
+      runSignalPoll,
+      session.phase === "connected" ? 2800 : 480,
+    );
 
     // Run one immediate check as well
-    void store
-      .fetchMessagesWithUser(session.peer.id)
-      .then((rows) => inspectMessages(rows))
-      .catch(() => undefined);
+    runSignalPoll();
 
     return () => {
       cancelled = true;
@@ -1878,7 +1887,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
       try {
         let offerEnv: SignalEnvelope | null = null;
         for (let attempt = 0; attempt < 16; attempt++) {
-          const rows = await store.fetchMessagesWithUser(cur.peer.id);
+          const rows = await store.fetchMessagesWithUser(cur.peer.id, {
+            callPollOnly: true,
+            limit: 32,
+          });
           const reversed = [...rows].reverse();
 
           // Path A: Web/Desktop caller attached call-offer.json directly to the invite message

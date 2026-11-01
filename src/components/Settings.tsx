@@ -1091,7 +1091,7 @@ export function SettingsModal({
                     <div className="settings-inline-legal-card" style={{ marginTop: 4 }}>
                       <h4>App Version &amp; Updates</h4>
                       <p className="muted small">
-                        Installed release: <strong>JaText v3.8.6 (Build 55)</strong>. JaText checks
+                        Installed release: <strong>JaText v3.8.7 (Build 56)</strong>. JaText checks
                         for updates automatically on launch, or you can check manually below.
                       </p>
                       <button
@@ -1111,7 +1111,7 @@ export function SettingsModal({
                     <div className="settings-inline-legal-card" style={{ marginTop: 8 }}>
                       <h4>JaText iOS Liquid Glass PWA</h4>
                       <p className="muted small">
-                        Active release: <strong>JaText v3.8.6</strong> (
+                        Active release: <strong>JaText v3.8.7</strong> (
                         {isRunningAsStandalonePwa()
                           ? "Installed on Home Screen"
                           : "Browser Mode"}

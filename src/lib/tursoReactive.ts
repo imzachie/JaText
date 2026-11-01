@@ -12,6 +12,7 @@ import {
   PUBLIC_TURSO_API_ORIGIN,
   captureUrlOAuthCallbackIfPresent,
   getTursoApiBase,
+  hasInFlightTursoMutation,
   isInTursoActivityBurst,
   resolveSlotToken,
   subscribeTursoSyncWake,
@@ -40,6 +41,8 @@ import type {
   GroupSummary,
   JaUser,
   PollVoter,
+  ScheduledMessage,
+  ScheduledTargetKind,
   StickerMedia,
 } from "./types";
 
@@ -627,8 +630,8 @@ export function useTursoReactiveSession(
       return;
     }
     if (!sinceTsRef.current) return;
-    if (syncInFlightRef.current) {
-      // Queue an immediate follow-up sync instead of dropping real-time FCM / mutation wakes!
+    if (syncInFlightRef.current || hasInFlightTursoMutation()) {
+      // Yield network priority to user mutations (send/unsend) and run immediately after!
       pendingWakeRef.current = true;
       return;
     }
@@ -1911,22 +1914,62 @@ export function useTursoReactiveSession(
         return res.voters;
       },
 
-      queryDmMessages: async (otherId: string) => {
+      queryDmMessages: async (otherId: string, limit?: number) => {
         const res = await tursoRpc<{ messages: ChatMessage[] }>(
           "listMessages",
-          { otherId },
+          { otherId, ...(limit ? { limit } : {}) },
           { slotId },
         );
         return (res.messages ?? []).filter((m) => !deletedForMeIdsRef.current.has(m.id));
       },
 
-      queryGroupMessages: async (groupId: string) => {
+      queryGroupMessages: async (groupId: string, limit?: number) => {
         const res = await tursoRpc<{ messages: GroupMessage[] }>(
           "listGroupMessages",
-          { groupId },
+          { groupId, ...(limit ? { limit } : {}) },
           { slotId },
         );
         return (res.messages ?? []).filter((m) => !deletedForMeIdsRef.current.has(m.id));
+      },
+
+      scheduleMessageMut: async (args: {
+        targetKind: ScheduledTargetKind;
+        targetId: string;
+        body: string;
+        scheduledAt: number;
+        replyToId?: string;
+      }) => {
+        const res = await tursoRpc<{ scheduled: ScheduledMessage }>(
+          "scheduleMessage",
+          args,
+          { slotId },
+        );
+        return res.scheduled;
+      },
+
+      listScheduledMessagesQuery: async (args?: {
+        targetKind?: ScheduledTargetKind;
+        targetId?: string;
+      }) => {
+        const res = await tursoRpc<{ scheduled: ScheduledMessage[] }>(
+          "listScheduledMessages",
+          args ?? {},
+          { slotId },
+        );
+        return res.scheduled ?? [];
+      },
+
+      deleteScheduledMessageMut: async (scheduledId: string) => {
+        await tursoRpc("deleteScheduledMessage", { scheduledId }, { slotId });
+      },
+
+      flushScheduledMessagesMut: async () => {
+        const res = await tursoRpc<{ ok: boolean; sentCount: number }>(
+          "flushScheduledMessages",
+          {},
+          { slotId },
+        );
+        return Number(res.sentCount || 0);
       },
 
       queryGroupDetails: async (groupId: string) => {

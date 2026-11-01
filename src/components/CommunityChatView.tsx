@@ -22,6 +22,7 @@ import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { ChatAttachmentImage } from "./ChatAttachmentImage";
 import { ChatVideoPlayer } from "./ChatVideoPlayer";
+import { ComposerPlusMenu } from "./ComposerPlusMenu";
 import { ForwardedMessageCard } from "./ForwardedMessageCard";
 import { MessageLinkEmbeds } from "./LinkEmbeds";
 import { MessageMarkdown } from "./MessageMarkdown";
@@ -326,16 +327,15 @@ const CommunityChatComposer = memo(function CommunityChatComposer({
           e.currentTarget.value = "";
         }}
       />
-      <button
-        type="button"
-        className="icon-btn attach-btn"
+      <ComposerPlusMenu
+        targetKind="community"
+        targetId="community"
+        targetLabel="Official Community"
         disabled={isEditing}
-        onClick={() => fileInputRef.current?.click()}
-        title="Attach a photo or file"
-        aria-label="Attach a photo or file"
-      >
-        <PaperclipIcon size={18} />
-      </button>
+        currentDraft={draft}
+        onConsumeDraft={() => handleChange("")}
+        onUploadAttachment={() => fileInputRef.current?.click()}
+      />
       <StickerPicker friendId="" disabled={isEditing} onSelect={onSelectSticker} />
       <button
         type="button"

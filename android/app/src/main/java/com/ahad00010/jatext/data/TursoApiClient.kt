@@ -83,28 +83,51 @@ object TursoApiClient {
             reqBuilder.header("Authorization", "Bearer $token")
         }
 
-        httpClient.newCall(reqBuilder.build()).execute().use { resp ->
-            val rawText = resp.body?.string().orEmpty()
-            val root = try {
-                JaTextJson.parseToJsonElement(rawText).jsonObject
-            } catch (_: Throwable) {
-                null
-            }
-            val ok = root?.get("ok")?.jsonPrimitive?.booleanOrNull == true
-            if (!resp.isSuccessful || !ok) {
-                val errMsg = root?.get("error")?.jsonPrimitive?.contentOrNull
-                    ?: "Request failed (${resp.code})"
-                throw TursoApiException(errMsg, resp.code)
-            }
-            val dataEl = root?.get("data") ?: JsonNull
-            if (dataEl is JsonObject) {
-                val refreshed = dataEl["refreshedToken"]?.jsonPrimitive?.contentOrNull
-                if (!refreshed.isNullOrBlank()) {
-                    onRefreshedToken?.invoke(refreshed)
+        val request = reqBuilder.build()
+        var lastError: Throwable? = null
+        val maxAttempts = 3
+        for (attempt in 0 until maxAttempts) {
+            try {
+                httpClient.newCall(request).execute().use { resp ->
+                    val rawText = resp.body?.string().orEmpty()
+                    val root = try {
+                        JaTextJson.parseToJsonElement(rawText).jsonObject
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    val ok = root?.get("ok")?.jsonPrimitive?.booleanOrNull == true
+                    if (!resp.isSuccessful || !ok) {
+                        val errMsg = root?.get("error")?.jsonPrimitive?.contentOrNull
+                            ?: "Request failed (${resp.code})"
+                        val apiEx = TursoApiException(errMsg, resp.code)
+                        val retryable = resp.code == 429 || resp.code == 408 || resp.code >= 502
+                        if (retryable && attempt + 1 < maxAttempts) {
+                            lastError = apiEx
+                        } else {
+                            throw apiEx
+                        }
+                    } else {
+                        val dataEl = root?.get("data") ?: JsonNull
+                        if (dataEl is JsonObject) {
+                            val refreshed = dataEl["refreshedToken"]?.jsonPrimitive?.contentOrNull
+                            if (!refreshed.isNullOrBlank()) {
+                                onRefreshedToken?.invoke(refreshed)
+                            }
+                        }
+                        return@withContext dataEl
+                    }
                 }
+            } catch (e: TursoApiException) {
+                val retryable = e.statusCode == 429 || e.statusCode == 408 || e.statusCode >= 502
+                if (!retryable || attempt + 1 >= maxAttempts) throw e
+                lastError = e
+            } catch (e: Throwable) {
+                if (attempt + 1 >= maxAttempts) throw e
+                lastError = e
             }
-            dataEl
+            delay(180L * (attempt + 1))
         }
+        throw lastError ?: TursoApiException("Network request failed.")
     }
 
     suspend inline fun <reified T> rpc(
