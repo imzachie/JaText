@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -149,10 +150,12 @@ fun LiquidBottomTabs(
             InteractiveHighlight(
                 animationScope = animationScope,
                 position = { size, _ ->
+                    val w = if (size.isSpecified) size.width else 0f
+                    val h = if (size.isSpecified) size.height else 0f
                     Offset(
                         if (isLtr) (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset
-                        else size.width - (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset,
-                        size.height / 2f
+                        else w - (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset,
+                        h / 2f
                     )
                 }
             )
@@ -175,8 +178,8 @@ fun LiquidBottomTabs(
                             lens(24f.dp.toPx(), 24f.dp.toPx())
                         },
                         layerBlock = {
-                            val progress = dampedDragAnimation.pressProgress
-                            val w = size.width.coerceAtLeast(1f)
+                            val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
+                            val w = if (size.isSpecified) size.width.coerceAtLeast(1f) else 1f
                             val scale = lerp(1f, 1f + 16f.dp.toPx() / w, progress)
                             scaleX = scale
                             scaleY = scale
@@ -195,7 +198,7 @@ fun LiquidBottomTabs(
         CompositionLocalProvider(
             LocalLiquidBottomTabContentColor provides accentColor,
             LocalLiquidBottomTabScale provides {
-                lerp(1f, 1.16f, dampedDragAnimation.pressProgress)
+                lerp(1f, 1.16f, dampedDragAnimation.pressProgress.coerceIn(0f, 1f))
             }
         ) {
             Row(
@@ -210,7 +213,7 @@ fun LiquidBottomTabs(
                         backdrop = backdrop,
                         shape = { CircleShape },
                         effects = {
-                            val progress = dampedDragAnimation.pressProgress
+                            val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
                             vibrancy()
                             blur(8f.dp.toPx())
                             lens(
@@ -219,7 +222,7 @@ fun LiquidBottomTabs(
                             )
                         },
                         highlight = {
-                            val progress = dampedDragAnimation.pressProgress
+                            val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
                             Highlight.Default.copy(alpha = progress)
                         },
                         onDrawSurface = { drawRect(containerColor) }
@@ -237,9 +240,10 @@ fun LiquidBottomTabs(
             Modifier
                 .padding(horizontal = 4f.dp)
                 .graphicsLayer {
+                    val w = if (size.isSpecified) size.width else 0f
                     translationX =
                         if (isLtr) dampedDragAnimation.value * tabWidth + panelOffset
-                        else size.width - (dampedDragAnimation.value + 1f) * tabWidth + panelOffset
+                        else w - (dampedDragAnimation.value + 1f) * tabWidth + panelOffset
                 }
                 .then(interactiveHighlight.gestureModifier)
                 .then(dampedDragAnimation.modifier)
@@ -247,7 +251,7 @@ fun LiquidBottomTabs(
                     backdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop),
                     shape = { CircleShape },
                     effects = {
-                        val progress = dampedDragAnimation.pressProgress
+                        val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
                         lens(
                             10f.dp.toPx() * progress,
                             14f.dp.toPx() * progress,
@@ -255,15 +259,15 @@ fun LiquidBottomTabs(
                         )
                     },
                     highlight = {
-                        val progress = dampedDragAnimation.pressProgress
+                        val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
                         Highlight.Default.copy(alpha = progress.coerceAtLeast(0.35f))
                     },
                     shadow = {
-                        val progress = dampedDragAnimation.pressProgress
+                        val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
                         Shadow(alpha = progress)
                     },
                     innerShadow = {
-                        val progress = dampedDragAnimation.pressProgress
+                        val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
                         InnerShadow(
                             radius = 8f.dp * progress,
                             alpha = progress
@@ -277,13 +281,13 @@ fun LiquidBottomTabs(
                         scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
                     },
                     onDrawSurface = {
-                        val progress = dampedDragAnimation.pressProgress
+                        val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
                         drawRect(
                             if (isLightTheme) Color.Black.copy(alpha = 0.09f)
                             else Color.White.copy(alpha = 0.13f),
-                            alpha = 1f - progress
+                            alpha = (1f - progress).coerceIn(0f, 1f)
                         )
-                        drawRect(Color.Black.copy(alpha = 0.03f * progress))
+                        drawRect(Color.Black.copy(alpha = (0.03f * progress).coerceIn(0f, 1f)))
                     }
                 )
                 .height(56f.dp)

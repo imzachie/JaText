@@ -5,20 +5,22 @@
 package com.kyant.backdrop.backdrops
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.RememberObserver
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.GraphicsContext
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
-import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalGraphicsContext
 import androidx.compose.ui.unit.Density
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.internal.InverseLayerScope
@@ -27,11 +29,29 @@ private val DefaultOnDraw: ContentDrawScope.() -> Unit = { drawContent() }
 
 @Composable
 fun rememberLayerBackdrop(
-    graphicsLayer: GraphicsLayer = rememberGraphicsLayer(),
     onDraw: ContentDrawScope.() -> Unit = DefaultOnDraw
 ): LayerBackdrop {
-    return remember(graphicsLayer, onDraw) {
-        LayerBackdrop(graphicsLayer, onDraw)
+    val graphicsContext = LocalGraphicsContext.current
+    return remember(graphicsContext, onDraw) {
+        LayerBackdropObserver(graphicsContext, onDraw)
+    }.backdrop
+}
+
+private class LayerBackdropObserver(
+    val graphicsContext: GraphicsContext,
+    val onDraw: ContentDrawScope.() -> Unit
+) : RememberObserver {
+
+    val backdrop = LayerBackdrop(graphicsContext.createGraphicsLayer(), onDraw)
+
+    override fun onRemembered() {}
+
+    override fun onForgotten() {
+        graphicsContext.releaseGraphicsLayer(backdrop.graphicsLayer)
+    }
+
+    override fun onAbandoned() {
+        graphicsContext.releaseGraphicsLayer(backdrop.graphicsLayer)
     }
 }
 
@@ -54,16 +74,18 @@ class LayerBackdrop internal constructor(
     ) {
         val coordinates = coordinates ?: return
         val layerCoordinates = layerCoordinates ?: return
+        if (!coordinates.isAttached || !layerCoordinates.isAttached) return
+        val offset = runCatching {
+            try {
+                layerCoordinates.localPositionOf(coordinates)
+            } catch (_: Exception) {
+                coordinates.positionInWindow() - layerCoordinates.positionInWindow()
+            }
+        }.getOrNull() ?: return
         withTransform({
             if (layerBlock != null) {
                 with(obtainInverseLayerScope()) { inverseTransform(density, layerBlock) }
             }
-            val offset =
-                try {
-                    layerCoordinates.localPositionOf(coordinates)
-                } catch (_: Exception) {
-                    coordinates.positionInWindow() - layerCoordinates.positionInWindow()
-                }
             translate(-offset.x, -offset.y)
         }) {
             drawLayer(graphicsLayer)

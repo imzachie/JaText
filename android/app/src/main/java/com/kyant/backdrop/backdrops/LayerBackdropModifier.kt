@@ -5,6 +5,7 @@
 package com.kyant.backdrop.backdrops
 
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.node.DrawModifierNode
@@ -22,14 +23,11 @@ private class LayerBackdropElement(
 ) : ModifierNodeElement<LayerBackdropNode>() {
 
     override fun create(): LayerBackdropNode {
-        return LayerBackdropNode(backdrop)
+        return LayerBackdropNode(backdrop = backdrop)
     }
 
     override fun update(node: LayerBackdropNode) {
-        if (node.backdrop != backdrop) {
-            node.backdrop.layerCoordinates = null
-            node.backdrop = backdrop
-        }
+        node.backdrop = backdrop
         node.invalidateDraw()
     }
 
@@ -58,6 +56,8 @@ private class LayerBackdropNode(
 
     override fun ContentDrawScope.draw() {
         drawContent()
+        val drawSize = size
+        if (drawSize.isUnspecified || drawSize.width <= 0f || drawSize.height <= 0f) return
         recordLayer(
             node = this@LayerBackdropNode,
             layer = backdrop.graphicsLayer

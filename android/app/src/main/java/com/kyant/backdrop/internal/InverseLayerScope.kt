@@ -6,6 +6,7 @@ package com.kyant.backdrop.internal
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.DefaultCameraDistance
@@ -52,7 +53,9 @@ internal class InverseLayerScope : GraphicsLayerScope {
         density: Density,
         layerBlock: GraphicsLayerScope.() -> Unit
     ) {
-        this@InverseLayerScope.size = size
+        val currentSize = size
+        if (currentSize.isUnspecified) return
+        this@InverseLayerScope.size = currentSize
         this@InverseLayerScope.density = density.density
         fontScale = density.fontScale
 
@@ -87,41 +90,34 @@ internal class InverseLayerScope : GraphicsLayerScope {
         clip = false
         renderEffect = null
         compositingStrategy = CompositingStrategy.Auto
-
-        matrix = null
     }
 
     private fun DrawTransform.inverseTransformAtTopLeft(
-        rotationZ: Float = 0f,
-        scaleX: Float = 1f,
-        scaleY: Float = 1f
+        rotationZ: Float,
+        scaleX: Float,
+        scaleY: Float
     ) {
-        if (rotationZ == 0f) {
-            if (scaleX != 0f && scaleY != 0f) {
-                scale(1f / scaleX, 1f / scaleY, Offset.Zero)
-            }
-            return
-        }
+        val size = size
+        if (size.isUnspecified) return
+        val sX = scaleX * scaleX
+        val sY = scaleY * scaleY
+        if (sX == 0f || sY == 0f || !sX.isFinite() || !sY.isFinite()) return
 
-        val matrix = matrix ?: Matrix().also { matrix = it }
-        if (matrix.values.size < 16) return
+        val pivot = Offset(
+            transformOrigin.pivotFractionX * size.width,
+            transformOrigin.pivotFractionY * size.height
+        )
+        val rad = -rotationZ * (PI / 180.0)
+        val rCos = cos(rad).toFloat()
+        val rSin = sin(rad).toFloat()
 
-        val rz = rotationZ * (PI / 180.0)
-        val rsz = sin(rz).toFloat()
-        val rcz = cos(rz).toFloat()
-
-        val a00 = rcz * scaleX
-        val a01 = rsz * scaleY
-        val a10 = -rsz * scaleX
-        val a11 = rcz * scaleY
-
-        val det = a00 * a11 - a01 * a10
-        if (det == 0f) return
-        val invDet = 1f / det
-        matrix[0, 0] = a11 * invDet
-        matrix[0, 1] = -a01 * invDet
-        matrix[1, 0] = -a10 * invDet
-        matrix[1, 1] = a00 * invDet
+        val matrix = matrix?.apply { reset() } ?: Matrix().also { matrix = it }
+        matrix.values[Matrix.ScaleX] = rCos / sX
+        matrix.values[Matrix.SkewY] = rSin / sY
+        matrix.values[Matrix.SkewX] = -rSin / sX
+        matrix.values[Matrix.ScaleY] = rCos / sY
+        matrix.values[Matrix.TranslateX] = (pivot.x - (rCos * pivot.x - rSin * pivot.y)) / sX
+        matrix.values[Matrix.TranslateY] = (pivot.y - (rSin * pivot.x + rCos * pivot.y)) / sY
 
         transform(matrix)
     }

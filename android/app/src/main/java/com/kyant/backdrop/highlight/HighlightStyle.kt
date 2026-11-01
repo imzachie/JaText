@@ -7,6 +7,7 @@ package com.kyant.backdrop.highlight
 import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
+import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -56,20 +57,22 @@ interface HighlightStyle {
             shape: Shape,
             runtimeShaderCache: RuntimeShaderCache
         ): RuntimeShader? {
-            return if (isRuntimeShaderSupported()) {
+            if (!isRuntimeShaderSupported()) return null
+            val drawSize = size
+            if (drawSize.isUnspecified || drawSize.width <= 0f || drawSize.height <= 0f) return null
+            val radii = getCornerRadii(shape)
+            return runCatching {
                 runtimeShaderCache.obtainRuntimeShader(
                     "Default",
                     DefaultHighlightShaderString
                 ).apply {
-                    setFloatUniform("size", size.width, size.height)
-                    setFloatUniform("cornerRadii", getCornerRadii(shape))
+                    setFloatUniform("size", drawSize.width, drawSize.height)
+                    setFloatUniform("cornerRadii", radii[0], radii[1], radii[2], radii[3])
                     setColorUniform("color", color.copy(alpha = 1f))
                     setFloatUniform("angle", angle * (PI / 180f).toFloat())
                     setFloatUniform("falloff", falloff)
                 }
-            } else {
-                null
-            }
+            }.getOrNull()
         }
     }
 
@@ -78,7 +81,7 @@ interface HighlightStyle {
         val intensity: Float = 0.38f
     ) : HighlightStyle {
 
-        override val color: Color = Color.White.copy(alpha = intensity)
+        override val color: Color = Color.White.copy(alpha = intensity.coerceIn(0f, 1f))
 
         override val blendMode: BlendMode = DrawScope.DefaultBlendMode
 
@@ -86,19 +89,21 @@ interface HighlightStyle {
             shape: Shape,
             runtimeShaderCache: RuntimeShaderCache
         ): RuntimeShader? {
-            return if (isRuntimeShaderSupported()) {
+            if (!isRuntimeShaderSupported()) return null
+            val drawSize = size
+            if (drawSize.isUnspecified || drawSize.width <= 0f || drawSize.height <= 0f) return null
+            val radii = getCornerRadii(shape)
+            return runCatching {
                 runtimeShaderCache.obtainRuntimeShader(
                     "Ambient",
                     AmbientHighlightShaderString
                 ).apply {
-                    setFloatUniform("size", size.width, size.height)
-                    setFloatUniform("cornerRadii", getCornerRadii(shape))
+                    setFloatUniform("size", drawSize.width, drawSize.height)
+                    setFloatUniform("cornerRadii", radii[0], radii[1], radii[2], radii[3])
                     setFloatUniform("angle", 45f * (PI / 180f).toFloat())
                     setFloatUniform("falloff", 1f)
                 }
-            } else {
-                null
-            }
+            }.getOrNull()
         }
     }
 
@@ -117,6 +122,9 @@ interface HighlightStyle {
 
 private fun DrawScope.getCornerRadii(shape: Shape): FloatArray {
     val size = size
+    if (size.isUnspecified || size.width <= 0f || size.height <= 0f) {
+        return FloatArray(4)
+    }
     val maxRadius = size.minDimension / 2f
     val cornerShape = shape as? CornerBasedShape ?: return FloatArray(4) { maxRadius }
     val isLtr = layoutDirection == LayoutDirection.Ltr

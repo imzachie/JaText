@@ -4,6 +4,8 @@
  */
 package com.kyant.backdrop.navigation
 
+import android.graphics.RuntimeShader
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.VisibilityThreshold
@@ -12,14 +14,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.util.fastCoerceIn
-import com.kyant.backdrop.RuntimeShader
-import com.kyant.backdrop.asComposeShader
-import com.kyant.backdrop.isRuntimeShaderSupported
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -43,9 +44,10 @@ class InteractiveHighlight(
     val offset: Offset get() = positionAnimation.value - startPosition
 
     private val shader =
-        if (isRuntimeShaderSupported()) {
-            RuntimeShader(
-                """
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            runCatching {
+                RuntimeShader(
+                    """
 uniform float2 size;
 layout(color) uniform half4 color;
 uniform float radius;
@@ -56,38 +58,49 @@ half4 main(float2 coord) {
     float intensity = smoothstep(radius, radius * 0.5, dist);
     return color * intensity;
 }"""
-            )
+                )
+            }.getOrNull()
         } else {
             null
         }
 
     val modifier: Modifier =
         Modifier.drawWithContent {
-            val progress = pressProgressAnimation.value
-            if (progress > 0f && size.width > 0f && size.height > 0f) {
-                if (shader != null && isRuntimeShaderSupported()) {
+            val rawProgress = pressProgressAnimation.value
+            val drawSize = size
+            if (rawProgress > 0f && !drawSize.isUnspecified && drawSize.width > 0f && drawSize.height > 0f) {
+                val safeProgress = rawProgress.coerceIn(0f, 1f)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && shader != null) {
                     drawRect(
-                        Color.White.copy(0.08f * progress),
+                        Color.White.copy(alpha = (0.08f * safeProgress).coerceIn(0f, 1f)),
                         blendMode = BlendMode.Plus
                     )
-                    shader.apply {
-                        val pos = position(size, positionAnimation.value)
-                        setFloatUniform("size", size.width, size.height)
-                        setColorUniform("color", Color.White.copy(0.15f * progress))
-                        setFloatUniform("radius", size.minDimension * 1.5f)
-                        setFloatUniform(
-                            "position",
-                            pos.x.fastCoerceIn(0f, size.width),
-                            pos.y.fastCoerceIn(0f, size.height)
+                    val brush = runCatching {
+                        shader.apply {
+                            val pos = position(drawSize, positionAnimation.value)
+                            setFloatUniform("size", drawSize.width, drawSize.height)
+                            setColorUniform(
+                                "color",
+                                Color.White.copy(alpha = (0.15f * safeProgress).coerceIn(0f, 1f)).toArgb()
+                            )
+                            setFloatUniform("radius", drawSize.minDimension * 1.5f)
+                            setFloatUniform(
+                                "position",
+                                pos.x.fastCoerceIn(0f, drawSize.width),
+                                pos.y.fastCoerceIn(0f, drawSize.height)
+                            )
+                        }
+                        ShaderBrush(shader)
+                    }.getOrNull()
+                    if (brush != null) {
+                        drawRect(
+                            brush = brush,
+                            blendMode = BlendMode.Plus
                         )
                     }
-                    drawRect(
-                        ShaderBrush(shader.asComposeShader()),
-                        blendMode = BlendMode.Plus
-                    )
                 } else {
                     drawRect(
-                        Color.White.copy(0.25f * progress),
+                        Color.White.copy(alpha = (0.25f * safeProgress).coerceIn(0f, 1f)),
                         blendMode = BlendMode.Plus
                     )
                 }

@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Shape
@@ -250,7 +251,9 @@ private class DrawBackdropNode(
 
     private val effectScope =
         object : BackdropEffectScopeImpl() {
-            override val shape: Shape get() = shapeProvider.innerShape
+
+            override val shape: Shape
+                get() = shapeProvider.innerShape
         }
 
     private var graphicsLayer: GraphicsLayer? = null
@@ -267,10 +270,10 @@ private class DrawBackdropNode(
 
     private val recordBackdropBlock: (DrawScope.() -> Unit) = {
         val canvas = drawContext.canvas
-        val padding = padding
+        val safePadding = if (padding.isFinite()) padding else 0f
 
-        if (padding != 0f) {
-            canvas.translate(padding, padding)
+        if (safePadding != 0f) {
+            canvas.translate(safePadding, safePadding)
         }
         onDrawBackdrop {
             with(backdrop) {
@@ -281,17 +284,19 @@ private class DrawBackdropNode(
                 )
             }
         }
-        if (padding != 0f) {
-            canvas.translate(-padding, -padding)
+        if (safePadding != 0f) {
+            canvas.translate(-safePadding, -safePadding)
         }
     }
 
     private val drawBackdropLayer: DrawScope.() -> Unit = {
         val layer = graphicsLayer
-        if (layer != null) {
-            val padding = padding
-            val w = (size.width.toInt() + padding.toInt() * 2).coerceAtLeast(1)
-            val h = (size.height.toInt() + padding.toInt() * 2).coerceAtLeast(1)
+        val drawSize = size
+        if (layer != null && !drawSize.isUnspecified && drawSize.width > 0f && drawSize.height > 0f) {
+            val safePadding = if (padding.isFinite() && padding > 0f) padding else 0f
+            val padInt = safePadding.toInt()
+            val w = (drawSize.width.toInt() + padInt * 2).coerceAtLeast(1)
+            val h = (drawSize.height.toInt() + padInt * 2).coerceAtLeast(1)
 
             recordLayer(
                 node = this@DrawBackdropNode,
@@ -301,7 +306,7 @@ private class DrawBackdropNode(
             )
 
             layer.topLeft =
-                if (padding != 0f) IntOffset(-padding.toInt(), -padding.toInt())
+                if (padInt != 0) IntOffset(-padInt, -padInt)
                 else IntOffset.Zero
             drawLayer(layer)
         }
@@ -318,8 +323,14 @@ private class DrawBackdropNode(
     }
 
     override fun ContentDrawScope.draw() {
+        val drawSize = size
+        if (drawSize.isUnspecified || drawSize.width <= 0f || drawSize.height <= 0f) {
+            drawContent()
+            return
+        }
+
         if (effectScope.update(this)) {
-            updateEffects()
+            observeEffects()
         }
 
         onDrawBehind?.invoke(this)
@@ -363,15 +374,22 @@ private class DrawBackdropNode(
     }
 
     private fun observeEffects() {
+        if (!isAttached) return
         observeReads { updateEffects() }
     }
 
     private fun updateEffects() {
         if (!isRenderEffectSupported()) return
+        val currentSize = effectScope.size
+        if (currentSize.isUnspecified || currentSize.width <= 0f || currentSize.height <= 0f) {
+            return
+        }
 
-        effectScope.apply(effects)
-        graphicsLayer?.renderEffect = effectScope.renderEffect
-        padding = effectScope.padding
+        runCatching {
+            effectScope.apply(effects)
+            graphicsLayer?.renderEffect = effectScope.renderEffect
+            padding = if (effectScope.padding.isFinite()) effectScope.padding else 0f
+        }
     }
 
     override fun onAttach() {

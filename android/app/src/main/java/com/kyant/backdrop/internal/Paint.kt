@@ -13,7 +13,7 @@ import com.kyant.backdrop.asAndroidRuntimeShader
 
 internal fun Paint.blur(radius: Float) {
     this.asFrameworkPaint().maskFilter =
-        if (radius > 0f) BlurMaskFilter(radius, BlurMaskFilter.Blur.NORMAL)
+        if (radius.isFinite() && radius > 0f) BlurMaskFilter(radius, BlurMaskFilter.Blur.NORMAL)
         else null
 }
 

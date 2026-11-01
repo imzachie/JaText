@@ -5,6 +5,7 @@
 package com.kyant.backdrop.highlight
 
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.PaintingStyle
@@ -88,7 +89,15 @@ internal class HighlightNode(
 
     override fun ContentDrawScope.draw() {
         val highlight = highlight()
-        if (highlight == null || highlight.width.value <= 0f || size.width <= 0f || size.height <= 0f) {
+        val drawSize = size
+        if (
+            highlight == null ||
+            highlight.width.value <= 0f ||
+            highlight.alpha <= 0f ||
+            drawSize.isUnspecified ||
+            drawSize.width <= 0f ||
+            drawSize.height <= 0f
+        ) {
             return drawContent()
         }
 
@@ -96,17 +105,16 @@ internal class HighlightNode(
 
         val highlightLayer = highlightLayer
         if (highlightLayer != null) {
-            val size = size
             val density: Density = this
             val layoutDirection = layoutDirection
 
             val safeSize =
                 IntSize(
-                    ceil(size.width).toInt() + 2,
-                    ceil(size.height).toInt() + 2
+                    (ceil(drawSize.width).toInt() + 2).coerceAtLeast(1),
+                    (ceil(drawSize.height).toInt() + 2).coerceAtLeast(1)
                 )
 
-            val outline = shapeProvider.shape.createOutline(size, layoutDirection, density)
+            val outline = shapeProvider.shape.createOutline(drawSize, layoutDirection, density)
             val clipPath =
                 if (outline is Outline.Rounded) {
                     clipPath ?: Path().also { clipPath = it }
@@ -116,7 +124,7 @@ internal class HighlightNode(
 
             configurePaint(highlight)
 
-            highlightLayer.alpha = highlight.alpha
+            highlightLayer.alpha = highlight.alpha.coerceIn(0f, 1f)
             highlightLayer.blendMode = highlight.style.blendMode
             highlightLayer.record(safeSize) {
                 translate(1f, 1f) {
@@ -155,12 +163,14 @@ internal class HighlightNode(
         paint.blur(highlight.blurRadius.toPx())
         if (isRuntimeShaderSupported()) {
             val shader =
-                with(highlight.style) {
-                    createShader(
-                        shape = shapeProvider.shape,
-                        runtimeShaderCache = runtimeShaderCache
-                    )
-                }
+                runCatching {
+                    with(highlight.style) {
+                        createShader(
+                            shape = shapeProvider.shape,
+                            runtimeShaderCache = runtimeShaderCache
+                        )
+                    }
+                }.getOrNull()
             paint.setRuntimeShader(shader)
         }
     }
