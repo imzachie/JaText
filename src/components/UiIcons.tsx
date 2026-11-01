@@ -669,3 +669,64 @@ export function LogOutIcon(props: UiIconProps) {
   );
 }
 
+/**
+ * Apple iOS SF-Symbol `gear` icon: 10 rounded outer cogs + machined rim + 3 120-degree spokes + inner hub ring.
+ */
+export function IosSettingsGearIcon(props: UiIconProps) {
+  const teethAngles = [0, 36, 72, 108, 144, 180, 216, 252, 288, 324];
+  const spokeAngles = [-90, 30, 150];
+  return (
+    <BaseSvg {...props}>
+      {teethAngles.map((deg) => {
+        const rad = ((deg - 90) * Math.PI) / 180;
+        const x1 = 12 + Math.cos(rad) * 7.4;
+        const y1 = 12 + Math.sin(rad) * 7.4;
+        const x2 = 12 + Math.cos(rad) * 10.15;
+        const y2 = 12 + Math.sin(rad) * 10.15;
+        return (
+          <line
+            key={deg}
+            x1={x1.toFixed(2)}
+            y1={y1.toFixed(2)}
+            x2={x2.toFixed(2)}
+            y2={y2.toFixed(2)}
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        );
+      })}
+      <circle cx="12" cy="12" r="7.35" strokeWidth="1.85" />
+      {spokeAngles.map((deg) => {
+        const rad = (deg * Math.PI) / 180;
+        const x1 = 12 + Math.cos(rad) * 2.35;
+        const y1 = 12 + Math.sin(rad) * 2.35;
+        const x2 = 12 + Math.cos(rad) * 6.95;
+        const y2 = 12 + Math.sin(rad) * 6.95;
+        return (
+          <line
+            key={deg}
+            x1={x1.toFixed(2)}
+            y1={y1.toFixed(2)}
+            x2={x2.toFixed(2)}
+            y2={y2.toFixed(2)}
+            strokeWidth="1.55"
+            strokeLinecap="round"
+          />
+        );
+      })}
+      <circle cx="12" cy="12" r="2.25" strokeWidth="1.55" />
+    </BaseSvg>
+  );
+}
+
+export function IosPlusCircleIcon(props: UiIconProps) {
+  return (
+    <BaseSvg {...props}>
+      <circle cx="12" cy="12" r="8.8" strokeWidth="1.85" />
+      <line x1="7.9" y1="12" x2="16.1" y2="12" strokeWidth="1.95" strokeLinecap="round" />
+      <line x1="12" y1="7.9" x2="12" y2="16.1" strokeWidth="1.95" strokeLinecap="round" />
+    </BaseSvg>
+  );
+}
+
+

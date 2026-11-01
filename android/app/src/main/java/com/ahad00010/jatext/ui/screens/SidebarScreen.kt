@@ -1,9 +1,13 @@
 package com.ahad00010.jatext.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -14,14 +18,19 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -99,12 +108,21 @@ import com.ahad00010.jatext.ui.components.JaWebGhostButton
 import com.ahad00010.jatext.ui.components.JaWebIconButton
 import com.ahad00010.jatext.ui.components.JaWebInput
 import com.ahad00010.jatext.ui.components.JaWebPrimaryButton
-import com.ahad00010.jatext.ui.components.JaWebTabs
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.navigation.IosAddNavIcon
+import com.kyant.backdrop.navigation.IosCallsNavIcon
+import com.kyant.backdrop.navigation.IosChatsNavIcon
+import com.kyant.backdrop.navigation.IosSettingsGearIcon
+import com.kyant.backdrop.navigation.LiquidBottomTab
+import com.kyant.backdrop.navigation.LiquidBottomTabs
+import com.kyant.backdrop.navigation.LocalLiquidBottomTabContentColor
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+
+private val BOTTOM_NAV_TAB_IDS = listOf("chats", "calls", "add", "settings")
 
 private sealed interface SidebarHoldTarget {
     data object Community : SidebarHoldTarget
@@ -112,20 +130,11 @@ private sealed interface SidebarHoldTarget {
     data class Group(val group: GroupSummary) : SidebarHoldTarget
 }
 
-private fun currentDayPartLabel(): String {
-    val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-    return when {
-        h in 5..11 -> "morning"
-        h in 12..16 -> "afternoon"
-        h in 17..21 -> "evening"
-        else -> "night"
-    }
-}
-
 /**
- * Exact 1:1 recreation of src/components/Sidebar.tsx + `.sidebar` in src/index.css!
+ * Main screen with iOS 26 Liquid Glass bottom navigation bar (`Chats`, `Calls`, `Add`, `Settings`)
+ * powered by Kyant0/AndroidLiquidGlass (`com.kyant.backdrop`).
  */
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SidebarScreen(
     state: SessionUiState,
@@ -137,13 +146,18 @@ fun SidebarScreen(
     val palette = LocalJaTextPalette.current
     val me = state.me
 
-    var activeTab by remember { mutableStateOf("chats") } // "chats" | "calls" | "add" (exact 3 web tabs!)
+    var activeTab by remember { mutableStateOf("chats") } // "chats" | "calls" | "add" | "settings"
+    var settingsSubOverlayOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showArchived by remember { mutableStateOf(false) }
     var addUsername by remember { mutableStateOf("") }
     var showAccountSwitcher by remember { mutableStateOf(false) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var holdTarget by remember { mutableStateOf<SidebarHoldTarget?>(null) }
+
+    BackHandler(enabled = activeTab != "chats" && !settingsSubOverlayOpen) {
+        activeTab = "chats"
+    }
 
     // 2-step Owner Group Deletion confirmation state
     var ownerDeleteTarget by remember { mutableStateOf<GroupSummary?>(null) }
@@ -212,204 +226,151 @@ fun SidebarScreen(
             .sortedByDescending { f -> previewByFriend[f.id]?.createdAt ?: 0L }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .then(
-                if (palette.rootGradientBrush != null) {
-                    Modifier.background(palette.rootGradientBrush)
-                } else {
-                    Modifier.background(palette.bgSecondary)
-                }
-            )
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        /* ==================== 1. `.sidebar-header` (`[logo] JaText` + SwitchAccount + Settings) ==================== */
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.jatext_logo_icon),
-                    contentDescription = "JaText",
-                    modifier = Modifier.size(36.dp),
-                )
-                Text(
-                    text = "JaText",
-                    color = palette.textPrimary,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Black,
-                )
-            }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                JaWebIconButton(
-                    icon = Icons.Rounded.SwapHoriz,
-                    contentDescription = "Switch or add account",
-                    badgeCount = if (state.accounts.size > 1) state.accounts.size else 0,
-                    onClick = { showAccountSwitcher = true },
-                )
-                JaWebIconButton(
-                    icon = Icons.Rounded.Settings,
-                    contentDescription = "Settings",
-                    onClick = onOpenSettings,
-                )
-            }
-        }
+    val contentBackdrop = rememberLayerBackdrop()
+    val isImeVisible = WindowInsets.isImeVisible
 
-        /* ==================== 2. `.greeting` Card ("Good morning/afternoon/evening, <Name>!") ==================== */
-        if (me != null) {
-            val myStatus = when (me.statusPreference) {
-                "offline" -> "offline"
-                "dnd" -> "dnd"
-                "away", "idle" -> "away"
-                else -> "online"
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(palette.bgTertiary)
-                    .border(1.dp, palette.border, RoundedCornerShape(16.dp))
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                JaAvatar(
-                    avatarUrl = me.avatarUrl,
-                    displayName = me.displayName.ifBlank { me.username },
-                    avatarColor = me.avatarColor,
-                    size = 50.dp,
-                    ringWidth = 3.dp,
-                    presenceStatus = myStatus,
-                    statusBorderColor = palette.bgTertiary,
-                    modifier = Modifier.clickable { onOpenProfile(me) },
+    Box(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        /* ==================== Layer 1: Full-Screen Backdrop Content ==================== */
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .layerBackdrop(contentBackdrop)
+                .then(
+                    if (palette.rootGradientBrush != null) {
+                        Modifier.background(palette.rootGradientBrush)
+                    } else {
+                        Modifier.background(palette.bgSecondary)
+                    }
                 )
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Good ${currentDayPartLabel()}, ${me.displayName.ifBlank { me.username }}!",
-                            color = palette.textPrimary,
-                            fontSize = 15.5.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                    }
-                    Spacer(Modifier.height(2.dp))
-                    Row(
+        ) {
+            AnimatedContent(
+                targetState = activeTab,
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(130))
+                },
+                modifier = Modifier.fillMaxSize(),
+                label = "sidebarTabPane",
+            ) { currentTab ->
+                if (currentTab == "settings") {
+                    SettingsModalScreen(
+                        state = state,
+                        vm = vm,
+                        onClose = { activeTab = "chats" },
+                        embeddedInBottomBar = true,
+                        onOpenAccountSwitcher = { showAccountSwitcher = true },
+                        onFullScreenOverlayChange = { settingsSubOverlayOpen = it },
+                    )
+                } else {
+                    Column(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { showAccountSwitcher = true }
-                            .padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text(
-                            text = "@${me.username}",
-                            color = palette.textSecondary,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(Modifier.width(2.dp))
-                        Icon(
-                            imageVector = Icons.Rounded.UnfoldMore,
-                            contentDescription = "Switch account",
-                            tint = palette.textSecondary,
-                            modifier = Modifier.size(14.dp),
-                        )
-                    }
-                }
-                if (otherSavedAccounts.isNotEmpty()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        otherSavedAccounts.take(2).forEach { acct ->
-                            JaAvatar(
-                                avatarUrl = acct.avatarUrl,
-                                displayName = acct.displayName.ifBlank { acct.username },
-                                avatarColor = acct.avatarColor,
-                                size = 30.dp,
-                                ringWidth = 2.dp,
-                                modifier = Modifier.clickable { vm.switchToAccountSlot(acct.slotId) },
-                            )
-                        }
-                        if (otherSavedAccounts.size > 2) {
-                            Box(
-                                modifier = Modifier
-                                    .size(30.dp)
-                                    .clip(CircleShape)
-                                    .background(palette.bgSecondary)
-                                    .border(1.dp, palette.border, CircleShape)
-                                    .clickable { showAccountSwitcher = true },
-                                contentAlignment = Alignment.Center,
+                        /* ---- Streamlined Top Header: Profile Picture + Title (NO top-right Settings icon) ---- */
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
-                                Text(
-                                    text = "+${otherSavedAccounts.size - 2}",
-                                    color = palette.textPrimary,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
+                                if (me != null) {
+                                    val myStatus = when (me.statusPreference) {
+                                        "offline" -> "offline"
+                                        "dnd" -> "dnd"
+                                        "away", "idle" -> "away"
+                                        else -> "online"
+                                    }
+                                    JaAvatar(
+                                        avatarUrl = me.avatarUrl,
+                                        displayName = me.displayName.ifBlank { me.username },
+                                        avatarColor = me.avatarColor,
+                                        size = 44.dp,
+                                        ringWidth = 2.5.dp,
+                                        presenceStatus = myStatus,
+                                        statusBorderColor = palette.bgSecondary,
+                                        modifier = Modifier.clickable { onOpenProfile(me) },
+                                    )
+                                } else {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.jatext_logo_icon),
+                                        contentDescription = "JaText",
+                                        modifier = Modifier.size(38.dp),
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = when (currentTab) {
+                                            "calls" -> "Calls"
+                                            "add" -> "Add"
+                                            else -> "Chats"
+                                        },
+                                        color = palette.textPrimary,
+                                        fontSize = 23.sp,
+                                        fontWeight = FontWeight.Black,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (me != null) {
+                                        Row(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable { showAccountSwitcher = true }
+                                                .padding(vertical = 1.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = "@${me.username}",
+                                                color = palette.textSecondary,
+                                                fontSize = 12.5.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Spacer(Modifier.width(2.dp))
+                                            Icon(
+                                                imageVector = Icons.Rounded.UnfoldMore,
+                                                contentDescription = "Switch account",
+                                                tint = palette.textSecondary,
+                                                modifier = Modifier.size(13.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (otherSavedAccounts.isNotEmpty()) {
+                                    otherSavedAccounts.take(2).forEach { acct ->
+                                        JaAvatar(
+                                            avatarUrl = acct.avatarUrl,
+                                            displayName = acct.displayName.ifBlank { acct.username },
+                                            avatarColor = acct.avatarColor,
+                                            size = 30.dp,
+                                            ringWidth = 2.dp,
+                                            modifier = Modifier.clickable { vm.switchToAccountSlot(acct.slotId) },
+                                        )
+                                    }
+                                }
+                                JaWebIconButton(
+                                    icon = Icons.Rounded.SwapHoriz,
+                                    contentDescription = "Switch or add account",
+                                    badgeCount = if (state.accounts.size > 1) state.accounts.size else 0,
+                                    onClick = { showAccountSwitcher = true },
                                 )
                             }
                         }
-                    }
-                }
-            }
-        }
 
-        /* ==================== 3. `.tabs` (`Chats` | `Calls` | `Add`) ==================== */
-        JaWebTabs(
-            tabs = listOf(
-                JaTabItem(
-                    id = "chats",
-                    label = "Chats",
-                    icon = Icons.Rounded.ChatBubbleOutline,
-                    badgeCount = totalUnreadCount,
-                ),
-                JaTabItem(
-                    id = "calls",
-                    label = "Calls",
-                    icon = Icons.Rounded.Call,
-                ),
-                JaTabItem(
-                    id = "add",
-                    label = "Add",
-                    icon = Icons.Rounded.Add,
-                    badgeCount = state.incoming.size,
-                ),
-            ),
-            selectedId = activeTab,
-            onSelect = { activeTab = it },
-        )
-
-        /* ==================== 4. Tab Panes ==================== */
-        AnimatedContent(
-            targetState = activeTab,
-            transitionSpec = {
-                fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(130))
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            label = "sidebarTabPane",
-        ) { currentTab ->
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                when (currentTab) {
+                        when (currentTab) {
             "chats" -> {
                 JaWebInput(
                     value = searchQuery,
@@ -473,7 +434,7 @@ fun SidebarScreen(
                         .fillMaxWidth()
                         .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
-                    contentPadding = PaddingValues(bottom = 12.dp),
+                    contentPadding = PaddingValues(bottom = 112.dp),
                 ) {
                     /* ---- Official JaText Community Row (`.official-community-row`) ---- */
                     if (!showArchived) {
@@ -677,7 +638,7 @@ fun SidebarScreen(
                             .fillMaxWidth()
                             .weight(1f),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
-                        contentPadding = PaddingValues(bottom = 12.dp),
+                        contentPadding = PaddingValues(bottom = 112.dp),
                     ) {
                         items(state.callHistory, key = { "call:${it.id}" }) { entry ->
                             val friendPeer = entry.peerId?.let { pid -> state.friends.firstOrNull { it.id == pid } }
@@ -717,7 +678,7 @@ fun SidebarScreen(
                         .fillMaxWidth()
                         .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 16.dp),
+                    contentPadding = PaddingValues(bottom = 112.dp),
                 ) {
                     /* ---- Add by username ---- */
                     item(key = "add-by-username") {
@@ -914,7 +875,109 @@ fun SidebarScreen(
                     }
                 }
             }
+                        }
+                    }
+                }
+            }
         }
+
+        /* ==================== Layer 2: Floating iOS 26 Liquid Glass Bottom Navigation Bar ==================== */
+        AnimatedVisibility(
+            visible = !isImeVisible && !settingsSubOverlayOpen,
+            enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 2 },
+            exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 2 },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+        ) {
+            val selectedNavIndex = BOTTOM_NAV_TAB_IDS.indexOf(activeTab).coerceAtLeast(0)
+            LiquidBottomTabs(
+                selectedTabIndex = { selectedNavIndex },
+                onTabSelected = { idx ->
+                    val nextTab = BOTTOM_NAV_TAB_IDS.getOrElse(idx) { "chats" }
+                    if (activeTab != nextTab) {
+                        activeTab = nextTab
+                    }
+                },
+                backdrop = contentBackdrop,
+                tabsCount = BOTTOM_NAV_TAB_IDS.size,
+                modifier = Modifier.fillMaxWidth(),
+                isLightTheme = !palette.isDark,
+                accentColor = palette.accent,
+                inactiveColor = palette.textPrimary.copy(alpha = 0.82f),
+            ) {
+                /* 1. Chats */
+                LiquidBottomTab(onClick = { activeTab = "chats" }) {
+                    val tabTint = LocalLiquidBottomTabContentColor.current
+                    Box(contentAlignment = Alignment.Center) {
+                        IosChatsNavIcon(tint = tabTint, size = 23.dp)
+                        if (totalUnreadCount > 0) {
+                            LiquidTabBadgePill(
+                                count = totalUnreadCount,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 9.dp, y = (-4).dp),
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Chats",
+                        color = tabTint,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+
+                /* 2. Calls */
+                LiquidBottomTab(onClick = { activeTab = "calls" }) {
+                    val tabTint = LocalLiquidBottomTabContentColor.current
+                    IosCallsNavIcon(tint = tabTint, size = 23.dp)
+                    Text(
+                        text = "Calls",
+                        color = tabTint,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+
+                /* 3. Add */
+                LiquidBottomTab(onClick = { activeTab = "add" }) {
+                    val tabTint = LocalLiquidBottomTabContentColor.current
+                    Box(contentAlignment = Alignment.Center) {
+                        IosAddNavIcon(tint = tabTint, size = 23.dp)
+                        if (state.incoming.isNotEmpty()) {
+                            LiquidTabBadgePill(
+                                count = state.incoming.size,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 9.dp, y = (-4).dp),
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Add",
+                        color = tabTint,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+
+                /* 4. Settings (Authentic iOS SF-Symbol `gear` icon) */
+                LiquidBottomTab(onClick = { activeTab = "settings" }) {
+                    val tabTint = LocalLiquidBottomTabContentColor.current
+                    IosSettingsGearIcon(tint = tabTint, size = 23.dp)
+                    Text(
+                        text = "Settings",
+                        color = tabTint,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }
@@ -1730,3 +1793,29 @@ private fun formatShortTime(ts: Long): String {
         SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(ts))
     }
 }
+
+@Composable
+private fun LiquidTabBadgePill(
+    count: Int,
+    modifier: Modifier = Modifier,
+) {
+    val label = if (count > 99) "99+" else count.toString()
+    Box(
+        modifier = modifier
+            .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
+            .clip(CircleShape)
+            .background(Color(0xFFFF3B30))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.ExtraBold,
+            lineHeight = 10.sp,
+            maxLines = 1,
+        )
+    }
+}
+
