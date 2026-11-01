@@ -188,13 +188,15 @@ class JaTextSessionViewModel(app: Application) :
     private val _state = MutableStateFlow(
         run {
             val initSlot = cache.getActiveSlotId()
+            val savedLang = cache.getLanguageCode()
+            com.ahad00010.jatext.data.JaTextI18n.setLanguage(appCtx, savedLang)
             SessionUiState(
                 slotId = initSlot,
                 accounts = cache.getAccounts(),
                 notificationsEnabled = cache.isNotificationsEnabled(),
                 soundsEnabled = cache.isSoundsEnabled(),
                 emojiUsageCounts = cache.getEmojiUsageCounts(initSlot),
-                languageCode = cache.getLanguageCode(),
+                languageCode = savedLang,
                 drafts = cache.getDrafts(initSlot),
                 openedViewOnceIds = cache.getOpenedViewOnceIds(initSlot),
                 chatOrganization = normalizeChatOrganization(cache.getChatOrganization(initSlot)),
@@ -4304,6 +4306,7 @@ class JaTextSessionViewModel(app: Application) :
     fun setAppLanguage(code: String) {
         val clean = code.trim().ifBlank { "en" }
         cache.setLanguageCode(clean)
+        com.ahad00010.jatext.data.JaTextI18n.setLanguage(appCtx, clean)
         _state.update { it.copy(languageCode = clean) }
     }
 

@@ -12,7 +12,13 @@ data class JaLanguageOption(
     val englishName: String,
     val flag: String,
     val rtl: Boolean = false,
-)
+) {
+    val nativeLabel: String get() = nativeName
+    val englishLabel: String get() = englishName
+}
+
+val JATEXT_LANGUAGE_OPTIONS: List<JaLanguageOption>
+    get() = JaTextI18n.languages
 
 object JaTextI18n {
     private const val PREFS_NAME = "jatext_prefs_v1"
