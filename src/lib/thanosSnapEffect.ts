@@ -8,11 +8,11 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-const ALPHAS = [0.3, 0.6, 1.0] as const;
+const ALPHAS = [0.35, 0.68, 1.0] as const;
 const MIN_DURATION_MS = 850;
 const MAX_DURATION_MS = 1650;
 const LINE_SENSITIVE_MS = 360;
-const LINE_STEP_DELAY_MS = 11;
+const SWEEP_DURATION_MS = 360;
 
 interface SnapParticle {
   initialX: number;
@@ -67,10 +67,19 @@ let lastFrameTs = 0;
 
 const recentlySnappedAtById = new Map<string, number>();
 const activeSweepListenersById = new Map<string, Set<() => void>>();
+const hiddenTargetElById = new Map<string, HTMLElement>();
 
 function restoreTargetVisibility(el: HTMLElement) {
   el.style.opacity = "";
   el.style.pointerEvents = "";
+}
+
+export function restoreSnapTargetVisibilityById(messageId: string) {
+  const el = hiddenTargetElById.get(messageId);
+  if (el) {
+    hiddenTargetElById.delete(messageId);
+    restoreTargetVisibility(el);
+  }
 }
 
 function finalizeRendererSweep(r: ActiveSnapRenderer) {
@@ -80,7 +89,6 @@ function finalizeRendererSweep(r: ActiveSnapRenderer) {
     window.clearTimeout(r.fallbackTimerId);
     r.fallbackTimerId = null;
   }
-  restoreTargetVisibility(r.targetEl);
   r.onSweepComplete?.();
   const listeners = activeSweepListenersById.get(r.messageId);
   activeSweepListenersById.delete(r.messageId);
@@ -91,6 +99,18 @@ function finalizeRendererSweep(r: ActiveSnapRenderer) {
       } catch {
         // ignore listener error
       }
+    });
+  }
+  // Only restore inline opacity if the node has already morphed into an unsent placeholder
+  // (prevents the original bubble from flashing back for a split second while RPC finishes!)
+  if (typeof window !== "undefined") {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (!r.targetEl.isConnected || r.targetEl.classList.contains("unsent") || r.targetEl.querySelector(".unsent")) {
+          hiddenTargetElById.delete(r.messageId);
+          restoreTargetVisibility(r.targetEl);
+        }
+      });
     });
   }
 }
@@ -367,8 +387,7 @@ function teardownOverlayIfIdle() {
   overlayCtx = null;
 }
 
-function spawnNextLinesIfReady(r: ActiveSnapRenderer, nowMs: number) {
-  if (nowMs < r.nextLineTime) return;
+function spawnNextLinesIfReady(r: ActiveSnapRenderer, deltaMs: number) {
   if (r.line >= r.maxLine) {
     if (r.endRenderingTime === 0) {
       r.endRenderingTime = r.time;
@@ -378,20 +397,19 @@ function spawnNextLinesIfReady(r: ActiveSnapRenderer, nowMs: number) {
     return;
   }
 
-  const renderCount = r.width > 260 ? 3 : 2;
-  let emittedCols = 0;
+  r.nextLineTime += deltaMs;
+  const targetLine = Math.min(
+    r.maxLine,
+    Math.max(r.line + 1, Math.round(Math.min(1, r.nextLineTime / SWEEP_DURATION_MS) * r.maxLine)),
+  );
 
-  while (emittedCols < renderCount && r.line < r.maxLine) {
-    const x = r.line * r.perPx;
-    r.animatedLineWidth = x;
-
-    let onThisLine = 0;
+  while (r.line < targetLine) {
+    const x = Math.min(r.width - 1, r.line * r.perPx);
     for (let y = 0; y < r.height; y += r.perPx) {
       const idx = (y * r.width + x) * 4;
       const a = r.imageData[idx + 3];
       if (a <= 10) continue;
 
-      onThisLine += 1;
       const minRad = Math.max(1, Math.floor(r.perPx / 4));
       const initialR = minRad + Math.random() * Math.max(1, r.perPx - minRad);
       const initialAlpha = randomInitialAlpha(a);
@@ -417,9 +435,6 @@ function spawnNextLinesIfReady(r: ActiveSnapRenderer, nowMs: number) {
     }
 
     r.line += 1;
-    if (onThisLine > 0) {
-      emittedCols += 1;
-    }
   }
 
   if (r.line >= r.maxLine) {
@@ -428,9 +443,9 @@ function spawnNextLinesIfReady(r: ActiveSnapRenderer, nowMs: number) {
     }
     r.animatedLineWidth = r.width;
     finalizeRendererSweep(r);
+  } else {
+    r.animatedLineWidth = Math.min(r.width, r.line * r.perPx);
   }
-
-  r.nextLineTime = nowMs + LINE_STEP_DELAY_MS;
 }
 
 function drawRenderer(ctx: CanvasRenderingContext2D, r: ActiveSnapRenderer, deltaMs: number): boolean {
@@ -529,10 +544,9 @@ function stepAnimation(nowTs: number) {
 
   ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
 
-  const nowWall = performance.now();
   const remaining: ActiveSnapRenderer[] = [];
   for (const r of activeRenderers) {
-    spawnNextLinesIfReady(r, nowWall);
+    spawnNextLinesIfReady(r, deltaMs);
     if (drawRenderer(ctx, r, deltaMs)) {
       remaining.push(r);
     } else {
@@ -642,6 +656,7 @@ export function triggerMessageThanosSnapById(
     particles: [],
     firstFrameCallback: () => {
       if (!renderer.sweepCompleteFired) {
+        hiddenTargetElById.set(messageId, targetEl);
         targetEl.style.opacity = "0";
         targetEl.style.pointerEvents = "none";
       }

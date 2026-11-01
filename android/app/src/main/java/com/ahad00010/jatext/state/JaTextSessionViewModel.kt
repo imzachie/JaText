@@ -788,8 +788,9 @@ class JaTextSessionViewModel(app: Application) :
                 g.copy(lastMessage = text, unreadCount = effectiveUnread)
             }
 
+            val nowSyncMs = System.currentTimeMillis()
             _state.update { prev ->
-                val nextDms = if (hydratedDmDelta.isNotEmpty() && prev.activeChatId == activeFriend) {
+                val rawDms = if (hydratedDmDelta.isNotEmpty() && prev.activeChatId == activeFriend) {
                     mergeDmMessages(
                         prev.dmMessages.filterNot { locallyDeletedIds.contains(it.id) },
                         hydratedDmDelta.filterNot { locallyDeletedIds.contains(it.id) },
@@ -797,7 +798,21 @@ class JaTextSessionViewModel(app: Application) :
                 } else {
                     prev.dmMessages
                 }
-                val nextGrps = if (hydratedGrpDelta.isNotEmpty() && prev.activeGroupId == st.activeGroupId) {
+                val nextDms = rawDms.map { m ->
+                    val localUnsent = locallyUnsentAtById[m.id]
+                    if (localUnsent != null && nowSyncMs - localUnsent < 25_000L && m.unsentAt == null) {
+                        m.copy(
+                            body = "",
+                            attachmentUrl = null,
+                            attachmentName = null,
+                            attachmentType = null,
+                            encryptedAttachmentJson = null,
+                            unsentAt = localUnsent,
+                            reactions = emptyList(),
+                        )
+                    } else m
+                }
+                val rawGrps = if (hydratedGrpDelta.isNotEmpty() && prev.activeGroupId == st.activeGroupId) {
                     mergeGroupMessages(
                         prev.groupMessages.filterNot { locallyDeletedIds.contains(it.id) },
                         hydratedGrpDelta.filterNot { locallyDeletedIds.contains(it.id) },
@@ -805,13 +820,40 @@ class JaTextSessionViewModel(app: Application) :
                 } else {
                     prev.groupMessages
                 }
-                val nextComm = if (!sync.changedCommunityMessages.isNullOrEmpty()) {
+                val nextGrps = rawGrps.map { m ->
+                    val localUnsent = locallyUnsentAtById[m.id]
+                    if (localUnsent != null && nowSyncMs - localUnsent < 25_000L && m.unsentAt == null) {
+                        m.copy(
+                            body = "",
+                            attachmentUrl = null,
+                            attachmentName = null,
+                            attachmentType = null,
+                            encryptedAttachmentJson = null,
+                            unsentAt = localUnsent,
+                            reactions = emptyList(),
+                        )
+                    } else m
+                }
+                val rawComm = if (!sync.changedCommunityMessages.isNullOrEmpty()) {
                     mergeCommunityMessages(
                         prev.communityMessages.filterNot { locallyDeletedIds.contains(it.id) },
                         hydrateCommunityList(sync.changedCommunityMessages).filterNot { locallyDeletedIds.contains(it.id) },
                     )
                 } else {
                     prev.communityMessages
+                }
+                val nextComm = rawComm.map { m ->
+                    val localUnsent = locallyUnsentAtById[m.id]
+                    if (localUnsent != null && nowSyncMs - localUnsent < 25_000L && m.unsentAt == null) {
+                        m.copy(
+                            body = "",
+                            attachmentUrl = null,
+                            attachmentName = null,
+                            attachmentType = null,
+                            unsentAt = localUnsent,
+                            reactions = emptyList(),
+                        )
+                    } else m
                 }
 
                 prev.copy(
@@ -2053,69 +2095,96 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
+    private val locallyUnsentAtById = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     fun unsendMessage(messageId: String) {
         val st = _state.value
         val token = currentAuthToken() ?: return
+        val nowUnsent = System.currentTimeMillis()
+        locallyUnsentAtById[messageId] = nowUnsent
+
+        var prevDm: ChatMessage? = null
+        var prevGroup: GroupMessage? = null
+        var prevComm: CommunityMessage? = null
+
+        // Optimistically update UI state IMMEDIATELY so the bubble never flashes back after Thanos Snap!
+        if (st.activeChatId != null && st.activeChatId != OFFICIAL_COMMUNITY_ID) {
+            prevDm = st.dmMessages.firstOrNull { it.id == messageId }
+            _state.update { cur ->
+                cur.copy(
+                    dmMessages = cur.dmMessages.map { m ->
+                        if (m.id == messageId) {
+                            m.copy(
+                                body = "",
+                                attachmentUrl = null,
+                                attachmentName = null,
+                                attachmentType = null,
+                                encryptedAttachmentJson = null,
+                                unsentAt = nowUnsent,
+                                reactions = emptyList(),
+                            )
+                        } else m
+                    }
+                )
+            }
+        } else if (st.activeGroupId != null) {
+            prevGroup = st.groupMessages.firstOrNull { it.id == messageId }
+            _state.update { cur ->
+                cur.copy(
+                    groupMessages = cur.groupMessages.map { m ->
+                        if (m.id == messageId) {
+                            m.copy(
+                                body = "",
+                                attachmentUrl = null,
+                                attachmentName = null,
+                                attachmentType = null,
+                                encryptedAttachmentJson = null,
+                                unsentAt = nowUnsent,
+                                reactions = emptyList(),
+                            )
+                        } else m
+                    }
+                )
+            }
+        } else if (st.activeChatId == OFFICIAL_COMMUNITY_ID) {
+            prevComm = st.communityMessages.firstOrNull { it.id == messageId }
+            _state.update { cur ->
+                cur.copy(
+                    communityMessages = cur.communityMessages.map { m ->
+                        if (m.id == messageId) {
+                            m.copy(
+                                body = "",
+                                attachmentUrl = null,
+                                attachmentName = null,
+                                attachmentType = null,
+                                unsentAt = nowUnsent,
+                                reactions = emptyList(),
+                            )
+                        } else m
+                    }
+                )
+            }
+        }
+
         viewModelScope.launch {
             try {
                 if (st.activeChatId != null && st.activeChatId != OFFICIAL_COMMUNITY_ID) {
                     TursoApiClient.rpcRaw("unsendMessage", mapOf("messageId" to messageId), token)
-                    _state.update { cur ->
-                        cur.copy(
-                            dmMessages = cur.dmMessages.map { m ->
-                                if (m.id == messageId) {
-                                    m.copy(
-                                        body = "",
-                                        attachmentUrl = null,
-                                        attachmentName = null,
-                                        attachmentType = null,
-                                        encryptedAttachmentJson = null,
-                                        unsentAt = System.currentTimeMillis(),
-                                        reactions = emptyList(),
-                                    )
-                                } else m
-                            }
-                        )
-                    }
                 } else if (st.activeGroupId != null) {
                     TursoApiClient.rpcRaw("mutateGroupMessage", mapOf("messageId" to messageId, "action" to "unsend"), token)
-                    _state.update { cur ->
-                        cur.copy(
-                            groupMessages = cur.groupMessages.map { m ->
-                                if (m.id == messageId) {
-                                    m.copy(
-                                        body = "",
-                                        attachmentUrl = null,
-                                        attachmentName = null,
-                                        attachmentType = null,
-                                        encryptedAttachmentJson = null,
-                                        unsentAt = System.currentTimeMillis(),
-                                        reactions = emptyList(),
-                                    )
-                                } else m
-                            }
-                        )
-                    }
                 } else if (st.activeChatId == OFFICIAL_COMMUNITY_ID) {
                     TursoApiClient.rpcRaw("mutateCommunityMessage", mapOf("messageId" to messageId, "action" to "unsend"), token)
-                    _state.update { cur ->
-                        cur.copy(
-                            communityMessages = cur.communityMessages.map { m ->
-                                if (m.id == messageId) {
-                                    m.copy(
-                                        body = "",
-                                        attachmentUrl = null,
-                                        attachmentName = null,
-                                        attachmentType = null,
-                                        unsentAt = System.currentTimeMillis(),
-                                        reactions = emptyList(),
-                                    )
-                                } else m
-                            }
-                        )
-                    }
                 }
             } catch (e: Throwable) {
+                locallyUnsentAtById.remove(messageId)
+                // Restore snapshot on RPC failure (e.g., 60-minute window expired)
+                _state.update { cur ->
+                    cur.copy(
+                        dmMessages = if (prevDm != null) cur.dmMessages.map { if (it.id == messageId) prevDm else it } else cur.dmMessages,
+                        groupMessages = if (prevGroup != null) cur.groupMessages.map { if (it.id == messageId) prevGroup else it } else cur.groupMessages,
+                        communityMessages = if (prevComm != null) cur.communityMessages.map { if (it.id == messageId) prevComm else it } else cur.communityMessages,
+                    )
+                }
                 showToast(e.message ?: "Unsend window (60 min) has expired")
             }
         }

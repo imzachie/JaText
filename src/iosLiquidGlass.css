@@ -1292,7 +1292,7 @@ html.jatext-ios-liquid-glass .ios-profile-header-heading {
 
 html.jatext-ios-liquid-glass .sidebar.ios-bottom-nav-layout .friend-list,
 html.jatext-ios-liquid-glass .sidebar.ios-bottom-nav-layout .sidebar-tab-pane {
-  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(140px + env(safe-area-inset-bottom, 0px));
 }
 
 html.jatext-ios-liquid-glass .ios-liquid-bottom-nav {
@@ -1307,10 +1307,10 @@ html.jatext-ios-liquid-glass .ios-liquid-bottom-nav {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: center;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-elevated, #141418) 54%, transparent);
-  backdrop-filter: blur(28px) saturate(210%);
-  -webkit-backdrop-filter: blur(28px) saturate(210%);
-  border: 1px solid var(--ios-glass-border, rgba(255, 255, 255, 0.24));
+  background: color-mix(in srgb, var(--bg-elevated, #141418) 76%, transparent);
+  backdrop-filter: blur(34px) saturate(210%);
+  -webkit-backdrop-filter: blur(34px) saturate(210%);
+  border: 1px solid var(--ios-glass-border, rgba(255, 255, 255, 0.26));
   box-shadow:
     0 18px 42px rgba(0, 0, 0, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.34);
@@ -1396,4 +1396,185 @@ html.jatext-ios-liquid-glass .ios-liquid-bottom-badge {
   line-height: 16px;
   text-align: center;
 }
+
+/* ============================================================================
+   iOS 26 Liquid Glass Full Settings Revamp (/ios/chats Parity with Android APK)
+   ============================================================================ */
+
+html.jatext-ios-liquid-glass .settings-modal,
+html.jatext-ios-liquid-glass .embedded-settings-pane {
+  background: radial-gradient(
+      circle at 86% 12%,
+      color-mix(in srgb, var(--accent, #0088ff) 20%, transparent),
+      transparent 55%
+    ),
+    radial-gradient(
+      circle at 14% 48%,
+      rgba(56, 189, 248, 0.14),
+      transparent 52%
+    ),
+    var(--bg-primary, #0c0d14) !important;
+}
+
+/* Grouped iOS 26 Liquid Glass Cards */
+html.jatext-ios-liquid-glass .settings-card,
+html.jatext-ios-liquid-glass .socials-fieldset,
+html.jatext-ios-liquid-glass .website-fieldset,
+html.jatext-ios-liquid-glass .pf-preview,
+html.jatext-ios-liquid-glass .jt-ios-devices-scan-card,
+html.jatext-ios-liquid-glass .jt-ios-device-row,
+html.jatext-ios-liquid-glass .custom-theme-drawer {
+  border-radius: 24px !important;
+  background: color-mix(in srgb, var(--bg-elevated, #181924) 58%, transparent) !important;
+  backdrop-filter: blur(26px) saturate(200%) !important;
+  -webkit-backdrop-filter: blur(26px) saturate(200%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32) !important;
+}
+
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .settings-card,
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .socials-fieldset,
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .website-fieldset,
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .pf-preview,
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .jt-ios-devices-scan-card,
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .jt-ios-device-row,
+html.jatext-ios-liquid-glass[data-theme-mode="light"] .custom-theme-drawer {
+  background: rgba(255, 255, 255, 0.66) !important;
+  border-color: rgba(255, 255, 255, 0.82) !important;
+  box-shadow:
+    0 12px 28px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92) !important;
+}
+
+/* iOS 26 Capsule Liquid Glass Name / Username / Status / Website Input Box Bars */
+html.jatext-ios-liquid-glass .profile-form input[type="text"],
+html.jatext-ios-liquid-glass .profile-form input[type="url"],
+html.jatext-ios-liquid-glass .settings-modal input[type="text"],
+html.jatext-ios-liquid-glass .settings-modal input[type="url"],
+html.jatext-ios-liquid-glass .embedded-settings-pane input[type="text"],
+html.jatext-ios-liquid-glass .embedded-settings-pane input[type="url"],
+html.jatext-ios-liquid-glass .username-input-wrap,
+html.jatext-ios-liquid-glass .website-url-wrap,
+html.jatext-ios-liquid-glass .custom-theme-hex-input {
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--bg-primary, #0e0f17) 54%, transparent) !important;
+  backdrop-filter: blur(20px) saturate(190%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(190%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24) !important;
+  transition: border-color 180ms ease, box-shadow 180ms ease !important;
+}
+
+html.jatext-ios-liquid-glass .profile-form textarea,
+html.jatext-ios-liquid-glass .settings-modal textarea,
+html.jatext-ios-liquid-glass .embedded-settings-pane textarea {
+  border-radius: 20px !important;
+  background: color-mix(in srgb, var(--bg-primary, #0e0f17) 54%, transparent) !important;
+  backdrop-filter: blur(20px) saturate(190%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(190%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24) !important;
+}
+
+html.jatext-ios-liquid-glass .profile-form input:focus,
+html.jatext-ios-liquid-glass .profile-form textarea:focus,
+html.jatext-ios-liquid-glass .username-input-wrap:focus-within,
+html.jatext-ios-liquid-glass .website-url-wrap:focus-within {
+  border-color: var(--accent, #0088ff) !important;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent, #0088ff) 24%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.36) !important;
+}
+
+/* Surface & Tinted iOS 26 Liquid Glass Capsule Buttons */
+html.jatext-ios-liquid-glass .settings-modal .primary,
+html.jatext-ios-liquid-glass .embedded-settings-pane .primary,
+html.jatext-ios-liquid-glass .custom-theme-drawer .primary {
+  border-radius: 999px !important;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent, #0088ff) 88%, #ffffff 12%),
+    color-mix(in srgb, var(--accent, #0088ff) 82%, transparent)
+  ) !important;
+  border: 1px solid rgba(255, 255, 255, 0.36) !important;
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--accent, #0088ff) 32%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+}
+
+html.jatext-ios-liquid-glass .settings-modal .ghost,
+html.jatext-ios-liquid-glass .embedded-settings-pane .ghost,
+html.jatext-ios-liquid-glass .custom-theme-drawer .ghost,
+html.jatext-ios-liquid-glass .settings-nav-btn {
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  backdrop-filter: blur(18px) saturate(185%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(185%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.24) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32) !important;
+}
+
+html.jatext-ios-liquid-glass .settings-nav-btn.active {
+  background: color-mix(in srgb, var(--accent, #0088ff) 78%, transparent) !important;
+  border-color: rgba(255, 255, 255, 0.44) !important;
+  color: #ffffff !important;
+}
+
+/* iOS 26 Green Liquid Glass Toggle Switch (64x28 pill + 40x24 refracting droplet thumb) */
+html.jatext-ios-liquid-glass .settings-modal input[type="checkbox"],
+html.jatext-ios-liquid-glass .embedded-settings-pane input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 64px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(120, 120, 128, 0.34);
+  position: relative;
+  cursor: pointer;
+  transition: background 220ms ease;
+  flex: none;
+}
+
+html.jatext-ios-liquid-glass .settings-modal input[type="checkbox"]:checked,
+html.jatext-ios-liquid-glass .embedded-settings-pane input[type="checkbox"]:checked {
+  background: #30d158;
+}
+
+html.jatext-ios-liquid-glass .settings-modal input[type="checkbox"]::after,
+html.jatext-ios-liquid-glass .embedded-settings-pane input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 40px;
+  height: 24px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: transform 260ms cubic-bezier(0.22, 1.28, 0.36, 1), background 180ms ease;
+}
+
+html.jatext-ios-liquid-glass .settings-modal input[type="checkbox"]:checked::after,
+html.jatext-ios-liquid-glass .embedded-settings-pane input[type="checkbox"]:checked::after {
+  transform: translateX(20px);
+}
+
+html.jatext-ios-liquid-glass .settings-modal input[type="checkbox"]:active::after,
+html.jatext-ios-liquid-glass .embedded-settings-pane input[type="checkbox"]:active::after {
+  transform: scale(1.24);
+  background: rgba(255, 255, 255, 0.32);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
 

@@ -1824,15 +1824,13 @@ fun MessageReactionPillsRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(text = emoji, fontSize = 13.sp)
-                if (list.size > 1) {
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = list.size.toString(),
-                        color = if (mine) palette.accent else palette.textSecondary,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = list.size.toString(),
+                    color = if (mine) palette.accent else palette.textSecondary,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
         if (onOpenPicker != null) {

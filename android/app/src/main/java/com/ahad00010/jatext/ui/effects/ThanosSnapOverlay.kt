@@ -30,26 +30,26 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sqrt
 import kotlin.random.Random
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 1:1 Port of Aghajari/ThanosEffect (Telegram Message Disintegration Effect) for Jetpack Compose.
- * Reference:
- *  - ThanosEffect-Core/EffectUtils.kt & ParticleLifeTime.kt
- *  - ThanosEffect-Canvas/Particle.kt & CanvasViewRenderer.kt
- *  - ThanosEffect-Compose/ThanosEffectModifier.kt & ThanosEffectCompose.kt
+ * Sweeps 100% of the message bubble from left to right into drifting dust particles with zero
+ * partial cutoff and zero split-second flash before "This message was unsent".
  */
 
-private val ALPHAS = floatArrayOf(0.3f, 0.6f, 1.0f)
+private val ALPHAS = floatArrayOf(0.45f, 0.75f, 1.0f)
 private const val MIN_DURATION_MS = 850
 private const val MAX_DURATION_MS = 1650
-private const val LINE_SENSITIVE_MS = 360
-private const val LINE_DELAY_MS = 11L
+private const val LINE_SENSITIVE_MS = 340
+private const val SWEEP_DURATION_MS = 360f
 
 private class SnapParticle(
     val initialX: Int,
@@ -84,7 +84,7 @@ private class SnapParticle(
         val fraction = time / lifeTime.toFloat()
         if (fraction >= 1f) return false
 
-        val renderingEffect = sqrt(min(1f, renderingLine))
+        val renderingEffect = sqrt(min(1f, max(0.08f, renderingLine)))
         val safeCenterY = max(1f, centerY)
         val safeCenterX = max(1f, centerX)
 
@@ -125,9 +125,9 @@ internal class ActiveSnapInstance(
     }
     private val centerX: Float = width / 2f
     private val centerY: Float = height / 2f
-    private val perPx: Int = (6 + 2 * pendingWeight).coerceAtMost(14)
-    private val maxLine: Int = max(1, width / perPx)
-    private val particles = ArrayList<SnapParticle>(max(64, (width * height) / (perPx * perPx)))
+    private val perPx: Int = (5 + 2 * pendingWeight).coerceAtMost(12)
+    private val maxLine: Int = max(1, ceil(width.toFloat() / perPx.toFloat()).toInt())
+    private val particles = ArrayList<SnapParticle>(max(96, (width * height) / (perPx * perPx)))
 
     private val srcRect = Rect(0, 0, width, height)
     private val dstRect = Rect(
@@ -139,8 +139,8 @@ internal class ActiveSnapInstance(
 
     private var line = 0
     private var animatedLineWidth = 0
+    private var sweepElapsedMs = 0f
     private var timeMs = 0f
-    private var nextLineWallMs = 0L
     private var endRenderingTimeMs = 0f
     private var recycled = false
     private var sweepCompleteFired = false
@@ -160,12 +160,12 @@ internal class ActiveSnapInstance(
     }
 
     private fun randomVelocity(): Int {
-        val base = dpPx(4f)
+        val base = dpPx(4.2f)
         return base + Random.nextInt(max(1, base))
     }
 
     private fun randomTranslation(initialMinDp: Int): Int {
-        var t = dpPx(initialMinDp.toFloat()).toFloat() + Random.nextInt(max(2, dpPx(56f))).toFloat()
+        var t = dpPx(initialMinDp.toFloat()).toFloat() + Random.nextInt(max(2, dpPx(58f))).toFloat()
         if (Random.nextInt(10) == 0) {
             t = -t / 4f
         }
@@ -178,8 +178,11 @@ internal class ActiveSnapInstance(
         return MIN_DURATION_MS + minus + Random.nextInt(span)
     }
 
-    fun spawnNextLinesIfReady(nowWallMs: Long) {
-        if (nowWallMs < nextLineWallMs) return
+    /**
+     * Advances the disintegration front smoothly from `0` to `100%` of `width` over `SWEEP_DURATION_MS`
+     * so every single column of the bubble turns into dust particles before `onSweepComplete` fires.
+     */
+    fun advanceSweep(deltaTimeMs: Float) {
         if (line >= maxLine) {
             if (endRenderingTimeMs == 0f) {
                 endRenderingTimeMs = timeMs
@@ -189,21 +192,19 @@ internal class ActiveSnapInstance(
             return
         }
 
-        val renderCount = if (width > dpPx(260f)) dpPx(3f) else dpPx(2f)
-        var emitted = 0
-        while (emitted < renderCount && line < maxLine) {
-            val x = line * perPx
-            animatedLineWidth = x
-            srcRect.left = animatedLineWidth
-            dstRect.left = dstRect.right - width + srcRect.left
+        sweepElapsedMs += deltaTimeMs
+        val targetLine = ((sweepElapsedMs / SWEEP_DURATION_MS).coerceIn(0f, 1f) * maxLine.toFloat())
+            .toInt()
+            .coerceAtLeast(line + 1)
+            .coerceAtMost(maxLine)
 
-            var onThisLine = 0
+        while (line < targetLine) {
+            val x = (line * perPx).coerceAtMost(width - 1)
             var y = 0
             while (y < height) {
                 val color = pixels[y * width + x]
                 if (AndroidColor.alpha(color) > 10) {
-                    onThisLine++
-                    val minR = max(1, perPx / 4)
+                    val minR = max(1, perPx / 3)
                     val initR = (minR..max(minR, perPx)).random().toFloat()
                     particles.add(
                         SnapParticle(
@@ -214,33 +215,45 @@ internal class ActiveSnapInstance(
                             lifeTime = calculateLifeTime(line),
                             initialAlpha = randomInitialAlpha(color),
                             velocityY = randomVelocity(),
-                            translationY = randomTranslation(32),
-                            translationX = randomTranslation(96),
+                            translationY = randomTranslation(34),
+                            translationX = randomTranslation(98),
                         )
                     )
                 }
                 y += perPx
             }
             line++
-            if (onThisLine > 0) {
-                emitted++
-            }
         }
+
         if (line >= maxLine) {
+            animatedLineWidth = width
+            srcRect.left = width
+            dstRect.left = dstRect.right
+            if (!recycled) {
+                recycled = true
+                bitmap.recycle()
+            }
             if (endRenderingTimeMs == 0f) {
                 endRenderingTimeMs = timeMs
             }
-            animatedLineWidth = width
             notifySweepDoneOnce()
+        } else {
+            animatedLineWidth = (line * perPx).coerceIn(0, width)
+            srcRect.left = animatedLineWidth
+            dstRect.left = dstRect.right - width + srcRect.left
         }
-        nextLineWallMs = nowWallMs + LINE_DELAY_MS
     }
 
     fun draw(nativeCanvas: android.graphics.Canvas, paint: Paint, deltaTimeMs: Float): Boolean {
         timeMs += deltaTimeMs
 
         if (!recycled && animatedLineWidth < width) {
-            nativeCanvas.drawBitmap(bitmap, srcRect, dstRect, null)
+            // Soft alpha feather along the disintegration edge so the remaining slice never looks hard-cut
+            val remainingRatio = (1f - (animatedLineWidth.toFloat() / width.toFloat())).coerceIn(0f, 1f)
+            val slicePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                alpha = (255f * (remainingRatio * 1.15f).coerceIn(0f, 1f)).toInt()
+            }
+            nativeCanvas.drawBitmap(bitmap, srcRect, dstRect, slicePaint)
         } else if (!recycled && animatedLineWidth >= width) {
             recycled = true
             bitmap.recycle()
@@ -351,15 +364,7 @@ class ThanosSnapHostState {
             return
         }
 
-        var committed = false
-        val finishSweepAndCommit: () -> Unit = {
-            hiddenSnappingIds.remove(messageId)
-            if (!committed) {
-                committed = true
-                onCommitUnsend()
-            }
-        }
-
+        val sweepDone = CompletableDeferred<Unit>()
         val inst = ActiveSnapInstance(
             messageId = messageId,
             bitmap = capturedBitmap,
@@ -367,16 +372,27 @@ class ThanosSnapHostState {
             offsetY = target.offsetInRoot.y,
             density = target.density,
             pendingWeight = activeInstances.size,
-            onSweepComplete = finishSweepAndCommit,
+            onSweepComplete = { sweepDone.complete(Unit) },
         )
-        inst.spawnNextLinesIfReady(System.currentTimeMillis())
+
+        // Hide the live Compose bubble BEFORE frame 1 of the particle sweep
         hiddenSnappingIds[messageId] = true
+        inst.advanceSweep(12f)
         activeInstances.add(inst)
         activeCount = activeInstances.size
 
-        // Fail-safe so the unsent placeholder always reveals briskly even if frames pause
-        delay(420L)
-        finishSweepAndCommit()
+        // Wait until 100% of the bubble bitmap has disintegrated into dust particles
+        withTimeoutOrNull(950L) {
+            sweepDone.await()
+        }
+        inst.notifySweepDoneOnce()
+
+        // Commit the optimistic unsend FIRST so Compose swaps directly to "This message was unsent"
+        // BEFORE we ever clear hiddenSnappingIds, eliminating any split-second bubble flash!
+        onCommitUnsend()
+        withFrameNanos { }
+        withFrameNanos { }
+        hiddenSnappingIds.remove(messageId)
     }
 }
 
@@ -443,10 +459,9 @@ fun ThanosSnapOverlayHost(
                 }
                 lastFrameNanos = nowNanos
                 latestDeltaMs = rawDeltaMs
-                val nowWall = System.currentTimeMillis()
                 var i = 0
                 while (i < hostState.activeInstances.size) {
-                    hostState.activeInstances[i].spawnNextLinesIfReady(nowWall)
+                    hostState.activeInstances[i].advanceSweep(rawDeltaMs)
                     i++
                 }
                 frameTick++
@@ -458,7 +473,6 @@ fun ThanosSnapOverlayHost(
 
     if (hostState.activeCount > 0) {
         Canvas(modifier = modifier.fillMaxSize()) {
-            // Read frameTick so Compose redraws on every VSYNC frame (60Hz / 120Hz)
             val tick = frameTick
             if (tick >= 0) {
                 drawIntoCanvas { composeCanvas ->

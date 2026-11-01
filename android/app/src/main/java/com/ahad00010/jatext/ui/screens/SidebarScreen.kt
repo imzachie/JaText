@@ -23,12 +23,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -79,6 +81,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -239,6 +242,8 @@ fun SidebarScreen(
 
     val contentBackdrop = rememberLayerBackdrop()
     val isImeVisible = WindowInsets.isImeVisible
+    val systemNavBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val bottomBarListClearance = systemNavBottomPadding + 132.dp
 
     Box(
         modifier = Modifier.fillMaxSize()
@@ -483,7 +488,7 @@ fun SidebarScreen(
                         .fillMaxWidth()
                         .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
-                    contentPadding = PaddingValues(bottom = 112.dp),
+                    contentPadding = PaddingValues(bottom = bottomBarListClearance),
                 ) {
                     /* ---- Official JaText Community Row (`.official-community-row`) ---- */
                     if (!showArchived) {
@@ -687,7 +692,7 @@ fun SidebarScreen(
                             .fillMaxWidth()
                             .weight(1f),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
-                        contentPadding = PaddingValues(bottom = 112.dp),
+                        contentPadding = PaddingValues(bottom = bottomBarListClearance),
                     ) {
                         items(state.callHistory, key = { "call:${it.id}" }) { entry ->
                             val friendPeer = entry.peerId?.let { pid -> state.friends.firstOrNull { it.id == pid } }
@@ -727,7 +732,7 @@ fun SidebarScreen(
                         .fillMaxWidth()
                         .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 112.dp),
+                    contentPadding = PaddingValues(bottom = bottomBarListClearance),
                 ) {
                     /* ---- Add by username ---- */
                     item(key = "add-by-username") {
@@ -927,6 +932,25 @@ fun SidebarScreen(
                         }
                     }
                 }
+            }
+
+            // Soft bottom fade scrim inside contentBackdrop so scrolled avatars never bleed into the Liquid Glass tabs
+            if (!isImeVisible && !settingsSubOverlayOpen) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(systemNavBottomPadding + 92.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    palette.bgSecondary.copy(alpha = 0.72f),
+                                    palette.bgSecondary.copy(alpha = 0.94f),
+                                )
+                            )
+                        )
+                )
             }
         }
 

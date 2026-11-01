@@ -71,8 +71,8 @@ fun LiquidBottomTabs(
     content: @Composable RowScope.() -> Unit
 ) {
     val containerColor =
-        if (isLightTheme) Color(0xFFFAFAFA).copy(alpha = 0.44f)
-        else Color(0xFF141418).copy(alpha = 0.48f)
+        if (isLightTheme) Color(0xFFFAFAFC).copy(alpha = 0.72f)
+        else Color(0xFF14141C).copy(alpha = 0.76f)
 
     val tabsBackdrop = rememberLayerBackdrop()
 
@@ -174,8 +174,8 @@ fun LiquidBottomTabs(
                         shape = { CircleShape },
                         effects = {
                             vibrancy()
-                            blur(8f.dp.toPx())
-                            lens(24f.dp.toPx(), 24f.dp.toPx())
+                            blur(26f.dp.toPx())
+                            lens(12f.dp.toPx(), 14f.dp.toPx())
                         },
                         layerBlock = {
                             val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
@@ -215,10 +215,10 @@ fun LiquidBottomTabs(
                         effects = {
                             val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
                             vibrancy()
-                            blur(8f.dp.toPx())
+                            blur(26f.dp.toPx())
                             lens(
-                                24f.dp.toPx() * progress,
-                                24f.dp.toPx() * progress
+                                12f.dp.toPx() * progress,
+                                14f.dp.toPx() * progress
                             )
                         },
                         highlight = {
