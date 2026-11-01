@@ -5,12 +5,14 @@
 package com.kyant.backdrop.shadow
 
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
@@ -25,6 +27,7 @@ import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import com.kyant.backdrop.internal.ShapeProvider
 import com.kyant.backdrop.internal.clipOutline
 import com.kyant.backdrop.isRenderEffectSupported
@@ -41,6 +44,7 @@ internal class InnerShadowElement(
     override fun update(node: InnerShadowNode) {
         node.shapeProvider = shapeProvider
         node.shadow = shadow
+        node.invalidateCache()
         node.invalidateDraw()
     }
 
@@ -80,6 +84,19 @@ internal class InnerShadowNode(
     private var clipPath: Path? = null
 
     private var prevRadius = Float.NaN
+    private var cachedDrawSize: Size = Size.Unspecified
+    private var cachedRadiusDp: Float = Float.NaN
+    private var cachedColor = androidx.compose.ui.graphics.Color.Unspecified
+    private var cachedOffset = androidx.compose.ui.unit.DpOffset.Unspecified
+    private var cachedShape: Shape? = null
+    private var cachedDensity: Float = Float.NaN
+    private var cachedLayoutDirection: LayoutDirection? = null
+    private var cachedOutline: Outline? = null
+
+    fun invalidateCache() {
+        cachedDrawSize = Size.Unspecified
+        cachedOutline = null
+    }
 
     override fun ContentDrawScope.draw() {
         drawContent()
@@ -95,20 +112,8 @@ internal class InnerShadowNode(
         if (shadowLayer != null) {
             val density: Density = this
             val layoutDirection = layoutDirection
-
+            val currentShape = shapeProvider.shape
             val radius = shadow.radius.toPx().coerceAtLeast(0f)
-            val offsetX = shadow.offset.x.toPx()
-            val offsetY = shadow.offset.y.toPx()
-
-            val outline = shapeProvider.shape.createOutline(drawSize, layoutDirection, density)
-            val clipPath =
-                if (outline is Outline.Rounded) {
-                    clipPath ?: Path().also { clipPath = it }
-                } else {
-                    null
-                }
-
-            configurePaint(shadow)
 
             shadowLayer.alpha = shadow.alpha.coerceIn(0f, 1f)
             shadowLayer.blendMode = shadow.blendMode
@@ -121,24 +126,59 @@ internal class InnerShadowNode(
                     }
                 prevRadius = radius
             }
-            val layerSize = IntSize(
-                drawSize.width.toInt().coerceAtLeast(1),
-                drawSize.height.toInt().coerceAtLeast(1)
-            )
-            shadowLayer.record(layerSize) {
-                val canvas = drawContext.canvas
-                canvas.save()
-                canvas.clipOutline(outline, clipPath)
-                canvas.drawOutline(outline, paint)
-                canvas.translate(offsetX, offsetY)
-                canvas.drawOutline(outline, InnerShadowMaskPaint)
-                canvas.translate(-offsetX, -offsetY)
-                canvas.restore()
+
+            val needsRecord =
+                cachedDrawSize != drawSize ||
+                    cachedRadiusDp != shadow.radius.value ||
+                    cachedColor != shadow.color ||
+                    cachedOffset != shadow.offset ||
+                    cachedShape != currentShape ||
+                    cachedDensity != density.density ||
+                    cachedLayoutDirection != layoutDirection ||
+                    cachedOutline == null
+
+            val outline = if (needsRecord) {
+                val nextOutline = currentShape.createOutline(drawSize, layoutDirection, density)
+                val cp =
+                    if (nextOutline is Outline.Rounded) {
+                        clipPath ?: Path().also { clipPath = it }
+                    } else {
+                        null
+                    }
+                val offsetX = shadow.offset.x.toPx()
+                val offsetY = shadow.offset.y.toPx()
+                configurePaint(shadow)
+                val layerSize = IntSize(
+                    drawSize.width.toInt().coerceAtLeast(1),
+                    drawSize.height.toInt().coerceAtLeast(1)
+                )
+                shadowLayer.record(layerSize) {
+                    val canvas = drawContext.canvas
+                    canvas.save()
+                    canvas.clipOutline(nextOutline, cp)
+                    canvas.drawOutline(nextOutline, paint)
+                    canvas.translate(offsetX, offsetY)
+                    canvas.drawOutline(nextOutline, InnerShadowMaskPaint)
+                    canvas.translate(-offsetX, -offsetY)
+                    canvas.restore()
+                }
+                cachedDrawSize = drawSize
+                cachedRadiusDp = shadow.radius.value
+                cachedColor = shadow.color
+                cachedOffset = shadow.offset
+                cachedShape = currentShape
+                cachedDensity = density.density
+                cachedLayoutDirection = layoutDirection
+                cachedOutline = nextOutline
+                nextOutline
+            } else {
+                cachedOutline!!
             }
 
+            val cp = if (outline is Outline.Rounded) clipPath else null
             val canvas = drawContext.canvas
             canvas.save()
-            canvas.clipOutline(outline, clipPath)
+            canvas.clipOutline(outline, cp)
             drawLayer(shadowLayer)
             canvas.restore()
         }
@@ -150,6 +190,7 @@ internal class InnerShadowNode(
             graphicsContext.createGraphicsLayer().apply {
                 compositingStrategy = CompositingStrategy.Offscreen
             }
+        invalidateCache()
     }
 
     override fun onDetach() {
@@ -158,6 +199,8 @@ internal class InnerShadowNode(
             graphicsContext.releaseGraphicsLayer(layer)
             shadowLayer = null
         }
+        clipPath = null
+        invalidateCache()
     }
 
     private fun DrawScope.configurePaint(shadow: InnerShadow) {

@@ -43,7 +43,7 @@ class InteractiveHighlight(
     val pressProgress: Float get() = pressProgressAnimation.value
     val offset: Offset get() = positionAnimation.value - startPosition
 
-    private val shader =
+    private val shader: RuntimeShader? by lazy(LazyThreadSafetyMode.NONE) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             runCatching {
                 RuntimeShader(
@@ -63,20 +63,22 @@ half4 main(float2 coord) {
         } else {
             null
         }
+    }
 
     val modifier: Modifier =
         Modifier.drawWithContent {
             val rawProgress = pressProgressAnimation.value
             val drawSize = size
+            val activeShader = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) shader else null
             if (rawProgress > 0f && !drawSize.isUnspecified && drawSize.width > 0f && drawSize.height > 0f) {
                 val safeProgress = rawProgress.coerceIn(0f, 1f)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && shader != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && activeShader != null) {
                     drawRect(
                         Color.White.copy(alpha = (0.08f * safeProgress).coerceIn(0f, 1f)),
                         blendMode = BlendMode.Plus
                     )
                     val brush = runCatching {
-                        shader.apply {
+                        activeShader.apply {
                             val pos = position(drawSize, positionAnimation.value)
                             setFloatUniform("size", drawSize.width, drawSize.height)
                             setColorUniform(
@@ -90,7 +92,7 @@ half4 main(float2 coord) {
                                 pos.y.fastCoerceIn(0f, drawSize.height)
                             )
                         }
-                        ShaderBrush(shader)
+                        ShaderBrush(activeShader)
                     }.getOrNull()
                     if (brush != null) {
                         drawRect(
