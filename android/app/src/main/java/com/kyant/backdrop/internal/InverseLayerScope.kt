@@ -9,6 +9,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.DefaultCameraDistance
+import androidx.compose.ui.graphics.DefaultShadowColor
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.RectangleShape
@@ -16,8 +18,6 @@ import androidx.compose.ui.graphics.RenderEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawTransform
-import androidx.compose.ui.graphics.layer.GraphicsLayerConfig.DefaultCameraDistance
-import androidx.compose.ui.graphics.layer.GraphicsLayerConfig.DefaultShadowColor
 import androidx.compose.ui.unit.Density
 import kotlin.math.PI
 import kotlin.math.cos

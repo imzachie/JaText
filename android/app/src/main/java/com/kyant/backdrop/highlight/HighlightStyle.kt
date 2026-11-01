@@ -4,24 +4,21 @@
  */
 package com.kyant.backdrop.highlight
 
-import android.os.Build
-import androidx.annotation.FloatRange
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.util.fastCoerceAtMost
+import com.kyant.backdrop.RuntimeShader
 import com.kyant.backdrop.RuntimeShaderCache
-import com.kyant.backdrop.asComposeShader
+import com.kyant.backdrop.internal.AmbientHighlightShaderString
 import com.kyant.backdrop.internal.DefaultHighlightShaderString
-import com.kyant.backdrop.internal.VibrantHighlightShaderString
+import com.kyant.backdrop.isRuntimeShaderSupported
 import kotlin.math.PI
 
 @Immutable
@@ -31,11 +28,10 @@ interface HighlightStyle {
 
     val blendMode: BlendMode
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun DrawScope.createShader(
         shape: Shape,
         runtimeShaderCache: RuntimeShaderCache
-    ): Shader?
+    ): RuntimeShader?
 
     @Immutable
     data class Plain(
@@ -43,29 +39,25 @@ interface HighlightStyle {
         override val blendMode: BlendMode = BlendMode.Plus
     ) : HighlightStyle {
 
-        @RequiresApi(Build.VERSION_CODES.TIRAMISU)
         override fun DrawScope.createShader(
             shape: Shape,
             runtimeShaderCache: RuntimeShaderCache
-        ): Shader? = null
+        ): RuntimeShader? = null
     }
 
     @Immutable
     data class Default(
-        @FloatRange(from = 0.0, to = 1.0) val intensity: Float = 0.5f,
+        override val color: Color = Color.White.copy(alpha = 0.5f),
+        override val blendMode: BlendMode = BlendMode.Plus,
         val angle: Float = 45f,
-        @FloatRange(from = 0.0) val falloff: Float = 1f
+        val falloff: Float = 1f
     ) : HighlightStyle {
 
-        override val color: Color = Color.White.copy(alpha = intensity.coerceIn(0f, 1f))
-
-        override val blendMode: BlendMode = BlendMode.Plus
-
-        @RequiresApi(Build.VERSION_CODES.TIRAMISU)
         override fun DrawScope.createShader(
             shape: Shape,
             runtimeShaderCache: RuntimeShaderCache
-        ): Shader? {
+        ): RuntimeShader? {
+            if (!isRuntimeShaderSupported()) return null
             val drawSize = size
             if (drawSize.isUnspecified || drawSize.width <= 0f || drawSize.height <= 0f) return null
             val radii = getCornerRadii(shape)
@@ -75,40 +67,42 @@ interface HighlightStyle {
                     DefaultHighlightShaderString
                 ).apply {
                     setFloatUniform("size", drawSize.width, drawSize.height)
-                    setColorUniform("color", color)
                     setFloatUniform("cornerRadii", radii[0], radii[1], radii[2], radii[3])
+                    setColorUniform("color", color.copy(alpha = 1f))
                     setFloatUniform("angle", angle * (PI / 180f).toFloat())
                     setFloatUniform("falloff", falloff)
-                }.asComposeShader()
+                }
             }.getOrNull()
         }
     }
 
     @Immutable
     data class Ambient(
-        @FloatRange(from = 0.0, to = 1.0) val intensity: Float = 0.38f
+        val intensity: Float = 0.38f
     ) : HighlightStyle {
 
-        override val color: Color = Color.Black.copy(alpha = intensity.coerceIn(0f, 1f))
+        override val color: Color = Color.White.copy(alpha = intensity.coerceIn(0f, 1f))
 
-        override val blendMode: BlendMode = BlendMode.SrcOver
+        override val blendMode: BlendMode = DrawScope.DefaultBlendMode
 
-        @RequiresApi(Build.VERSION_CODES.TIRAMISU)
         override fun DrawScope.createShader(
             shape: Shape,
             runtimeShaderCache: RuntimeShaderCache
-        ): Shader? {
+        ): RuntimeShader? {
+            if (!isRuntimeShaderSupported()) return null
             val drawSize = size
             if (drawSize.isUnspecified || drawSize.width <= 0f || drawSize.height <= 0f) return null
             val radii = getCornerRadii(shape)
             return runCatching {
                 runtimeShaderCache.obtainRuntimeShader(
-                    "Vibrant",
-                    VibrantHighlightShaderString
+                    "Ambient",
+                    AmbientHighlightShaderString
                 ).apply {
                     setFloatUniform("size", drawSize.width, drawSize.height)
                     setFloatUniform("cornerRadii", radii[0], radii[1], radii[2], radii[3])
-                }.asComposeShader()
+                    setFloatUniform("angle", 45f * (PI / 180f).toFloat())
+                    setFloatUniform("falloff", 1f)
+                }
             }.getOrNull()
         }
     }
@@ -131,21 +125,21 @@ private fun DrawScope.getCornerRadii(shape: Shape): FloatArray {
     if (size.isUnspecified || size.width <= 0f || size.height <= 0f) {
         return FloatArray(4)
     }
-    val shape = shape as? CornerBasedShape ?: return FloatArray(4) { size.minDimension / 2f }
+    val maxRadius = size.minDimension / 2f
+    val cornerShape = shape as? CornerBasedShape ?: return FloatArray(4) { maxRadius }
     val isLtr = layoutDirection == LayoutDirection.Ltr
     val topLeft =
-        if (isLtr) shape.topStart.toPx(size, this)
-        else shape.topEnd.toPx(size, this)
+        if (isLtr) cornerShape.topStart.toPx(size, this)
+        else cornerShape.topEnd.toPx(size, this)
     val topRight =
-        if (isLtr) shape.topEnd.toPx(size, this)
-        else shape.topStart.toPx(size, this)
+        if (isLtr) cornerShape.topEnd.toPx(size, this)
+        else cornerShape.topStart.toPx(size, this)
     val bottomRight =
-        if (isLtr) shape.bottomEnd.toPx(size, this)
-        else shape.bottomStart.toPx(size, this)
+        if (isLtr) cornerShape.bottomEnd.toPx(size, this)
+        else cornerShape.bottomStart.toPx(size, this)
     val bottomLeft =
-        if (isLtr) shape.bottomStart.toPx(size, this)
-        else shape.bottomEnd.toPx(size, this)
-    val maxRadius = size.minDimension / 2f
+        if (isLtr) cornerShape.bottomStart.toPx(size, this)
+        else cornerShape.bottomEnd.toPx(size, this)
     return floatArrayOf(
         topLeft.fastCoerceAtMost(maxRadius),
         topRight.fastCoerceAtMost(maxRadius),
