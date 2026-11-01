@@ -406,6 +406,7 @@ fun NativeLoginScreen(
                             color = loginPalette.textPrimary,
                             fontSize = 24.sp,
                             fontWeight = FontWeight.ExtraBold,
+                            fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                         )
                         Text(
                             text = "Enter your authentication code",
@@ -474,6 +475,7 @@ fun NativeLoginScreen(
                         color = loginPalette.textPrimary,
                         fontSize = 23.sp,
                         fontWeight = FontWeight.ExtraBold,
+                        fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                     )
 
                     /* ==================== .google-btn (999px white pill) ==================== */
@@ -793,6 +795,7 @@ fun JaTextLegalModalDialog(
                         color = palette.textPrimary,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.ExtraBold,
+                        fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("For ", color = palette.textSecondary, fontSize = 12.5.sp)
@@ -869,6 +872,7 @@ fun JaTextLegalModalDialog(
                         color = palette.textPrimary,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.ExtraBold,
+                        fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("For ", color = palette.textSecondary, fontSize = 12.5.sp)
@@ -1049,6 +1053,7 @@ fun ProfileSetupOnboardingScreen(
                 color = palette.textPrimary,
                 fontSize = 32.sp,
                 fontWeight = FontWeight.Black,
+                fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )

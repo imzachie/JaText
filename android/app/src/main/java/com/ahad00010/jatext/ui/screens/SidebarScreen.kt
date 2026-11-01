@@ -347,6 +347,7 @@ fun SidebarScreen(
                                     color = palette.textPrimary,
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Black,
+                                    fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                                 )
                             }
                             Row(

@@ -254,6 +254,7 @@ fun SettingsModalScreen(
                             color = palette.textPrimary,
                             fontSize = 26.sp,
                             fontWeight = FontWeight.Black,
+                            fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                             letterSpacing = (-0.5).sp,
                         )
                         Text(
@@ -2794,6 +2795,7 @@ private fun WebParityCustomThemeDrawerOverlay(
                         color = palette.textPrimary,
                         fontSize = 21.sp,
                         fontWeight = FontWeight.Black,
+                        fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                     )
                 }
                 LiquidIconButton(

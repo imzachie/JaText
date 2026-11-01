@@ -604,7 +604,11 @@ fun JaTextTheme(
     CompositionLocalProvider(LocalJaTextPalette provides palette) {
         MaterialTheme(
             colorScheme = materialScheme,
-            content = content,
-        )
+            typography = JaTextTypography,
+        ) {
+            androidx.compose.material3.ProvideTextStyle(value = JaTextTypography.bodyLarge) {
+                content()
+            }
+        }
     }
 }

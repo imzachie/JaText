@@ -165,6 +165,7 @@ fun JaWebTabs(
                             color = Color.White,
                             fontSize = 10.5.sp,
                             fontWeight = FontWeight.ExtraBold,
+                            fontFamily = com.ahad00010.jatext.ui.theme.SfProRoundedFontFamily,
                         )
                     }
                 }
@@ -255,6 +256,7 @@ fun JaWebInput(
                     textStyle = TextStyle(
                         color = palette.textPrimary,
                         fontSize = 15.sp,
+                        fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
                     ),
                     modifier = Modifier.fillMaxWidth(),
                     decorationBox = { inner ->
@@ -450,6 +452,7 @@ fun JaWebIconButton(
                     color = palette.accentDark,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Black,
+                    fontFamily = com.ahad00010.jatext.ui.theme.SfProRoundedFontFamily,
                 )
             }
         }
@@ -491,6 +494,7 @@ fun JaOfficialBadge(text: String = "OFFICIAL") {
             color = Color(0xFF052E16),
             fontSize = 9.5.sp,
             fontWeight = FontWeight.Black,
+            fontFamily = com.ahad00010.jatext.ui.theme.SfProRoundedFontFamily,
             letterSpacing = 0.4.sp,
         )
     }
