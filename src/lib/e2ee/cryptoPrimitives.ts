@@ -680,10 +680,10 @@ export async function encryptDmPayload(params: {
   // Wrap CEK via pure ephemeral ECDH (ephemPriv x targetDhPub) for sender + receiver + sibling devices
   const wra: Record<string, string> = {};
   const wrapTargets = new Map<string, string>();
-  wrapTargets.set(senderIdentity.keyId, senderIdentity.dhPubB64);
   wrapTargets.set(receiverPublic.keyId, receiverPublic.dhPubB64);
+  wrapTargets.set(senderIdentity.keyId, senderIdentity.dhPubB64);
   for (const extra of additionalDeviceBundles) {
-    if (extra.keyId && extra.dhPubB64 && wrapTargets.size < 8) {
+    if (extra.keyId && extra.dhPubB64 && wrapTargets.size < 24) {
       wrapTargets.set(extra.keyId, extra.dhPubB64);
     }
   }

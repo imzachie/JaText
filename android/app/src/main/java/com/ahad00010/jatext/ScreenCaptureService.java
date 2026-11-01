@@ -237,6 +237,7 @@ public class ScreenCaptureService extends Service {
                     .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                     .addMatchingUsage(AudioAttributes.USAGE_GAME)
                     .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                    .excludeUid(android.os.Process.myUid())
                     .build();
 
             AudioFormat audioFormat = new AudioFormat.Builder()

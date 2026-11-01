@@ -1,14 +1,18 @@
 package com.ahad00010.jatext.ui.screens
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
+import android.media.MediaPlayer
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,14 +46,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Gavel
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.LinkOff
@@ -90,6 +98,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -110,6 +119,7 @@ import com.ahad00010.jatext.data.UserWebsiteLink
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.state.SessionUiState
 import com.ahad00010.jatext.ui.components.JaAvatar
+import com.ahad00010.jatext.ui.components.JaWebInput
 import com.ahad00010.jatext.ui.components.RichMarkdownText
 import com.ahad00010.jatext.ui.components.jaBouncyClick
 import com.ahad00010.jatext.ui.icons.SOCIAL_PLATFORM_SPECS
@@ -191,13 +201,13 @@ fun SettingsModalScreen(
     }
 
     val categories = listOf(
-        Triple("profile", "Profile", Icons.Rounded.Person),
-        Triple("appearance", "Appearance", Icons.Rounded.Palette),
-        Triple("devices", "Devices", Icons.Rounded.Devices),
-        Triple("socials", "Socials", Icons.Rounded.Link),
-        Triple("audio", "Alerts & Audio", Icons.Rounded.NotificationsActive),
-        Triple("encryption", "Encryption", Icons.Rounded.Lock),
-        Triple("legal", "Legal Policies", Icons.Rounded.Gavel),
+        Triple("profile", com.ahad00010.jatext.data.jt("settings.profile"), Icons.Rounded.Person),
+        Triple("appearance", com.ahad00010.jatext.data.jt("settings.appearance"), Icons.Rounded.Palette),
+        Triple("devices", com.ahad00010.jatext.data.jt("settings.devices"), Icons.Rounded.Devices),
+        Triple("socials", com.ahad00010.jatext.data.jt("settings.socials"), Icons.Rounded.Link),
+        Triple("audio", com.ahad00010.jatext.data.jt("settings.alerts"), Icons.Rounded.NotificationsActive),
+        Triple("encryption", com.ahad00010.jatext.data.jt("settings.privacy"), Icons.Rounded.Lock),
+        Triple("legal", com.ahad00010.jatext.data.jt("settings.legal"), Icons.Rounded.Gavel),
     )
 
     val tintedActionColor = if (palette.isDark) palette.accent else IOS_LIQUID_BLUE
@@ -769,6 +779,111 @@ fun SettingsModalScreen(
                                         )
                                     }
                                 }
+
+                                Spacer(Modifier.height(14.dp))
+
+                                /* ---- Blocked Users Section (Profile -> Blocked users) ---- */
+                                var showBlockedList by remember { mutableStateOf(false) }
+                                LaunchedEffect(showBlockedList) {
+                                    if (showBlockedList) vm.refreshBlockedUsersList()
+                                }
+                                LiquidGlassCard(
+                                    backdrop = settingsBackdrop,
+                                    isDark = palette.isDark,
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Block,
+                                            contentDescription = null,
+                                            tint = palette.danger,
+                                            modifier = Modifier.size(19.dp),
+                                        )
+                                        Text(
+                                            text = com.ahad00010.jatext.data.jt("blocked.title"),
+                                            color = palette.textPrimary,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 16.sp,
+                                        )
+                                    }
+                                    LiquidButton(
+                                        onClick = {
+                                            showBlockedList = !showBlockedList
+                                            if (showBlockedList) vm.refreshBlockedUsersList()
+                                        },
+                                        backdrop = settingsBackdrop,
+                                        isDark = palette.isDark,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(
+                                            text = com.ahad00010.jatext.data.jt("blocked.cta"),
+                                            color = palette.textPrimary,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                    if (showBlockedList) {
+                                        if (state.blockedUsersList.isEmpty()) {
+                                            Text(
+                                                text = com.ahad00010.jatext.data.jt("blocked.empty"),
+                                                color = palette.textSecondary,
+                                                fontSize = 13.sp,
+                                            )
+                                        } else {
+                                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                state.blockedUsersList.forEach { bu ->
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clip(RoundedCornerShape(14.dp))
+                                                            .background(palette.bgTertiary)
+                                                            .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+                                                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                    ) {
+                                                        JaAvatar(
+                                                            avatarUrl = bu.avatarUrl,
+                                                            displayName = bu.displayName.ifBlank { bu.username },
+                                                            avatarColor = bu.avatarColor,
+                                                            size = 36.dp,
+                                                            ringWidth = 2.dp,
+                                                        )
+                                                        Spacer(Modifier.width(10.dp))
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(
+                                                                text = bu.displayName.ifBlank { bu.username },
+                                                                color = palette.textPrimary,
+                                                                fontSize = 14.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                            )
+                                                            Text(
+                                                                text = "@${bu.username}",
+                                                                color = palette.textSecondary,
+                                                                fontSize = 12.sp,
+                                                            )
+                                                        }
+                                                        LiquidButton(
+                                                            onClick = { vm.unblockUserFromSettings(bu.id) },
+                                                            backdrop = settingsBackdrop,
+                                                            isDark = palette.isDark,
+                                                            height = 34.dp,
+                                                            horizontalPadding = 12.dp,
+                                                        ) {
+                                                            Text(
+                                                                text = com.ahad00010.jatext.data.jt("blocked.unblock"),
+                                                                color = palette.textPrimary,
+                                                                fontSize = 12.5.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
                             "appearance" -> {
@@ -1041,10 +1156,512 @@ fun SettingsModalScreen(
                                         )
                                     }
                                 }
+
+                                Spacer(Modifier.height(14.dp))
+
+                                /* ---- Custom Soundboards Card (<= 10 MB, <= 10s) ---- */
+                                var newClipName by remember { mutableStateOf("") }
+                                var uploadingClip by remember { mutableStateOf(false) }
+                                LaunchedEffect(Unit) { vm.refreshSoundboards() }
+                                val soundboardAudioLauncher = rememberLauncherForActivityResult(
+                                    ActivityResultContracts.GetContent()
+                                ) { uri ->
+                                    if (uri != null) {
+                                        val fallbackName = queryUriFileName(context, uri)
+                                            ?.substringBeforeLast('.')
+                                            ?.take(40)
+                                            .orEmpty()
+                                        val effectiveName = newClipName.trim().ifBlank { fallbackName.ifBlank { "Custom Clip" } }
+                                        uploadingClip = true
+                                        vm.createCustomSoundboardFromUri(
+                                            name = effectiveName,
+                                            audioUri = uri,
+                                            onDone = {
+                                                uploadingClip = false
+                                                newClipName = ""
+                                                vm.showToast("Soundboard clip saved!")
+                                            },
+                                            onError = { uploadingClip = false },
+                                        )
+                                    }
+                                }
+
+                                LiquidGlassCard(
+                                    backdrop = settingsBackdrop,
+                                    isDark = palette.isDark,
+                                ) {
+                                    Text(
+                                        text = com.ahad00010.jatext.data.jt("soundboard.title"),
+                                        color = palette.textPrimary,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 16.sp,
+                                    )
+                                    Text(
+                                        text = com.ahad00010.jatext.data.jt("soundboard.desc"),
+                                        color = palette.textSecondary,
+                                        fontSize = 12.5.sp,
+                                    )
+                                    JaWebInput(
+                                        value = newClipName,
+                                        onValueChange = { newClipName = it.take(40) },
+                                        label = "Clip name",
+                                        placeholder = "Airhorn, Victory, Rimshot...",
+                                    )
+                                    LiquidButton(
+                                        onClick = {
+                                            if (!uploadingClip) soundboardAudioLauncher.launch("audio/*")
+                                        },
+                                        backdrop = settingsBackdrop,
+                                        isDark = palette.isDark,
+                                        tint = tintedActionColor,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Icon(Icons.Rounded.Add, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                        Text(
+                                            text = if (uploadingClip) "Uploading..." else com.ahad00010.jatext.data.jt("soundboard.add"),
+                                            color = Color.White,
+                                            fontSize = 13.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                    if (state.soundboards.isNotEmpty()) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            state.soundboards.forEach { clip ->
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clip(RoundedCornerShape(14.dp))
+                                                        .background(palette.bgTertiary)
+                                                        .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+                                                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = clip.name,
+                                                            color = palette.textPrimary,
+                                                            fontSize = 14.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                        )
+                                                        Text(
+                                                            text = "${(clip.durationMs / 1000f).let { String.format(java.util.Locale.US, "%.1fs", it) }} · ${(clip.byteSize / 1024).coerceAtLeast(1)} KB",
+                                                            color = palette.textSecondary,
+                                                            fontSize = 11.5.sp,
+                                                        )
+                                                    }
+                                                    LiquidIconButton(
+                                                        onClick = {
+                                                            val raw = clip.audioUrl.trim()
+                                                            val full = when {
+                                                                raw.startsWith("http") -> raw
+                                                                raw.startsWith("/") -> "https://jatext.vercel.app$raw"
+                                                                else -> "https://jatext.vercel.app/api/media?id=$raw"
+                                                            }
+                                                            runCatching {
+                                                                MediaPlayer().apply {
+                                                                    setDataSource(full)
+                                                                    setOnPreparedListener { it.start() }
+                                                                    setOnCompletionListener { it.release() }
+                                                                    setOnErrorListener { mp, _, _ -> mp.release(); true }
+                                                                    prepareAsync()
+                                                                }
+                                                            }
+                                                        },
+                                                        backdrop = settingsBackdrop,
+                                                        isDark = palette.isDark,
+                                                        size = 34.dp,
+                                                    ) {
+                                                        Icon(Icons.Rounded.PlayArrow, "Preview", tint = palette.accent, modifier = Modifier.size(18.dp))
+                                                    }
+                                                    Spacer(Modifier.width(6.dp))
+                                                    LiquidIconButton(
+                                                        onClick = { vm.deleteCustomSoundboard(clip.id) },
+                                                        backdrop = settingsBackdrop,
+                                                        isDark = palette.isDark,
+                                                        size = 34.dp,
+                                                    ) {
+                                                        Icon(Icons.Rounded.Delete, "Delete", tint = palette.danger, modifier = Modifier.size(17.dp))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
                             "encryption" -> {
                                 var copiedFp by remember { mutableStateOf(false) }
+                                val activity = context as? Activity
+                                LaunchedEffect(Unit) { vm.refreshSecuritySettings() }
+
+                                /* ---- Time-Based 2FA (Authenticator App TOTP) ---- */
+                                var setupSecret by remember { mutableStateOf<String?>(null) }
+                                var setupOtpAuthUrl by remember { mutableStateOf<String?>(null) }
+                                var totpInputCode by remember { mutableStateOf("") }
+                                var disableCodeInput by remember { mutableStateOf("") }
+                                var showDisablePrompt by remember { mutableStateOf(false) }
+                                var backupCodesShown by remember { mutableStateOf<List<String>>(emptyList()) }
+                                var totpBusy by remember { mutableStateOf(false) }
+
+                                val qrBitmap = remember(setupOtpAuthUrl) {
+                                    val url = setupOtpAuthUrl?.takeIf { it.isNotBlank() } ?: return@remember null
+                                    runCatching {
+                                        val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(
+                                            url,
+                                            com.google.zxing.BarcodeFormat.QR_CODE,
+                                            420,
+                                            420,
+                                        )
+                                        val w = matrix.width
+                                        val h = matrix.height
+                                        val pixels = IntArray(w * h)
+                                        for (y in 0 until h) {
+                                            for (x in 0 until w) {
+                                                pixels[y * w + x] = if (matrix.get(x, y)) {
+                                                    android.graphics.Color.BLACK
+                                                } else {
+                                                    android.graphics.Color.WHITE
+                                                }
+                                            }
+                                        }
+                                        Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+                                            setPixels(pixels, 0, w, 0, 0, w, h)
+                                        }
+                                    }.getOrNull()
+                                }
+
+                                LiquidGlassCard(
+                                    backdrop = settingsBackdrop,
+                                    isDark = palette.isDark,
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.Lock, null, tint = palette.accent, modifier = Modifier.size(20.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = com.ahad00010.jatext.data.jt("twofa.title"),
+                                            color = palette.textPrimary,
+                                            fontSize = 17.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                        )
+                                    }
+                                    Text(
+                                        text = "Protect your account with an authenticator app (Google Authenticator, Authy, 1Password, or Apple Passwords).",
+                                        color = palette.textSecondary,
+                                        fontSize = 12.5.sp,
+                                        lineHeight = 18.sp,
+                                    )
+
+                                    if (state.securitySettings.totpEnabled) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(palette.accentSoft)
+                                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        ) {
+                                            Icon(Icons.Rounded.CheckCircle, null, tint = IOS_LIQUID_GREEN, modifier = Modifier.size(18.dp))
+                                            Text(
+                                                text = "2FA enabled · ${state.securitySettings.backupCodesRemaining} backup codes left",
+                                                color = palette.textPrimary,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                            )
+                                        }
+                                        if (!showDisablePrompt) {
+                                            LiquidButton(
+                                                onClick = { showDisablePrompt = true },
+                                                backdrop = settingsBackdrop,
+                                                isDark = palette.isDark,
+                                                tint = IOS_LIQUID_RED,
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) {
+                                                Text(
+                                                    text = com.ahad00010.jatext.data.jt("twofa.disable"),
+                                                    color = Color.White,
+                                                    fontSize = 13.5.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                )
+                                            }
+                                        } else {
+                                            JaWebInput(
+                                                value = disableCodeInput,
+                                                onValueChange = { disableCodeInput = it },
+                                                label = "Enter current 6-digit code to disable",
+                                                placeholder = "000000",
+                                            )
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                LiquidButton(
+                                                    onClick = { showDisablePrompt = false; disableCodeInput = "" },
+                                                    backdrop = settingsBackdrop,
+                                                    isDark = palette.isDark,
+                                                    modifier = Modifier.weight(1f),
+                                                ) {
+                                                    Text("Cancel", color = palette.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                                LiquidButton(
+                                                    onClick = {
+                                                        if (disableCodeInput.trim().length >= 6 && !totpBusy) {
+                                                            totpBusy = true
+                                                            scope.launch {
+                                                                try {
+                                                                    vm.disableTotp(disableCodeInput)
+                                                                    showDisablePrompt = false
+                                                                    disableCodeInput = ""
+                                                                    vm.showToast("2FA disabled")
+                                                                } catch (e: Throwable) {
+                                                                    vm.showToast(e.message ?: "Invalid code")
+                                                                } finally {
+                                                                    totpBusy = false
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                    backdrop = settingsBackdrop,
+                                                    isDark = palette.isDark,
+                                                    tint = IOS_LIQUID_RED,
+                                                    modifier = Modifier.weight(1f),
+                                                ) {
+                                                    Text("Confirm disable", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+                                    } else if (setupSecret == null) {
+                                        LiquidButton(
+                                            onClick = {
+                                                if (!totpBusy) {
+                                                    totpBusy = true
+                                                    scope.launch {
+                                                        try {
+                                                            val res = vm.beginTotpSetup()
+                                                            setupSecret = res.secret
+                                                            setupOtpAuthUrl = res.otpauthUrl
+                                                        } catch (e: Throwable) {
+                                                            vm.showToast(e.message ?: "Failed to start 2FA setup")
+                                                        } finally {
+                                                            totpBusy = false
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            backdrop = settingsBackdrop,
+                                            isDark = palette.isDark,
+                                            tint = tintedActionColor,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Text(
+                                                text = com.ahad00010.jatext.data.jt("twofa.setup"),
+                                                color = Color.White,
+                                                fontSize = 13.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                            )
+                                        }
+                                    } else {
+                                        if (qrBitmap != null) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 4.dp),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                Image(
+                                                    bitmap = qrBitmap.asImageBitmap(),
+                                                    contentDescription = "2FA QR Code",
+                                                    modifier = Modifier
+                                                        .size(190.dp)
+                                                        .clip(RoundedCornerShape(16.dp))
+                                                        .background(Color.White)
+                                                        .padding(8.dp),
+                                                )
+                                            }
+                                        }
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(palette.bgTertiary)
+                                                .border(1.dp, palette.border, RoundedCornerShape(12.dp))
+                                                .clickable {
+                                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                                    cm?.setPrimaryClip(ClipData.newPlainText("2FA Secret", setupSecret.orEmpty()))
+                                                    vm.showToast("Copied manual secret key")
+                                                }
+                                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("Setup key (tap to copy)", color = palette.textSecondary, fontSize = 11.sp)
+                                                Text(
+                                                    text = setupSecret.orEmpty(),
+                                                    color = palette.textPrimary,
+                                                    fontSize = 13.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.Bold,
+                                                )
+                                            }
+                                        }
+                                        JaWebInput(
+                                            value = totpInputCode,
+                                            onValueChange = { totpInputCode = it },
+                                            label = "Enter 6-digit code from your app",
+                                            placeholder = "000000",
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            LiquidButton(
+                                                onClick = {
+                                                    setupSecret = null
+                                                    setupOtpAuthUrl = null
+                                                    totpInputCode = ""
+                                                },
+                                                backdrop = settingsBackdrop,
+                                                isDark = palette.isDark,
+                                                modifier = Modifier.weight(1f),
+                                            ) {
+                                                Text("Cancel", color = palette.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                            LiquidButton(
+                                                onClick = {
+                                                    if (totpInputCode.trim().length >= 6 && !totpBusy) {
+                                                        totpBusy = true
+                                                        scope.launch {
+                                                            try {
+                                                                val confirmed = vm.confirmTotpSetup(totpInputCode)
+                                                                backupCodesShown = confirmed.backupCodes
+                                                                setupSecret = null
+                                                                setupOtpAuthUrl = null
+                                                                totpInputCode = ""
+                                                                vm.showToast("2FA enabled!")
+                                                            } catch (e: Throwable) {
+                                                                vm.showToast(e.message ?: "Invalid code")
+                                                            } finally {
+                                                                totpBusy = false
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                backdrop = settingsBackdrop,
+                                                isDark = palette.isDark,
+                                                tint = tintedActionColor,
+                                                modifier = Modifier.weight(1f),
+                                            ) {
+                                                Text("Verify & enable", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+
+                                    if (backupCodesShown.isNotEmpty()) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(palette.bgTertiary)
+                                                .border(1.dp, palette.border, RoundedCornerShape(12.dp))
+                                                .padding(12.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                                        ) {
+                                            Text(
+                                                text = "Save these recovery backup codes:",
+                                                color = palette.textPrimary,
+                                                fontSize = 12.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                            )
+                                            Text(
+                                                text = backupCodesShown.joinToString("   "),
+                                                color = palette.accent,
+                                                fontSize = 12.5.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(14.dp))
+
+                                /* ---- Passkeys (Credential Manager WebAuthn) ---- */
+                                var passkeyLabel by remember { mutableStateOf("") }
+                                LiquidGlassCard(
+                                    backdrop = settingsBackdrop,
+                                    isDark = palette.isDark,
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.Key, null, tint = palette.accent, modifier = Modifier.size(20.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = com.ahad00010.jatext.data.jt("passkeys.title"),
+                                            color = palette.textPrimary,
+                                            fontSize = 17.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                        )
+                                    }
+                                    Text(
+                                        text = "Sign in faster and phishing-free using your fingerprint, face unlock, or Google Password Manager.",
+                                        color = palette.textSecondary,
+                                        fontSize = 12.5.sp,
+                                        lineHeight = 18.sp,
+                                    )
+                                    JaWebInput(
+                                        value = passkeyLabel,
+                                        onValueChange = { passkeyLabel = it.take(36) },
+                                        label = "Passkey label (optional)",
+                                        placeholder = "My Android Phone",
+                                    )
+                                    LiquidButton(
+                                        onClick = {
+                                            if (activity != null) {
+                                                vm.registerPasskey(
+                                                    activity = activity,
+                                                    label = passkeyLabel.ifBlank { "Android Passkey" },
+                                                    onDone = { passkeyLabel = "" },
+                                                )
+                                            }
+                                        },
+                                        backdrop = settingsBackdrop,
+                                        isDark = palette.isDark,
+                                        tint = tintedActionColor,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Icon(Icons.Rounded.Add, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                        Text(
+                                            text = com.ahad00010.jatext.data.jt("passkeys.add"),
+                                            color = Color.White,
+                                            fontSize = 13.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                    if (state.securitySettings.passkeys.isNotEmpty()) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            state.securitySettings.passkeys.forEach { pk ->
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clip(RoundedCornerShape(14.dp))
+                                                        .background(palette.bgTertiary)
+                                                        .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+                                                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Icon(Icons.Rounded.Key, null, tint = palette.accent, modifier = Modifier.size(18.dp))
+                                                    Spacer(Modifier.width(10.dp))
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(pk.label, color = palette.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                                        Text("Passkey active", color = palette.textSecondary, fontSize = 11.5.sp)
+                                                    }
+                                                    LiquidIconButton(
+                                                        onClick = { vm.deletePasskey(pk.credentialId) },
+                                                        backdrop = settingsBackdrop,
+                                                        isDark = palette.isDark,
+                                                        size = 34.dp,
+                                                    ) {
+                                                        Icon(Icons.Rounded.Delete, "Delete passkey", tint = palette.danger, modifier = Modifier.size(17.dp))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(14.dp))
 
                                 LiquidGlassCard(
                                     backdrop = settingsBackdrop,
@@ -1983,102 +2600,59 @@ private fun AppearanceSettingsTab(
 
     Spacer(Modifier.height(14.dp))
 
-    /* ---- 4. Live iOS 26 Liquid Glass Optics Card (Exact `image-24.png` Bottom-Center Controls!) ---- */
+    /* ---- 4. Languages Card (Liquid Glass Optics removed per user request!) ---- */
     LiquidGlassCard(
         backdrop = backdrop,
         isDark = palette.isDark,
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Icon(
+                imageVector = Icons.Rounded.Language,
+                contentDescription = null,
+                tint = palette.accent,
+                modifier = Modifier.size(20.dp),
+            )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Liquid Glass Optics",
+                    text = com.ahad00010.jatext.data.jt("appearance.languages"),
                     color = palette.textPrimary,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 15.5.sp,
                 )
                 Text(
-                    text = "Live lens refraction & chromatic dispersion across cards and buttons.",
+                    text = com.ahad00010.jatext.data.jt("appearance.languagesDesc"),
                     color = palette.textSecondary,
                     fontSize = 12.sp,
                 )
             }
-            LiquidButton(
-                onClick = { optics.resetDefaults() },
-                backdrop = backdrop,
-                isDark = palette.isDark,
-                height = 34.dp,
-                horizontalPadding = 12.dp,
-            ) {
-                Text(
-                    text = "Reset",
-                    color = palette.textPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
         }
-
-        LiquidOpticsLivePreview(
-            accentColor = tintedActionColor,
-            isDark = palette.isDark,
-        )
-
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("Refraction height", color = palette.textPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                Text("${optics.refractionHeightDp.roundToInt()} dp", color = palette.textSecondary, fontSize = 12.5.sp)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            com.ahad00010.jatext.data.JATEXT_LANGUAGE_OPTIONS.forEach { langOpt ->
+                val selected = state.languageCode == langOpt.code
+                LiquidPillChip(
+                    selected = selected,
+                    onClick = { vm.setAppLanguage(langOpt.code) },
+                    backdrop = backdrop,
+                    isDark = palette.isDark,
+                    accentColor = tintedActionColor,
+                    horizontalPadding = 12.dp,
+                    verticalPadding = 8.dp,
+                ) {
+                    Text(
+                        text = "${langOpt.nativeLabel} (${langOpt.englishLabel})",
+                        color = if (selected) Color.White else palette.textPrimary,
+                        fontSize = 12.5.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                }
             }
-            LiquidSlider(
-                value = { optics.refractionHeightDp },
-                onValueChange = { optics.update(heightDp = it) },
-                valueRange = 4f..32f,
-                backdrop = backdrop,
-                isDark = palette.isDark,
-                accentColor = IOS_LIQUID_BLUE,
-            )
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("Refraction amount", color = palette.textPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                Text("${optics.refractionAmountDp.roundToInt()} dp", color = palette.textSecondary, fontSize = 12.5.sp)
-            }
-            LiquidSlider(
-                value = { optics.refractionAmountDp },
-                onValueChange = { optics.update(amountDp = it) },
-                valueRange = 4f..44f,
-                backdrop = backdrop,
-                isDark = palette.isDark,
-                accentColor = IOS_LIQUID_BLUE,
-            )
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("Chromatic aberration", color = palette.textPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                Text("${(optics.chromaticAberration * 100f).roundToInt()}%", color = palette.textSecondary, fontSize = 12.5.sp)
-            }
-            LiquidSlider(
-                value = { optics.chromaticAberration },
-                onValueChange = { optics.update(aberration = it) },
-                valueRange = 0f..1f,
-                backdrop = backdrop,
-                isDark = palette.isDark,
-                accentColor = IOS_LIQUID_BLUE,
-            )
         }
     }
 }

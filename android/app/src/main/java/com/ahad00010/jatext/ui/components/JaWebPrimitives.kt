@@ -251,7 +251,7 @@ fun JaWebInput(
                     keyboardOptions = keyboardOptions,
                     keyboardActions = keyboardActions,
                     interactionSource = interactionSource,
-                    cursorBrush = SolidColor(palette.accent),
+                    cursorBrush = SolidColor(if (palette.isDark) Color.White else Color.Black),
                     textStyle = TextStyle(
                         color = palette.textPrimary,
                         fontSize = 15.sp,

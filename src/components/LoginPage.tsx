@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LegalModal, type LegalTab } from "./LegalModal";
-import { LockClosedIcon } from "./UiIcons";
+import { KeyIcon, LockClosedIcon } from "./UiIcons";
 import { buildQrSvgPath } from "../lib/qrCodeSvg";
+import { useI18n } from "../lib/i18n";
+import { isWebAuthnSupported } from "../lib/securityClient";
+import { useJaText } from "../lib/store";
 import {
   decryptAndHydrateLinkedWebSession,
   pollWebQrPairingSession,
@@ -14,7 +17,10 @@ type LinkScreenPhase = "loading_qr" | "waiting_scan" | "syncing" | "error";
 const QR_ROTATION_INTERVAL_MS = 120_000; // 2 minutes privacy rotation
 
 export function LoginPage() {
+  const store = useJaText();
+  const { t } = useI18n();
   const [phase, setPhase] = useState<LinkScreenPhase>("loading_qr");
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [qrHandle, setQrHandle] = useState<WebQrSessionHandle | null>(null);
   const [rotateAt, setRotateAt] = useState<number>(() => Date.now() + QR_ROTATION_INTERVAL_MS);
   const [secondsLeft, setSecondsLeft] = useState<number>(120);
@@ -336,6 +342,30 @@ export function LoginPage() {
                 </svg>
                 <span>Refresh QR</span>
               </button>
+              {isWebAuthnSupported() && store.signInWithPasskey && (
+                <button
+                  type="button"
+                  className="qr-refresh-btn"
+                  disabled={passkeyBusy}
+                  onClick={() => {
+                    if (!store.signInWithPasskey) return;
+                    setPasskeyBusy(true);
+                    setErrorMsg(null);
+                    void store
+                      .signInWithPasskey()
+                      .catch((err) => {
+                        setErrorMsg(
+                          err instanceof Error ? err.message : "Passkey sign-in failed.",
+                        );
+                      })
+                      .finally(() => setPasskeyBusy(false));
+                  }}
+                  title="Sign in with a registered Passkey"
+                >
+                  <KeyIcon size={13} />
+                  <span>{passkeyBusy ? "Verifying…" : t("sign_in_passkey")}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

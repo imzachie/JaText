@@ -15,6 +15,7 @@ import { clearSlotChatCache, preloadSlotChatCache } from "./lib/chatCache";
 import { DemoStoreProvider } from "./lib/store";
 import { PUBLIC_TURSO_API_ORIGIN } from "./lib/tursoClient";
 import { TursoStoreProvider } from "./lib/tursoStore";
+import { I18nProvider } from "./lib/i18n";
 import { setThemeUserScope } from "./lib/themeEngine";
 import "./index.css";
 import "./iosLiquidGlass.css";
@@ -81,7 +82,9 @@ export function Root() {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <AppErrorBoundary>
-      <Root />
+      <I18nProvider>
+        <Root />
+      </I18nProvider>
     </AppErrorBoundary>
   </StrictMode>,
 );

@@ -29,6 +29,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 class TursoApiException(message: String, val statusCode: Int = 500) : Exception(message)
 
+class TwoFactorRequiredException(
+    val challengeToken: String,
+    val email: String = "",
+) : Exception("Enter your authentication code")
+
 object TursoApiClient {
     val apiOrigin: String = BuildConfig.API_ORIGIN.trimEnd('/')
 
@@ -152,6 +157,7 @@ object TursoApiClient {
         val token: String? = null,
         val me: JaUser? = null,
         val error: String? = null,
+        val challengeToken: String? = null,
     )
 
     suspend fun fetchGoogleOAuthServerConfig(): GoogleOAuthServerConfig? = withContext(Dispatchers.IO) {
@@ -194,6 +200,7 @@ object TursoApiClient {
                     val status = obj["status"]?.jsonPrimitive?.contentOrNull ?: "pending"
                     val token = obj["token"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
                     val error = obj["error"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    val challengeToken = obj["challengeToken"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
                     val meEl = obj["me"]
                     val me = if (meEl != null && meEl !is JsonNull) {
                         try {
@@ -204,7 +211,13 @@ object TursoApiClient {
                     } else {
                         null
                     }
-                    MobileOAuthPollResult(status = status, token = token, me = me, error = error)
+                    MobileOAuthPollResult(
+                        status = status,
+                        token = token,
+                        me = me,
+                        error = error,
+                        challengeToken = challengeToken,
+                    )
                 }
             } catch (_: Throwable) {
                 MobileOAuthPollResult(status = "pending")
@@ -229,6 +242,12 @@ object TursoApiClient {
                     null
                 }
                 val ok = obj?.get("ok")?.jsonPrimitive?.booleanOrNull == true
+                val requiresTwoFactor = obj?.get("requiresTwoFactor")?.jsonPrimitive?.booleanOrNull == true
+                val challengeToken = obj?.get("challengeToken")?.jsonPrimitive?.contentOrNull
+                if (resp.isSuccessful && ok && requiresTwoFactor && !challengeToken.isNullOrBlank()) {
+                    val email = obj["email"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    throw TwoFactorRequiredException(challengeToken, email)
+                }
                 val token = obj?.get("token")?.jsonPrimitive?.contentOrNull
                 if (!resp.isSuccessful || !ok || token.isNullOrBlank()) {
                     val err = obj?.get("error")?.jsonPrimitive?.contentOrNull

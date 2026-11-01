@@ -59,6 +59,7 @@ data class JaUser(
     val socials: List<UserSocialLink>? = null,
     val website: UserWebsiteLink? = null,
     val syncedTheme: SyncedThemePayload? = null,
+    val totpEnabled: Boolean = false,
 ) {
     val isOwner: Boolean
         get() = email?.equals(OWNER_EMAIL, ignoreCase = true) == true ||
@@ -479,6 +480,9 @@ data class BootstrapResponse(
     val groups: List<GroupSummary> = emptyList(),
     val hasRemoteE2EEVault: Boolean = false,
     val remoteVaultKeyId: String? = null,
+    val openedViewOnceIds: List<String> = emptyList(),
+    val soundboards: List<SoundboardClip> = emptyList(),
+    val chatOrganization: ChatOrganizationSpec = ChatOrganizationSpec(),
     val refreshedToken: String? = null,
 )
 
@@ -858,11 +862,102 @@ data class ScheduledMessageItem(
 
 @Serializable
 data class ListScheduledMessagesResponse(
+    val scheduled: List<ScheduledMessageItem> = emptyList(),
     val items: List<ScheduledMessageItem> = emptyList(),
-)
+) {
+    val resolvedItems: List<ScheduledMessageItem>
+        get() = scheduled.ifEmpty { items }
+}
 
 @Serializable
 data class ScheduleMessageResponse(
+    val scheduled: ScheduledMessageItem? = null,
     val item: ScheduledMessageItem = ScheduledMessageItem(),
+) {
+    val resolvedItem: ScheduledMessageItem
+        get() = scheduled ?: item
+}
+
+@Serializable
+data class SoundboardClip(
+    val id: String = "",
+    val name: String = "",
+    val audioUrl: String = "",
+    val durationMs: Int = 0,
+    val byteSize: Int = 0,
+    val createdAt: Long = 0L,
 )
+
+@Serializable
+data class ListSoundboardsResponse(
+    val soundboards: List<SoundboardClip> = emptyList(),
+)
+
+@Serializable
+data class CreateSoundboardResponse(
+    val clip: SoundboardClip = SoundboardClip(),
+)
+
+@Serializable
+data class ChatFolderSpec(
+    val id: String = "",
+    val name: String = "",
+    val threadIds: List<String> = emptyList(),
+)
+
+@Serializable
+data class ChatOrganizationSpec(
+    val pinnedIds: List<String> = emptyList(),
+    val customOrder: List<String> = listOf("__jatext_community__"),
+    val folders: List<ChatFolderSpec> = emptyList(),
+)
+
+@Serializable
+data class ChatOrganizationResponse(
+    val ok: Boolean = true,
+    val chatOrganization: ChatOrganizationSpec = ChatOrganizationSpec(),
+)
+
+@Serializable
+data class PasskeySummary(
+    val credentialId: String = "",
+    val label: String = "Passkey",
+    val createdAt: Long = 0L,
+    val lastUsedAt: Long? = null,
+)
+
+@Serializable
+data class SecuritySettingsResponse(
+    val totpEnabled: Boolean = false,
+    val backupCodesRemaining: Int = 0,
+    val passkeys: List<PasskeySummary> = emptyList(),
+)
+
+@Serializable
+data class BeginTotpSetupResponse(
+    val secret: String = "",
+    val otpauthUrl: String = "",
+)
+
+@Serializable
+data class ConfirmTotpSetupResponse(
+    val ok: Boolean = false,
+    val totpEnabled: Boolean = false,
+    val backupCodes: List<String> = emptyList(),
+)
+
+@Serializable
+data class BlockedUsersResponse(
+    val users: List<JaUser> = emptyList(),
+)
+
+@Serializable
+data class ClientPinnedMessage(
+    val id: String = "",
+    val senderName: String = "",
+    val preview: String = "",
+    val pinnedAt: Long = 0L,
+)
+
+
 

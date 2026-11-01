@@ -82,6 +82,10 @@ object JaTextCryptoEngine {
     private const val MAX_INLINE_WIRE_CHARS = 3500
     private const val SAFETY_NUMBER_ROUNDS = 5200
     private val lastPeerForceRefreshAt = ConcurrentHashMap<String, Long>()
+    private val peerFetchedAtByUserId = ConcurrentHashMap<String, Long>()
+    private val lastGroupEpochPullAt = ConcurrentHashMap<String, Long>()
+    @Volatile
+    private var lastKeyringSelfHealAt = 0L
 
     fun isInternalSyncSticker(item: StickerMedia): Boolean {
         val n = item.name.trim()
@@ -504,9 +508,14 @@ object JaTextCryptoEngine {
         return created
     }
 
-    suspend fun ensurePrimaryIdentityPublished(identity: StoredIdentityRecord, token: String) {
+    suspend fun ensurePrimaryIdentityPublished(
+        identity: StoredIdentityRecord,
+        token: String,
+        force: Boolean = false,
+    ) {
         if (token.isBlank() || identity.keyId.isBlank()) return
-        if (!publishedSessionKeyIds.add(identity.keyId)) return
+        if (!force && !publishedSessionKeyIds.add(identity.keyId)) return
+        publishedSessionKeyIds.add(identity.keyId)
         try {
             TursoApiClient.rpcRaw(
                 op = "publishE2EEIdentity",
@@ -527,6 +536,8 @@ object JaTextCryptoEngine {
                         dhPubB64 = identity.dhPubB64,
                         sigPubB64 = identity.sigPubB64,
                         selfSigB64 = identity.selfSigB64,
+                        ts = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis(),
                     )
                 )
             )
@@ -612,7 +623,8 @@ object JaTextCryptoEngine {
             val list = peerBundlesByUserId.getOrPut(b.userId) { mutableListOf() }
             synchronized(list) {
                 list.removeAll { it.keyId == b.keyId }
-                list.add(0, b)
+                list.add(b)
+                list.sortByDescending { maxOf(it.updatedAt ?: 0L, it.ts) }
             }
         }
     }
@@ -625,12 +637,19 @@ object JaTextCryptoEngine {
     }
 
     suspend fun ensurePeerBundles(userIds: List<String>, token: String): Map<String, List<PublicIdentityBundle>> {
-        val missing = userIds.distinct().filter { getCachedPeerBundles(it).isEmpty() }
-        if (missing.isNotEmpty()) {
+        val nowMs = System.currentTimeMillis()
+        val staleOrMissing = userIds.distinct().filter { uid ->
+            uid.isNotBlank() && (
+                getCachedPeerBundles(uid).isEmpty() ||
+                    nowMs - (peerFetchedAtByUserId[uid] ?: 0L) > 12_000L
+                )
+        }
+        if (staleOrMissing.isNotEmpty() && token.isNotBlank()) {
             try {
+                for (uid in staleOrMissing) peerFetchedAtByUserId[uid] = nowMs
                 val root = TursoApiClient.rpcRaw(
                     op = "getUserE2EEIdentities",
-                    args = mapOf("userIds" to missing),
+                    args = mapOf("userIds" to staleOrMissing),
                     token = token
                 ).jsonObject
                 val bundlesEl = root["bundles"]
@@ -719,9 +738,9 @@ object JaTextCryptoEngine {
                 )
             }
         val extraBundles = (
-            myLocalOtherDevices +
-                receiverBundles.drop(1) +
-                peerMap[myUserId].orEmpty().filter { it.keyId != myIdentity.keyId }
+            receiverBundles.drop(1) +
+                peerMap[myUserId].orEmpty().filter { it.keyId != myIdentity.keyId } +
+                myLocalOtherDevices
             )
 
         val senderDhPriv = importPkcs8Private(b64UrlDecode(myIdentity.dhPrivPkcs8B64))
@@ -763,10 +782,10 @@ object JaTextCryptoEngine {
 
         val wra = LinkedHashMap<String, String>()
         val targets = LinkedHashMap<String, String>()
-        targets[myIdentity.keyId] = myIdentity.dhPubB64
         targets[receiverPrimary.keyId] = receiverPrimary.dhPubB64
+        targets[myIdentity.keyId] = myIdentity.dhPubB64
         for (extra in extraBundles) {
-            if (targets.size < 8 && extra.keyId.isNotBlank() && extra.dhPubB64.isNotBlank()) {
+            if (targets.size < 24 && extra.keyId.isNotBlank() && extra.dhPubB64.isNotBlank()) {
                 targets[extra.keyId] = extra.dhPubB64
             }
         }
@@ -987,6 +1006,67 @@ object JaTextCryptoEngine {
                             plainBytes = aesGcmDecrypt(cek, ivBytes, aad, ctBytes)
                             break@outer
                         } catch (_: Throwable) {
+                        }
+                    }
+                }
+            }
+        }
+
+        if (plainBytes == null && token.isNotBlank()) {
+            val healed = trySelfHealKeyringOnMiss(context, myUserId, token)
+            if (healed) {
+                val refreshedIdentities = loadLocalIdentities(context, myUserId)
+                if (wra != null) {
+                    for (id in refreshedIdentities) {
+                        val entry = wra[id.keyId] ?: continue
+                        try {
+                            val rawM = b64UrlDecode(entry)
+                            if (rawM.size < 29) continue
+                            val myPriv = importPkcs8Private(b64UrlDecode(id.dhPrivPkcs8B64))
+                            val ssM = ecdhSharedSecret(myPriv, epkPub)
+                            val kwkM = hkdfSha256(ssM, epkRaw, "JaText-DM-WrapM-v1|$senderId|$receiverId|${id.keyId}")
+                            val cek = aesGcmDecrypt(kwkM, rawM.copyOfRange(0, 12), null, rawM.copyOfRange(12, rawM.size))
+                            plainBytes = aesGcmDecrypt(cek, ivBytes, aad, ctBytes)
+                            break
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+                if (plainBytes == null) {
+                    val isFromMe = senderId == myUserId
+                    val wrapRaw = b64UrlDecode(if (isFromMe) env.ws else env.wr)
+                    if (wrapRaw.size >= 29) {
+                        val wrapIv = wrapRaw.copyOfRange(0, 12)
+                        val wrapCt = wrapRaw.copyOfRange(12, wrapRaw.size)
+                        val peerDhs = buildList {
+                            if (!isFromMe && !env.sdh.isNullOrBlank()) add(env.sdh)
+                            for (b in peerBundles) {
+                                if (b.dhPubB64.isNotBlank() && !contains(b.dhPubB64)) add(b.dhPubB64)
+                            }
+                        }
+                        outerHeal@ for (id in refreshedIdentities) {
+                            val myPriv = try {
+                                importPkcs8Private(b64UrlDecode(id.dhPrivPkcs8B64))
+                            } catch (_: Throwable) {
+                                continue
+                            }
+                            val ssEphem = ecdhSharedSecret(myPriv, epkPub)
+                            val info = if (isFromMe) {
+                                "JaText-DM-WrapS-v1|$senderId|$receiverId|${env.sk}"
+                            } else {
+                                "JaText-DM-WrapR-v1|$senderId|$receiverId|${env.rk}"
+                            }
+                            for (peerDh in peerDhs) {
+                                try {
+                                    val peerPub = importRawP256Public(b64UrlDecode(peerDh))
+                                    val ssStatic = ecdhSharedSecret(myPriv, peerPub)
+                                    val kwk = hkdfSha256(ssEphem + ssStatic, epkRaw, info)
+                                    val cek = aesGcmDecrypt(kwk, wrapIv, null, wrapCt)
+                                    plainBytes = aesGcmDecrypt(cek, ivBytes, aad, ctBytes)
+                                    break@outerHeal
+                                } catch (_: Throwable) {
+                                }
+                            }
                         }
                     }
                 }
@@ -1245,18 +1325,83 @@ object JaTextCryptoEngine {
                     sig = b64UrlEncode(ecdsaSignP1363(sigPriv, sigInput)),
                     ts = System.currentTimeMillis(),
                 )
+                val pktJson = JaTextJson.encodeToString(pkt)
                 TursoApiClient.rpcRaw(
                     op = "sendGroupMessage",
                     args = mapOf(
                         "groupId" to groupId,
-                        "body" to "$E2EE_SIGNAL_PREFIX${JaTextJson.encodeToString(pkt)}"
+                        "body" to "$E2EE_SIGNAL_PREFIX$pktJson"
                     ),
                     token = token
                 )
+                runCatching {
+                    TursoApiClient.rpcRaw(
+                        op = "publishGroupEpochKey",
+                        args = mapOf(
+                            "groupId" to groupId,
+                            "epoch" to epoch,
+                            "packetJson" to pktJson,
+                        ),
+                        token = token,
+                    )
+                }
             } catch (_: Throwable) {
             }
         }
         epoch to secretB64
+    }
+
+    private suspend fun trySelfHealKeyringOnMiss(
+        context: Context,
+        myUserId: String,
+        token: String,
+    ): Boolean {
+        if (myUserId.isBlank() || token.isBlank()) return false
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastKeyringSelfHealAt < 8_000L) return false
+        lastKeyringSelfHealAt = nowMs
+        return try {
+            val boot = TursoApiClient.rpc<com.ahad00010.jatext.data.BootstrapResponse>(
+                op = "bootstrap",
+                token = token,
+            )
+            val allStickers = boot.stickerFavorites + boot.recentStickers
+            val outcome = syncAccountKeyringWithServer(context, myUserId, allStickers, token, forcePush = false)
+            outcome?.changedLocal == true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private suspend fun tryPullGroupEpochKeysFromServer(
+        context: Context,
+        myUserId: String,
+        groupId: String,
+        token: String,
+    ) {
+        if (groupId.isBlank() || myUserId.isBlank() || token.isBlank()) return
+        val nowMs = System.currentTimeMillis()
+        val prev = lastGroupEpochPullAt[groupId] ?: 0L
+        if (nowMs - prev < 6_000L) return
+        lastGroupEpochPullAt[groupId] = nowMs
+        try {
+            val root = TursoApiClient.rpcRaw(
+                op = "getGroupEpochKeys",
+                args = mapOf("groupId" to groupId),
+                token = token,
+            ).jsonObject
+            val arr = root["packets"] as? kotlinx.serialization.json.JsonArray ?: return
+            for (el in arr) {
+                val obj = el.jsonObject
+                val senderId = obj["senderId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val pktJson = obj["packetJson"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (pktJson.isNotBlank()) {
+                    val raw = if (pktJson.startsWith(E2EE_SIGNAL_PREFIX)) pktJson else "$E2EE_SIGNAL_PREFIX$pktJson"
+                    tryIngestGroupEpochSignal(context, myUserId, senderId, raw)
+                }
+            }
+        } catch (_: Throwable) {
+        }
     }
 
     suspend fun encryptGroupMessage(
@@ -1363,6 +1508,9 @@ object JaTextCryptoEngine {
         messageId: String,
         senderId: String,
         wireBody: String,
+        context: Context? = null,
+        myUserId: String = "",
+        token: String = "",
     ): DecryptedWireResult? = withContext(Dispatchers.Default) {
         val trimmed = wireBody.trim()
         decryptedByWireCache[trimmed]?.let { return@withContext it }
@@ -1378,7 +1526,13 @@ object JaTextCryptoEngine {
             return@withContext null
         }
         if (env.v != 1 || env.c != "grp") return@withContext null
-        val rawSecretEntry = groupEpochSecrets["$groupId:${env.ep}"] ?: return@withContext null
+        var rawSecretEntry = groupEpochSecrets["$groupId:${env.ep}"]
+        if (rawSecretEntry == null && context != null && myUserId.isNotBlank() && token.isNotBlank()) {
+            trySelfHealKeyringOnMiss(context, myUserId, token)
+            tryPullGroupEpochKeysFromServer(context, myUserId, groupId, token)
+            rawSecretEntry = groupEpochSecrets["$groupId:${env.ep}"]
+        }
+        if (rawSecretEntry == null) return@withContext null
         val candidateSecrets = rawSecretEntry
             .split(",")
             .map { it.trim() }
@@ -1835,6 +1989,7 @@ object JaTextCryptoEngine {
         groupId: String,
         rawMessages: List<GroupMessage>,
         members: List<GroupMember> = emptyList(),
+        token: String = "",
     ): GroupHydrationOutcome {
         for (m in rawMessages) {
             val raw = m.rawWireBody ?: m.body
@@ -1914,7 +2069,7 @@ object JaTextCryptoEngine {
                 continue
             }
             if (isEncryptedWireBody(wire)) {
-                val dec = decryptGroupWire(groupId, m.id, m.senderId, wire)
+                val dec = decryptGroupWire(groupId, m.id, m.senderId, wire, context, myUserId, token)
                 if (dec != null) {
                     val p = dec.payload
                     val sig = parseGroupSeenSignal(p.b)
@@ -2614,7 +2769,7 @@ object JaTextCryptoEngine {
             }
 
             val outcome = mergeAutoSyncedKeyring(context, userId, remoteContents)
-            ensurePrimaryIdentityPublished(outcome.primaryIdentity, token)
+            ensurePrimaryIdentityPublished(outcome.primaryIdentity, token, force = outcome.changedLocal)
 
             if (outcome.needsRemotePush || forcePush) {
                 try {

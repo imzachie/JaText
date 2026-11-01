@@ -13,7 +13,18 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Phone, Video } from "./CallIcons";
-import { ComposerPlusMenu } from "./ComposerPlusMenu";
+import { ComposerPlusMenu, ViewOnceRingIcon } from "./ComposerPlusMenu";
+import { ViewOnceMessageBubble } from "./ViewOnceViewerModal";
+import {
+  buildEncryptedViewOnceBody,
+  isViewOnceBody,
+  parseViewOnceEnvelope,
+} from "../lib/viewOnce";
+import {
+  isMessagePinned,
+  togglePinnedMessage,
+  usePinnedMessages,
+} from "../lib/chatOrganization";
 import { playMessageSound } from "../lib/alerts";
 import { CONVERSATION_MARKED_READ_EVENT } from "../lib/convexStore";
 import { getUserChatPrefs } from "../lib/userChatPrefs";
@@ -71,6 +82,8 @@ import {
   BellOffIcon,
   BubblePaletteIcon,
   CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   CloseIcon,
   CopyIcon,
   EditIcon,
@@ -82,8 +95,10 @@ import {
   MicVoiceIcon,
   MoreVerticalIcon,
   PaperclipIcon,
+  PinIcon,
   PlusIcon,
   ReplyIcon,
+  SearchIcon,
   SendIcon,
   ShieldCheckIcon,
   SmilePlusIcon,
@@ -112,6 +127,20 @@ import { AnimatedMediaImg, Avatar } from "./Avatar";
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
 const EMPTY_MESSAGES: ChatMessage[] = [];
+
+function detectDmMentionQuery(
+  text: string,
+  cursor: number,
+): { start: number; query: string } | null {
+  const safeCursor = Math.max(0, Math.min(cursor, text.length));
+  const before = text.slice(0, safeCursor);
+  const atIndex = before.lastIndexOf("@");
+  if (atIndex === -1) return null;
+  if (atIndex > 0 && !/[\s([{]/.test(before[atIndex - 1])) return null;
+  const query = before.slice(atIndex + 1);
+  if (/[\s@[\]()]/.test(query) || query.length > 32) return null;
+  return { start: atIndex, query };
+}
 
 interface MessageMenuState {
   x: number;
@@ -234,6 +263,7 @@ const ChatHistory = memo(function ChatHistory({
   onOpenMessageMenu,
   onOpenMessageMenuAt,
   onOpenImage,
+  activeSearchMatchId,
   onReactToMessage,
   onOpenReactionPicker,
   onSwipeReply,
@@ -253,6 +283,7 @@ const ChatHistory = memo(function ChatHistory({
   onOpenMessageMenu: (event: MouseEvent, message: ChatMessage) => void;
   onOpenMessageMenuAt: (x: number, y: number, message: ChatMessage) => void;
   onOpenImage: (url: string) => void;
+  activeSearchMatchId?: string | null;
   onReactToMessage: (message: ChatMessage, emoji: string) => void;
   onOpenReactionPicker: (x: number, y: number, message: ChatMessage) => void;
   onSwipeReply: (message: ChatMessage) => void;
@@ -422,6 +453,23 @@ const ChatHistory = memo(function ChatHistory({
     [messages, visibleCount],
   );
 
+  useEffect(() => {
+    if (!activeSearchMatchId) return;
+    const idx = messages.findIndex((m) => m.id === activeSearchMatchId);
+    if (idx >= 0) {
+      const needed = messages.length - idx + 8;
+      if (needed > visibleCount) {
+        setVisibleCount(Math.min(messages.length, needed));
+        return;
+      }
+    }
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`message-${activeSearchMatchId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [activeSearchMatchId, messages, visibleCount]);
+
   useLayoutEffect(() => {
     const anchor = prependAnchorRef.current;
     const el = messagesRef.current;
@@ -549,11 +597,31 @@ const ChatHistory = memo(function ChatHistory({
           );
         }
         const callInvite = parseCallInvite(message.body);
+        const viewOnceEnv = !callInvite
+          ? parseViewOnceEnvelope(message.body, {
+              url: message.attachmentUrl,
+              name: message.attachmentName,
+              type: message.attachmentType,
+            })
+          : null;
+        const isViewOnce = Boolean(viewOnceEnv);
+        const mentionedMe =
+          !mine &&
+          !message.unsentAt &&
+          !isViewOnce &&
+          Boolean(
+            me.username &&
+              new RegExp(
+                `(?:^|[\\s(])@(?:everyone|${me.username.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")})\\b`,
+                "i",
+              ).test(message.body),
+          );
         const isAudioNote =
-          !callInvite && isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
-        const isImage = !callInvite && message.attachmentType?.startsWith("image/");
+          !callInvite && !isViewOnce && isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
+        const isImage = !callInvite && !isViewOnce && message.attachmentType?.startsWith("image/");
         const isVideo =
           !callInvite &&
+          !isViewOnce &&
           !isAudioNote &&
           (message.attachmentType?.startsWith("video/") ||
             /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
@@ -572,7 +640,9 @@ const ChatHistory = memo(function ChatHistory({
               className={`msg-row ${mine ? "mine" : "theirs"} ${
                 isJustArrived ? "msg-just-arrived" : ""
               } ${
-                highlightedJumpId === message.id ? "jump-highlight-pulse" : ""
+                highlightedJumpId === message.id || activeSearchMatchId === message.id
+                  ? "jump-highlight-pulse"
+                  : ""
               }`}
               id={`message-${message.id}`}
             >
@@ -589,7 +659,7 @@ const ChatHistory = memo(function ChatHistory({
                     styleId={callInvite ? "default" : (message.bubbleStyle ?? "default")}
                     mine={mine}
                     unsent={Boolean(message.unsentAt)}
-                    className={mine ? "mine" : "theirs"}
+                    className={`${mine ? "mine" : "theirs"} ${mentionedMe ? "bubble-mentioned" : ""}`}
                     onContextMenu={
                       message.id.startsWith("pending-")
                         ? undefined
@@ -634,6 +704,13 @@ const ChatHistory = memo(function ChatHistory({
                     <p className="unsent-copy">This message was unsent</p>
                   ) : callInvite ? (
                     <CallMessageCard invite={callInvite} isMine={mine} peer={friend} />
+                  ) : viewOnceEnv ? (
+                    <ViewOnceMessageBubble
+                      messageId={message.id}
+                      senderName={mine ? "You" : friend.displayName}
+                      envelope={viewOnceEnv}
+                      mine={mine}
+                    />
                   ) : (
                     <>
                       {message.attachmentUrl &&
@@ -760,44 +837,54 @@ const ChatHistory = memo(function ChatHistory({
 });
 
 const DirectChatComposer = memo(function DirectChatComposer({
-  friendId,
-  friendUsername,
+  friend,
+  friendStatus,
   initialDraft,
   hasFile,
+  viewOnceActive,
+  onToggleViewOnce,
   isFriendBlocked,
   isEditing,
   composerRef,
   fileInputRef,
-  onSelectFile,
+  onAddFiles,
   onStartVoiceNote,
   onMobileActivate,
   onStickerSent,
   onTypingSignal,
   onSubmitDraft,
 }: {
-  friendId: string;
-  friendUsername: string;
+  friend: JaUser;
+  friendStatus?: "online" | "away" | "dnd" | "offline";
   initialDraft: string;
   hasFile: boolean;
+  viewOnceActive: boolean;
+  onToggleViewOnce: () => void;
   isFriendBlocked: boolean;
   isEditing: boolean;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
-  onSelectFile: (file: File | null) => void;
+  onAddFiles: (files: File[]) => void;
   onStartVoiceNote: () => void;
   onMobileActivate: () => void;
   onStickerSent: () => void;
   onTypingSignal: (hasText: boolean) => void;
   onSubmitDraft: (body: string) => void;
 }) {
+  const friendId = friend.id;
+  const friendUsername = friend.username;
   const draftKey = `dm:${friendId}`;
-  const [draft, setDraft] = useState(() => (isEditing ? initialDraft : initialDraft || getDraft(draftKey)));
-  const prevLenRef = useRef(draft.length);
+  const startText = isEditing ? initialDraft : initialDraft || getDraft(draftKey);
+  const [draft, setDraft] = useState(startText);
+  const [cursorPos, setCursorPos] = useState(startText.length);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissedAt, setMentionDismissedAt] = useState<number | null>(null);
+  const prevLenRef = useRef(startText.length);
 
   useLayoutEffect(() => {
-    const startText = isEditing ? initialDraft : initialDraft || getDraft(draftKey);
-    syncComposerTextareaHeight(composerRef.current, 0, startText);
-    prevLenRef.current = startText.length;
+    const seed = isEditing ? initialDraft : initialDraft || getDraft(draftKey);
+    syncComposerTextareaHeight(composerRef.current, 0, seed);
+    prevLenRef.current = seed.length;
   }, [composerRef, draftKey, initialDraft, isEditing]);
 
   useEffect(() => {
@@ -813,12 +900,78 @@ const DirectChatComposer = memo(function DirectChatComposer({
     return () => window.cancelAnimationFrame(raf);
   }, [composerRef, isEditing]);
 
-  function handleChange(next: string) {
+  const activeMentionMatch = useMemo(() => {
+    const match = detectDmMentionQuery(draft, cursorPos);
+    if (!match) return null;
+    if (mentionDismissedAt !== null && mentionDismissedAt === match.start) return null;
+    return match;
+  }, [cursorPos, draft, mentionDismissedAt]);
+
+  const mentionCandidates = useMemo(() => {
+    if (!activeMentionMatch) return [];
+    const q = activeMentionMatch.query.toLowerCase();
+    const list: Array<
+      | { kind: "everyone"; handle: string; subtitle: string }
+      | { kind: "peer"; handle: string; user: JaUser }
+    > = [];
+    if ("everyone".includes(q)) {
+      list.push({
+        kind: "everyone",
+        handle: "everyone",
+        subtitle: "Notify everyone in this chat",
+      });
+    }
+    if (
+      friend.username.toLowerCase().includes(q) ||
+      friend.displayName.toLowerCase().includes(q)
+    ) {
+      list.push({
+        kind: "peer",
+        handle: friend.username,
+        user: friend,
+      });
+    }
+    return list;
+  }, [activeMentionMatch, friend]);
+
+  const safeMentionIndex =
+    mentionCandidates.length > 0 ? Math.min(mentionIndex, mentionCandidates.length - 1) : 0;
+
+  function applyMention(handle: string) {
+    if (!activeMentionMatch) return;
+    const before = draft.slice(0, activeMentionMatch.start);
+    const after = draft.slice(cursorPos);
+    const insertion = `@${handle} `;
+    const nextDraft = `${before}${insertion}${after.replace(/^\s+/, "")}`;
+    const nextCursor = before.length + insertion.length;
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = nextDraft.length;
+    setDraft(nextDraft);
+    if (!isEditing) saveStoredDraft(draftKey, nextDraft);
+    setCursorPos(nextCursor);
+    setMentionIndex(0);
+    setMentionDismissedAt(null);
+    syncComposerTextareaHeight(composerRef.current, prevLen, nextDraft);
+    window.requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    });
+  }
+
+  function handleChange(next: string, selectionStart?: number | null) {
     const prevLen = prevLenRef.current;
     prevLenRef.current = next.length;
     setDraft(next);
     if (!isEditing) {
       saveStoredDraft(draftKey, next);
+    }
+    if (next.includes("@") || activeMentionMatch !== null) {
+      setCursorPos(selectionStart ?? next.length);
+      setMentionIndex(0);
+      setMentionDismissedAt(null);
     }
     syncComposerTextareaHeight(composerRef.current, prevLen, next);
     if (!isEditing) {
@@ -835,6 +988,9 @@ const DirectChatComposer = memo(function DirectChatComposer({
       document.activeElement === composerRef.current && isSoftKeyboardCurrentlyOpen();
     prevLenRef.current = 0;
     setDraft("");
+    setCursorPos(0);
+    setMentionIndex(0);
+    setMentionDismissedAt(null);
     if (!isEditing) {
       clearDraft(draftKey);
     }
@@ -846,85 +1002,202 @@ const DirectChatComposer = memo(function DirectChatComposer({
   }
 
   return (
-    <form className="composer" onSubmit={handleSubmit}>
-      <input
-        ref={fileInputRef}
-        type="file"
-        hidden
-        onChange={(e) => {
-          onSelectFile(e.target.files?.[0] ?? null);
-          e.currentTarget.value = "";
-        }}
-      />
-      <ComposerPlusMenu
-        targetKind="dm"
-        targetId={friendId}
-        targetLabel={`@${friendUsername}`}
-        disabled={isFriendBlocked || isEditing}
-        currentDraft={draft}
-        onConsumeDraft={() => handleChange("")}
-        onUploadAttachment={() => fileInputRef.current?.click()}
-      />
-      <StickerPicker
-        friendId={friendId}
-        disabled={isFriendBlocked || isEditing}
-        onSent={onStickerSent}
-      />
-      <button
-        type="button"
-        className="icon-btn voice-note-btn"
-        title="Record voice note"
-        aria-label="Record voice note"
-        disabled={isFriendBlocked || isEditing}
-        onClick={onStartVoiceNote}
-      >
-        <MicVoiceIcon size={18} />
-      </button>
-      <textarea
-        ref={composerRef}
-        value={draft}
-        onChange={(e) => handleChange(e.target.value)}
-        onFocus={onMobileActivate}
-        onClick={onMobileActivate}
-        placeholder={
-          isFriendBlocked
-            ? "Unblock to message"
-            : isEditing
-              ? "Edit message…"
-              : "Message…"
-        }
-        aria-label={`Message @${friendUsername}`}
-        disabled={isFriendBlocked}
-        rows={1}
-        onPaste={(e) => {
-          if (isFriendBlocked || isEditing) return;
-          const pasted = extractClipboardFile(e.clipboardData);
-          if (pasted) {
-            e.preventDefault();
-            onSelectFile(pasted);
+    <div className="composer-wrap">
+      {mentionCandidates.length > 0 && (
+        <div className="mention-autocomplete" role="listbox" aria-label="Mention someone">
+          <div className="mention-autocomplete-header">
+            Mention matching <strong>@{activeMentionMatch?.query ?? ""}</strong>
+          </div>
+          {mentionCandidates.map((candidate, idx) => {
+            const isActive = idx === safeMentionIndex;
+            if (candidate.kind === "everyone") {
+              return (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={isActive}
+                  key="dm-mention-everyone"
+                  className={`mention-option ${isActive ? "active" : ""}`}
+                  onMouseEnter={() => setMentionIndex(idx)}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applyMention("everyone");
+                  }}
+                >
+                  <span className="mention-everyone-avatar" aria-hidden="true">
+                    @
+                  </span>
+                  <span className="mention-option-text">
+                    <strong>@everyone</strong>
+                    <small className="muted">{candidate.subtitle}</small>
+                  </span>
+                  <span className="mention-role-tag everyone">Ping all</span>
+                </button>
+              );
+            }
+            return (
+              <button
+                type="button"
+                role="option"
+                aria-selected={isActive}
+                key={`dm-mention-${candidate.user.id}`}
+                className={`mention-option ${isActive ? "active" : ""}`}
+                onMouseEnter={() => setMentionIndex(idx)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  applyMention(candidate.user.username);
+                }}
+              >
+                <Avatar user={candidate.user} size={30} status={friendStatus} />
+                <span className="mention-option-text">
+                  <strong>{candidate.user.displayName}</strong>
+                  <small className="muted">@{candidate.user.username}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <form className="composer" onSubmit={handleSubmit}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            const picked = Array.from(e.target.files ?? []);
+            if (picked.length > 0) onAddFiles(picked);
+            e.currentTarget.value = "";
+          }}
+        />
+        <ComposerPlusMenu
+          targetKind="dm"
+          targetId={friendId}
+          targetLabel={`@${friendUsername}`}
+          disabled={isFriendBlocked || isEditing}
+          currentDraft={draft}
+          onConsumeDraft={() => handleChange("", 0)}
+          onUploadAttachment={() => fileInputRef.current?.click()}
+          viewOnceActive={viewOnceActive}
+          onToggleViewOnce={onToggleViewOnce}
+        />
+        <StickerPicker
+          friendId={friendId}
+          disabled={isFriendBlocked || isEditing}
+          onSent={onStickerSent}
+        />
+        <button
+          type="button"
+          className="icon-btn voice-note-btn"
+          title="Record voice note"
+          aria-label="Record voice note"
+          disabled={isFriendBlocked || isEditing}
+          onClick={onStartVoiceNote}
+        >
+          <MicVoiceIcon size={18} />
+        </button>
+        <div className={`composer-input-shell ${viewOnceActive && !isEditing ? "has-viewonce" : ""}`}>
+          <textarea
+            ref={composerRef}
+            value={draft}
+            onChange={(e) => handleChange(e.target.value, e.currentTarget.selectionStart)}
+            onFocus={onMobileActivate}
+            onClick={(e) => {
+              onMobileActivate();
+              if (draft.includes("@")) {
+                setCursorPos(e.currentTarget.selectionStart ?? 0);
+              }
+            }}
+            onKeyUp={(e) => {
+              if (
+                draft.includes("@") &&
+                e.key !== "ArrowDown" &&
+                e.key !== "ArrowUp" &&
+                e.key !== "Enter" &&
+                e.key !== "Escape"
+              ) {
+                setCursorPos(e.currentTarget.selectionStart ?? 0);
+              }
+            }}
+            placeholder={
+              isFriendBlocked
+                ? "Unblock to message"
+                : isEditing
+                  ? "Edit message…"
+                  : viewOnceActive
+                    ? "View once message…"
+                    : "Message…"
+            }
+            aria-label={`Message @${friendUsername}`}
+            disabled={isFriendBlocked}
+            rows={1}
+            onPaste={(e) => {
+              if (isFriendBlocked || isEditing) return;
+              const pasted = extractClipboardFile(e.clipboardData);
+              if (pasted) {
+                e.preventDefault();
+                onAddFiles([pasted]);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (mentionCandidates.length > 0 && activeMentionMatch) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMentionIndex((cur) => (cur + 1) % mentionCandidates.length);
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMentionIndex(
+                    (cur) => (cur - 1 + mentionCandidates.length) % mentionCandidates.length,
+                  );
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  const chosen = mentionCandidates[safeMentionIndex];
+                  if (chosen) applyMention(chosen.handle);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMentionDismissedAt(activeMentionMatch.start);
+                  return;
+                }
+              }
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmit();
+              }
+            }}
+          />
+          {viewOnceActive && !isEditing && (
+            <button
+              type="button"
+              className="composer-viewonce-badge"
+              title="View once enabled (click to turn off)"
+              aria-label="Disable view once"
+              onClick={onToggleViewOnce}
+            >
+              <ViewOnceRingIcon size={17} />
+            </button>
+          )}
+        </div>
+        <button
+          className="send-btn"
+          type="submit"
+          disabled={
+            isFriendBlocked ||
+            (isEditing ? !draft.trim() : !draft.trim() && !hasFile)
           }
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            handleSubmit();
-          }
-        }}
-      />
-      <button
-        className="send-btn"
-        type="submit"
-        disabled={
-          isFriendBlocked ||
-          (isEditing ? !draft.trim() : !draft.trim() && !hasFile)
-        }
-        onPointerDown={(event) => event.preventDefault()}
-        onMouseDown={(event) => event.preventDefault()}
-        aria-label={isEditing ? "Save edit" : "Send message"}
-      >
-        {isEditing ? <CheckIcon size={19} strokeWidth={2.6} /> : <SendIcon size={18} />}
-      </button>
-    </form>
+          onPointerDown={(event) => event.preventDefault()}
+          onMouseDown={(event) => event.preventDefault()}
+          aria-label={isEditing ? "Save edit" : "Send message"}
+        >
+          {isEditing ? <CheckIcon size={19} strokeWidth={2.6} /> : <SendIcon size={18} />}
+        </button>
+      </form>
+    </div>
   );
 });
 
@@ -952,7 +1225,12 @@ export function ChatView({
     toggleMessageReaction,
   } = store;
   const [composerSeed, setComposerSeed] = useState({ nonce: 0, text: "" });
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [viewOnceActive, setViewOnceActive] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatchIdx, setSearchMatchIdx] = useState(0);
+  const pinnedMessages = usePinnedMessages(`dm:${friend.id}`);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
   const [deletedUndoState, setDeletedUndoState] = useState<DeletedForMeUndoState | null>(null);
@@ -1037,6 +1315,23 @@ export function ChatView({
     [locallyHiddenIds, rawDisplayedMessages],
   );
   const displayedMessages = useUnsendThanosWatcher(visibleRawDisplayedMessages, `dm:${friend.id}`);
+  const searchMatchIds = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!searchOpen || !q) return [];
+    return displayedMessages
+      .filter(
+        (m) =>
+          !m.unsentAt &&
+          !isViewOnceBody(m.body) &&
+          (formatPreviewMessageText(m.body).toLowerCase().includes(q) ||
+            (m.attachmentName ?? "").toLowerCase().includes(q)),
+      )
+      .map((m) => m.id);
+  }, [displayedMessages, searchOpen, searchQuery]);
+  const safeSearchMatchIdx =
+    searchMatchIds.length > 0 ? Math.min(searchMatchIdx, searchMatchIds.length - 1) : 0;
+  const activeSearchMatchId =
+    searchMatchIds.length > 0 ? searchMatchIds[safeSearchMatchIdx] : null;
   const activeWallpaperUrl = useMemo(() => {
     for (let i = displayedMessages.length - 1; i >= 0; i--) {
       const msg = displayedMessages[i];
@@ -1402,8 +1697,13 @@ export function ChatView({
     [publishTyping],
   );
 
+  const handleAddFiles = useCallback((incoming: File[]) => {
+    if (incoming.length === 0) return;
+    setFiles((prev) => [...prev, ...incoming].slice(0, 20));
+  }, []);
+
   const handlePastedChatFile = useCallback((pasted: File) => {
-    setFile(pasted);
+    setFiles((prev) => [...prev, pasted].slice(0, 20));
     window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
   }, []);
 
@@ -1428,32 +1728,49 @@ export function ChatView({
         }
         return;
       }
-      if ((!submittedBody && !file) || isFriendBlocked) return;
+      if ((!submittedBody && files.length === 0) || isFriendBlocked) return;
       const sentBody = submittedBody;
-      const sentFile = file;
+      const queuedFiles = files;
       const sentReply = replyTo;
-      const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
-      lastPendingMessageAtRef.current = sentAt;
-      const pendingId = `pending-${sentAt}`;
-      const attachmentUrl = sentFile ? URL.createObjectURL(sentFile) : undefined;
-      if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
-      setPendingMessages((current) => [
-        ...current.slice(-299),
-        {
-          id: pendingId,
-          senderId: me?.id ?? "",
-          receiverId: friend.id,
-          body: sentBody,
-          bubbleStyle: getSavedOutgoingBubbleStyle(),
-          attachmentUrl,
-          attachmentName: sentFile?.name,
-          attachmentType: sentFile?.type,
-          createdAt: sentAt,
-          deliveryStatus: "sent",
-        },
-      ]);
-      window.requestAnimationFrame(scrollToBottom);
-      setFile(null);
+
+      if (viewOnceActive) {
+        const photoFile = queuedFiles.find((f) => f.type.startsWith("image/")) ?? null;
+        const audioFile =
+          queuedFiles.find((f) => isVoiceNoteOrAudio(f.type, f.name)) ?? null;
+        if (!sentBody && !photoFile && !audioFile) {
+          setError("View once supports text, photos, and audio attachments.");
+          return;
+        }
+        setFiles([]);
+        setViewOnceActive(false);
+        setReplyTo(null);
+        setError(null);
+        if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+        if (typingActive.current) {
+          typingActive.current = false;
+          publishTyping(false);
+        }
+        try {
+          const voBody = await buildEncryptedViewOnceBody({
+            text: sentBody,
+            photoFile,
+            audioFile,
+          });
+          await sendMessage(friend.id, voBody, undefined, sentReply?.id);
+          if (soundsEnabled) playMessageSound("sent");
+          window.requestAnimationFrame(scrollToBottom);
+        } catch (err) {
+          if (sentBody) {
+            setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: sentBody }));
+          }
+          if (queuedFiles.length > 0) setFiles(queuedFiles);
+          setViewOnceActive(true);
+          setError(friendlyError(err, "Couldn't send the view once message."));
+        }
+        return;
+      }
+
+      setFiles([]);
       setReplyTo(null);
       setError(null);
       if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
@@ -1461,23 +1778,63 @@ export function ChatView({
         typingActive.current = false;
         publishTyping(false);
       }
+
+      const batches: Array<{ body: string; file: File | null; replyId?: string }> =
+        queuedFiles.length === 0
+          ? [{ body: sentBody, file: null, replyId: sentReply?.id }]
+          : queuedFiles.map((f, idx) => ({
+              body: idx === 0 ? sentBody : "",
+              file: f,
+              replyId: idx === 0 ? sentReply?.id : undefined,
+            }));
+
+      const createdPendingIds: string[] = [];
+      for (const item of batches) {
+        const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
+        lastPendingMessageAtRef.current = sentAt;
+        const pendingId = `pending-${sentAt}`;
+        createdPendingIds.push(pendingId);
+        const attachmentUrl = item.file ? URL.createObjectURL(item.file) : undefined;
+        if (attachmentUrl) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
+        setPendingMessages((current) => [
+          ...current.slice(-299),
+          {
+            id: pendingId,
+            senderId: me?.id ?? "",
+            receiverId: friend.id,
+            body: item.body,
+            bubbleStyle: getSavedOutgoingBubbleStyle(),
+            attachmentUrl,
+            attachmentName: item.file?.name,
+            attachmentType: item.file?.type,
+            createdAt: sentAt,
+            deliveryStatus: "sent",
+          },
+        ]);
+      }
+      window.requestAnimationFrame(scrollToBottom);
+
       try {
-        await sendMessage(friend.id, sentBody, sentFile ?? undefined, sentReply?.id);
+        for (let i = 0; i < batches.length; i++) {
+          const item = batches[i];
+          const pendingId = createdPendingIds[i];
+          await sendMessage(friend.id, item.body, item.file ?? undefined, item.replyId);
+          window.setTimeout(() => removePendingMessage(pendingId), 1500);
+        }
         if (soundsEnabled) playMessageSound("sent");
-        window.setTimeout(() => removePendingMessage(pendingId), 1500);
       } catch (err) {
-        removePendingMessage(pendingId);
+        for (const pid of createdPendingIds) removePendingMessage(pid);
         if (sentBody) {
           setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: sentBody }));
         }
-        if (sentFile) setFile((current) => current ?? sentFile);
+        if (queuedFiles.length > 0) setFiles((cur) => (cur.length > 0 ? cur : queuedFiles));
         setError(friendlyError(err, "Couldn't send the message. Please try again."));
       }
     },
     [
       editMessage,
       editingMessage,
-      file,
+      files,
       friend.id,
       isFriendBlocked,
       me?.id,
@@ -1487,6 +1844,7 @@ export function ChatView({
       scrollToBottom,
       sendMessage,
       soundsEnabled,
+      viewOnceActive,
     ],
   );
 
@@ -1531,6 +1889,33 @@ export function ChatView({
     if (isFriendBlocked) return;
     setRecordingVoiceNote(false);
     const sentReply = replyTo;
+    if (viewOnceActive) {
+      const draftKey = `dm:${friend.id}`;
+      const draftCaption = getDraft(draftKey).trim();
+      const stagedPhoto = files.find((f) => f.type.startsWith("image/")) ?? null;
+      setViewOnceActive(false);
+      setFiles([]);
+      if (draftCaption) {
+        clearDraft(draftKey);
+        setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
+      }
+      setReplyTo(null);
+      setError(null);
+      try {
+        const voBody = await buildEncryptedViewOnceBody({
+          text: draftCaption,
+          photoFile: stagedPhoto,
+          audioFile: voiceFile,
+        });
+        await sendMessage(friend.id, voBody, undefined, sentReply?.id);
+        if (soundsEnabled) playMessageSound("sent");
+        window.requestAnimationFrame(scrollToBottom);
+      } catch (err) {
+        setViewOnceActive(true);
+        setError(friendlyError(err, "Couldn't send the view once voice note."));
+      }
+      return;
+    }
     const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
     lastPendingMessageAtRef.current = sentAt;
     const pendingId = `pending-${sentAt}`;
@@ -1692,7 +2077,8 @@ export function ChatView({
     );
     setEditingMessage(message);
     setReplyTo(null);
-    setFile(null);
+    setFiles([]);
+    setViewOnceActive(false);
     setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
     closeMessageMenu();
   }
@@ -1806,6 +2192,23 @@ export function ChatView({
         <div className="chat-header-actions" aria-label="Chat actions">
           <button
             type="button"
+            className={`icon-btn ${searchOpen ? "menu-open" : ""}`}
+            title="Search in chat"
+            aria-label="Search in chat"
+            onClick={() => {
+              setSearchOpen((open) => {
+                if (open) {
+                  setSearchQuery("");
+                  setSearchMatchIdx(0);
+                }
+                return !open;
+              });
+            }}
+          >
+            <SearchIcon size={18} />
+          </button>
+          <button
+            type="button"
             className="icon-btn chat-call-btn"
             title={`Voice call ${friend.displayName}`}
             aria-label={`Voice call ${friend.displayName}`}
@@ -1843,6 +2246,118 @@ export function ChatView({
           </button>
         </div>
       </header>
+
+      {searchOpen && (
+        <div className="chat-search-bar" role="search">
+          <SearchIcon size={16} />
+          <input
+            type="search"
+            value={searchQuery}
+            autoFocus
+            placeholder={`Search in chat with ${friend.displayName}…`}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setSearchMatchIdx(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && searchMatchIds.length > 0) {
+                e.preventDefault();
+                setSearchMatchIdx((cur) =>
+                  e.shiftKey
+                    ? (cur - 1 + searchMatchIds.length) % searchMatchIds.length
+                    : (cur + 1) % searchMatchIds.length,
+                );
+              } else if (e.key === "Escape") {
+                setSearchOpen(false);
+                setSearchQuery("");
+              }
+            }}
+          />
+          {searchQuery.trim() && (
+            <span className="chat-search-counter">
+              {searchMatchIds.length === 0
+                ? "0 matches"
+                : `${safeSearchMatchIdx + 1} / ${searchMatchIds.length}`}
+            </span>
+          )}
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Previous match"
+            disabled={searchMatchIds.length === 0}
+            onClick={() =>
+              setSearchMatchIdx(
+                (cur) => (cur - 1 + searchMatchIds.length) % searchMatchIds.length,
+              )
+            }
+          >
+            <ChevronUpIcon size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Next match"
+            disabled={searchMatchIds.length === 0}
+            onClick={() =>
+              setSearchMatchIdx((cur) => (cur + 1) % searchMatchIds.length)
+            }
+          >
+            <ChevronDownIcon size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Close search"
+            onClick={() => {
+              setSearchOpen(false);
+              setSearchQuery("");
+            }}
+          >
+            <CloseIcon size={16} />
+          </button>
+        </div>
+      )}
+
+      {pinnedMessages.length > 0 && (
+        <div className="chat-pinned-banner" role="region" aria-label="Pinned message">
+          <PinIcon size={15} filled />
+          <button
+            type="button"
+            className="chat-pinned-banner-jump"
+            onClick={() => {
+              const latestPin = pinnedMessages[0];
+              if (!latestPin) return;
+              document
+                .getElementById(`message-${latestPin.messageId}`)
+                ?.scrollIntoView({ behavior: "smooth", block: "center" });
+            }}
+          >
+            <strong>
+              Pinned message
+              {pinnedMessages.length > 1 ? ` (${pinnedMessages.length})` : ""}
+            </strong>
+            <span>{pinnedMessages[0].previewText}</span>
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="Unpin message"
+            aria-label="Unpin message"
+            onClick={() => {
+              const latestPin = pinnedMessages[0];
+              if (!latestPin) return;
+              togglePinnedMessage({
+                conversationKey: `dm:${friend.id}`,
+                messageId: latestPin.messageId,
+                senderName: latestPin.senderName,
+                previewText: latestPin.previewText,
+              });
+            }}
+          >
+            <CloseIcon size={15} />
+          </button>
+        </div>
+      )}
 
       {showUnsendWarning && (
         <div className="unsend-warning-banner" role="status">
@@ -1883,6 +2398,7 @@ export function ChatView({
         onOpenMessageMenu={openMessageMenu}
         onOpenMessageMenuAt={openMessageMenuAt}
         onOpenImage={openImagePreview}
+        activeSearchMatchId={activeSearchMatchId}
         onReactToMessage={reactToMessage}
         onOpenReactionPicker={handleOpenReactionPicker}
         onSwipeReply={handleSwipeReply}
@@ -1895,14 +2411,29 @@ export function ChatView({
         </div>
       )}
 
-      {file && (
-        <div className="attach-preview">
-          <span>
-            <PaperclipIcon size={14} /> {file.name}
-          </span>
-          <button className="mini-btn" onClick={() => setFile(null)}>
-            <CloseIcon size={12} /> Remove
-          </button>
+      {files.length > 0 && (
+        <div className="attach-preview-list">
+          {files.map((item, idx) => (
+            <span className="attach-preview-chip" key={`${item.name}-${item.size}-${idx}`}>
+              <PaperclipIcon size={13} />
+              <span className="attach-preview-chip-name">{item.name}</span>
+              <button
+                type="button"
+                className="attach-preview-chip-remove"
+                aria-label={`Remove ${item.name}`}
+                onClick={() =>
+                  setFiles((cur) => cur.filter((_, fileIdx) => fileIdx !== idx))
+                }
+              >
+                <CloseIcon size={12} />
+              </button>
+            </span>
+          ))}
+          {files.length > 1 && (
+            <button type="button" className="mini-btn" onClick={() => setFiles([])}>
+              Clear all ({files.length})
+            </button>
+          )}
         </div>
       )}
 
@@ -1940,15 +2471,17 @@ export function ChatView({
       ) : (
         <DirectChatComposer
           key={`${friend.id}:${editingMessage?.id ?? "new"}:${composerSeed.nonce}`}
-          friendId={friend.id}
-          friendUsername={friend.username}
+          friend={friend}
+          friendStatus={friendActivity?.status}
           initialDraft={editingMessage ? editingMessage.body : composerSeed.text}
-          hasFile={Boolean(file)}
+          hasFile={files.length > 0}
+          viewOnceActive={viewOnceActive}
+          onToggleViewOnce={() => setViewOnceActive((v) => !v)}
           isFriendBlocked={isFriendBlocked}
           isEditing={Boolean(editingMessage)}
           composerRef={composerRef}
           fileInputRef={fileInput}
-          onSelectFile={setFile}
+          onAddFiles={handleAddFiles}
           onStartVoiceNote={handleStartVoiceNote}
           onMobileActivate={handleMobileComposerActivate}
           onStickerSent={scrollToBottom}
@@ -1971,6 +2504,35 @@ export function ChatView({
             </span>{" "}
             Reply
           </button>
+          {!messageMenu.message.unsentAt && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const msg = messageMenu.message;
+                togglePinnedMessage({
+                  conversationKey: `dm:${friend.id}`,
+                  messageId: msg.id,
+                  senderName: msg.senderId === me.id ? "You" : friend.displayName,
+                  previewText:
+                    formatPreviewMessageText(msg.body) ||
+                    msg.attachmentName ||
+                    "Attachment",
+                });
+                closeMessageMenu();
+              }}
+            >
+              <span>
+                <PinIcon
+                  size={15}
+                  filled={isMessagePinned(`dm:${friend.id}`, messageMenu.message.id)}
+                />
+              </span>{" "}
+              {isMessagePinned(`dm:${friend.id}`, messageMenu.message.id)
+                ? "Unpin message"
+                : "Pin message"}
+            </button>
+          )}
           {!messageMenu.message.unsentAt &&
             messageMenu.message.senderId === me.id && (
               <button

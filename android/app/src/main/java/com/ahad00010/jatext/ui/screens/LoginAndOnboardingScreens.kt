@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Group
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.SwapHoriz
@@ -196,6 +197,7 @@ fun NativeLoginScreen(
     var authTab by remember { mutableStateOf("signin") } // "signin" | "signup"
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var totpCode by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -383,6 +385,85 @@ fun NativeLoginScreen(
                         }
                     }
 
+                    if (!sessionState.pendingTwoFactorChallengeToken.isNullOrBlank()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            JaWebGhostButton(
+                                text = "Back",
+                                leadingIcon = Icons.AutoMirrored.Rounded.ArrowBack,
+                                onClick = {
+                                    totpCode = ""
+                                    errorMsg = null
+                                    vm.cancelTwoFactorChallenge()
+                                },
+                            )
+                        }
+                        Text(
+                            text = "2FA",
+                            color = loginPalette.textPrimary,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                        Text(
+                            text = "Enter your authentication code",
+                            color = loginPalette.textSecondary,
+                            fontSize = 14.5.sp,
+                        )
+                        JaWebInput(
+                            value = totpCode,
+                            onValueChange = {
+                                totpCode = it
+                                errorMsg = null
+                                vm.clearAuthError()
+                            },
+                            label = "Authentication code",
+                            placeholder = "000000",
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Ascii,
+                                imeAction = ImeAction.Done,
+                            ),
+                        )
+                        if (!activeError.isNullOrBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0x1FEF4444))
+                                    .border(1.dp, Color(0x80EF4444), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 13.dp, vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = activeError,
+                                    color = Color(0xFFFCA5A5),
+                                    fontSize = 13.5.sp,
+                                    lineHeight = 19.sp,
+                                )
+                            }
+                        }
+                        JaWebPrimaryButton(
+                            text = if (busy) "Verifying..." else "Verify",
+                            enabled = !busy && totpCode.trim().length >= 6,
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                busy = true
+                                errorMsg = null
+                                scope.launch {
+                                    try {
+                                        vm.verifyTwoFactorLogin(totpCode)
+                                        totpCode = ""
+                                    } catch (e: Throwable) {
+                                        errorMsg = e.message ?: "Invalid authentication code."
+                                    } finally {
+                                        busy = false
+                                    }
+                                }
+                            },
+                        )
+                    } else {
+
                     Text(
                         text = when {
                             isAddingAnotherAccount && authTab == "signin" -> "Add another account"
@@ -427,6 +508,38 @@ fun NativeLoginScreen(
                                 fontWeight = FontWeight.Bold,
                             )
                         }
+                    }
+
+                    /* ==================== Passkey Sign-In Pill ==================== */
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(loginPalette.bgTertiary)
+                            .border(1.dp, loginPalette.borderStrong, RoundedCornerShape(999.dp))
+                            .clickable(enabled = !googleBusy && !busy && activity != null) {
+                                val act = activity ?: return@clickable
+                                errorMsg = null
+                                vm.clearAuthError()
+                                vm.startPasskeySignIn(act, email.takeIf { it.isNotBlank() })
+                            }
+                            .padding(horizontal = 20.dp, vertical = 11.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Key,
+                            contentDescription = "Passkey",
+                            tint = loginPalette.accent,
+                            modifier = Modifier.size(19.dp),
+                        )
+                        Spacer(Modifier.width(9.dp))
+                        Text(
+                            text = "Sign in with Passkey",
+                            color = loginPalette.textPrimary,
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
 
                     /* ==================== .divider ("or") ==================== */
@@ -547,6 +660,7 @@ fun NativeLoginScreen(
                             }
                         },
                     )
+                    } // end normal login vs 2FA challenge
 
                     /* ==================== .login-legal-footer ==================== */
                     Column(

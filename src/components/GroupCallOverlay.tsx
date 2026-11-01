@@ -22,6 +22,7 @@ import {
 } from "./CallIcons";
 import { formatCallDuration, type SoundboardEffectId } from "../lib/calling";
 import { useGroupCall } from "../lib/groupCalling";
+import { useCustomSoundboards } from "../lib/securityClient";
 import { useJaText } from "../lib/store";
 import { AnimatedMediaImg, Avatar } from "./Avatar";
 import { MobileScreenShareSheet, SharedMediaPlaybackBar } from "./MobileScreenShareSheet";
@@ -137,10 +138,12 @@ export function GroupCallOverlay() {
     toggleCaptions,
     sendCallReaction,
     playSoundboard,
+    playCustomSoundboard,
     setMinimized,
     setLayoutMode,
     dismissCallError,
   } = useGroupCall();
+  const customSoundboards = useCustomSoundboards();
 
   const [elapsedSec, setElapsedSec] = useState(0);
   const [openDrawer, setOpenDrawer] = useState<"none" | "reactions" | "soundboard">("none");
@@ -776,6 +779,17 @@ export function GroupCallOverlay() {
             >
               {renderSoundboardIcon(item.id)}
               <span>{item.label}</span>
+            </button>
+          ))}
+          {customSoundboards.map((clip) => (
+            <button
+              key={clip.id}
+              type="button"
+              className="call-sound-pill"
+              onClick={() => playCustomSoundboard(clip.audioUrl, clip.name)}
+            >
+              <Music2 size={15} />
+              <span>{clip.name}</span>
             </button>
           ))}
         </div>

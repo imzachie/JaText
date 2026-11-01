@@ -3,7 +3,7 @@ import {
   isValidBubbleStyleId,
   stripBubbleStyleFromText,
 } from "../chatCustomization";
-import { fetchMediaBytesSmart } from "../tursoClient";
+import { fetchMediaBytesSmart, tursoRpc } from "../tursoClient";
 import {
   extractForwardedContext,
   stripForwardedMetadataFromText,
@@ -158,6 +158,8 @@ export interface PreparedEncryptedWrite<TStorageId = string> {
   attachmentType?: string;
 }
 
+const lastPeerSendRefreshAt = new Map<string, number>();
+
 export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
   receiverId: string;
   wireBody: string;
@@ -166,8 +168,41 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
   uploadFile: (file: File) => Promise<TStorageId>;
 }): Promise<PreparedEncryptedWrite<TStorageId> | null> {
   const { receiverId, wireBody, file, sticker, uploadFile } = params;
-  const state = getActiveE2EEState();
+  let state = getActiveE2EEState();
   if (!state) return null;
+
+  // Refresh peer & own remote device bundles (12s TTL) so unlinked/switched devices never use stale keys
+  const nowTs = Date.now();
+  const prevRef = lastPeerSendRefreshAt.get(receiverId) ?? 0;
+  if (!state.peerKeys[receiverId] || nowTs - prevRef > 12_000) {
+    lastPeerSendRefreshAt.set(receiverId, nowTs);
+    try {
+      const res = await tursoRpc<{
+        bundles?: Array<{
+          userId: string;
+          keyId: string;
+          dhPubB64: string;
+          sigPubB64: string;
+          selfSigB64: string;
+          ts?: number;
+        }>;
+      }>("getUserE2EEIdentities", { userIds: [receiverId, state.userId] });
+      for (const b of res?.bundles ?? []) {
+        await ingestPeerIdentityBundle({
+          userId: b.userId,
+          keyId: b.keyId,
+          dhPubB64: b.dhPubB64,
+          sigPubB64: b.sigPubB64,
+          selfSigB64: b.selfSigB64,
+          ts: b.ts ?? nowTs,
+        }).catch(() => undefined);
+      }
+      state = getActiveE2EEState() ?? state;
+    } catch {
+      // Fall back to cached peerEntry if offline
+    }
+  }
+
   const peerEntry = state.peerKeys[receiverId];
   if (!peerEntry) return null;
 
@@ -253,9 +288,11 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
 
   const silentSignal = isSilentEncryptedControlPayload(wireBody);
 
+  const myRemoteEntry = state.peerKeys[state.userId];
   const additionalDeviceBundles = [
-    ...getAllMyIdentities(state).map((i) => ({ keyId: i.keyId, dhPubB64: i.dhPubB64 })),
     ...getPeerKnownBundles(peerEntry).map((b) => ({ keyId: b.keyId, dhPubB64: b.dhPubB64 })),
+    ...getPeerKnownBundles(myRemoteEntry).map((b) => ({ keyId: b.keyId, dhPubB64: b.dhPubB64 })),
+    ...getAllMyIdentities(state).map((i) => ({ keyId: i.keyId, dhPubB64: i.dhPubB64 })),
   ];
 
   const encryptedWire = await encryptDmPayload({

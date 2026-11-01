@@ -16,7 +16,18 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { playMessageSound } from "../lib/alerts";
-import { ComposerPlusMenu } from "./ComposerPlusMenu";
+import { ComposerPlusMenu, ViewOnceRingIcon } from "./ComposerPlusMenu";
+import { ViewOnceMessageBubble } from "./ViewOnceViewerModal";
+import {
+  buildEncryptedViewOnceBody,
+  isViewOnceBody,
+  parseViewOnceEnvelope,
+} from "../lib/viewOnce";
+import {
+  isMessagePinned,
+  togglePinnedMessage,
+  usePinnedMessages,
+} from "../lib/chatOrganization";
 import { CONVERSATION_MARKED_READ_EVENT } from "../lib/convexStore";
 import { getUserChatPrefs } from "../lib/userChatPrefs";
 import { isChatActivelyVisibleToUser } from "../lib/nativeBridge";
@@ -67,6 +78,8 @@ import {
   BubblePaletteIcon,
   CameraIcon,
   CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   CloseIcon,
   CopyIcon,
   CrownIcon,
@@ -79,8 +92,10 @@ import {
   MicVoiceIcon,
   MoreVerticalIcon,
   PaperclipIcon,
+  PinIcon,
   PlusIcon,
   ReplyIcon,
+  SearchIcon,
   SendIcon,
   SettingsIcon,
   ShieldCheckIcon,
@@ -284,6 +299,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onScroll,
   onOpenProfile,
   onOpenImage,
+  activeSearchMatchId,
   onOpenMessageMenu,
   onOpenMessageMenuAt,
   onReactToMessage,
@@ -311,6 +327,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onScroll: (event: UIEvent<HTMLDivElement>) => void;
   onOpenProfile: (user: JaUser) => void;
   onOpenImage: (url: string) => void;
+  activeSearchMatchId?: string | null;
   onOpenMessageMenu: (event: MouseEvent, message: GroupMessage) => void;
   onOpenMessageMenuAt: (x: number, y: number, message: GroupMessage) => void;
   onReactToMessage: (message: GroupMessage, emoji: string) => void;
@@ -438,6 +455,23 @@ const GroupChatHistory = memo(function GroupChatHistory({
     }
   }, [windowedMessages.length, messagesRef]);
 
+  useEffect(() => {
+    if (!activeSearchMatchId) return;
+    const idx = messages.findIndex((m) => m.id === activeSearchMatchId);
+    if (idx >= 0) {
+      const needed = messages.length - idx + 8;
+      if (needed > visibleCount) {
+        setVisibleCount(Math.min(messages.length, needed));
+        return;
+      }
+    }
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`group-message-${activeSearchMatchId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [activeSearchMatchId, messages, visibleCount]);
+
   const canRevealMoreLocal = visibleCount < messages.length;
   const canLoadOlderAny = canRevealMoreLocal || hasMoreOlder;
 
@@ -556,8 +590,19 @@ const GroupChatHistory = memo(function GroupChatHistory({
           );
         }
         const groupCallInvite = !message.unsentAt ? parseGroupCallInvite(message.body) : null;
-        const isAudioNote = isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
+        const viewOnceEnv =
+          !message.unsentAt && !groupCallInvite
+            ? parseViewOnceEnvelope(message.body, {
+                url: message.attachmentUrl,
+                name: message.attachmentName,
+                type: message.attachmentType,
+              })
+            : null;
+        const isViewOnce = Boolean(viewOnceEnv);
+        const isAudioNote =
+          !isViewOnce && isVoiceNoteOrAudio(message.attachmentType, message.attachmentName);
         const isImage =
+          !isViewOnce &&
           !isAudioNote &&
           isImageAttachment(
             message.attachmentType,
@@ -565,6 +610,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
             message.attachmentUrl,
           );
         const isVideo =
+          !isViewOnce &&
           !isAudioNote &&
           (message.attachmentType?.startsWith("video/") ||
             /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
@@ -607,7 +653,9 @@ const GroupChatHistory = memo(function GroupChatHistory({
               className={`msg-row group-msg-row ${mine ? "mine" : "theirs"} ${
                 isJustArrived ? "msg-just-arrived" : ""
               } ${
-                highlightedJumpId === message.id ? "jump-highlight-pulse" : ""
+                highlightedJumpId === message.id || activeSearchMatchId === message.id
+                  ? "jump-highlight-pulse"
+                  : ""
               }`}
               id={`group-message-${message.id}`}
             >
@@ -742,6 +790,15 @@ const GroupChatHistory = memo(function GroupChatHistory({
                             </div>
                           );
                         })()
+                      ) : viewOnceEnv ? (
+                        <ViewOnceMessageBubble
+                          messageId={message.id}
+                          senderName={
+                            mine ? "You" : message.senderName || senderUser.displayName
+                          }
+                          envelope={viewOnceEnv}
+                          mine={mine}
+                        />
                       ) : (
                       <>
                         {message.attachmentUrl &&
@@ -923,13 +980,15 @@ const GroupChatComposer = memo(function GroupChatComposer({
   canMentionEveryone,
   activityByUserId,
   hasFile,
+  viewOnceActive,
+  onToggleViewOnce,
   hasForwardedMessage,
   isEditing,
   busy,
   recordingVoiceNote,
   composerRef,
   fileInputRef,
-  onSelectFile,
+  onAddFiles,
   onSelectSticker,
   onStartVoiceNote,
   onCancelVoiceNote,
@@ -947,13 +1006,15 @@ const GroupChatComposer = memo(function GroupChatComposer({
   canMentionEveryone: boolean;
   activityByUserId: Map<string, FriendActivity>;
   hasFile: boolean;
+  viewOnceActive: boolean;
+  onToggleViewOnce: () => void;
   hasForwardedMessage: boolean;
   isEditing: boolean;
   busy: boolean;
   recordingVoiceNote: boolean;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
-  onSelectFile: (file: File | null) => void;
+  onAddFiles: (files: File[]) => void;
   onSelectSticker: (sticker: StickerMedia) => Promise<void>;
   onStartVoiceNote: () => void;
   onCancelVoiceNote: () => void;
@@ -1081,7 +1142,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
     const pasted = extractClipboardFile(event.clipboardData);
     if (pasted) {
       event.preventDefault();
-      onSelectFile(pasted);
+      onAddFiles([pasted]);
     }
   }
 
@@ -1182,10 +1243,11 @@ const GroupChatComposer = memo(function GroupChatComposer({
           <input
             ref={fileInputRef}
             type="file"
+            multiple
             hidden
             onChange={(event) => {
-              const selected = event.target.files?.[0] ?? null;
-              onSelectFile(selected);
+              const picked = Array.from(event.target.files ?? []);
+              if (picked.length > 0) onAddFiles(picked);
               event.currentTarget.value = "";
             }}
           />
@@ -1197,6 +1259,8 @@ const GroupChatComposer = memo(function GroupChatComposer({
             currentDraft={draft}
             onConsumeDraft={() => handleDraftChange("", 0)}
             onUploadAttachment={() => fileInputRef.current?.click()}
+            viewOnceActive={viewOnceActive}
+            onToggleViewOnce={onToggleViewOnce}
           />
           <StickerPicker
             friendId=""
@@ -1213,67 +1277,86 @@ const GroupChatComposer = memo(function GroupChatComposer({
           >
             <MicVoiceIcon size={18} />
           </button>
-          <textarea
-            ref={composerRef}
-            value={draft}
-            maxLength={4000}
-            onChange={(event) =>
-              handleDraftChange(event.target.value, event.currentTarget.selectionStart)
-            }
-            onFocus={onMobileActivate}
-            onClick={(event) => {
-              onMobileActivate();
-              if (draft.includes("@")) {
-                setCursorPos(event.currentTarget.selectionStart ?? 0);
+          <div className={`composer-input-shell ${viewOnceActive && !isEditing ? "has-viewonce" : ""}`}>
+            <textarea
+              ref={composerRef}
+              value={draft}
+              maxLength={4000}
+              onChange={(event) =>
+                handleDraftChange(event.target.value, event.currentTarget.selectionStart)
               }
-            }}
-            onKeyUp={(event) => {
-              if (
-                draft.includes("@") &&
-                event.key !== "ArrowDown" &&
-                event.key !== "ArrowUp" &&
-                event.key !== "Enter" &&
-                event.key !== "Escape"
-              ) {
-                setCursorPos(event.currentTarget.selectionStart ?? 0);
+              onFocus={onMobileActivate}
+              onClick={(event) => {
+                onMobileActivate();
+                if (draft.includes("@")) {
+                  setCursorPos(event.currentTarget.selectionStart ?? 0);
+                }
+              }}
+              onKeyUp={(event) => {
+                if (
+                  draft.includes("@") &&
+                  event.key !== "ArrowDown" &&
+                  event.key !== "ArrowUp" &&
+                  event.key !== "Enter" &&
+                  event.key !== "Escape"
+                ) {
+                  setCursorPos(event.currentTarget.selectionStart ?? 0);
+                }
+              }}
+              onPaste={onComposerPaste}
+              rows={1}
+              placeholder={
+                isEditing
+                  ? "Edit message…"
+                  : viewOnceActive
+                    ? "View once message…"
+                    : "Message…"
               }
-            }}
-            onPaste={onComposerPaste}
-            rows={1}
-            placeholder={isEditing ? "Edit message…" : "Message…"}
-            aria-label="Group message"
-            onKeyDown={(event) => {
-              if (mentionCandidates.length > 0) {
-                if (event.key === "ArrowDown") {
-                  event.preventDefault();
-                  setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
-                  return;
+              aria-label="Group message"
+              onKeyDown={(event) => {
+                if (mentionCandidates.length > 0) {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
+                    return;
+                  }
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setMentionIndex(
+                      (prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length,
+                    );
+                    return;
+                  }
+                  if (event.key === "Enter" || event.key === "Tab") {
+                    event.preventDefault();
+                    const picked = mentionCandidates[safeMentionIndex];
+                    if (picked) applyMention(picked.handle);
+                    return;
+                  }
+                  if (event.key === "Escape" && activeMentionMatch) {
+                    event.preventDefault();
+                    setMentionDismissedAt(activeMentionMatch.start);
+                    return;
+                  }
                 }
-                if (event.key === "ArrowUp") {
+                if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  setMentionIndex(
-                    (prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length,
-                  );
-                  return;
+                  handleSubmit();
                 }
-                if (event.key === "Enter" || event.key === "Tab") {
-                  event.preventDefault();
-                  const picked = mentionCandidates[safeMentionIndex];
-                  if (picked) applyMention(picked.handle);
-                  return;
-                }
-                if (event.key === "Escape" && activeMentionMatch) {
-                  event.preventDefault();
-                  setMentionDismissedAt(activeMentionMatch.start);
-                  return;
-                }
-              }
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                handleSubmit();
-              }
-            }}
-          />
+              }}
+            />
+            {viewOnceActive && !isEditing && (
+              <button
+                type="button"
+                className="composer-viewonce-badge"
+                title="View once enabled (click to turn off)"
+                aria-label="Disable view once"
+                onClick={onToggleViewOnce}
+              >
+                <ViewOnceRingIcon size={17} />
+              </button>
+            )}
+          </div>
           <button
             type="submit"
             className="send-btn"
@@ -1320,7 +1403,12 @@ export function GroupChatView({
   const [firstUnreadGroupMsgId, setFirstUnreadGroupMsgId] = useState<string | null>(null);
   const capturedUnreadForGroupRef = useRef<string | null>(null);
   const isMobileWallpaper = useIsMobileWallpaperSupported();
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [viewOnceActive, setViewOnceActive] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatchIdx, setSearchMatchIdx] = useState(0);
+  const pinnedMessages = usePinnedMessages(`group:${groupId ?? ""}`);
   const [recordingVoiceNote, setRecordingVoiceNote] = useState(false);
   const [shownTranscriptIds, setShownTranscriptIds] = useState<Record<string, boolean>>({});
   const [deletedUndoState, setDeletedUndoState] = useState<DeletedForMeUndoState | null>(null);
@@ -1735,6 +1823,23 @@ export function GroupChatView({
     visibleRawDisplayedMessages,
     `group:${groupId ?? ""}`,
   );
+  const searchMatchIds = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!searchOpen || !q) return [];
+    return displayedMessages
+      .filter(
+        (m) =>
+          !m.unsentAt &&
+          !isViewOnceBody(m.body) &&
+          (formatPreviewMessageText(m.body).toLowerCase().includes(q) ||
+            (m.attachmentName ?? "").toLowerCase().includes(q)),
+      )
+      .map((m) => m.id);
+  }, [displayedMessages, searchOpen, searchQuery]);
+  const safeSearchMatchIdx =
+    searchMatchIds.length > 0 ? Math.min(searchMatchIdx, searchMatchIds.length - 1) : 0;
+  const activeSearchMatchId =
+    searchMatchIds.length > 0 ? searchMatchIds[safeSearchMatchIdx] : null;
   const lastDisplayedKey = displayedMessages.at(-1)?.id ?? "";
   const lastDisplayedSenderId = displayedMessages.at(-1)?.senderId ?? "";
 
@@ -2102,8 +2207,13 @@ export function GroupChatView({
     [groupId, replyTo, sendGroupSticker, soundsEnabled],
   );
 
+  const handleAddFiles = useCallback((incoming: File[]) => {
+    if (incoming.length === 0) return;
+    setFiles((prev) => [...prev, ...incoming].slice(0, 20));
+  }, []);
+
   const handlePastedGroupFile = useCallback((pasted: File) => {
-    setFile(pasted);
+    setFiles((prev) => [...prev, pasted].slice(0, 20));
     window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
   }, []);
 
@@ -2135,40 +2245,51 @@ export function GroupChatView({
       }
       return;
     }
-    if (!submittedBody && !file && !forwardedMessage) return;
+    if (!submittedBody && files.length === 0 && !forwardedMessage) return;
     const sentBody = submittedBody;
-    const sentFile = file;
+    const queuedFiles = files;
     const sentReply = replyTo;
     const sentForwarded = forwardedMessage;
-    const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
-    lastPendingMessageAtRef.current = sentAt;
-    const pendingId = `pending-${sentAt}`;
-    const attachmentUrl = sentFile
-      ? URL.createObjectURL(sentFile)
-      : sentForwarded?.attachmentUrl ?? sentForwarded?.stickerUrl;
-    if (attachmentUrl && sentFile) pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
-    wasPinnedRef.current = true;
-    setPendingMessages((current) => [
-      ...current.slice(-299),
-      {
-        id: pendingId,
-        senderId: store.me?.id ?? "",
-        senderName: store.me?.displayName ?? "",
-        senderUsername: store.me?.username ?? "",
-        senderAvatarUrl: store.me?.avatarUrl,
-        senderAvatarColor: store.me?.avatarColor ?? "black",
-        body: sentBody || sentForwarded?.body || "",
-        bubbleStyle: getSavedOutgoingBubbleStyle(),
-        attachmentUrl,
-        attachmentName: sentFile?.name ?? sentForwarded?.attachmentName,
-        attachmentType: sentFile?.type ?? sentForwarded?.attachmentType,
-        stickerUrl: sentForwarded?.stickerUrl,
-        stickerName: sentForwarded?.stickerName,
-        createdAt: sentAt,
-      } as GroupMessage,
-    ]);
-    window.requestAnimationFrame(scrollToBottom);
-    setFile(null);
+
+    if (viewOnceActive) {
+      const photoFile = queuedFiles.find((f) => f.type.startsWith("image/")) ?? null;
+      const audioFile =
+        queuedFiles.find((f) => isVoiceNoteOrAudio(f.type, f.name)) ?? null;
+      if (!sentBody && !photoFile && !audioFile) {
+        setError("View once supports text, photos, and audio attachments.");
+        return;
+      }
+      setFiles([]);
+      setViewOnceActive(false);
+      setReplyTo(null);
+      setForwardedMessage(null);
+      setError(null);
+      if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+      if (typingRef.current) {
+        typingRef.current = false;
+        publishTyping(false);
+      }
+      try {
+        const voBody = await buildEncryptedViewOnceBody({
+          text: sentBody,
+          photoFile,
+          audioFile,
+        });
+        await store.sendGroupMessage(groupId, voBody, undefined, sentReply?.id);
+        if (store.soundsEnabled) playMessageSound("sent");
+        window.requestAnimationFrame(scrollToBottom);
+      } catch (err) {
+        if (sentBody) {
+          setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: sentBody }));
+        }
+        if (queuedFiles.length > 0) setFiles(queuedFiles);
+        setViewOnceActive(true);
+        setError(friendlyError(err, "Couldn't send the view once message."));
+      }
+      return;
+    }
+
+    setFiles([]);
     setReplyTo(null);
     setForwardedMessage(null);
     setError(null);
@@ -2177,35 +2298,89 @@ export function GroupChatView({
       typingRef.current = false;
       publishTyping(false);
     }
+
+    const batches: Array<{ body: string; file: File | null; replyId?: string }> =
+      queuedFiles.length === 0
+        ? [{ body: sentBody, file: null, replyId: sentReply?.id }]
+        : queuedFiles.map((f, idx) => ({
+            body: idx === 0 ? sentBody : "",
+            file: f,
+            replyId: idx === 0 ? sentReply?.id : undefined,
+          }));
+
+    const createdPendingIds: string[] = [];
+    wasPinnedRef.current = true;
+    for (const item of batches) {
+      const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
+      lastPendingMessageAtRef.current = sentAt;
+      const pendingId = `pending-${sentAt}`;
+      createdPendingIds.push(pendingId);
+      const attachmentUrl = item.file
+        ? URL.createObjectURL(item.file)
+        : sentForwarded?.attachmentUrl ?? sentForwarded?.stickerUrl;
+      if (attachmentUrl && item.file) {
+        pendingAttachmentUrlsRef.current.set(pendingId, attachmentUrl);
+      }
+      setPendingMessages((current) => [
+        ...current.slice(-299),
+        {
+          id: pendingId,
+          senderId: store.me?.id ?? "",
+          senderName: store.me?.displayName ?? "",
+          senderUsername: store.me?.username ?? "",
+          senderAvatarUrl: store.me?.avatarUrl,
+          senderAvatarColor: store.me?.avatarColor ?? "black",
+          body: item.body || sentForwarded?.body || "",
+          bubbleStyle: getSavedOutgoingBubbleStyle(),
+          attachmentUrl,
+          attachmentName: item.file?.name ?? sentForwarded?.attachmentName,
+          attachmentType: item.file?.type ?? sentForwarded?.attachmentType,
+          stickerUrl: sentForwarded?.stickerUrl,
+          stickerName: sentForwarded?.stickerName,
+          createdAt: sentAt,
+        } as GroupMessage,
+      ]);
+    }
+    window.requestAnimationFrame(scrollToBottom);
+
     try {
       if (sentForwarded) {
         await store.forwardGroupMessage(sentForwarded.id, { groupId });
-        if (sentBody || sentFile) {
-          await store.sendGroupMessage(groupId, sentBody, sentFile ?? undefined, sentReply?.id);
+      }
+      for (let i = 0; i < batches.length; i++) {
+        const item = batches[i];
+        const pendingId = createdPendingIds[i];
+        if (!sentForwarded || item.body || item.file) {
+          await store.sendGroupMessage(
+            groupId,
+            item.body,
+            item.file ?? undefined,
+            item.replyId,
+          );
         }
-      } else {
-        await store.sendGroupMessage(groupId, sentBody, sentFile ?? undefined, sentReply?.id);
+        window.setTimeout(() => {
+          const url = pendingAttachmentUrlsRef.current.get(pendingId);
+          if (url) {
+            URL.revokeObjectURL(url);
+            pendingAttachmentUrlsRef.current.delete(pendingId);
+          }
+          setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
+        }, 1500);
       }
       if (store.soundsEnabled) playMessageSound("sent");
-      window.setTimeout(() => {
+    } catch (err) {
+      for (const pendingId of createdPendingIds) {
         const url = pendingAttachmentUrlsRef.current.get(pendingId);
         if (url) {
           URL.revokeObjectURL(url);
           pendingAttachmentUrlsRef.current.delete(pendingId);
         }
-        setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
-      }, 1500);
-    } catch (err) {
-      const url = pendingAttachmentUrlsRef.current.get(pendingId);
-      if (url) {
-        URL.revokeObjectURL(url);
-        pendingAttachmentUrlsRef.current.delete(pendingId);
       }
-      setPendingMessages((cur) => cur.filter((m) => m.id !== pendingId));
+      setPendingMessages((cur) => cur.filter((m) => !createdPendingIds.includes(m.id)));
       if (sentBody) {
         setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: sentBody }));
       }
-      if (sentFile) setFile((c) => c ?? sentFile);
+      if (queuedFiles.length > 0) setFiles((c) => (c.length > 0 ? c : queuedFiles));
       setError(friendlyError(err, "Couldn't send the group message."));
     }
   }
@@ -2248,6 +2423,33 @@ export function GroupChatView({
     if (!groupId || isMuted) return;
     setRecordingVoiceNote(false);
     const sentReply = replyTo;
+    if (viewOnceActive) {
+      const draftKey = `group:${groupId}`;
+      const draftCaption = getDraft(draftKey).trim();
+      const stagedPhoto = files.find((f) => f.type.startsWith("image/")) ?? null;
+      setViewOnceActive(false);
+      setFiles([]);
+      if (draftCaption) {
+        clearDraft(draftKey);
+        setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
+      }
+      setReplyTo(null);
+      setError(null);
+      try {
+        const voBody = await buildEncryptedViewOnceBody({
+          text: draftCaption,
+          photoFile: stagedPhoto,
+          audioFile: voiceFile,
+        });
+        await store.sendGroupMessage(groupId, voBody, undefined, sentReply?.id);
+        if (store.soundsEnabled) playMessageSound("sent");
+        window.requestAnimationFrame(scrollToBottom);
+      } catch (err) {
+        setViewOnceActive(true);
+        setError(friendlyError(err, "Couldn't send the view once voice note."));
+      }
+      return;
+    }
     const sentAt = Math.max(Date.now(), lastPendingMessageAtRef.current + 1);
     lastPendingMessageAtRef.current = sentAt;
     const pendingId = `pending-${sentAt}`;
@@ -2423,7 +2625,8 @@ export function GroupChatView({
     setPendingMessages([]);
     setEditingMessage(message);
     setReplyTo(null);
-    setFile(null);
+    setFiles([]);
+    setViewOnceActive(false);
     setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
     closeMessageMenu();
   }
@@ -2715,6 +2918,23 @@ export function GroupChatView({
         <div className="chat-header-actions">
           <button
             type="button"
+            className={`icon-btn ${searchOpen ? "menu-open" : ""}`}
+            title="Search in group"
+            aria-label="Search in group"
+            onClick={() => {
+              setSearchOpen((open) => {
+                if (open) {
+                  setSearchQuery("");
+                  setSearchMatchIdx(0);
+                }
+                return !open;
+              });
+            }}
+          >
+            <SearchIcon size={18} />
+          </button>
+          <button
+            type="button"
             className="icon-btn call-header-btn"
             title="Start group voice call"
             aria-label="Start group voice call"
@@ -2784,6 +3004,118 @@ export function GroupChatView({
         </div>
       </header>
 
+      {searchOpen && (
+        <div className="chat-search-bar" role="search">
+          <SearchIcon size={16} />
+          <input
+            type="search"
+            value={searchQuery}
+            autoFocus
+            placeholder={`Search in ${group?.name ?? summary?.name ?? "group"}…`}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setSearchMatchIdx(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && searchMatchIds.length > 0) {
+                e.preventDefault();
+                setSearchMatchIdx((cur) =>
+                  e.shiftKey
+                    ? (cur - 1 + searchMatchIds.length) % searchMatchIds.length
+                    : (cur + 1) % searchMatchIds.length,
+                );
+              } else if (e.key === "Escape") {
+                setSearchOpen(false);
+                setSearchQuery("");
+              }
+            }}
+          />
+          {searchQuery.trim() && (
+            <span className="chat-search-counter">
+              {searchMatchIds.length === 0
+                ? "0 matches"
+                : `${safeSearchMatchIdx + 1} / ${searchMatchIds.length}`}
+            </span>
+          )}
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Previous match"
+            disabled={searchMatchIds.length === 0}
+            onClick={() =>
+              setSearchMatchIdx(
+                (cur) => (cur - 1 + searchMatchIds.length) % searchMatchIds.length,
+              )
+            }
+          >
+            <ChevronUpIcon size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Next match"
+            disabled={searchMatchIds.length === 0}
+            onClick={() =>
+              setSearchMatchIdx((cur) => (cur + 1) % searchMatchIds.length)
+            }
+          >
+            <ChevronDownIcon size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Close search"
+            onClick={() => {
+              setSearchOpen(false);
+              setSearchQuery("");
+            }}
+          >
+            <CloseIcon size={16} />
+          </button>
+        </div>
+      )}
+
+      {pinnedMessages.length > 0 && (
+        <div className="chat-pinned-banner" role="region" aria-label="Pinned message">
+          <PinIcon size={15} filled />
+          <button
+            type="button"
+            className="chat-pinned-banner-jump"
+            onClick={() => {
+              const latestPin = pinnedMessages[0];
+              if (!latestPin) return;
+              document
+                .getElementById(`group-message-${latestPin.messageId}`)
+                ?.scrollIntoView({ behavior: "smooth", block: "center" });
+            }}
+          >
+            <strong>
+              Pinned message
+              {pinnedMessages.length > 1 ? ` (${pinnedMessages.length})` : ""}
+            </strong>
+            <span>{pinnedMessages[0].previewText}</span>
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="Unpin message"
+            aria-label="Unpin message"
+            onClick={() => {
+              const latestPin = pinnedMessages[0];
+              if (!latestPin || !groupId) return;
+              togglePinnedMessage({
+                conversationKey: `group:${groupId}`,
+                messageId: latestPin.messageId,
+                senderName: latestPin.senderName,
+                previewText: latestPin.previewText,
+              });
+            }}
+          >
+            <CloseIcon size={15} />
+          </button>
+        </div>
+      )}
+
       {activeGroupCallMessage &&
         groupCall.groupSession?.callId !== activeGroupCallMessage.invite.callId && (
           <div className="group-call-active-banner" role="region" aria-label="Active group call">
@@ -2849,6 +3181,7 @@ export function GroupChatView({
         onScroll={handleMessagesScroll}
         onOpenProfile={onOpenProfile}
         onOpenImage={openImagePreview}
+        activeSearchMatchId={activeSearchMatchId}
         onOpenMessageMenu={openMessageMenu}
         onOpenMessageMenuAt={openMessageMenuAt}
         onReactToMessage={reactToMessage}
@@ -2888,14 +3221,29 @@ export function GroupChatView({
           </button>
         </div>
       )}
-      {file && (
-        <div className="attach-preview">
-          <span>
-            <PaperclipIcon size={14} /> {file.name}
-          </span>
-          <button type="button" className="mini-btn" onClick={() => setFile(null)}>
-            <CloseIcon size={12} /> Remove
-          </button>
+      {files.length > 0 && (
+        <div className="attach-preview-list">
+          {files.map((item, idx) => (
+            <span className="attach-preview-chip" key={`${item.name}-${item.size}-${idx}`}>
+              <PaperclipIcon size={13} />
+              <span className="attach-preview-chip-name">{item.name}</span>
+              <button
+                type="button"
+                className="attach-preview-chip-remove"
+                aria-label={`Remove ${item.name}`}
+                onClick={() =>
+                  setFiles((cur) => cur.filter((_, fileIdx) => fileIdx !== idx))
+                }
+              >
+                <CloseIcon size={12} />
+              </button>
+            </span>
+          ))}
+          {files.length > 1 && (
+            <button type="button" className="mini-btn" onClick={() => setFiles([])}>
+              Clear all ({files.length})
+            </button>
+          )}
         </div>
       )}
       {(replyTo || forwardedMessage) && !editingMessage && (
@@ -2946,14 +3294,16 @@ export function GroupChatView({
             (group?.role ?? summary?.role) === "moderator"
           }
           activityByUserId={activityByUserId}
-          hasFile={Boolean(file)}
+          hasFile={files.length > 0}
+          viewOnceActive={viewOnceActive}
+          onToggleViewOnce={() => setViewOnceActive((v) => !v)}
           hasForwardedMessage={Boolean(forwardedMessage)}
           isEditing={Boolean(editingMessage)}
           busy={busy}
           recordingVoiceNote={recordingVoiceNote}
           composerRef={composerRef}
           fileInputRef={fileInput}
-          onSelectFile={setFile}
+          onAddFiles={handleAddFiles}
           onSelectSticker={handleSelectSticker}
           onStartVoiceNote={handleStartVoiceNote}
           onCancelVoiceNote={handleCancelVoiceNote}
@@ -2979,6 +3329,37 @@ export function GroupChatView({
             </span>{" "}
             Reply
           </button>
+          {!messageMenu.message.unsentAt && groupId && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                const msg = messageMenu.message;
+                togglePinnedMessage({
+                  conversationKey: `group:${groupId}`,
+                  messageId: msg.id,
+                  senderName:
+                    msg.senderId === store.me?.id ? "You" : msg.senderName || "Member",
+                  previewText:
+                    formatPreviewMessageText(msg.body) ||
+                    msg.attachmentName ||
+                    msg.stickerName ||
+                    "Attachment",
+                });
+                closeMessageMenu();
+              }}
+            >
+              <span>
+                <PinIcon
+                  size={15}
+                  filled={isMessagePinned(`group:${groupId}`, messageMenu.message.id)}
+                />
+              </span>{" "}
+              {isMessagePinned(`group:${groupId}`, messageMenu.message.id)
+                ? "Unpin message"
+                : "Pin message"}
+            </button>
+          )}
           {!messageMenu.message.unsentAt &&
             messageMenu.message.senderId === store.me?.id && (
               <button

@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,12 +40,15 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CallMade
 import androidx.compose.material.icons.rounded.CallReceived
@@ -52,12 +56,16 @@ import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExitToApp
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.PersonAdd
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SwapHoriz
@@ -167,6 +175,9 @@ fun SidebarScreen(
     var addUsername by remember { mutableStateOf("") }
     var showAccountSwitcher by remember { mutableStateOf(false) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
+    var activeFolderId by remember { mutableStateOf("all") }
+    var editingFolderSpec by remember { mutableStateOf<com.ahad00010.jatext.data.ChatFolderSpec?>(null) }
+    var showFolderEditorDialog by remember { mutableStateOf(false) }
     var holdTarget by remember { mutableStateOf<SidebarHoldTarget?>(null) }
 
     BackHandler(enabled = activeTab != "chats" && !settingsSubOverlayOpen) {
@@ -219,19 +230,25 @@ fun SidebarScreen(
         state.accounts.filter { it.slotId != state.slotId && it.userId != me?.id }
     }
 
-    val visibleGroups = remember(state.groups, showArchived, searchQuery) {
+    val activeFolder = remember(state.chatOrganization.folders, activeFolderId) {
+        state.chatOrganization.folders.firstOrNull { it.id == activeFolderId }
+    }
+
+    val visibleGroups = remember(state.groups, showArchived, searchQuery, activeFolder) {
         val q = searchQuery.trim().lowercase()
         state.groups.filter { grp ->
-            grp.isArchived == showArchived && (q.isEmpty() || grp.name.lowercase().contains(q))
+            val inFolder = activeFolder == null || activeFolder.threadIds.contains("group:${grp.id}")
+            inFolder && grp.isArchived == showArchived && (q.isEmpty() || grp.name.lowercase().contains(q))
         }
     }
 
-    val sortedFriends = remember(state.friends, previewByFriend, showArchived, searchQuery) {
+    val sortedFriends = remember(state.friends, previewByFriend, showArchived, searchQuery, activeFolder) {
         val q = searchQuery.trim().lowercase()
         state.friends
             .filter { f ->
+                val inFolder = activeFolder == null || activeFolder.threadIds.contains("dm:${f.id}")
                 val isArch = previewByFriend[f.id]?.isArchived == true
-                isArch == showArchived && (
+                inFolder && isArch == showArchived && (
                     q.isEmpty() ||
                         f.displayName.lowercase().contains(q) ||
                         f.username.lowercase().contains(q)
@@ -239,6 +256,29 @@ fun SidebarScreen(
             }
             .sortedByDescending { f -> previewByFriend[f.id]?.createdAt ?: 0L }
     }
+
+    // Unified ordered list of non-community threads (pinned first, then customOrder, then recency)
+    // JaText Community is ALWAYS rendered unconditionally at #1 above this list!
+    val orderedNonCommunityKeys = remember(
+        visibleGroups,
+        sortedFriends,
+        previewByFriend,
+        state.chatOrganization,
+    ) {
+        val pinnedSet = state.chatOrganization.pinnedIds.toSet()
+        val orderIdx = state.chatOrganization.customOrder.withIndex().associate { it.value to it.index }
+        val groupKeys = visibleGroups.map { "group:${it.id}" to it.lastMessageAt }
+        val dmKeys = sortedFriends.map { "dm:${it.id}" to (previewByFriend[it.id]?.createdAt ?: 0L) }
+        (groupKeys + dmKeys)
+            .sortedWith(
+                compareByDescending<Pair<String, Long>> { pinnedSet.contains(it.first) }
+                    .thenBy { orderIdx[it.first] ?: Int.MAX_VALUE }
+                    .thenByDescending { it.second }
+            )
+            .map { it.first }
+    }
+    val groupById = remember(visibleGroups) { visibleGroups.associateBy { it.id } }
+    val friendById = remember(sortedFriends) { sortedFriends.associateBy { it.id } }
 
     val contentBackdrop = rememberLayerBackdrop()
     val isImeVisible = WindowInsets.isImeVisible
@@ -429,7 +469,7 @@ fun SidebarScreen(
                 JaWebInput(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = "Search friends…",
+                    placeholder = com.ahad00010.jatext.data.jt("sidebar.search"),
                     leadingIcon = Icons.Rounded.Search,
                     trailingContent = if (searchQuery.isNotEmpty()) {
                         {
@@ -446,6 +486,107 @@ fun SidebarScreen(
                         null
                     },
                 )
+
+                // Folder Filter Pills ("All", user folders, "+ Folder")
+                if (!showArchived) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val allSelected = activeFolder == null
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(if (allSelected) palette.accent else palette.bgTertiary)
+                                .border(1.dp, if (allSelected) palette.accent else palette.border, RoundedCornerShape(999.dp))
+                                .clickable { activeFolderId = "all" }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                text = com.ahad00010.jatext.data.jt("sidebar.folders.all"),
+                                color = if (allSelected) palette.onAccent else palette.textPrimary,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        state.chatOrganization.folders.forEach { folder ->
+                            val selected = activeFolder?.id == folder.id
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(if (selected) palette.accent else palette.bgTertiary)
+                                    .border(1.dp, if (selected) palette.accent else palette.border, RoundedCornerShape(999.dp))
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selected) {
+                                                editingFolderSpec = folder
+                                                showFolderEditorDialog = true
+                                            } else {
+                                                activeFolderId = folder.id
+                                            }
+                                        },
+                                        onLongClick = {
+                                            editingFolderSpec = folder
+                                            showFolderEditorDialog = true
+                                        },
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Folder,
+                                    contentDescription = null,
+                                    tint = if (selected) palette.onAccent else palette.accent,
+                                    modifier = Modifier.size(13.5.dp),
+                                )
+                                Text(
+                                    text = folder.name,
+                                    color = if (selected) palette.onAccent else palette.textPrimary,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                if (selected) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Edit,
+                                        contentDescription = "Edit folder",
+                                        tint = palette.onAccent,
+                                        modifier = Modifier.size(12.dp),
+                                    )
+                                }
+                            }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(palette.bgTertiary)
+                                .border(1.dp, palette.border, RoundedCornerShape(999.dp))
+                                .clickable {
+                                    editingFolderSpec = null
+                                    showFolderEditorDialog = true
+                                }
+                                .padding(horizontal = 11.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CreateNewFolder,
+                                contentDescription = "New folder",
+                                tint = palette.accent,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                text = com.ahad00010.jatext.data.jt("sidebar.folders.new"),
+                                color = palette.textSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
 
                 // `.archive-toggle`
                 Row(
@@ -560,10 +701,16 @@ fun SidebarScreen(
                                         }
                                     }
                                     Spacer(Modifier.height(2.dp))
+                                    val commDraft = state.drafts["community"]?.trim().orEmpty()
                                     Text(
-                                        text = "Official JaText announcements",
-                                        color = palette.textSecondary,
+                                        text = if (commDraft.isNotEmpty()) {
+                                            "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $commDraft"
+                                        } else {
+                                            "Official JaText announcements"
+                                        },
+                                        color = if (commDraft.isNotEmpty()) palette.accent else palette.textSecondary,
                                         fontSize = 13.sp,
+                                        fontWeight = if (commDraft.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -572,19 +719,48 @@ fun SidebarScreen(
                         }
                     }
 
-                    /* ---- Group Rows (`.group-list-row`) ---- */
-                    items(visibleGroups, key = { "grp:${it.id}" }) { grp ->
-                        GroupSidebarRow(
-                            group = grp,
-                            myUserId = me?.id.orEmpty(),
-                            isSelected = state.activeGroupId == grp.id,
-                            onClick = { vm.openGroupChat(grp.id) },
-                            onLongClick = { holdTarget = SidebarHoldTarget.Group(grp) },
-                        )
+                    /* ---- Unified Pinned + Ordered Group & 1:1 DM Rows ---- */
+                    items(orderedNonCommunityKeys, key = { it }) { threadKey ->
+                        val isPinned = state.chatOrganization.pinnedIds.contains(threadKey)
+                        if (threadKey.startsWith("group:")) {
+                            val gid = threadKey.removePrefix("group:")
+                            val grp = groupById[gid]
+                            if (grp != null) {
+                                GroupSidebarRow(
+                                    group = grp,
+                                    myUserId = me?.id.orEmpty(),
+                                    isSelected = state.activeGroupId == grp.id,
+                                    isPinned = isPinned,
+                                    draftText = state.drafts["group:${grp.id}"],
+                                    onClick = { vm.openGroupChat(grp.id) },
+                                    onLongClick = { holdTarget = SidebarHoldTarget.Group(grp) },
+                                )
+                            }
+                        } else if (threadKey.startsWith("dm:")) {
+                            val fid = threadKey.removePrefix("dm:")
+                            val friend = friendById[fid]
+                            if (friend != null) {
+                                val prev = previewByFriend[friend.id]
+                                val act = activityByFriend[friend.id]
+                                DmSidebarRow(
+                                    friend = friend,
+                                    preview = prev,
+                                    myUserId = me?.id.orEmpty(),
+                                    isSelected = state.activeChatId == friend.id,
+                                    isPinned = isPinned,
+                                    draftText = state.drafts["dm:${friend.id}"],
+                                    presenceStatus = act?.status ?: "offline",
+                                    typingToMe = typingDmSenders.contains(friend.id),
+                                    onClick = { vm.openDmChat(friend.id) },
+                                    onAvatarClick = { onOpenProfile(friend) },
+                                    onLongClick = { holdTarget = SidebarHoldTarget.Dm(friend, prev) },
+                                )
+                            }
+                        }
                     }
 
                     /* ---- Empty State (`.empty-box`) ---- */
-                    if (sortedFriends.isEmpty() && visibleGroups.isEmpty()) {
+                    if (orderedNonCommunityKeys.isEmpty()) {
                         item(key = "empty-chats") {
                             Column(
                                 modifier = Modifier
@@ -631,23 +807,6 @@ fun SidebarScreen(
                                 }
                             }
                         }
-                    }
-
-                    /* ---- 1:1 Friend Rows (`.friend-row`) ---- */
-                    items(sortedFriends, key = { "dm:${it.id}" }) { friend ->
-                        val prev = previewByFriend[friend.id]
-                        val act = activityByFriend[friend.id]
-                        DmSidebarRow(
-                            friend = friend,
-                            preview = prev,
-                            myUserId = me?.id.orEmpty(),
-                            isSelected = state.activeChatId == friend.id,
-                            presenceStatus = act?.status ?: "offline",
-                            typingToMe = typingDmSenders.contains(friend.id),
-                            onClick = { vm.openDmChat(friend.id) },
-                            onAvatarClick = { onOpenProfile(friend) },
-                            onLongClick = { holdTarget = SidebarHoldTarget.Dm(friend, prev) },
-                        )
                     }
                 }
             }
@@ -995,7 +1154,7 @@ fun SidebarScreen(
                         }
                     }
                     Text(
-                        text = "Chats",
+                        text = com.ahad00010.jatext.data.jt("nav.chats"),
                         color = tabTint,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -1008,7 +1167,7 @@ fun SidebarScreen(
                     val tabTint = LocalLiquidBottomTabContentColor.current
                     IosCallsNavIcon(tint = tabTint, size = 23.dp)
                     Text(
-                        text = "Calls",
+                        text = com.ahad00010.jatext.data.jt("nav.calls"),
                         color = tabTint,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -1031,7 +1190,7 @@ fun SidebarScreen(
                         }
                     }
                     Text(
-                        text = "Add",
+                        text = com.ahad00010.jatext.data.jt("nav.add"),
                         color = tabTint,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -1044,7 +1203,7 @@ fun SidebarScreen(
                     val tabTint = LocalLiquidBottomTabContentColor.current
                     IosSettingsGearIcon(tint = tabTint, size = 23.dp)
                     Text(
-                        text = "Settings",
+                        text = com.ahad00010.jatext.data.jt("nav.settings"),
                         color = tabTint,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -1087,6 +1246,8 @@ fun SidebarScreen(
                         )
                     }
                     is SidebarHoldTarget.Dm -> {
+                        val dmKey = "dm:${target.friend.id}"
+                        val isPinned = state.chatOrganization.pinnedIds.contains(dmKey)
                         val isMuted = target.preview?.isMuted == true
                         val isArchived = target.preview?.isArchived == true
                         Text(
@@ -1094,6 +1255,30 @@ fun SidebarScreen(
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 16.sp,
                             modifier = Modifier.padding(bottom = 10.dp),
+                        )
+                        ContextActionItem(
+                            icon = Icons.Rounded.PushPin,
+                            label = if (isPinned) com.ahad00010.jatext.data.jt("sidebar.unpin") else com.ahad00010.jatext.data.jt("sidebar.pin"),
+                            onClick = {
+                                vm.togglePinThread(dmKey)
+                                holdTarget = null
+                            }
+                        )
+                        ContextActionItem(
+                            icon = Icons.Rounded.ArrowUpward,
+                            label = com.ahad00010.jatext.data.jt("sidebar.moveUp"),
+                            onClick = {
+                                vm.moveThreadInOrder(orderedNonCommunityKeys, dmKey, -1)
+                                holdTarget = null
+                            }
+                        )
+                        ContextActionItem(
+                            icon = Icons.Rounded.ArrowDownward,
+                            label = com.ahad00010.jatext.data.jt("sidebar.moveDown"),
+                            onClick = {
+                                vm.moveThreadInOrder(orderedNonCommunityKeys, dmKey, 1)
+                                holdTarget = null
+                            }
                         )
                         ContextActionItem(
                             icon = Icons.Rounded.CheckCircle,
@@ -1131,12 +1316,38 @@ fun SidebarScreen(
                     }
                     is SidebarHoldTarget.Group -> {
                         val grp = target.group
+                        val grpKey = "group:${grp.id}"
+                        val isPinned = state.chatOrganization.pinnedIds.contains(grpKey)
                         val isOwner = grp.myRole == "owner" || grp.ownerId == me?.id
                         Text(
                             text = grp.name,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 16.sp,
                             modifier = Modifier.padding(bottom = 10.dp),
+                        )
+                        ContextActionItem(
+                            icon = Icons.Rounded.PushPin,
+                            label = if (isPinned) com.ahad00010.jatext.data.jt("sidebar.unpin") else com.ahad00010.jatext.data.jt("sidebar.pin"),
+                            onClick = {
+                                vm.togglePinThread(grpKey)
+                                holdTarget = null
+                            }
+                        )
+                        ContextActionItem(
+                            icon = Icons.Rounded.ArrowUpward,
+                            label = com.ahad00010.jatext.data.jt("sidebar.moveUp"),
+                            onClick = {
+                                vm.moveThreadInOrder(orderedNonCommunityKeys, grpKey, -1)
+                                holdTarget = null
+                            }
+                        )
+                        ContextActionItem(
+                            icon = Icons.Rounded.ArrowDownward,
+                            label = com.ahad00010.jatext.data.jt("sidebar.moveDown"),
+                            onClick = {
+                                vm.moveThreadInOrder(orderedNonCommunityKeys, grpKey, 1)
+                                holdTarget = null
+                            }
                         )
                         ContextActionItem(
                             icon = Icons.Rounded.CheckCircle,
@@ -1492,6 +1703,169 @@ fun SidebarScreen(
             }
         }
     }
+
+    /* ==================== Folder Editor Dialog ==================== */
+    if (showFolderEditorDialog) {
+        val initialSpec = editingFolderSpec
+        var folderName by remember(initialSpec?.id) { mutableStateOf(initialSpec?.name.orEmpty()) }
+        val selectedThreadKeys = remember(initialSpec?.id) {
+            mutableStateListOf<String>().apply {
+                initialSpec?.threadIds?.let { addAll(it) }
+            }
+        }
+        Dialog(onDismissRequest = { showFolderEditorDialog = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(palette.bgSecondary)
+                    .border(1.dp, palette.border, RoundedCornerShape(22.dp))
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (initialSpec != null) "Edit folder" else "New folder",
+                        color = palette.textPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    JaWebIconButton(
+                        icon = Icons.Rounded.Close,
+                        contentDescription = "Close",
+                        size = 34.dp,
+                        iconSize = 16.dp,
+                        onClick = { showFolderEditorDialog = false },
+                    )
+                }
+                JaWebInput(
+                    value = folderName,
+                    onValueChange = { folderName = it },
+                    label = "Folder name",
+                    placeholder = "Work, Family, Gaming...",
+                )
+                Text(
+                    text = "Select chats & groups (${selectedThreadKeys.size})",
+                    color = palette.textSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 240.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(state.groups, key = { "fgrp:${it.id}" }) { grp ->
+                        val tKey = "group:${grp.id}"
+                        val checked = selectedThreadKeys.contains(tKey)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(palette.bgTertiary)
+                                .clickable {
+                                    if (checked) selectedThreadKeys.remove(tKey) else selectedThreadKeys.add(tKey)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            JaGroupAvatar(avatarUrl = grp.avatarUrl, name = grp.name, size = 32.dp, ringWidth = 2.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(grp.name, color = palette.textPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+                                Text("Group", color = palette.textSecondary, fontSize = 11.5.sp)
+                            }
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = {
+                                    if (it) selectedThreadKeys.add(tKey) else selectedThreadKeys.remove(tKey)
+                                },
+                                colors = CheckboxDefaults.colors(checkedColor = palette.accent, checkmarkColor = palette.accentDark),
+                            )
+                        }
+                    }
+                    items(state.friends, key = { "fdm:${it.id}" }) { f ->
+                        val tKey = "dm:${f.id}"
+                        val checked = selectedThreadKeys.contains(tKey)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(palette.bgTertiary)
+                                .clickable {
+                                    if (checked) selectedThreadKeys.remove(tKey) else selectedThreadKeys.add(tKey)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            JaAvatar(
+                                avatarUrl = f.avatarUrl,
+                                displayName = f.displayName.ifBlank { f.username },
+                                avatarColor = f.avatarColor,
+                                size = 32.dp,
+                                ringWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    f.displayName.ifBlank { f.username },
+                                    color = palette.textPrimary,
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text("@${f.username}", color = palette.textSecondary, fontSize = 11.5.sp)
+                            }
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = {
+                                    if (it) selectedThreadKeys.add(tKey) else selectedThreadKeys.remove(tKey)
+                                },
+                                colors = CheckboxDefaults.colors(checkedColor = palette.accent, checkmarkColor = palette.accentDark),
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (initialSpec != null) {
+                        JaWebDangerButton(
+                            text = "Delete",
+                            onClick = {
+                                vm.deleteChatFolder(initialSpec.id)
+                                if (activeFolderId == initialSpec.id) activeFolderId = "all"
+                                showFolderEditorDialog = false
+                            },
+                        )
+                    } else {
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        JaWebGhostButton(
+                            text = "Cancel",
+                            onClick = { showFolderEditorDialog = false },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        JaWebPrimaryButton(
+                            text = "Save",
+                            enabled = folderName.trim().isNotEmpty(),
+                            onClick = {
+                                vm.saveChatFolder(initialSpec?.id, folderName.trim(), selectedThreadKeys.toList())
+                                showFolderEditorDialog = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1523,6 +1897,8 @@ private fun DmSidebarRow(
     preview: ChatPreview?,
     myUserId: String,
     isSelected: Boolean,
+    isPinned: Boolean = false,
+    draftText: String? = null,
     presenceStatus: String,
     typingToMe: Boolean,
     onClick: () -> Unit,
@@ -1574,6 +1950,14 @@ private fun DmSidebarRow(
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    if (isPinned) {
+                        Icon(
+                            imageVector = Icons.Rounded.PushPin,
+                            contentDescription = "Pinned",
+                            tint = palette.accent,
+                            modifier = Modifier.size(13.dp),
+                        )
+                    }
                     if (preview?.isMuted == true) {
                         Icon(
                             imageVector = Icons.Rounded.NotificationsOff,
@@ -1595,8 +1979,11 @@ private fun DmSidebarRow(
                 }
             }
             Spacer(Modifier.height(2.dp))
+            val cleanDraft = draftText?.trim().orEmpty()
+            val hasDraft = cleanDraft.isNotEmpty()
             val previewCopy = when {
                 typingToMe -> "typing…"
+                hasDraft -> "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $cleanDraft"
                 preview != null && preview.body.isNotBlank() -> {
                     val prefix = if (preview.senderId == myUserId) "You: " else ""
                     "$prefix${preview.body}"
@@ -1606,12 +1993,12 @@ private fun DmSidebarRow(
             Text(
                 text = previewCopy,
                 color = when {
-                    typingToMe -> palette.accent
+                    typingToMe || hasDraft -> palette.accent
                     unread > 0 -> palette.textPrimary
                     else -> palette.textSecondary
                 },
                 fontSize = 13.sp,
-                fontWeight = if (unread > 0 || typingToMe) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = if (unread > 0 || typingToMe || hasDraft) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1625,6 +2012,8 @@ private fun GroupSidebarRow(
     group: GroupSummary,
     myUserId: String,
     isSelected: Boolean,
+    isPinned: Boolean = false,
+    draftText: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -1669,6 +2058,14 @@ private fun GroupSidebarRow(
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    if (isPinned) {
+                        Icon(
+                            imageVector = Icons.Rounded.PushPin,
+                            contentDescription = "Pinned",
+                            tint = palette.accent,
+                            modifier = Modifier.size(13.dp),
+                        )
+                    }
                     if (group.isSilenced) {
                         Icon(
                             imageVector = Icons.Rounded.NotificationsOff,
@@ -1705,20 +2102,29 @@ private fun GroupSidebarRow(
                 }
             }
             Spacer(Modifier.height(2.dp))
-            val subText = if (group.lastMessage.isNotBlank()) {
-                val prefix = when {
-                    group.lastSenderId == myUserId -> "You: "
-                    !group.lastSenderName.isNullOrBlank() -> "${group.lastSenderName}: "
-                    else -> ""
+            val cleanDraft = draftText?.trim().orEmpty()
+            val hasDraft = cleanDraft.isNotEmpty()
+            val subText = when {
+                hasDraft -> "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $cleanDraft"
+                group.lastMessage.isNotBlank() -> {
+                    val prefix = when {
+                        group.lastSenderId == myUserId -> "You: "
+                        !group.lastSenderName.isNullOrBlank() -> "${group.lastSenderName}: "
+                        else -> ""
+                    }
+                    "$prefix${group.lastMessage}"
                 }
-                "$prefix${group.lastMessage}"
-            } else {
-                "${group.memberCount} members"
+                else -> "${group.memberCount} members"
             }
             Text(
                 text = subText,
-                color = if (unread > 0) palette.textPrimary else palette.textSecondary,
+                color = when {
+                    hasDraft -> palette.accent
+                    unread > 0 -> palette.textPrimary
+                    else -> palette.textSecondary
+                },
                 fontSize = 13.sp,
+                fontWeight = if (unread > 0 || hasDraft) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

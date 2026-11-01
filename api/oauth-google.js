@@ -189,14 +189,22 @@ async function handleNativeGoogleTokenSignIn(req, res, credentials) {
         });
       }
 
-      const { token, me } = await upsertGoogleOAuthAccount({
+      const authRes = await upsertGoogleOAuthAccount({
         googleSub: String(claims.sub),
         email: String(claims.email),
         name: claims.name ? String(claims.name) : undefined,
         picture: claims.picture ? String(claims.picture) : undefined,
       });
 
-      return res.status(200).json({ ok: true, token, me });
+      if (authRes.requiresTwoFactor) {
+        return res.status(200).json({
+          ok: true,
+          requiresTwoFactor: true,
+          challengeToken: authRes.challengeToken,
+          email: authRes.email,
+        });
+      }
+      return res.status(200).json({ ok: true, token: authRes.token, me: authRes.me });
     }
 
     const userResp = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
@@ -210,13 +218,21 @@ async function handleNativeGoogleTokenSignIn(req, res, credentials) {
       });
     }
 
-    const { token, me } = await upsertGoogleOAuthAccount({
+    const authRes = await upsertGoogleOAuthAccount({
       googleSub: String(profile.sub),
       email: String(profile.email),
       name: profile.name ? String(profile.name) : undefined,
       picture: profile.picture ? String(profile.picture) : undefined,
     });
-    return res.status(200).json({ ok: true, token, me });
+    if (authRes.requiresTwoFactor) {
+      return res.status(200).json({
+        ok: true,
+        requiresTwoFactor: true,
+        challengeToken: authRes.challengeToken,
+        email: authRes.email,
+      });
+    }
+    return res.status(200).json({ ok: true, token: authRes.token, me: authRes.me });
   } catch (err) {
     return res.status(500).json({
       ok: false,
@@ -399,12 +415,38 @@ export default async function handler(req, res) {
       );
     }
 
-    const { token, me } = await upsertGoogleOAuthAccount({
+    const authRes = await upsertGoogleOAuthAccount({
       googleSub: String(profile.sub),
       email: String(profile.email),
       name: profile.name ? String(profile.name) : undefined,
       picture: profile.picture ? String(profile.picture) : undefined,
     });
+
+    if (authRes.requiresTwoFactor && authRes.challengeToken) {
+      if (mobileSession) {
+        await saveMobileOAuthHandoff({
+          sessionId: mobileSession,
+          status: "two_factor_required",
+          challengeToken: authRes.challengeToken,
+        }).catch(() => undefined);
+      }
+      if (platform === "android") {
+        const sessSuffix = mobileSession
+          ? `&mobileSession=${encodeURIComponent(mobileSession)}`
+          : "";
+        res.writeHead(302, {
+          Location: `com.ahad00010.jatext://auth?twoFactorChallenge=${encodeURIComponent(authRes.challengeToken)}${sessSuffix}`,
+        });
+        return res.end();
+      }
+      const webCallbackPath = platform === "ios_web" ? "/ios/chats" : "/chats";
+      res.writeHead(302, {
+        Location: `${targetOrigin}${webCallbackPath}?twoFactorChallenge=${encodeURIComponent(authRes.challengeToken)}`,
+      });
+      return res.end();
+    }
+
+    const { token, me } = authRes;
 
     if (mobileSession) {
       await saveMobileOAuthHandoff({
