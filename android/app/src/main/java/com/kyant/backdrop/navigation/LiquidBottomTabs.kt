@@ -101,7 +101,7 @@ fun LiquidBottomTabs(
         val latestOnTabSelected by rememberUpdatedState(onTabSelected)
         val maxIndex = (tabsCount - 1).coerceAtLeast(0)
         var currentIndex by remember {
-            mutableIntStateOf(selectedTabIndex().fastCoerceIn(0, maxIndex))
+            mutableIntStateOf(selectedTabIndex().coerceIn(0, maxIndex))
         }
         val dampedDragAnimation = remember(animationScope, tabsCount) {
             DampedDragAnimation(
@@ -113,7 +113,7 @@ fun LiquidBottomTabs(
                 pressedScale = 78f / 56f,
                 onDragStarted = {},
                 onDragStopped = {
-                    val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, maxIndex)
+                    val targetIndex = targetValue.fastRoundToInt().coerceIn(0, maxIndex)
                     currentIndex = targetIndex
                     animateToValue(targetIndex.toFloat())
                     latestOnTabSelected(targetIndex)
@@ -136,7 +136,7 @@ fun LiquidBottomTabs(
             )
         }
         LaunchedEffect(dampedDragAnimation, maxIndex) {
-            snapshotFlow { latestSelectedTabIndex().fastCoerceIn(0, maxIndex) }
+            snapshotFlow { latestSelectedTabIndex().coerceIn(0, maxIndex) }
                 .collectLatest { index ->
                     if (currentIndex != index) {
                         currentIndex = index
