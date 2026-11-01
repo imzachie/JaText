@@ -372,6 +372,7 @@ fun NativeCallOverlay(
                     onSetShowSoundboard = { showSoundboard = it },
                     onLaunchScreenShare = { intent -> screenShareLauncher.launch(intent) },
                     callEngine = callEngine,
+                    customSoundboards = customSoundboards,
                 )
             }
         }
@@ -576,6 +577,7 @@ private fun NativeCallFullscreenStage(
     onSetShowSoundboard: (Boolean) -> Unit,
     onLaunchScreenShare: (Intent) -> Unit,
     callEngine: NativeCallEngine,
+    customSoundboards: List<SoundboardClip> = emptyList(),
 ) {
     val context = LocalContext.current
     val titleName = callState.peer?.displayName?.ifBlank { callState.peer?.username.orEmpty() }

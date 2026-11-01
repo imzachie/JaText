@@ -624,7 +624,7 @@ object JaTextCryptoEngine {
             synchronized(list) {
                 list.removeAll { it.keyId == b.keyId }
                 list.add(b)
-                list.sortByDescending { maxOf(it.updatedAt, it.ts) }
+                list.sortByDescending { maxOf(it.updatedAt ?: 0L, it.ts) }
             }
         }
     }
@@ -1366,7 +1366,7 @@ object JaTextCryptoEngine {
                 token = token,
             )
             val allStickers = boot.stickerFavorites + boot.recentStickers
-            val outcome = syncAutoKeyringWithServer(context, myUserId, allStickers, token, forcePush = false)
+            val outcome = syncAccountKeyringWithServer(context, myUserId, allStickers, token, forcePush = false)
             outcome?.changedLocal == true
         } catch (_: Throwable) {
             false

@@ -94,11 +94,18 @@ object JaTextI18n {
         "add_soundboard" to "Add custom sound",
         "two_factor_title" to "2FA",
         "setup_2fa" to "Set up 2FA authentication",
+        "disable_2fa" to "Disable 2FA",
         "enter_auth_code" to "Enter your authentication code",
         "passkeys" to "Passkeys",
         "add_passkey" to "Create a passkey",
         "sign_in_passkey" to "Sign in with Passkey",
         "type_message" to "Message",
+        "upload_attachment" to "Upload attachment",
+        "schedule_message" to "Schedule message",
+        "socials" to "Socials",
+        "legal" to "Legal",
+        "soundboards_desc" to "Upload custom audio clips (max 10 MB, max 10s) to play during 1:1 and Group calls.",
+        "languages_desc" to "Choose your preferred display language across JaText.",
     )
 
     private val dicts: Map<String, Map<String, String>> = mapOf(
@@ -329,9 +336,57 @@ object JaTextI18n {
         ),
     )
 
+    private val keyAliases: Map<String, String> = mapOf(
+        "sidebar.search" to "search_chats",
+        "sidebar.folders.all" to "all_chats",
+        "sidebar.folders.new" to "new_folder",
+        "sidebar.draft" to "draft",
+        "sidebar.pin" to "pin_chat",
+        "sidebar.unpin" to "unpin_chat",
+        "sidebar.moveUp" to "move_up",
+        "sidebar.moveDown" to "move_down",
+        "nav.chats" to "chats",
+        "nav.calls" to "calls",
+        "nav.add" to "add",
+        "nav.settings" to "settings",
+        "chat.searchInChat" to "search_messages",
+        "chat.pinned" to "pinned_messages",
+        "chat.typeMessage" to "type_message",
+        "chat.pinMessage" to "pin_message",
+        "chat.unpinMessage" to "unpin_message",
+        "plus.upload" to "upload_attachment",
+        "plus.viewOnce" to "view_once",
+        "plus.schedule" to "schedule_message",
+        "settings.profile" to "profile",
+        "settings.appearance" to "appearance",
+        "settings.devices" to "linked_devices",
+        "settings.socials" to "socials",
+        "settings.alerts" to "alerts_audio",
+        "settings.privacy" to "privacy",
+        "settings.legal" to "legal",
+        "blocked.title" to "blocked_users",
+        "blocked.cta" to "see_blocked_users",
+        "blocked.empty" to "no_blocked_users",
+        "blocked.unblock" to "unblock",
+        "soundboard.title" to "soundboards",
+        "soundboard.desc" to "soundboards_desc",
+        "soundboard.add" to "add_soundboard",
+        "twofa.title" to "two_factor_title",
+        "twofa.disable" to "disable_2fa",
+        "twofa.setup" to "setup_2fa",
+        "passkeys.title" to "passkeys",
+        "passkeys.add" to "add_passkey",
+        "appearance.languages" to "languages",
+        "appearance.languagesDesc" to "languages_desc",
+    )
+
     fun tr(key: String, lang: String = _currentLanguage.value): String {
-        return dicts[lang]?.get(key) ?: en[key] ?: key
+        val canonical = keyAliases[key] ?: key
+        return dicts[lang]?.get(canonical) ?: en[canonical] ?: canonical
     }
 }
+
+fun jt(key: String, lang: String = JaTextI18n.currentLanguage.value): String =
+    JaTextI18n.tr(key, lang)
 
 val LocalJaTextLanguage = compositionLocalOf { "en" }
