@@ -61,6 +61,7 @@ import {
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { DeleteForMeToast, type DeletedForMeUndoState } from "./DeleteForMeToast";
 import {
+  restoreSnapTargetVisibilityById,
   triggerMessageThanosSnapById,
   useUnsendThanosWatcher,
 } from "../lib/thanosSnapEffect";
@@ -1156,12 +1157,16 @@ export function CommunityChatView({
   }
   async function unsend(message: CommunityMessage) {
     closeMessageMenu();
-    triggerMessageThanosSnapById(message.id);
+    const sweepDone = new Promise<void>((resolve) => {
+      const started = triggerMessageThanosSnapById(message.id, undefined, () => resolve());
+      if (!started) resolve();
+    });
     try {
-      await new Promise((resolve) => window.setTimeout(resolve, 260));
-      const shouldShowWarning = await store.unsendCommunityMessage(message.id);
+      const unsendReq = store.unsendCommunityMessage(message.id);
+      const [, shouldShowWarning] = await Promise.all([sweepDone, unsendReq]);
       if (shouldShowWarning) setShowUnsendWarning(true);
     } catch (err) {
+      restoreSnapTargetVisibilityById(message.id);
       setError(friendlyError(err, "Couldn't unsend the message."));
     }
   }

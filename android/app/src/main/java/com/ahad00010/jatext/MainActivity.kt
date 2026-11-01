@@ -114,6 +114,9 @@ class MainActivity : ComponentActivity() {
         @Volatile
         private var activeActivityRef: WeakReference<MainActivity>? = null
 
+        @Volatile
+        private var callLockScreenEnabled: Boolean = false
+
         @JvmStatic
         fun peekActiveActivity(): MainActivity? = activeActivityRef?.get()
 
@@ -140,7 +143,9 @@ class MainActivity : ComponentActivity() {
         @JvmStatic
         fun setCallLockScreenMode(enabled: Boolean) {
             mainHandler.post {
+                if (callLockScreenEnabled == enabled) return@post
                 val activity = activeActivityRef?.get() ?: return@post
+                callLockScreenEnabled = enabled
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                         activity.setShowWhenLocked(enabled)
@@ -308,15 +313,9 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-            )
+        // Only enable lock-screen wakeup flags when actually woken up by an incoming call intent!
+        if (intent?.getStringExtra("type") == "incoming_call") {
+            setCallLockScreenMode(true)
         }
 
         // Request native 120Hz / highest supported display refresh rate on Android RenderThread
@@ -343,6 +342,9 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getStringExtra("type") == "incoming_call") {
+            setCallLockScreenMode(true)
+        }
         handleIncomingPushIntent(intent)
     }
 
@@ -371,6 +373,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         if (activeActivityRef?.get() === this) {
             activeActivityRef = null
+            callLockScreenEnabled = false
         }
         super.onDestroy()
     }

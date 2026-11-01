@@ -3281,83 +3281,98 @@ private fun SwipeableMessageRow(
                     }
 
                     else -> {
-                        StyledMessageBubbleContainer(
-                            styleId = msg.bubbleStyle,
-                            isMine = isMine,
-                            palette = palette,
-                            modifier = Modifier
-                                .thanosSnapTarget(msg.id, thanosHost)
-                                .combinedClickable(
-                                    onClick = {},
-                                    onLongClick = onLongPress,
-                                )
-                        ) { ink ->
-                            Column {
-                                msg.forwardedContext?.let { fwd ->
-                                    ForwardedContextCardUi(
-                                        contextCard = fwd,
-                                        myUserId = myUserId,
-                                        knownGroupIds = knownGroupIds,
-                                        knownFriendIds = knownFriendIds,
-                                        ink = ink,
-                                        onJumpToOriginal = onJumpToForwarded,
+                        Column(
+                            horizontalAlignment = if (isMine) Alignment.End else Alignment.Start,
+                            modifier = Modifier.thanosSnapTarget(msg.id, thanosHost),
+                        ) {
+                            StyledMessageBubbleContainer(
+                                styleId = msg.bubbleStyle,
+                                isMine = isMine,
+                                palette = palette,
+                                modifier = Modifier
+                                    .combinedClickable(
+                                        onClick = {},
+                                        onLongClick = onLongPress,
                                     )
-                                }
-                                msg.replyTo?.let { rep ->
-                                    ReplyQuoteBannerUi(
-                                        reply = rep,
-                                        ink = ink,
-                                        onJump = onJumpToReply,
-                                    )
-                                }
-                                if (!msg.attachmentUrl.isNullOrBlank()) {
-                                    MessageMediaAttachmentView(
-                                        attachmentUrl = msg.attachmentUrl,
-                                        attachmentName = msg.attachmentName,
-                                        attachmentType = msg.attachmentType,
-                                        encryptedAttachment = msg.encryptedAttachment,
-                                        ink = ink,
-                                        onOpenImageFullscreen = onOpenFullscreenImage,
-                                        showTranscript = showTranscript,
-                                        onHideTranscript = onHideTranscript,
-                                        onLongPressMessage = onLongPress,
-                                    )
-                                }
-                                if (msg.body.isNotBlank()) {
-                                    RichTextWithLinksAndMentions(
-                                        text = msg.body,
-                                        ink = ink,
-                                        palette = palette,
-                                        onLongPressMessage = onLongPress,
-                                    )
-                                }
+                            ) { ink ->
+                                Column {
+                                    msg.forwardedContext?.let { fwd ->
+                                        ForwardedContextCardUi(
+                                            contextCard = fwd,
+                                            myUserId = myUserId,
+                                            knownGroupIds = knownGroupIds,
+                                            knownFriendIds = knownFriendIds,
+                                            ink = ink,
+                                            onJumpToOriginal = onJumpToForwarded,
+                                        )
+                                    }
+                                    msg.replyTo?.let { rep ->
+                                        ReplyQuoteBannerUi(
+                                            reply = rep,
+                                            ink = ink,
+                                            onJump = onJumpToReply,
+                                        )
+                                    }
+                                    if (!msg.attachmentUrl.isNullOrBlank()) {
+                                        MessageMediaAttachmentView(
+                                            attachmentUrl = msg.attachmentUrl,
+                                            attachmentName = msg.attachmentName,
+                                            attachmentType = msg.attachmentType,
+                                            encryptedAttachment = msg.encryptedAttachment,
+                                            ink = ink,
+                                            onOpenImageFullscreen = onOpenFullscreenImage,
+                                            showTranscript = showTranscript,
+                                            onHideTranscript = onHideTranscript,
+                                            onLongPressMessage = onLongPress,
+                                        )
+                                    }
+                                    if (msg.body.isNotBlank()) {
+                                        RichTextWithLinksAndMentions(
+                                            text = msg.body,
+                                            ink = ink,
+                                            palette = palette,
+                                            onLongPressMessage = onLongPress,
+                                        )
+                                    }
 
-                                Spacer(Modifier.height(3.dp))
-                                Box(modifier = Modifier.align(Alignment.End)) {
-                                    MessageMetaTimestampAndReceiptRow(
-                                        createdAt = msg.createdAt,
-                                        editedAt = msg.editedAt,
-                                        isMine = isMine,
-                                        isGroupThread = isGroupThread,
-                                        deliveryStatus = msg.deliveryStatus,
-                                        readAt = msg.readAt,
-                                        subTextColor = ink.subTextColor,
-                                        readAccentColor = if (ink.isLightSurface) Color(0xFF0284C7) else Color(0xFF7DD3FC),
-                                    )
+                                    Spacer(Modifier.height(3.dp))
+                                    Box(modifier = Modifier.align(Alignment.End)) {
+                                        MessageMetaTimestampAndReceiptRow(
+                                            createdAt = msg.createdAt,
+                                            editedAt = msg.editedAt,
+                                            isMine = isMine,
+                                            isGroupThread = isGroupThread,
+                                            deliveryStatus = msg.deliveryStatus,
+                                            readAt = msg.readAt,
+                                            subTextColor = ink.subTextColor,
+                                            readAccentColor = if (ink.isLightSurface) Color(0xFF0284C7) else Color(0xFF7DD3FC),
+                                        )
+                                    }
                                 }
                             }
+
+                            MessageReactionPillsRow(
+                                reactions = msg.reactions,
+                                myUserId = myUserId,
+                                palette = palette,
+                                alignEnd = isMine,
+                                onToggleEmoji = onToggleReaction,
+                                onOpenPicker = onOpenEmojiPicker,
+                            )
                         }
                     }
                 }
 
-                MessageReactionPillsRow(
-                    reactions = msg.reactions,
-                    myUserId = myUserId,
-                    palette = palette,
-                    alignEnd = isMine,
-                    onToggleEmoji = onToggleReaction,
-                    onOpenPicker = onOpenEmojiPicker,
-                )
+                if (msg.unsentAt == null && !msg.stickerUrl.isNullOrBlank()) {
+                    MessageReactionPillsRow(
+                        reactions = msg.reactions,
+                        myUserId = myUserId,
+                        palette = palette,
+                        alignEnd = isMine,
+                        onToggleEmoji = onToggleReaction,
+                        onOpenPicker = onOpenEmojiPicker,
+                    )
+                }
 
                 if (isGroupThread && seenReaders.isNotEmpty()) {
                     GroupSeenAvatarsRowUi(
