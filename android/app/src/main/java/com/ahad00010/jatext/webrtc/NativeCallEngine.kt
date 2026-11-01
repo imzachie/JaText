@@ -124,6 +124,7 @@ class NativeCallEngine(
     private val sendDmWireSignal: suspend (receiverId: String, plainBody: String, silent: Boolean) -> Unit,
     private val sendGroupWireSignal: suspend (groupId: String, plainBody: String, silent: Boolean) -> Unit,
     private val recordCallHistory: (peer: JaUser?, group: GroupSummary?, mode: String, direction: String, status: String, durationSec: Int) -> Unit,
+    private val requestRecentCallSignals: ((peerId: String?, groupId: String?) -> Unit)? = null,
 ) : NativeRuntimeBridge.ScreenCaptureListener {
 
     companion object {
@@ -156,8 +157,11 @@ class NativeCallEngine(
     private val dataChannels = ConcurrentHashMap<String, DataChannel>()
     private val videoSenders = ConcurrentHashMap<String, RtpSender>()
     private val pendingOffersByPeer = ConcurrentHashMap<String, SdpPayload>()
+    private val pendingOffersByCallId = ConcurrentHashMap<String, SdpPayload>()
     private val handledSignalKeys = LinkedHashSet<String>()
+    private val handledInviteCallIds = LinkedHashSet<String>()
     private val endedOrDeclinedCallIds = LinkedHashSet<String>()
+    private val answeredCallIds = LinkedHashSet<String>()
 
     private var ringTimeoutJob: Job? = null
     private var myJoinSeq: Long = 0L
@@ -379,6 +383,7 @@ class NativeCallEngine(
         val actualVideo = withVideo && hasCameraPermission()
         JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
         ringTimeoutJob?.cancel()
+        handledInviteCallIds.add(cur.callId)
 
         configureCallAudioMode(active = true, speakerphone = true)
         if (cur.isGroup && cur.group != null) {
@@ -393,6 +398,7 @@ class NativeCallEngine(
                     localVideoTrack = if (actualVideo) localVideoTrack else null,
                 )
             }
+            requestRecentCallSignals?.invoke(null, cur.group.id)
             scope.launch {
                 // Dominant first-device claim so other logged-in devices stop ringing immediately!
                 val claimSig = GroupSignalEnvelope(
@@ -403,7 +409,7 @@ class NativeCallEngine(
                     fromUsername = me.username,
                     fromAvatarUrl = me.avatarUrl,
                     fromAvatarColor = me.avatarColor,
-                    toId = me.id,
+                    toId = "*",
                     type = "claim-ring",
                     deviceSessionId = deviceSessionId,
                     joinSeq = myJoinSeq,
@@ -428,18 +434,21 @@ class NativeCallEngine(
             )
         }
         scope.launch {
-            // Dominant first-device pickup claim!
+            // Dominant first-device pickup claim MUST go into the peer DM thread (NOT me.id!)
+            // so linked Desktop / iOS devices polling messages with peer.id immediately dismiss!
             val claim = CallSignalEnvelope(
                 callId = cur.callId,
                 type = "claim",
                 deviceSessionId = deviceSessionId,
                 ts = System.currentTimeMillis(),
             )
-            sendDmWireSignal(me.id, "$CALL_SIGNAL_PREFIX${JaTextJson.encodeToString(claim)}", true)
+            sendDmWireSignal(peer.id, "$CALL_SIGNAL_PREFIX${JaTextJson.encodeToString(claim)}", true)
 
-            val pendingOffer = pendingOffersByPeer[peer.id]
+            val pendingOffer = pendingOffersByCallId[cur.callId] ?: pendingOffersByPeer[peer.id]
             if (pendingOffer != null) {
                 answerDmOffer(peer, cur.callId, pendingOffer, actualVideo)
+            } else {
+                requestRecentCallSignals?.invoke(peer.id, null)
             }
         }
     }
@@ -479,7 +488,7 @@ class NativeCallEngine(
                     fromId = me.id,
                     fromName = me.displayName,
                     fromUsername = me.username,
-                    toId = me.id,
+                    toId = "*",
                     type = "decline-ring",
                     deviceSessionId = deviceSessionId,
                     ts = System.currentTimeMillis(),
@@ -710,7 +719,24 @@ class NativeCallEngine(
             isSpeakerphone = true,
             localVideoTrack = if (actualVideo) localVideoTrack else null,
         )
+        handledInviteCallIds.add(invite.callId)
+        requestRecentCallSignals?.invoke(null, group.id)
         scope.launch {
+            val claimSig = GroupSignalEnvelope(
+                callId = invite.callId,
+                groupId = group.id,
+                fromId = me.id,
+                fromName = me.displayName,
+                fromUsername = me.username,
+                fromAvatarUrl = me.avatarUrl,
+                fromAvatarColor = me.avatarColor,
+                toId = "*",
+                type = "claim-ring",
+                deviceSessionId = deviceSessionId,
+                joinSeq = myJoinSeq,
+                ts = System.currentTimeMillis(),
+            )
+            sendGroupWireSignal(group.id, "$GROUP_CALL_SIGNAL_PREFIX${JaTextJson.encodeToString(claimSig)}", true)
             val joinSig = GroupSignalEnvelope(
                 callId = invite.callId,
                 groupId = group.id,
@@ -909,15 +935,32 @@ class NativeCallEngine(
                 return
             }
             if (inv.state == "ended" || inv.state == "declined" || inv.state == "missed") {
+                endedOrDeclinedCallIds.add(inv.callId)
+                handledInviteCallIds.add(inv.callId)
+                JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
                 if (_uiState.value.callId == inv.callId) {
-                    JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
                     teardownAllResources()
                     _uiState.value = NativeCallUiState()
                 }
                 return
             }
-            if (inv.state == "ringing" && senderId != me.id && !endedOrDeclinedCallIds.contains(inv.callId)) {
+            if (inv.state == "connected" && _uiState.value.callId == inv.callId && _uiState.value.phase == "incoming") {
+                // Another device logged into our account already answered and connected this call!
+                endedOrDeclinedCallIds.add(inv.callId)
+                handledInviteCallIds.add(inv.callId)
+                JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
+                teardownAllResources()
+                _uiState.value = NativeCallUiState()
+                return
+            }
+            if (
+                inv.state == "ringing" &&
+                senderId != me.id &&
+                !endedOrDeclinedCallIds.contains(inv.callId) &&
+                !handledInviteCallIds.contains(inv.callId)
+            ) {
                 if (!_uiState.value.active) {
+                    handledInviteCallIds.add(inv.callId)
                     JaTextSoundManager.startIncomingRingtoneLoop(appContext)
                     _uiState.value = NativeCallUiState(
                         active = true,
@@ -929,6 +972,7 @@ class NativeCallEngine(
                         participants = listOf(RemoteParticipantState(user = peer, cameraOff = inv.mode != "video")),
                     )
                     armOneMinuteUnansweredTimeout()
+                    requestRecentCallSignals?.invoke(peer.id, null)
                 }
             }
             return
@@ -943,22 +987,47 @@ class NativeCallEngine(
         } catch (_: Throwable) {
             return
         }
+
+        // Multi-device dominance: another device logged into OUR OWN account (senderId == me.id)
+        // claimed, answered, declined, or hung up this call -> immediately stop ringing & dismiss!
+        if (
+            senderId == me.id &&
+            sig.deviceSessionId != null &&
+            sig.deviceSessionId != deviceSessionId &&
+            (sig.type == "claim" || sig.type == "answer" || sig.type == "decline" || sig.type == "hangup")
+        ) {
+            endedOrDeclinedCallIds.add(sig.callId)
+            handledInviteCallIds.add(sig.callId)
+            JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
+            val cur = _uiState.value
+            if (cur.active && cur.callId == sig.callId && (cur.phase == "incoming" || sig.type == "hangup")) {
+                teardownAllResources()
+                _uiState.value = NativeCallUiState()
+            }
+            return
+        }
+
         if (endedOrDeclinedCallIds.contains(sig.callId)) return
 
         when (sig.type) {
             "claim" -> {
-                if (sig.deviceSessionId != null && sig.deviceSessionId != deviceSessionId && _uiState.value.callId == sig.callId) {
-                    // Another logged-in device answered first; stop ringing here!
+                if (sig.deviceSessionId != null && sig.deviceSessionId != deviceSessionId && senderId == me.id) {
+                    endedOrDeclinedCallIds.add(sig.callId)
+                    handledInviteCallIds.add(sig.callId)
                     JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
-                    teardownAllResources()
-                    _uiState.value = NativeCallUiState()
+                    if (_uiState.value.callId == sig.callId && _uiState.value.phase == "incoming") {
+                        teardownAllResources()
+                        _uiState.value = NativeCallUiState()
+                    }
                 }
             }
             "offer" -> {
                 if (senderId == me.id) return
                 val sdp = sig.sdp ?: return
                 pendingOffersByPeer[peer.id] = sdp
-                if (!_uiState.value.active) {
+                pendingOffersByCallId[sig.callId] = sdp
+                if (!_uiState.value.active && !handledInviteCallIds.contains(sig.callId)) {
+                    handledInviteCallIds.add(sig.callId)
                     JaTextSoundManager.startIncomingRingtoneLoop(appContext)
                     _uiState.value = NativeCallUiState(
                         active = true,
@@ -981,12 +1050,20 @@ class NativeCallEngine(
                 val sdp = sig.sdp ?: return
                 val pc = peerConnections[peer.id] ?: return
                 ringTimeoutJob?.cancel()
-                pc.setRemoteDescription(SimpleSdpObserver(), SessionDescription(SessionDescription.Type.ANSWER, sdp.sdp))
-                _uiState.update {
-                    it.copy(
-                        phase = "connected",
-                        startedAtMs = it.startedAtMs ?: System.currentTimeMillis(),
-                    )
+                upsertParticipant(peer, cameraOff = sig.cameraOff ?: true)
+                scope.launch {
+                    if (pc.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+                        awaitSetRemoteDescription(
+                            pc,
+                            SessionDescription(SessionDescription.Type.ANSWER, sdp.sdp),
+                        )
+                    }
+                    _uiState.update {
+                        it.copy(
+                            phase = "connected",
+                            startedAtMs = it.startedAtMs ?: System.currentTimeMillis(),
+                        )
+                    }
                 }
             }
             "renegotiate-offer" -> {
@@ -994,7 +1071,11 @@ class NativeCallEngine(
                 val sdp = sig.sdp ?: return
                 scope.launch {
                     val pc = getOrCreatePeerConnection(peer.id, peer, isGroup = false)
-                    pc.setRemoteDescription(SimpleSdpObserver(), SessionDescription(SessionDescription.Type.OFFER, sdp.sdp))
+                    val ok = awaitSetRemoteDescription(
+                        pc,
+                        SessionDescription(SessionDescription.Type.OFFER, sdp.sdp),
+                    )
+                    if (!ok) return@launch
                     val answer = createCompleteSdp(pc, isOffer = false) ?: return@launch
                     val reply = CallSignalEnvelope(
                         callId = sig.callId,
@@ -1007,15 +1088,23 @@ class NativeCallEngine(
                 }
             }
             "renegotiate-answer" -> {
+                if (senderId == me.id) return
                 val sdp = sig.sdp ?: return
-                peerConnections[peer.id]?.setRemoteDescription(
-                    SimpleSdpObserver(),
-                    SessionDescription(SessionDescription.Type.ANSWER, sdp.sdp)
-                )
+                val pc = peerConnections[peer.id] ?: return
+                scope.launch {
+                    if (pc.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+                        awaitSetRemoteDescription(
+                            pc,
+                            SessionDescription(SessionDescription.Type.ANSWER, sdp.sdp),
+                        )
+                    }
+                }
             }
             "decline", "hangup" -> {
+                endedOrDeclinedCallIds.add(sig.callId)
+                handledInviteCallIds.add(sig.callId)
+                JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
                 if (_uiState.value.callId == sig.callId) {
-                    JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
                     teardownAllResources()
                     _uiState.value = NativeCallUiState()
                 }
@@ -1033,15 +1122,23 @@ class NativeCallEngine(
                 return
             }
             if (inv.state == "ended") {
+                endedOrDeclinedCallIds.add(inv.callId)
+                handledInviteCallIds.add(inv.callId)
+                JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
                 if (_uiState.value.callId == inv.callId) {
-                    JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
                     teardownAllResources()
                     _uiState.value = NativeCallUiState(statusBanner = "GC VC Ended")
                 }
                 return
             }
-            if (inv.state == "active" && inv.hostId != me.id && !endedOrDeclinedCallIds.contains(inv.callId)) {
+            if (
+                inv.state == "active" &&
+                inv.hostId != me.id &&
+                !endedOrDeclinedCallIds.contains(inv.callId) &&
+                !handledInviteCallIds.contains(inv.callId)
+            ) {
                 if (!_uiState.value.active) {
+                    handledInviteCallIds.add(inv.callId)
                     JaTextSoundManager.startIncomingRingtoneLoop(appContext)
                     _uiState.value = NativeCallUiState(
                         active = true,
@@ -1066,19 +1163,38 @@ class NativeCallEngine(
         } catch (_: Throwable) {
             return
         }
-        val cur = _uiState.value
-        if (!cur.active || cur.callId != sig.callId) return
 
-        if ((sig.type == "claim-ring" || sig.type == "decline-ring") &&
+        // Sibling device logged into our same account accepted/joined or declined -> stop ringing immediately!
+        if (
+            (sig.type == "claim-ring" || sig.type == "decline-ring" || sig.type == "join") &&
             sig.fromId == me.id &&
-            sig.deviceSessionId != deviceSessionId &&
-            cur.phase == "incoming"
+            sig.deviceSessionId != null &&
+            sig.deviceSessionId != deviceSessionId
         ) {
+            endedOrDeclinedCallIds.add(sig.callId)
+            handledInviteCallIds.add(sig.callId)
             JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
-            teardownAllResources()
-            _uiState.value = NativeCallUiState()
+            val curNow = _uiState.value
+            if (curNow.active && curNow.callId == sig.callId && curNow.phase == "incoming") {
+                teardownAllResources()
+                _uiState.value = NativeCallUiState()
+            }
             return
         }
+
+        if (sig.type == "ended") {
+            endedOrDeclinedCallIds.add(sig.callId)
+            handledInviteCallIds.add(sig.callId)
+            JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
+            if (_uiState.value.active && _uiState.value.callId == sig.callId) {
+                teardownAllResources()
+                _uiState.value = NativeCallUiState(statusBanner = "GC VC Ended")
+            }
+            return
+        }
+
+        val cur = _uiState.value
+        if (!cur.active || cur.callId != sig.callId) return
 
         if (sig.fromId == me.id) return
         if (sig.toId != "*" && sig.toId != me.id) return
@@ -1096,11 +1212,20 @@ class NativeCallEngine(
                 if (cur.phase != "connected") return
                 ringTimeoutJob?.cancel()
                 upsertParticipant(remoteUser, cameraOff = sig.cameraOff ?: true)
-                scope.launch {
+
+                // Match Web groupCalling.tsx strict offerer ordering (newer joinSeq offers first) to avoid glare!
+                val amDesignatedOfferer =
+                    myJoinSeq > sig.joinSeq || (myJoinSeq == sig.joinSeq && me.id > remoteUser.id)
+
+                val sendGroupOfferToRemote: suspend () -> Unit = sendOffer@{
+                    val liveCur = _uiState.value
+                    if (!liveCur.active || liveCur.callId != cur.callId) return@sendOffer
                     val pc = getOrCreatePeerConnection(remoteUser.id, remoteUser, isGroup = true)
-                    val dc = pc.createDataChannel("jatext-grp", DataChannel.Init())
-                    attachDataChannel(remoteUser.id, dc)
-                    val offer = createCompleteSdp(pc, isOffer = true) ?: return@launch
+                    if (!dataChannels.containsKey(remoteUser.id)) {
+                        val dc = pc.createDataChannel("jatext-gcall-meta", DataChannel.Init())
+                        attachDataChannel(remoteUser.id, dc)
+                    }
+                    val offer = createCompleteSdp(pc, isOffer = true) ?: return@sendOffer
                     val offerSig = GroupSignalEnvelope(
                         callId = cur.callId,
                         groupId = group.id,
@@ -1120,15 +1245,42 @@ class NativeCallEngine(
                     )
                     sendGroupWireSignal(group.id, "$GROUP_CALL_SIGNAL_PREFIX${JaTextJson.encodeToString(offerSig)}", true)
                 }
+
+                if (amDesignatedOfferer) {
+                    scope.launch { sendGroupOfferToRemote() }
+                } else {
+                    scope.launch {
+                        delay(3400L)
+                        val existingPc = peerConnections[remoteUser.id]
+                        if (existingPc == null || existingPc.iceConnectionState() == PeerConnection.IceConnectionState.FAILED) {
+                            sendGroupOfferToRemote()
+                        }
+                    }
+                }
             }
             "offer" -> {
                 if (cur.phase != "connected") return
                 val sdp = sig.sdp ?: return
                 ringTimeoutJob?.cancel()
+
+                // Polite/impolite glare guard matching Web groupCalling.tsx
+                val existingPc = peerConnections[remoteUser.id]
+                val amPolite = me.id < remoteUser.id
+                if (existingPc != null && existingPc.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+                    if (!amPolite) return
+                    peerConnections.remove(remoteUser.id)?.close()
+                    dataChannels.remove(remoteUser.id)?.close()
+                    videoSenders.remove(remoteUser.id)
+                }
+
                 upsertParticipant(remoteUser, cameraOff = sig.cameraOff ?: true, screenSharing = sig.screenSharing ?: false)
                 scope.launch {
                     val pc = getOrCreatePeerConnection(remoteUser.id, remoteUser, isGroup = true)
-                    pc.setRemoteDescription(SimpleSdpObserver(), SessionDescription(SessionDescription.Type.OFFER, sdp.sdp))
+                    val ok = awaitSetRemoteDescription(
+                        pc,
+                        SessionDescription(SessionDescription.Type.OFFER, sdp.sdp),
+                    )
+                    if (!ok) return@launch
                     val answer = createCompleteSdp(pc, isOffer = false) ?: return@launch
                     val ansSig = GroupSignalEnvelope(
                         callId = cur.callId,
@@ -1154,10 +1306,15 @@ class NativeCallEngine(
                 val sdp = sig.sdp ?: return
                 ringTimeoutJob?.cancel()
                 upsertParticipant(remoteUser, cameraOff = sig.cameraOff ?: true, screenSharing = sig.screenSharing ?: false)
-                peerConnections[remoteUser.id]?.setRemoteDescription(
-                    SimpleSdpObserver(),
-                    SessionDescription(SessionDescription.Type.ANSWER, sdp.sdp)
-                )
+                val pc = peerConnections[remoteUser.id] ?: return
+                scope.launch {
+                    if (pc.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+                        awaitSetRemoteDescription(
+                            pc,
+                            SessionDescription(SessionDescription.Type.ANSWER, sdp.sdp),
+                        )
+                    }
+                }
             }
             "leave" -> {
                 peerConnections.remove(remoteUser.id)?.close()
@@ -1165,20 +1322,47 @@ class NativeCallEngine(
                 videoSenders.remove(remoteUser.id)
                 _uiState.update { st -> st.copy(participants = st.participants.filterNot { it.user.id == remoteUser.id }) }
             }
-            "ended" -> {
-                JaTextSoundManager.cancelIncomingCallWakeup(appContext, true)
-                teardownAllResources()
-                _uiState.value = NativeCallUiState(statusBanner = "GC VC Ended")
-            }
         }
     }
 
     /* ==================== Internal WebRTC Helpers ==================== */
 
+    private suspend fun awaitSetRemoteDescription(pc: PeerConnection, desc: SessionDescription): Boolean {
+        val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        pc.setRemoteDescription(
+            object : SdpObserver {
+                override fun onCreateSuccess(p0: SessionDescription?) {}
+                override fun onSetSuccess() {
+                    deferred.complete(true)
+                }
+                override fun onCreateFailure(err: String?) {
+                    deferred.complete(false)
+                }
+                override fun onSetFailure(err: String?) {
+                    deferred.complete(false)
+                }
+            },
+            desc,
+        )
+        return deferred.await()
+    }
+
     private suspend fun answerDmOffer(peer: JaUser, callId: String, offerSdp: SdpPayload, withVideo: Boolean) {
+        if (!answeredCallIds.add(callId)) return
         val pc = getOrCreatePeerConnection(peer.id, peer, isGroup = false)
-        pc.setRemoteDescription(SimpleSdpObserver(), SessionDescription(SessionDescription.Type.OFFER, offerSdp.sdp))
-        val answer = createCompleteSdp(pc, isOffer = false) ?: return
+        val ok = awaitSetRemoteDescription(
+            pc,
+            SessionDescription(SessionDescription.Type.OFFER, offerSdp.sdp),
+        )
+        if (!ok) {
+            answeredCallIds.remove(callId)
+            return
+        }
+        val answer = createCompleteSdp(pc, isOffer = false)
+        if (answer == null) {
+            answeredCallIds.remove(callId)
+            return
+        }
         val ansSig = CallSignalEnvelope(
             callId = callId,
             type = "answer",
@@ -1298,6 +1482,47 @@ class NativeCallEngine(
                             val emoji = obj["emoji"]?.jsonPrimitive?.contentOrNull ?: return
                             val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: UUID.randomUUID().toString()
                             addReactionBubble(id, emoji)
+                        }
+                        "renegotiate-offer" -> {
+                            val sdpObj = obj["sdp"]?.jsonObject ?: return
+                            val sdpStr = sdpObj["sdp"]?.jsonPrimitive?.contentOrNull ?: return
+                            val pc = peerConnections[peerId] ?: return
+                            scope.launch {
+                                val ok = awaitSetRemoteDescription(
+                                    pc,
+                                    SessionDescription(SessionDescription.Type.OFFER, sdpStr),
+                                )
+                                if (!ok) return@launch
+                                val answer = createCompleteSdp(pc, isOffer = false) ?: return@launch
+                                val replyJson = JsonObject(
+                                    mapOf(
+                                        "type" to JsonPrimitive("renegotiate-answer"),
+                                        "sdp" to JsonObject(
+                                            mapOf(
+                                                "type" to JsonPrimitive("answer"),
+                                                "sdp" to JsonPrimitive(answer.description),
+                                            )
+                                        ),
+                                    )
+                                )
+                                if (dc.state() == DataChannel.State.OPEN) {
+                                    val replyBytes = replyJson.toString().toByteArray(Charsets.UTF_8)
+                                    dc.send(DataChannel.Buffer(ByteBuffer.wrap(replyBytes), false))
+                                }
+                            }
+                        }
+                        "renegotiate-answer" -> {
+                            val sdpObj = obj["sdp"]?.jsonObject ?: return
+                            val sdpStr = sdpObj["sdp"]?.jsonPrimitive?.contentOrNull ?: return
+                            val pc = peerConnections[peerId] ?: return
+                            scope.launch {
+                                if (pc.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+                                    awaitSetRemoteDescription(
+                                        pc,
+                                        SessionDescription(SessionDescription.Type.ANSWER, sdpStr),
+                                    )
+                                }
+                            }
                         }
                         "hangup" -> {
                             if (!_uiState.value.isGroup) {

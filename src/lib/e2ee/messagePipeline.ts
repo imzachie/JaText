@@ -457,7 +457,23 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
   // notifies mentioned group members (and @everyone ONLY for group owner / moderators)
   // while keeping message text end-to-end encrypted inside the v1 JSON envelope.
   let finalWire = encryptedWire;
-  if (!silentSignal && wireBody) {
+  if (
+    wireBody.startsWith("__JATEXT_CALL_GRP__:") &&
+    wireBody.includes('"state":"ended"') &&
+    encryptedWire.length + 32 <= 3980
+  ) {
+    finalWire = `${encryptedWire}\n(__JATEXT_CALL_GRP_ENDED__)`;
+  } else if (wireBody.startsWith("__JATEXT_CALL_SIG__:GRP:") && encryptedWire.length + 32 <= 3980) {
+    if (wireBody.includes('"type":"ended"')) {
+      finalWire = `${encryptedWire}\n(__JATEXT_CALL_GRP_ENDED__)`;
+    } else if (
+      wireBody.includes('"type":"claim-ring"') ||
+      wireBody.includes('"type":"decline-ring"') ||
+      wireBody.includes('"type":"join"')
+    ) {
+      finalWire = `${encryptedWire}\n(__JATEXT_CALL_CLAIM__)`;
+    }
+  } else if (!silentSignal && wireBody) {
     if (
       wireBody.startsWith("__JATEXT_CALL_GRP__:") &&
       wireBody.includes('"state":"active"') &&
@@ -523,6 +539,36 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
 /* Incoming Decryption & Media Blob Resolution                         */
 /* ------------------------------------------------------------------ */
 
+const overflowCipherCache = new Map<string, Uint8Array<ArrayBuffer>>();
+const inFlightOverflowCipher = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
+
+function fetchOverflowCiphertextBytes(storageId: string): Promise<Uint8Array<ArrayBuffer>> {
+  const normalizedUrl =
+    storageId.startsWith("http://") ||
+    storageId.startsWith("https://") ||
+    storageId.startsWith("/")
+      ? storageId
+      : `/api/media?id=${encodeURIComponent(storageId)}`;
+  const hit = overflowCipherCache.get(normalizedUrl);
+  if (hit) return Promise.resolve(hit);
+  const inflight = inFlightOverflowCipher.get(normalizedUrl);
+  if (inflight) return inflight;
+
+  const task = (async (): Promise<Uint8Array<ArrayBuffer>> => {
+    try {
+      const raw = await fetchMediaBytesSmart(normalizedUrl);
+      const copy = new Uint8Array(raw.byteLength);
+      copy.set(raw);
+      overflowCipherCache.set(normalizedUrl, copy);
+      return copy;
+    } finally {
+      inFlightOverflowCipher.delete(normalizedUrl);
+    }
+  })();
+  inFlightOverflowCipher.set(normalizedUrl, task);
+  return task;
+}
+
 const msgBlobTextCache = new Map<string, string>();
 const inFlightMsgBlob = new Map<string, Promise<void>>();
 
@@ -585,16 +631,26 @@ function resolveReplyBody(
     senderId: reply.senderId,
     receiverId,
     groupId,
+    fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
   });
   return "Decrypting…";
 }
 
 function extractFallbackCallControlSignal(rawBody: string): string | null {
   const m = rawBody.match(
-    /\(__JATEXT_CALL_(?:CANCEL|CLAIM)__:([A-Za-z0-9_-]+):(hangup|decline|claim):([A-Za-z0-9_-]*):(\d+)\)/,
+    /\(__JATEXT_CALL_(?:CANCEL|CLAIM)__:([A-Za-z0-9_-]+):(hangup|decline|claim|answer):([A-Za-z0-9_-]*):(\d+)\)/,
   );
   if (!m) return null;
   const [, callId, type, deviceSessionId, tsStr] = m;
+  if (type === "answer") {
+    // Only use control fallback as a sibling-device claim header until full SDP decrypts
+    return `__JATEXT_CALL_SIG__:${JSON.stringify({
+      callId,
+      type: "claim",
+      ...(deviceSessionId ? { deviceSessionId } : {}),
+      ts: Number(tsStr) || Date.now(),
+    })}`;
+  }
   return `__JATEXT_CALL_SIG__:${JSON.stringify({
     callId,
     type,
@@ -646,6 +702,7 @@ export function hydrateDecryptedDmMessage(
       rawBody: raw.body,
       senderId: raw.senderId,
       receiverId: raw.receiverId,
+      fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
     }).then(() => triggerRerender());
     if (fallbackControlBody) {
       return {
@@ -862,6 +919,7 @@ export function hydrateDecryptedGroupMessage(
       rawBody: raw.body,
       senderId: raw.senderId,
       groupId,
+      fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
     }).then(() => triggerRerender());
     return {
       ...withReply,
@@ -1005,6 +1063,7 @@ export function hydrateDecryptedChatPreview(
       rawBody: preview.body,
       senderId: preview.senderId,
       receiverId,
+      fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
     }).then(() => {
       triggerRerender?.();
     });
@@ -1045,6 +1104,7 @@ export async function decryptWirePreviewAsync(params: {
     senderId: params.senderId,
     receiverId: params.receiverId,
     groupId: params.groupId,
+    fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
   });
   if (!res.payload) return null;
   const p = res.payload;
@@ -1086,6 +1146,7 @@ export function hydrateDecryptedGroupSummary(
       rawBody: group.lastMessage,
       senderId: group.lastSenderId ?? "",
       groupId: group.id,
+      fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
     }).then(() => {
       triggerRerender?.();
     });
@@ -1143,6 +1204,7 @@ export async function hydrateDecryptedDmMessageAsync(
       rawBody: raw.body,
       senderId: raw.senderId,
       receiverId: raw.receiverId,
+      fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
     });
     if (!options?.skipRemoteAttachments) {
       if (cached.payload?.att && raw.attachmentUrl) {
@@ -1177,6 +1239,7 @@ export async function hydrateDecryptedGroupMessageAsync(
       rawBody: raw.body,
       senderId: raw.senderId,
       groupId,
+      fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
     });
     if (!options?.skipRemoteAttachments) {
       if (cached.payload?.att && raw.attachmentUrl) {
@@ -1214,6 +1277,7 @@ export async function prewarmDecryptedDmBatch(
         rawBody: raw.body,
         senderId: raw.senderId,
         receiverId: raw.receiverId,
+        fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
       }),
     );
   }
@@ -1242,6 +1306,7 @@ export async function prewarmDecryptedGroupBatch(
         rawBody: raw.body,
         senderId: raw.senderId,
         groupId,
+        fetchOverflowCiphertext: fetchOverflowCiphertextBytes,
       }),
     );
   }

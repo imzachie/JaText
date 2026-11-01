@@ -21,6 +21,7 @@ import { AnimatedMediaImg, Avatar } from "./Avatar";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
 import { ChatAttachmentImage } from "./ChatAttachmentImage";
+import { ChatVideoPlayer } from "./ChatVideoPlayer";
 import { ForwardedMessageCard } from "./ForwardedMessageCard";
 import { MessageLinkEmbeds } from "./LinkEmbeds";
 import { MessageMarkdown } from "./MessageMarkdown";
@@ -1523,11 +1524,10 @@ export function CommunityChatView({
                             <ChatAttachmentImage className="msg-image" src={message.attachmentUrl} alt={message.attachmentName ?? "attachment"} maxWidth={420} maxHeight={420} />
                           </button>
                         ) : isVideo ? (
-                          <div className="video-attachment">
-                            <video className="msg-video" controls playsInline preload="metadata" src={message.attachmentUrl}>
-                              Your browser does not support video playback.
-                            </video>
-                          </div>
+                          <ChatVideoPlayer
+                            src={message.attachmentUrl}
+                            name={message.attachmentName}
+                          />
                         ) : (
                           <a className="file-chip" href={message.attachmentUrl} download={message.attachmentName ?? "file"} target="_blank" rel="noreferrer">
                             <PaperclipIcon size={14} /> {message.attachmentName ?? "Attachment"}

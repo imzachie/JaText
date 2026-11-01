@@ -805,7 +805,7 @@ object JaTextCryptoEngine {
         )
         val prefix = if (silentSignal) "$E2EE_SIGNAL_PREFIX$E2EE_WIRE_MARKER" else E2EE_WIRE_MARKER
         val candidateWire = "$prefix${JaTextJson.encodeToString(inlineEnv)}"
-        val finalWire = if (candidateWire.length <= MAX_INLINE_WIRE_CHARS) {
+        val baseWire = if (candidateWire.length <= MAX_INLINE_WIRE_CHARS) {
             candidateWire
         } else {
             val sid = TursoApiClient.uploadMediaBytes(
@@ -817,6 +817,53 @@ object JaTextCryptoEngine {
             val ovfEnv = inlineEnv.copy(ct = null, ovf = OverflowDescriptor(sid = sid, h = ctHashB64))
             "$prefix${JaTextJson.encodeToString(ovfEnv)}"
         }
+        val plainBodyStr = payload.b
+        val dmControlSuffix = when {
+            plainBodyStr.startsWith(CALL_INVITE_PREFIX) -> {
+                if (plainBodyStr.contains("\"state\":\"ringing\"")) {
+                    val callMode = if (plainBodyStr.contains("\"mode\":\"video\"")) "video" else "voice"
+                    "\n(__JATEXT_CALL_DM_RINGING__:$callMode)"
+                } else if (
+                    plainBodyStr.contains("\"state\":\"missed\"") ||
+                    plainBodyStr.contains("\"state\":\"ended\"") ||
+                    plainBodyStr.contains("\"state\":\"declined\"")
+                ) {
+                    "\n(__JATEXT_CALL_DM_ENDED__)"
+                } else ""
+            }
+            plainBodyStr.startsWith("__JATEXT_CALL_SIG__:") -> {
+                try {
+                    val sigObj = JaTextJson.parseToJsonElement(
+                        plainBodyStr.removePrefix("__JATEXT_CALL_SIG__:")
+                    ).jsonObject
+                    val cid = sigObj["callId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        .replace(Regex("[^A-Za-z0-9_-]"), "")
+                    val stype = sigObj["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        .replace(Regex("[^A-Za-z0-9_-]"), "")
+                    val devId = sigObj["deviceSessionId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        .replace(Regex("[^A-Za-z0-9_-]"), "")
+                    val ts = sigObj["ts"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+                        ?: System.currentTimeMillis()
+                    when {
+                        cid.isNotEmpty() && (stype == "hangup" || stype == "decline") ->
+                            "\n(__JATEXT_CALL_CANCEL__:$cid:$stype:$devId:$ts)"
+                        cid.isNotEmpty() && (stype == "claim" || stype == "answer") ->
+                            "\n(__JATEXT_CALL_CLAIM__:$cid:$stype:$devId:$ts)"
+                        else -> ""
+                    }
+                } catch (_: Throwable) {
+                    when {
+                        plainBodyStr.contains("\"type\":\"hangup\"") || plainBodyStr.contains("\"type\":\"decline\"") ->
+                            "\n(__JATEXT_CALL_CANCEL__)"
+                        plainBodyStr.contains("\"type\":\"claim\"") || plainBodyStr.contains("\"type\":\"answer\"") ->
+                            "\n(__JATEXT_CALL_CLAIM__)"
+                        else -> ""
+                    }
+                }
+            }
+            else -> ""
+        }
+        val finalWire = "$baseWire$dmControlSuffix"
 
         val proof = MessageE2EEProof(
             encrypted = true,
@@ -1265,7 +1312,7 @@ object JaTextCryptoEngine {
         )
         val prefix = if (silentSignal) "$E2EE_SIGNAL_PREFIX$E2EE_WIRE_MARKER" else E2EE_WIRE_MARKER
         val candidateWire = "$prefix${JaTextJson.encodeToString(env)}"
-        val finalWire = if (candidateWire.length <= MAX_INLINE_WIRE_CHARS) {
+        val baseWire = if (candidateWire.length <= MAX_INLINE_WIRE_CHARS) {
             candidateWire
         } else {
             val sid = TursoApiClient.uploadMediaBytes(
@@ -1276,6 +1323,28 @@ object JaTextCryptoEngine {
             )
             "$prefix${JaTextJson.encodeToString(env.copy(ct = null, ovf = OverflowDescriptor(sid = sid, h = ctHashB64)))}"
         }
+        val grpPlain = payload.b
+        val grpControlSuffix = when {
+            grpPlain.startsWith(GROUP_CALL_INVITE_PREFIX) -> {
+                if (grpPlain.contains("\"state\":\"active\"")) {
+                    val grpMode = if (grpPlain.contains("\"mode\":\"video\"")) "video" else "voice"
+                    "\n(__JATEXT_CALL_GRP_ACTIVE__:$grpMode)"
+                } else if (grpPlain.contains("\"state\":\"ended\"")) {
+                    "\n(__JATEXT_CALL_GRP_ENDED__)"
+                } else ""
+            }
+            grpPlain.startsWith("__JATEXT_CALL_SIG__:GRP:") -> {
+                when {
+                    grpPlain.contains("\"type\":\"ended\"") -> "\n(__JATEXT_CALL_GRP_ENDED__)"
+                    grpPlain.contains("\"type\":\"claim-ring\"") ||
+                        grpPlain.contains("\"type\":\"decline-ring\"") ||
+                        grpPlain.contains("\"type\":\"join\"") -> "\n(__JATEXT_CALL_CLAIM__)"
+                    else -> ""
+                }
+            }
+            else -> ""
+        }
+        val finalWire = "$baseWire$grpControlSuffix"
 
         val proof = MessageE2EEProof(
             encrypted = true,
@@ -2110,7 +2179,10 @@ object JaTextCryptoEngine {
             }
             if (dec != null) {
                 val p = dec.payload
+                val trimB = p.b.trim()
                 return when {
+                    trimB.startsWith(CALL_INVITE_PREFIX) || trimB.startsWith(GROUP_CALL_INVITE_PREFIX) ->
+                        formatPreviewPlainText(p.b)
                     p.stk != null -> "Sent a sticker"
                     p.att != null -> when {
                         p.att.t.startsWith("audio/") -> "Voice message"

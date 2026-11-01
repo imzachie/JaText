@@ -659,16 +659,47 @@ function summarizeReadablePushBody(body, fallback) {
   return stripped || fallback;
 }
 
+function isCallCancelWire(body) {
+  const s = String(body || "");
+  return (
+    s === "__JATEXT_CALL_CANCEL__" ||
+    s.includes("(__JATEXT_CALL_CANCEL__") ||
+    s.includes("(__JATEXT_CALL_DM_ENDED__") ||
+    s.includes("(__JATEXT_CALL_GRP_ENDED__") ||
+    (s.startsWith("__JATEXT_CALL__:") &&
+      (s.includes('"state":"missed"') ||
+        s.includes('"state":"ended"') ||
+        s.includes('"state":"declined"'))) ||
+    (s.startsWith("__JATEXT_CALL_GRP__:") && s.includes('"state":"ended"')) ||
+    (s.startsWith("__JATEXT_CALL_SIG__:") &&
+      (s.includes('"type":"hangup"') || s.includes('"type":"decline"')))
+  );
+}
+
+function isCallClaimWire(body) {
+  const s = String(body || "");
+  return (
+    s.includes("(__JATEXT_CALL_CLAIM__") ||
+    (s.startsWith("__JATEXT_CALL_SIG__:") &&
+      (s.includes('"type":"claim"') ||
+        s.includes('"type":"answer"') ||
+        s.includes('"type":"claim-ring"') ||
+        s.includes('"type":"decline-ring"')))
+  );
+}
+
 async function dispatchPushToUsers(db, targetUserIds, payload) {
   if (!targetUserIds?.length) return;
+  const uniqueUserIds = [...new Set(targetUserIds.map((id) => String(id || "")).filter(Boolean))];
+  if (!uniqueUserIds.length) return;
   const messaging = getFirebaseMessagingIfConfigured();
   if (!messaging) return;
-  const placeholders = targetUserIds.map(() => "?").join(",");
+  const placeholders = uniqueUserIds.map(() => "?").join(",");
   const res = await db.execute({
     sql: `SELECT token FROM push_devices WHERE user_id IN (${placeholders})`,
-    args: targetUserIds,
+    args: uniqueUserIds,
   });
-  const tokens = res.rows.map((r) => String(r.token)).filter(Boolean);
+  const tokens = [...new Set(res.rows.map((r) => String(r.token)).filter(Boolean))];
   if (!tokens.length) return;
 
   if (payload.type === "sync_poke") {
@@ -692,10 +723,36 @@ async function dispatchPushToUsers(db, targetUserIds, payload) {
   }
 
   const body = String(payload.body || "");
-  if (body.startsWith("__JATEXT_SIG__:") || body.startsWith("__JATEXT_REACT__:")) {
+  if (
+    body.startsWith("__JATEXT_SIG__:") ||
+    body.startsWith("__JATEXT_REACT__:") ||
+    body.startsWith("__JATEXT_SEEN__:") ||
+    body.startsWith("__JATEXT_GRP_SEEN__:") ||
+    body.startsWith("__JATEXT_GROUP_SEEN_V1__:")
+  ) {
     return;
   }
-  const isCallCancel = body === "__JATEXT_CALL_CANCEL__";
+  const isCallCancel = payload.type === "call_cancel" || isCallCancelWire(body);
+  // Silent call/E2EE control packets that aren't call cancels should wake via sync_poke, never "New message"
+  if (!isCallCancel && body.startsWith("__JATEXT_CALL_SIG__:")) {
+    try {
+      await messaging.sendEachForMulticast({
+        tokens,
+        data: {
+          type: "sync_poke",
+          senderId: String(payload.senderId || ""),
+          ...(payload.groupId ? { groupId: String(payload.groupId) } : {}),
+        },
+        android: {
+          priority: "high",
+          ttl: 30_000,
+        },
+      });
+    } catch {
+      // Ignore transient poke failure
+    }
+    return;
+  }
   const callInfo = isCallCancel ? { isCall: false, isVideo: false } : detectCallInfo(body);
   const isEncrypted = body.includes("__JATEXT_E2EE_V1__:");
   const cleanBody = isCallCancel
@@ -874,6 +931,7 @@ async function hydrateGroupMessages(db, rows, meId, clearedAt = 0) {
           : undefined;
     return {
       id: String(r.id),
+      ...(r.group_id ? { groupId: String(r.group_id) } : {}),
       senderId: String(r.sender_id),
       senderName: sender?.displayName || sender?.username || "JaText user",
       senderUsername: sender?.username || "user",
@@ -1043,7 +1101,15 @@ async function listMyGroupsHydrated(db, meId) {
               FROM group_messages
               WHERE group_id IN (${ph})
                 AND body NOT LIKE '__JATEXT_SIG__:%'
+                AND body NOT LIKE '__JATEXT_CALL_SIG__:%'
                 AND body NOT LIKE '__JATEXT_REACT__:%'
+                AND body NOT LIKE '__JATEXT_SEEN__:%'
+                AND body NOT LIKE '__JATEXT_GRP_SEEN__:%'
+                AND body NOT LIKE '__JATEXT_GROUP_SEEN_V1__:%'
+                AND body NOT LIKE '__JATEXT_IK_V1__:%'
+                AND body NOT LIKE '__JATEXT_GK_V1__:%'
+                AND body NOT LIKE '__JATEXT_E2EE_IK__:%'
+                AND body NOT LIKE '__JATEXT_E2EE_GK__:%'
               GROUP BY group_id
             ) gm2 ON gm1.group_id = gm2.group_id AND gm1.created_at = gm2.max_created`,
       args: groupIds,
@@ -1159,7 +1225,13 @@ async function buildSocialAndPreviews(db, meId) {
                   FROM messages
                   WHERE pair_key IN (${pairPh})
                     AND body NOT LIKE '__JATEXT_SIG__:%'
+                    AND body NOT LIKE '__JATEXT_CALL_SIG__:%'
                     AND body NOT LIKE '__JATEXT_REACT__:%'
+                    AND body NOT LIKE '__JATEXT_SEEN__:%'
+                    AND body NOT LIKE '__JATEXT_IK_V1__:%'
+                    AND body NOT LIKE '__JATEXT_GK_V1__:%'
+                    AND body NOT LIKE '__JATEXT_E2EE_IK__:%'
+                    AND body NOT LIKE '__JATEXT_E2EE_GK__:%'
                   GROUP BY pair_key
                 ) m2 ON m1.pair_key = m2.pair_key AND m1.created_at = m2.max_created`,
           args: pairKeys,
@@ -1631,12 +1703,15 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
 
       // Run presence touch + all delta checks in a single parallel round-trip
       const activePairKey = activeFriendId ? pairKey(meId, activeFriendId) : null;
+      const recentCallWindowTs = syncStartedAt - 120_000;
       const [
         dmDeltaRes,
         activeDmDeltaRes,
+        callDmDeltaRes,
         frDeltaRes,
         commDeltaRes,
         grpMsgDeltaRes,
+        callGrpDeltaRes,
         grpTypingRes,
         commTypingRes,
         myGroupsCheck,
@@ -1653,6 +1728,16 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
             })
           : Promise.resolve({ rows: [] }),
         db.execute({
+          sql: `SELECT * FROM messages
+                WHERE (receiver_id = ? OR sender_id = ?)
+                  AND updated_at > ?
+                  AND created_at > ?
+                  AND (body LIKE '__JATEXT_CALL%' OR body LIKE '%(__JATEXT_CALL_%')
+                ORDER BY created_at ASC
+                LIMIT 60`,
+          args: [meId, meId, sinceTs, recentCallWindowTs],
+        }),
+        db.execute({
           sql: `SELECT id FROM friend_requests WHERE (from_id = ? OR to_id = ?) AND updated_at > ? LIMIT 1`,
           args: [meId, meId, sinceTs],
         }),
@@ -1666,6 +1751,16 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
               args: [activeGroupId, sinceTs],
             })
           : Promise.resolve({ rows: [] }),
+        db.execute({
+          sql: `SELECT m.* FROM group_messages m
+                INNER JOIN group_members gm ON gm.group_id = m.group_id AND gm.user_id = ?
+                WHERE m.updated_at > ?
+                  AND m.created_at > ?
+                  AND (m.body LIKE '__JATEXT_CALL%' OR m.body LIKE '%(__JATEXT_CALL_%')
+                ORDER BY m.created_at ASC
+                LIMIT 60`,
+          args: [meId, sinceTs, recentCallWindowTs],
+        }),
         activeGroupId
           ? db.execute({
               sql: `SELECT user_id FROM chat_typing WHERE channel_id = ? AND typing_at > ? AND user_id != ?`,
@@ -1726,6 +1821,11 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         changedDmMessages = hydrateDmMessages(activeDmDeltaRes.rows, meId, replyMap, favKeys);
       }
 
+      let callDmMessages = [];
+      if (callDmDeltaRes.rows.length > 0) {
+        callDmMessages = hydrateDmMessages(callDmDeltaRes.rows, meId, new Map(), new Set());
+      }
+
       let changedGroupMessages = [];
       if (activeGroupId && grpMsgDeltaRes.rows.length > 0) {
         const gus = await db.execute({
@@ -1739,6 +1839,11 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           meId,
           clearedAt,
         );
+      }
+
+      let callGroupMessages = [];
+      if (callGrpDeltaRes.rows.length > 0) {
+        callGroupMessages = await hydrateGroupMessages(db, callGrpDeltaRes.rows, meId, 0);
       }
 
       let changedCommunityMessages = [];
@@ -1782,7 +1887,9 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         ...(social ? { social } : {}),
         ...(stickersDelta ? { stickers: stickersDelta } : {}),
         ...(changedDmMessages.length ? { changedDmMessages } : {}),
+        ...(callDmMessages.length ? { callDmMessages } : {}),
         ...(changedGroupMessages.length ? { changedGroupMessages } : {}),
+        ...(callGroupMessages.length ? { callGroupMessages } : {}),
         ...(changedCommunityMessages.length ? { changedCommunityMessages } : {}),
         ...(groups ? { groups } : {}),
         groupTypingUsers,
@@ -2211,16 +2318,49 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         !Number(recvSettings?.is_muted || 0) &&
         !Number(recvSettings?.is_archived || 0);
 
-      const pushPromise = shouldPush
-        ? dispatchPushToUsers(db, [receiverId], {
+      const callCancel = isCallCancelWire(body);
+      const callClaim = isCallClaimWire(body);
+      const dmPushTasks = [];
+
+      if (callCancel) {
+        // Cancel incoming call wakeup on BOTH recipient's devices AND our own sibling mobile devices!
+        dmPushTasks.push(
+          dispatchPushToUsers(db, [receiverId, meId], {
+            type: "call_cancel",
+            senderId: meId,
+            body: "__JATEXT_CALL_CANCEL__",
+          }),
+        );
+      } else if (callClaim) {
+        // Answered/claimed on one of our devices -> immediately stop ringing on our own mobile phone(s),
+        // and send a high-priority sync_poke to the caller so their WebRTC answer arrives instantaneously!
+        dmPushTasks.push(
+          dispatchPushToUsers(db, [meId], {
+            type: "call_cancel",
+            senderId: meId,
+            body: "__JATEXT_CALL_CANCEL__",
+          }),
+          dispatchPushToUsers(db, [receiverId], {
+            type: "sync_poke",
+            senderId: meId,
+          }),
+        );
+      } else if (shouldPush) {
+        dmPushTasks.push(
+          dispatchPushToUsers(db, [receiverId], {
             senderId: meId,
             senderName: String(meRow.display_name || meRow.username || "JaText"),
             body,
-          })
-        : dispatchPushToUsers(db, [receiverId], {
+          }),
+        );
+      } else {
+        dmPushTasks.push(
+          dispatchPushToUsers(db, [receiverId], {
             type: "sync_poke",
             senderId: meId,
-          });
+          }),
+        );
+      }
 
       const [rowRes, favKeys, repRes] = await Promise.all([
         db.execute({ sql: `SELECT * FROM messages WHERE id = ?`, args: [msgId] }),
@@ -2231,7 +2371,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
               args: [String(args.replyToId)],
             })
           : Promise.resolve({ rows: [] }),
-        pushPromise,
+        ...dmPushTasks,
       ]);
       const replyMap = new Map();
       if (repRes.rows[0]) replyMap.set(String(repRes.rows[0].id), repRes.rows[0]);
@@ -2290,10 +2430,22 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       if (String(m.sender_id) !== meId) throw new TursoAppError("You can only edit your own messages.", 403);
       if (m.unsent_at) throw new TursoAppError("Cannot edit an unsent message.");
       const writeAt = Date.now();
-      await db.execute({
-        sql: `UPDATE messages SET body = ?, edited_at = ?, updated_at = ? WHERE id = ?`,
-        args: [body, writeAt, writeAt, messageId],
-      });
+      const editTasks = [
+        db.execute({
+          sql: `UPDATE messages SET body = ?, edited_at = ?, updated_at = ? WHERE id = ?`,
+          args: [body, writeAt, writeAt, messageId],
+        }),
+      ];
+      if (isCallCancelWire(body)) {
+        editTasks.push(
+          dispatchPushToUsers(db, [String(m.receiver_id), meId], {
+            type: "call_cancel",
+            senderId: meId,
+            body: "__JATEXT_CALL_CANCEL__",
+          }),
+        );
+      }
+      await Promise.all(editTasks);
       return { ok: true };
     }
 
@@ -2944,6 +3096,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
 
       // Push notifications for group calls / mentions / @everyone + silent sync_poke for active members
       const callInfo = detectCallInfo(body);
+      const grpCallCancel = isCallCancelWire(body);
+      const grpCallClaim = isCallClaimWire(body);
       const allOtherMemberIds = memRes.rows
         .map((m) => String(m.user_id))
         .filter((uid) => uid !== meId);
@@ -2952,7 +3106,28 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
 
       const pushTasks = [];
       let notifiedSet = new Set();
-      if (candidateTargets.length) {
+      if (grpCallCancel) {
+        notifiedSet = new Set(allOtherMemberIds);
+        pushTasks.push(
+          dispatchPushToUsers(db, [...allOtherMemberIds, meId], {
+            type: "call_cancel",
+            senderId: meId,
+            body: "__JATEXT_CALL_CANCEL__",
+            groupId,
+          }),
+        );
+      } else if (grpCallClaim) {
+        // User answered or declined a group call ring on one device -> stop ringing on their own mobile phone(s)!
+        pushTasks.push(
+          dispatchPushToUsers(db, [meId], {
+            type: "call_cancel",
+            senderId: meId,
+            body: "__JATEXT_CALL_CANCEL__",
+            groupId,
+          }),
+        );
+      }
+      if (!grpCallCancel && candidateTargets.length) {
         const ph = candidateTargets.map(() => "?").join(",");
         const gusRes = await db.execute({
           sql: `SELECT user_id, is_silenced, is_archived FROM group_user_settings WHERE group_id = ? AND user_id IN (${ph})`,

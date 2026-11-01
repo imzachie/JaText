@@ -130,10 +130,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.8.6",
+    date: "November 1, 2026",
+    headline: "Seamless Desktop-to-Mobile Calling, Instant Multi-Device Call Dismissal & Mobile Video Player Scrubber",
+    latest: true,
+    bullets: [
+      "Unified encrypted SDP signaling and E2EE overflow hydration across Desktop Web, Android APK, and iOS so 1:1 and Group calls connect reliably in both directions.",
+      "Added instant sibling-device call dominance and FCM cancel push wakes so answering or declining a call on Mobile or Desktop immediately stops ringing and dismisses the prompt on your other devices, plus a full scrubbable progress bar and video controller on Mobile.",
+    ],
+  },
+  {
     version: "v3.8.0",
     date: "October 31, 2026",
     headline: "JaText iOS Web & Liquid Glass PWA (/ios/chats) with 1:1 Mobile Parity & Live Updates",
-    latest: true,
     bullets: [
       "Launched jatext.vercel.app/ios/chats exclusively for iOS Safari and Chrome users with an instant On iOS? welcome screen, standalone Home Screen PWA installation, and automatic live PWA refresh notifications on every deploy.",
       "Delivered 1:1 JaText mobile parity on iOS including Google and Email sign-in, multi-account switching, Settings -> Devices rear-camera QR scanning to link Desktop Web, mobile chat wallpapers, and iOS 26 Liquid Glass animations across Settings and chat surfaces.",
@@ -423,7 +432,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.8.0 · Live
+                v3.8.6 · Live
               </span>
             </span>
           </a>
@@ -562,7 +571,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.8.0 (Build 50)</strong>
+                    <strong>v3.8.6 (Build 55)</strong>
                     <span>{isIosVisitor ? "iOS Web & Liquid Glass PWA" : "Web & Signed APK"}</span>
                   </div>
                 </div>
@@ -944,7 +953,7 @@ export function LandingHeroPage() {
                   <>
                     Launch the full JaText web app at{" "}
                     <strong>jatext.vercel.app/chats</strong> or grab the latest signed Android
-                    Release APK (v3.8.0).
+                    Release APK (v3.8.6).
                   </>
                 )}
               </p>
@@ -974,7 +983,7 @@ export function LandingHeroPage() {
                   href="/downloads/JaText-release.apk"
                   className="jt-btn-secondary jt-btn-lg"
                 >
-                  Get Android APK (v3.8.0)
+                  Get Android APK (v3.8.6)
                 </a>
               )}
             </div>
@@ -987,7 +996,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.8.0</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.8.6</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">
