@@ -5,6 +5,7 @@
 package com.kyant.backdrop.shadow
 
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawOutline
@@ -76,26 +77,28 @@ internal class ShadowNode(
 
     override fun ContentDrawScope.draw() {
         val shadow = shadow() ?: return drawContent()
-        if (shadow.alpha <= 0f || size.width <= 0f || size.height <= 0f) return drawContent()
+        val drawSize = size
+        if (shadow.alpha <= 0f || drawSize.isUnspecified || drawSize.width <= 0f || drawSize.height <= 0f) {
+            return drawContent()
+        }
 
         val shadowLayer = shadowLayer
         if (shadowLayer != null) {
-            val size = size
             val density: Density = this
             val layoutDirection = layoutDirection
 
-            val radius = shadow.radius.toPx()
+            val radius = shadow.radius.toPx().coerceAtLeast(0f)
             val offsetX = shadow.offset.x.toPx()
             val offsetY = shadow.offset.y.toPx()
             val shadowSize = IntSize(
-                ceil(size.width + radius * 4f + offsetX).toInt().coerceAtLeast(1),
-                ceil(size.height + radius * 4f + offsetY).toInt().coerceAtLeast(1)
+                ceil(drawSize.width + radius * 4f + offsetX).toInt().coerceAtLeast(1),
+                ceil(drawSize.height + radius * 4f + offsetY).toInt().coerceAtLeast(1)
             )
-            val outline = shapeProvider.shape.createOutline(size, layoutDirection, density)
+            val outline = shapeProvider.shape.createOutline(drawSize, layoutDirection, density)
 
             configurePaint(shadow)
 
-            shadowLayer.alpha = shadow.alpha
+            shadowLayer.alpha = shadow.alpha.coerceIn(0f, 1f)
             shadowLayer.blendMode = shadow.blendMode
             shadowLayer.record(shadowSize) {
                 translate(radius * 2f + offsetX, radius * 2f + offsetY) {
@@ -133,7 +136,7 @@ internal class ShadowNode(
 
     private fun DrawScope.configurePaint(shadow: Shadow) {
         paint.color = shadow.color
-        paint.blur(shadow.radius.toPx())
+        paint.blur(shadow.radius.toPx().coerceAtLeast(0f))
     }
 }
 

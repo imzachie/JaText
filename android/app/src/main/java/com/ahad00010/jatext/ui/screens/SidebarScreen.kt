@@ -119,6 +119,7 @@ import com.kyant.backdrop.navigation.LiquidBottomTab
 import com.kyant.backdrop.navigation.LiquidBottomTabs
 import com.kyant.backdrop.navigation.LocalLiquidBottomTabContentColor
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -128,6 +129,16 @@ private sealed interface SidebarHoldTarget {
     data object Community : SidebarHoldTarget
     data class Dm(val friend: JaUser, val preview: ChatPreview?) : SidebarHoldTarget
     data class Group(val group: GroupSummary) : SidebarHoldTarget
+}
+
+private fun currentDayPartLabel(): String {
+    val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+    return when {
+        h in 5..11 -> "morning"
+        h in 12..16 -> "afternoon"
+        h in 17..21 -> "evening"
+        else -> "night"
+    }
 }
 
 /**
@@ -271,102 +282,140 @@ fun SidebarScreen(
                             .padding(top = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        /* ---- Streamlined Top Header: Profile Picture + Title (NO top-right Settings icon) ---- */
+                        /* ==================== 1. `.sidebar-header` (`[logo] JaText` + SwitchAccount; Settings moved to bottom bar) ==================== */
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Row(
-                                modifier = Modifier.weight(1f),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
-                                if (me != null) {
-                                    val myStatus = when (me.statusPreference) {
-                                        "offline" -> "offline"
-                                        "dnd" -> "dnd"
-                                        "away", "idle" -> "away"
-                                        else -> "online"
-                                    }
-                                    JaAvatar(
-                                        avatarUrl = me.avatarUrl,
-                                        displayName = me.displayName.ifBlank { me.username },
-                                        avatarColor = me.avatarColor,
-                                        size = 44.dp,
-                                        ringWidth = 2.5.dp,
-                                        presenceStatus = myStatus,
-                                        statusBorderColor = palette.bgSecondary,
-                                        modifier = Modifier.clickable { onOpenProfile(me) },
-                                    )
-                                } else {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.jatext_logo_icon),
-                                        contentDescription = "JaText",
-                                        modifier = Modifier.size(38.dp),
-                                    )
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = when (currentTab) {
-                                            "calls" -> "Calls"
-                                            "add" -> "Add"
-                                            else -> "Chats"
-                                        },
-                                        color = palette.textPrimary,
-                                        fontSize = 23.sp,
-                                        fontWeight = FontWeight.Black,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    if (me != null) {
-                                        Row(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .clickable { showAccountSwitcher = true }
-                                                .padding(vertical = 1.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            Text(
-                                                text = "@${me.username}",
-                                                color = palette.textSecondary,
-                                                fontSize = 12.5.sp,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                            Spacer(Modifier.width(2.dp))
-                                            Icon(
-                                                imageVector = Icons.Rounded.UnfoldMore,
-                                                contentDescription = "Switch account",
-                                                tint = palette.textSecondary,
-                                                modifier = Modifier.size(13.dp),
-                                            )
-                                        }
-                                    }
-                                }
+                                Image(
+                                    painter = painterResource(id = R.drawable.jatext_logo_icon),
+                                    contentDescription = "JaText",
+                                    modifier = Modifier.size(36.dp),
+                                )
+                                Text(
+                                    text = "JaText",
+                                    color = palette.textPrimary,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black,
+                                )
                             }
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                if (otherSavedAccounts.isNotEmpty()) {
-                                    otherSavedAccounts.take(2).forEach { acct ->
-                                        JaAvatar(
-                                            avatarUrl = acct.avatarUrl,
-                                            displayName = acct.displayName.ifBlank { acct.username },
-                                            avatarColor = acct.avatarColor,
-                                            size = 30.dp,
-                                            ringWidth = 2.dp,
-                                            modifier = Modifier.clickable { vm.switchToAccountSlot(acct.slotId) },
-                                        )
-                                    }
-                                }
                                 JaWebIconButton(
                                     icon = Icons.Rounded.SwapHoriz,
                                     contentDescription = "Switch or add account",
                                     badgeCount = if (state.accounts.size > 1) state.accounts.size else 0,
                                     onClick = { showAccountSwitcher = true },
                                 )
+                            }
+                        }
+
+                        /* ==================== 2. `.greeting` Card ("Good morning/afternoon/evening, <Name>!") ==================== */
+                        if (me != null) {
+                            val myStatus = when (me.statusPreference) {
+                                "offline" -> "offline"
+                                "dnd" -> "dnd"
+                                "away", "idle" -> "away"
+                                else -> "online"
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(palette.bgTertiary)
+                                    .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                JaAvatar(
+                                    avatarUrl = me.avatarUrl,
+                                    displayName = me.displayName.ifBlank { me.username },
+                                    avatarColor = me.avatarColor,
+                                    size = 50.dp,
+                                    ringWidth = 3.dp,
+                                    presenceStatus = myStatus,
+                                    statusBorderColor = palette.bgTertiary,
+                                    modifier = Modifier.clickable { onOpenProfile(me) },
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "Good ${currentDayPartLabel()}, ${me.displayName.ifBlank { me.username }}!",
+                                            color = palette.textPrimary,
+                                            fontSize = 15.5.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                    }
+                                    Spacer(Modifier.height(2.dp))
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { showAccountSwitcher = true }
+                                            .padding(vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = "@${me.username}",
+                                            color = palette.textSecondary,
+                                            fontSize = 13.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Spacer(Modifier.width(2.dp))
+                                        Icon(
+                                            imageVector = Icons.Rounded.UnfoldMore,
+                                            contentDescription = "Switch account",
+                                            tint = palette.textSecondary,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
+                                }
+                                if (otherSavedAccounts.isNotEmpty()) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        otherSavedAccounts.take(2).forEach { acct ->
+                                            JaAvatar(
+                                                avatarUrl = acct.avatarUrl,
+                                                displayName = acct.displayName.ifBlank { acct.username },
+                                                avatarColor = acct.avatarColor,
+                                                size = 30.dp,
+                                                ringWidth = 2.dp,
+                                                modifier = Modifier.clickable { vm.switchToAccountSlot(acct.slotId) },
+                                            )
+                                        }
+                                        if (otherSavedAccounts.size > 2) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(30.dp)
+                                                    .clip(CircleShape)
+                                                    .background(palette.bgSecondary)
+                                                    .border(1.dp, palette.border, CircleShape)
+                                                    .clickable { showAccountSwitcher = true },
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                Text(
+                                                    text = "+${otherSavedAccounts.size - 2}",
+                                                    color = palette.textPrimary,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 

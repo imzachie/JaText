@@ -5,6 +5,7 @@
 package com.kyant.backdrop.shadow
 
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Outline
@@ -23,6 +24,7 @@ import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntSize
 import com.kyant.backdrop.internal.ShapeProvider
 import com.kyant.backdrop.internal.clipOutline
 import com.kyant.backdrop.isRenderEffectSupported
@@ -83,22 +85,22 @@ internal class InnerShadowNode(
         drawContent()
 
         if (!isRenderEffectSupported()) return
-        if (size.width <= 0f || size.height <= 0f) return
+        val drawSize = size
+        if (drawSize.isUnspecified || drawSize.width <= 0f || drawSize.height <= 0f) return
 
         val shadow = shadow() ?: return
         if (shadow.alpha <= 0f) return
 
         val shadowLayer = shadowLayer
         if (shadowLayer != null) {
-            val size = size
             val density: Density = this
             val layoutDirection = layoutDirection
 
-            val radius = shadow.radius.toPx()
+            val radius = shadow.radius.toPx().coerceAtLeast(0f)
             val offsetX = shadow.offset.x.toPx()
             val offsetY = shadow.offset.y.toPx()
 
-            val outline = shapeProvider.shape.createOutline(size, layoutDirection, density)
+            val outline = shapeProvider.shape.createOutline(drawSize, layoutDirection, density)
             val clipPath =
                 if (outline is Outline.Rounded) {
                     clipPath ?: Path().also { clipPath = it }
@@ -108,18 +110,22 @@ internal class InnerShadowNode(
 
             configurePaint(shadow)
 
-            shadowLayer.alpha = shadow.alpha
+            shadowLayer.alpha = shadow.alpha.coerceIn(0f, 1f)
             shadowLayer.blendMode = shadow.blendMode
             if (prevRadius != radius) {
                 shadowLayer.renderEffect =
-                    if (radius > 0f) {
+                    if (radius > 0f && radius.isFinite()) {
                         BlurEffect(radius, radius, TileMode.Decal)
                     } else {
                         null
                     }
                 prevRadius = radius
             }
-            shadowLayer.record {
+            val layerSize = IntSize(
+                drawSize.width.toInt().coerceAtLeast(1),
+                drawSize.height.toInt().coerceAtLeast(1)
+            )
+            shadowLayer.record(layerSize) {
                 val canvas = drawContext.canvas
                 canvas.save()
                 canvas.clipOutline(outline, clipPath)
