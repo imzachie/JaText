@@ -959,7 +959,7 @@ fun InlineVideoAttachmentPlayer(
                                     .fillMaxHeight()
                                     .fillMaxWidth(previewFrac)
                                     .clip(RoundedCornerShape(999.dp))
-                                    .background(JaTextPalette.AccentBlue)
+                                    .background(Color(0xFF3897F0))
                             )
                         }
                     }
@@ -1673,7 +1673,7 @@ private fun JaTextVideoScrubBar(
         val activeW = (usableWidth * clamped).coerceIn(0f, usableWidth)
         if (activeW > 0f) {
             drawRoundRect(
-                color = JaTextPalette.AccentBlue,
+                color = Color(0xFF3897F0),
                 topLeft = Offset(padX, topY),
                 size = Size(activeW, trackHeight),
                 cornerRadius = corner,
@@ -1684,7 +1684,7 @@ private fun JaTextVideoScrubBar(
         val thumbX = padX + activeW
         if (isScrubbing) {
             drawCircle(
-                color = JaTextPalette.AccentBlue.copy(alpha = 0.32f),
+                color = Color(0xFF3897F0).copy(alpha = 0.32f),
                 radius = thumbRadius * 1.65f,
                 center = Offset(thumbX, centerY),
             )
