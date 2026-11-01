@@ -54,6 +54,7 @@ import {
   MessageCircleIcon,
   PinIcon,
   PlusIcon,
+  SearchIcon,
   SettingsIcon,
   SwitchAccountIcon,
   TrashIcon,
@@ -121,6 +122,8 @@ export function Sidebar({
   const { me, friends, incoming, outgoing, previews, activeChatId, setActiveChatId } = store;
   const [tab, setTab] = useState<"chats" | "calls" | "add">("chats");
   const [search, setSearch] = useState("");
+  const [iosSearchOpen, setIosSearchOpen] = useState(false);
+  const iosSearchInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState<string>("all");
   const [folderEditor, setFolderEditor] = useState<{
     id?: string;
@@ -494,6 +497,15 @@ export function Sidebar({
 
   const isIosChats = isAuthorizedIosChatsRuntime();
 
+  useEffect(() => {
+    if (isIosChats && iosSearchOpen && tab === "chats") {
+      const id = window.setTimeout(() => {
+        iosSearchInputRef.current?.focus();
+      }, 60);
+      return () => window.clearTimeout(id);
+    }
+  }, [isIosChats, iosSearchOpen, tab]);
+
   return (
     <aside className={`sidebar ${isIosChats ? "ios-bottom-nav-layout" : ""}`}>
       <header className="sidebar-header">
@@ -526,65 +538,71 @@ export function Sidebar({
         </div>
       </header>
 
-      <div className="greeting">
-        <Avatar
-          user={me}
-          size={52}
-          status={
-            me.statusPreference === "offline"
-              ? "offline"
-              : me.statusPreference === "dnd"
-                ? "dnd"
-                : "online"
-          }
-          onClick={() => onOpenProfile(me)}
-        />
-        <div className="greeting-text">
-          <span className="greeting-title">
-            Good {dayPart(now)}, {me.displayName}!
-          </span>
-          {onOpenAccountSwitcher ? (
-            <button
-              type="button"
-              className="greeting-account-btn"
-              onClick={onOpenAccountSwitcher}
-              title="Switch or add account"
-            >
-              <span className="greeting-username">@{me.username}</span>
-              <ChevronUpDownIcon size={13} />
-            </button>
-          ) : (
-            <span className="greeting-username">@{me.username}</span>
-          )}
-        </div>
-        {onOpenAccountSwitcher && otherSavedAccounts.length > 0 && (
-          <div className="greeting-quick-accounts">
-            {otherSavedAccounts.slice(0, 2).map((acct) => (
-              <button
-                key={acct.slotId}
-                type="button"
-                className="quick-account-avatar-btn"
-                title={`Switch directly to ${acct.displayName || `@${acct.username}`}`}
-                aria-label={`Switch directly to ${acct.displayName || acct.username}`}
-                onClick={() => void handleDirectQuickSwitch(acct.slotId)}
-              >
-                <Avatar user={savedEntryToAvatarUser(acct)} size={30} />
-              </button>
-            ))}
-            {otherSavedAccounts.length > 2 && (
+      {isIosChats ? (
+        <h1 className="ios-page-large-title">
+          {tab === "calls" ? t("calls") : tab === "add" ? t("add") : t("chats")}
+        </h1>
+      ) : (
+        <div className="greeting">
+          <Avatar
+            user={me}
+            size={52}
+            status={
+              me.statusPreference === "offline"
+                ? "offline"
+                : me.statusPreference === "dnd"
+                  ? "dnd"
+                  : "online"
+            }
+            onClick={() => onOpenProfile(me)}
+          />
+          <div className="greeting-text">
+            <span className="greeting-title">
+              Good {dayPart(now)}, {me.displayName}!
+            </span>
+            {onOpenAccountSwitcher ? (
               <button
                 type="button"
-                className="quick-account-more-btn"
-                title="All saved accounts"
-                aria-label="All saved accounts"
+                className="greeting-account-btn"
                 onClick={onOpenAccountSwitcher}
+                title="Switch or add account"
               >
-                +{otherSavedAccounts.length - 2}
+                <span className="greeting-username">@{me.username}</span>
+                <ChevronUpDownIcon size={13} />
               </button>
+            ) : (
+              <span className="greeting-username">@{me.username}</span>
             )}
           </div>
-        )}
-      </div>
+          {onOpenAccountSwitcher && otherSavedAccounts.length > 0 && (
+            <div className="greeting-quick-accounts">
+              {otherSavedAccounts.slice(0, 2).map((acct) => (
+                <button
+                  key={acct.slotId}
+                  type="button"
+                  className="quick-account-avatar-btn"
+                  title={`Switch directly to ${acct.displayName || `@${acct.username}`}`}
+                  aria-label={`Switch directly to ${acct.displayName || acct.username}`}
+                  onClick={() => void handleDirectQuickSwitch(acct.slotId)}
+                >
+                  <Avatar user={savedEntryToAvatarUser(acct)} size={30} />
+                </button>
+              ))}
+              {otherSavedAccounts.length > 2 && (
+                <button
+                  type="button"
+                  className="quick-account-more-btn"
+                  title="All saved accounts"
+                  aria-label="All saved accounts"
+                  onClick={onOpenAccountSwitcher}
+                >
+                  +{otherSavedAccounts.length - 2}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {!isIosChats && (
         <div className="tabs sidebar-tabs">
@@ -611,12 +629,29 @@ export function Sidebar({
 
       {tab === "chats" && (
         <div className="sidebar-tab-pane" key="pane-chats">
-          <input
-            className="search-input"
-            placeholder={`${t("search_chats")}…`}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          {(!isIosChats || iosSearchOpen) && (
+            <div className={isIosChats ? "ios-search-row" : undefined}>
+              <input
+                ref={isIosChats ? iosSearchInputRef : undefined}
+                className="search-input"
+                placeholder={`${t("search_chats")}…`}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              {isIosChats && (
+                <button
+                  type="button"
+                  className="ios-search-cancel-btn"
+                  onClick={() => {
+                    setIosSearchOpen(false);
+                    setSearch("");
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          )}
           {!showArchived && (
             <div className="sidebar-folder-bar" role="tablist" aria-label={t("folders")}>
               <button
@@ -1896,65 +1931,97 @@ export function Sidebar({
       )}
 
       {isIosChats && (
-        <nav className="ios-liquid-bottom-nav" aria-label="Primary navigation">
-          <div
-            className="ios-liquid-bottom-pill"
-            style={{
-              transform: `translateX(${
-                (tab === "chats" ? 0 : tab === "calls" ? 1 : 2) * 100
-              }%)`,
+        <div className="ios-liquid-bottom-dock">
+          <nav className="ios-liquid-bottom-nav" aria-label="Primary navigation">
+            <div
+              className="ios-liquid-bottom-pill"
+              style={{
+                transform: `translateX(${
+                  (tab === "chats" ? 0 : tab === "calls" ? 1 : 2) * 100
+                }%)`,
+              }}
+              aria-hidden="true"
+            />
+            <button
+              type="button"
+              className={`ios-liquid-bottom-tab ${tab === "chats" ? "active" : ""}`}
+              onClick={() => setTab("chats")}
+            >
+              <span className="ios-liquid-bottom-icon-wrap">
+                <MessageCircleIcon size={21} />
+                {totalUnreadCount > 0 && (
+                  <span className="ios-liquid-bottom-badge">
+                    {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
+                  </span>
+                )}
+              </span>
+              <span>{t("chats")}</span>
+            </button>
+            <button
+              type="button"
+              className={`ios-liquid-bottom-tab ${tab === "calls" ? "active" : ""}`}
+              onClick={() => {
+                setIosSearchOpen(false);
+                setSearch("");
+                setTab("calls");
+              }}
+            >
+              <span className="ios-liquid-bottom-icon-wrap">
+                <Phone size={21} />
+              </span>
+              <span>{t("calls")}</span>
+            </button>
+            <button
+              type="button"
+              className={`ios-liquid-bottom-tab ${tab === "add" ? "active" : ""}`}
+              onClick={() => {
+                setIosSearchOpen(false);
+                setSearch("");
+                setTab("add");
+              }}
+            >
+              <span className="ios-liquid-bottom-icon-wrap">
+                <IosPlusCircleIcon size={21} />
+                {incoming.length > 0 && (
+                  <span className="ios-liquid-bottom-badge">{incoming.length}</span>
+                )}
+              </span>
+              <span>{t("add")}</span>
+            </button>
+            <button
+              type="button"
+              className="ios-liquid-bottom-tab"
+              onClick={() => {
+                setIosSearchOpen(false);
+                setSearch("");
+                onOpenSettings();
+              }}
+            >
+              <span className="ios-liquid-bottom-icon-wrap">
+                <IosSettingsGearIcon size={21} />
+              </span>
+              <span>{t("settings")}</span>
+            </button>
+          </nav>
+          <button
+            type="button"
+            className={`ios-liquid-search-btn ${iosSearchOpen ? "active" : ""}`}
+            aria-label={t("search_chats")}
+            onClick={() => {
+              if (tab !== "chats") {
+                setTab("chats");
+                setIosSearchOpen(true);
+              } else if (iosSearchOpen) {
+                setIosSearchOpen(false);
+                setSearch("");
+              } else {
+                setIosSearchOpen(true);
+              }
             }}
-            aria-hidden="true"
-          />
-          <button
-            type="button"
-            className={`ios-liquid-bottom-tab ${tab === "chats" ? "active" : ""}`}
-            onClick={() => setTab("chats")}
           >
-            <span className="ios-liquid-bottom-icon-wrap">
-              <MessageCircleIcon size={22} />
-              {totalUnreadCount > 0 && (
-                <span className="ios-liquid-bottom-badge">
-                  {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
-                </span>
-              )}
-            </span>
-            <span>{t("chats")}</span>
+            <SearchIcon size={22} />
           </button>
-          <button
-            type="button"
-            className={`ios-liquid-bottom-tab ${tab === "calls" ? "active" : ""}`}
-            onClick={() => setTab("calls")}
-          >
-            <span className="ios-liquid-bottom-icon-wrap">
-              <Phone size={22} />
-            </span>
-            <span>{t("calls")}</span>
-          </button>
-          <button
-            type="button"
-            className={`ios-liquid-bottom-tab ${tab === "add" ? "active" : ""}`}
-            onClick={() => setTab("add")}
-          >
-            <span className="ios-liquid-bottom-icon-wrap">
-              <IosPlusCircleIcon size={22} />
-              {incoming.length > 0 && (
-                <span className="ios-liquid-bottom-badge">{incoming.length}</span>
-              )}
-            </span>
-            <span>{t("add")}</span>
-          </button>
-          <button
-            type="button"
-            className="ios-liquid-bottom-tab"
-            onClick={onOpenSettings}
-          >
-            <span className="ios-liquid-bottom-icon-wrap">
-              <IosSettingsGearIcon size={22} />
-            </span>
-            <span>{t("settings")}</span>
-          </button>
-        </nav>
+        </div>
       )}
     </aside>
   );

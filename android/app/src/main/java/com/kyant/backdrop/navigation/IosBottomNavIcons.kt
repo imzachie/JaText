@@ -193,3 +193,34 @@ fun IosSettingsGearIcon(
         )
     }
 }
+
+/**
+ * Authentic Apple iOS 26.3 SF-Symbol `magnifyingglass` icon for the separated circular Search button.
+ */
+@Composable
+fun IosSearchNavIcon(
+    tint: Color,
+    size: Dp = 24.dp,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val s = w / 24f
+        val lensCenter = Offset(10.5f * s, 10.5f * s)
+        val radius = 6.2f * s
+        drawCircle(
+            color = tint,
+            radius = radius,
+            center = lensCenter,
+            style = Stroke(width = 2.05f * s),
+        )
+        drawLine(
+            color = tint,
+            start = Offset(15.05f * s, 15.05f * s),
+            end = Offset(20.15f * s, 20.15f * s),
+            strokeWidth = 2.2f * s,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+

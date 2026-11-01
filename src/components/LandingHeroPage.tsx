@@ -130,10 +130,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.9.2",
+    date: "November 1, 2026",
+    headline: "iOS 26.3 Chats Header & Separated Liquid Glass Search Bar",
+    latest: true,
+    bullets: [
+      "Replaced the mobile greeting banner with a clean SF Pro Bold Chats title (pure White on dark themes and pure Black on light themes) and removed the permanent top search bar.",
+      "Updated the bottom Liquid Glass navigation bar to the iOS 26.3 layout with Chats, Calls, Add, and Settings in the primary capsule plus a separated circular icon-only Search button on the right end.",
+    ],
+  },
+  {
     version: "v3.9.1",
     date: "November 1, 2026",
     headline: "Native Apple SF Pro Typography Across Android APK (Display, Text & Rounded)",
-    latest: true,
     bullets: [
       "Bundled the full SF Pro typography suite (SF Pro Text, SF Pro Display, and SF Pro Rounded across Regular, Medium, Semibold, Bold, Heavy, Black, Light, Thin, Ultralight, and Italics) across every screen, chat message, input, modal, badge, and call overlay in the JaText Android APK.",
     ],
@@ -458,7 +467,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.9.1 · Live
+                v3.9.2 · Live
               </span>
             </span>
           </a>
@@ -597,7 +606,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.9.1 (Build 58)</strong>
+                    <strong>v3.9.2 (Build 59)</strong>
                     <span>{isIosVisitor ? "iOS Web & Liquid Glass PWA" : "Web & Signed APK"}</span>
                   </div>
                 </div>
@@ -979,7 +988,7 @@ export function LandingHeroPage() {
                   <>
                     Launch the full JaText web app at{" "}
                     <strong>jatext.vercel.app/chats</strong> or grab the latest signed Android
-                    Release APK (v3.9.1).
+                    Release APK (v3.9.2).
                   </>
                 )}
               </p>
@@ -1009,7 +1018,7 @@ export function LandingHeroPage() {
                   href="/downloads/JaText-release.apk"
                   className="jt-btn-secondary jt-btn-lg"
                 >
-                  Get Android APK (v3.9.1)
+                  Get Android APK (v3.9.2)
                 </a>
               )}
             </div>
@@ -1022,7 +1031,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.9.1</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.9.2</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

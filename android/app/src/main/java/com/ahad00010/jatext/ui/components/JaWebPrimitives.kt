@@ -182,6 +182,7 @@ fun JaWebInput(
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    inputModifier: Modifier = Modifier,
     label: String? = null,
     placeholder: String = "",
     leadingPrefix: String? = null,
@@ -258,7 +259,7 @@ fun JaWebInput(
                         fontSize = 15.sp,
                         fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
                     ),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = inputModifier.fillMaxWidth(),
                     decorationBox = { inner ->
                         if (value.isEmpty() && placeholder.isNotEmpty()) {
                             Text(
