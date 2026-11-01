@@ -2189,6 +2189,7 @@ fun RichMarkdownText(
                                 color = subTextColor,
                                 fontSize = fontSizeSp.sp,
                                 fontStyle = FontStyle.Italic,
+                                fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
                                 lineHeight = (fontSizeSp + 5.5f).sp,
                             ),
                             onClick = { offset ->
@@ -2222,6 +2223,7 @@ fun RichMarkdownText(
                             style = TextStyle(
                                 color = textColor,
                                 fontSize = fontSizeSp.sp,
+                                fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
                                 lineHeight = (fontSizeSp + 5.5f).sp,
                             ),
                             modifier = Modifier.weight(1f),
@@ -2259,6 +2261,11 @@ fun RichMarkdownText(
                                 color = textColor,
                                 fontSize = sizeSp.sp,
                                 fontWeight = if (block.headingLevel > 0) FontWeight.ExtraBold else FontWeight.Normal,
+                                fontFamily = if (block.headingLevel in 1..2) {
+                                    com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily
+                                } else {
+                                    com.ahad00010.jatext.ui.theme.SfProTextFontFamily
+                                },
                                 lineHeight = (sizeSp + 5.5f).sp,
                             ),
                             onClick = { offset ->
@@ -2779,6 +2786,10 @@ fun ViewOnceMessageBubbleUi(
             ViewOnceCircleBadge(burned = true, tint = ink.subTextColor)
             ClickableText(
                 text = annotated,
+                style = TextStyle(
+                    fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
+                    fontSize = 14.sp,
+                ),
                 onClick = { offset ->
                     annotated.getStringAnnotations(tag = "LEARN_MORE", start = offset, end = offset)
                         .firstOrNull()
@@ -2985,6 +2996,11 @@ fun ViewOnceMessageBubbleUi(
                                 fontSize = if (isTextOnly && textBody.length <= 120) 22.sp else 16.5.sp,
                                 lineHeight = if (isTextOnly && textBody.length <= 120) 30.sp else 23.sp,
                                 fontWeight = if (isTextOnly) FontWeight.SemiBold else FontWeight.Medium,
+                                fontFamily = if (isTextOnly && textBody.length <= 120) {
+                                    com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily
+                                } else {
+                                    com.ahad00010.jatext.ui.theme.SfProTextFontFamily
+                                },
                             )
                         }
                     }

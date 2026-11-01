@@ -890,6 +890,7 @@ fun JaAvatar(
                 text = initial,
                 color = Color.White,
                 fontWeight = FontWeight.Black,
+                fontFamily = com.ahad00010.jatext.ui.theme.SfProRoundedFontFamily,
                 fontSize = (size.value * 0.42f).sp,
             )
             if (!resolvedUrl.isNullOrBlank()) {

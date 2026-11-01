@@ -54,6 +54,20 @@ jobs:
             printf "%s\n" "${GOOGLE_SERVICES_JSON}" > android/app/google-services.json
           fi
 
+      - name: Restore or cache SF Pro font bundle
+        id: sfpro-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/jatext-sf-pro-fonts
+          key: jatext-sf-pro-fonts-${{ hashFiles('scripts/fetch-sf-pro-fonts.py') }}
+
+      - name: Fetch and prepare Apple SF Pro fonts from JaText-Essential-Stuff
+        run: |
+          if [ "${{ steps.sfpro-cache.outputs.cache-hit }}" != "true" ]; then
+            python3 -m pip install --user --break-system-packages --quiet fonttools || python3 -m pip install --quiet fonttools
+          fi
+          python3 scripts/fetch-sf-pro-fonts.py --fetch
+
       - name: Assemble Pure Native Signed Release APK
         working-directory: android
         run: |
@@ -94,6 +108,7 @@ jobs:
                           sys.exit("Forbidden Capacitor/JaTextWebView class found in " + n)
               print("Native libs in APK:", libs)
           '
+          python3 scripts/fetch-sf-pro-fonts.py --verify-apk JaText-release.apk
           APK_BYTES=$(stat -c%s JaText-release.apk)
           echo "::notice title=PureNativeAPK::Verified pure native Jetpack Compose APK (${APK_BYTES} bytes, arm64-v8a + armeabi-v7a, zero Capacitor, zero WebView code, zero HTML bundle)."
 

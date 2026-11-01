@@ -1864,6 +1864,7 @@ fun ChatThreadScreen(
                                     color = Color.White,
                                     fontSize = 9.5.sp,
                                     fontWeight = FontWeight.ExtraBold,
+                                    fontFamily = com.ahad00010.jatext.ui.theme.SfProRoundedFontFamily,
                                 )
                             }
                         }
@@ -1885,6 +1886,7 @@ fun ChatThreadScreen(
                             color = composerTextCol,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Black,
+                            fontFamily = com.ahad00010.jatext.ui.theme.SfProRoundedFontFamily,
                         )
                     }
                     if (isCommunity && state.communityPermissions.canCreatePolls) {
@@ -1927,6 +1929,7 @@ fun ChatThreadScreen(
                             textStyle = TextStyle(
                                 color = composerTextCol,
                                 fontSize = 15.sp,
+                                fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
                             ),
                             maxLines = 5,
                             modifier = Modifier.weight(1f),

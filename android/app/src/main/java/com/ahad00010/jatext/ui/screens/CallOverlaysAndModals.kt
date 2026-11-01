@@ -617,6 +617,7 @@ private fun NativeCallFullscreenStage(
                     color = Color.White,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
+                    fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -667,7 +668,13 @@ private fun NativeCallFullscreenStage(
                         sizeDp = 104.dp,
                     )
                     Spacer(Modifier.height(18.dp))
-                    Text(titleName, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = titleName,
+                        color = Color.White,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
+                    )
                     Spacer(Modifier.height(6.dp))
                     Text(
                         text = if (callState.isGroup) {
@@ -807,7 +814,13 @@ private fun NativeCallFullscreenStage(
                             size = 100.dp,
                         )
                         Spacer(Modifier.height(14.dp))
-                        Text(titleName, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = titleName,
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
+                        )
                         if (callState.isGroup) {
                             Text(
                                 text = "${callState.participants.size + 1} in voice channel",
