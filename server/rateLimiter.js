@@ -106,7 +106,20 @@ export function resolveRpcRateTier(op) {
   switch (op) {
     case "signInPassword":
     case "signUpPassword":
-      return { tier: "auth", limit: 20, windowMs: 60_000 };
+    case "signInEmail":
+    case "signUpEmail":
+    case "verifyTwoFactorLogin":
+    case "beginPasskeyLogin":
+    case "finishPasskeyLogin":
+      return { tier: "auth", limit: 25, windowMs: 60_000 };
+
+    case "beginTotpSetup":
+    case "confirmTotpSetup":
+    case "disableTotp":
+    case "beginPasskeyRegistration":
+    case "finishPasskeyRegistration":
+    case "deletePasskey":
+      return { tier: "security_mutate", limit: 30, windowMs: 60_000 };
 
     case "createDeviceLinkSession":
     case "claimDeviceLinkSession":

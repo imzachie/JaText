@@ -119,6 +119,8 @@ import com.ahad00010.jatext.data.LinkPreviewData
 import com.ahad00010.jatext.data.MessageReaction
 import com.ahad00010.jatext.data.ReplySummary
 import com.ahad00010.jatext.data.TursoApiClient
+import com.ahad00010.jatext.data.ViewOnceCodec
+import com.ahad00010.jatext.data.ViewOnceEnvelopePayload
 import com.ahad00010.jatext.media.VoiceNoteMusicDetector
 import com.ahad00010.jatext.ui.theme.JaTextPalette
 import java.io.File
@@ -549,6 +551,7 @@ fun NativeVoiceNoteBubblePlayer(
     var durationMs by remember { mutableIntStateOf(0) }
     var positionMs by remember { mutableIntStateOf(0) }
     var progress by remember { mutableFloatStateOf(0f) }
+    var isScrubbing by remember { mutableStateOf(false) }
     var playerRef by remember { mutableStateOf<MediaPlayer?>(null) }
 
     LaunchedEffect(attachmentUrl, encryptedAttachment?.h) {
@@ -598,11 +601,11 @@ fun NativeVoiceNoteBubblePlayer(
         transcribing = false
     }
 
-    LaunchedEffect(isPlaying, playerRef) {
+    LaunchedEffect(isPlaying, playerRef, isScrubbing) {
         while (isPlaying && playerRef != null) {
             try {
                 val mp = playerRef ?: break
-                if (mp.isPlaying) {
+                if (mp.isPlaying && !isScrubbing) {
                     positionMs = mp.currentPosition
                     durationMs = mp.duration.coerceAtLeast(1)
                     progress = (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
@@ -668,6 +671,9 @@ fun NativeVoiceNoteBubblePlayer(
                                     setDataSource(file.absolutePath)
                                     prepare()
                                     durationMs = duration.coerceAtLeast(1)
+                                    if (positionMs in 1 until durationMs) {
+                                        seekTo(positionMs)
+                                    }
                                     setOnCompletionListener {
                                         isPlaying = false
                                         progress = 0f
@@ -704,11 +710,52 @@ fun NativeVoiceNoteBubblePlayer(
             Spacer(Modifier.width(10.dp))
 
             Column(modifier = Modifier.weight(1f)) {
+                val applyRatioSeek: (Float, Boolean) -> Unit = { rawRatio, commitMp ->
+                    val clamped = rawRatio.coerceIn(0f, 1f)
+                    val total = (playerRef?.duration ?: durationMs).coerceAtLeast(1)
+                    val targetMs = (clamped * total.toFloat()).toInt().coerceIn(0, total)
+                    progress = clamped
+                    positionMs = targetMs
+                    if (commitMp) {
+                        try {
+                            playerRef?.seekTo(targetMs)
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
                 Canvas(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(26.dp)
+                        .height(28.dp)
+                        .pointerInput(resolvedFile) {
+                            detectTapGestures { offset ->
+                                val w = size.width.toFloat().coerceAtLeast(1f)
+                                applyRatioSeek(offset.x / w, true)
+                            }
+                        }
+                        .pointerInput(resolvedFile) {
+                            detectHorizontalDragGestures(
+                                onDragStart = { offset ->
+                                    isScrubbing = true
+                                    val w = size.width.toFloat().coerceAtLeast(1f)
+                                    applyRatioSeek(offset.x / w, false)
+                                },
+                                onHorizontalDrag = { change, _ ->
+                                    change.consume()
+                                    val w = size.width.toFloat().coerceAtLeast(1f)
+                                    applyRatioSeek(change.position.x / w, true)
+                                },
+                                onDragEnd = {
+                                    isScrubbing = false
+                                    applyRatioSeek(progress, true)
+                                },
+                                onDragCancel = {
+                                    isScrubbing = false
+                                },
+                            )
+                        }
                 ) {
+                    if (size.isUnspecified) return@Canvas
                     val count = bars.size.coerceAtLeast(1)
                     val gap = 2.5.dp.toPx()
                     val barW = ((size.width - gap * (count - 1)) / count).coerceAtLeast(2f)
@@ -723,11 +770,22 @@ fun NativeVoiceNoteBubblePlayer(
                             cornerRadius = CornerRadius(barW / 2f, barW / 2f),
                         )
                     }
+                    val thumbX = (progress.coerceIn(0f, 1f) * size.width).coerceIn(4.dp.toPx(), (size.width - 4.dp.toPx()).coerceAtLeast(4.dp.toPx()))
+                    drawCircle(
+                        color = fgInk,
+                        radius = if (isScrubbing) 5.5.dp.toPx() else 4.dp.toPx(),
+                        center = Offset(thumbX, size.height / 2f),
+                    )
                 }
                 Spacer(Modifier.height(3.dp))
-                val shownSec = ((if (isPlaying || positionMs > 0) positionMs else durationMs) / 1000).coerceAtLeast(0)
+                val shownSec = ((if (isPlaying || positionMs > 0 || isScrubbing) positionMs else durationMs) / 1000).coerceAtLeast(0)
+                val totalSec = (durationMs / 1000).coerceAtLeast(0)
                 Text(
-                    text = "%d:%02d".format(shownSec / 60, shownSec % 60),
+                    text = if (isPlaying || positionMs > 0 || isScrubbing) {
+                        "%d:%02d / %d:%02d".format(shownSec / 60, shownSec % 60, totalSec / 60, totalSec % 60)
+                    } else {
+                        "%d:%02d".format(totalSec / 60, totalSec % 60)
+                    },
                     color = fgInk.copy(alpha = 0.85f),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
@@ -2604,3 +2662,335 @@ fun GroupSeenAvatarsRowUi(
         }
     }
 }
+
+/* ==================== v3.9.0 View Once Bubble & Fullscreen Burn Viewer ==================== */
+
+@Composable
+fun ViewOnceCircleBadge(
+    burned: Boolean,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.size(22.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = 1.8.dp.toPx()
+            if (burned) {
+                val dashEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                    floatArrayOf(4.dp.toPx(), 3.dp.toPx()),
+                    0f,
+                )
+                drawCircle(
+                    color = tint.copy(alpha = 0.65f),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke, pathEffect = dashEffect),
+                )
+            } else {
+                drawCircle(
+                    color = tint,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke),
+                )
+            }
+        }
+        if (!burned) {
+            Text(
+                text = "1",
+                color = tint,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ViewOnceMessageBubbleUi(
+    messageId: String,
+    rawBody: String,
+    fallbackUrl: String? = null,
+    fallbackName: String? = null,
+    fallbackMime: String? = null,
+    fallbackAtt: EncryptedBlobDescriptor? = null,
+    isOpened: Boolean,
+    ink: ResolvedBubbleColors,
+    onBurnOpened: (String) -> Unit,
+    onLongPressMessage: (() -> Unit)? = null,
+) {
+    val context = LocalContext.current
+    val envelope = remember(rawBody, fallbackUrl, fallbackAtt?.h) {
+        ViewOnceCodec.decode(
+            body = JaTextCryptoEngine.stripBubbleStyleFromText(rawBody),
+            fallbackUrl = fallbackUrl,
+            fallbackName = fallbackName,
+            fallbackMime = fallbackMime,
+            fallbackAtt = fallbackAtt,
+        ) ?: ViewOnceEnvelopePayload(v = 1)
+    }
+
+    var viewerOpen by remember(messageId) { mutableStateOf(false) }
+
+    val closeAndBurn = {
+        viewerOpen = false
+        onBurnOpened(messageId)
+    }
+
+    if (isOpened && !viewerOpen) {
+        val annotated = remember(ink.subTextColor, ink.textColor) {
+            buildAnnotatedString {
+                withStyle(
+                    SpanStyle(
+                        color = ink.subTextColor,
+                        fontStyle = FontStyle.Italic,
+                        fontSize = 14.sp,
+                    )
+                ) {
+                    append("You can only view this once. ")
+                }
+                pushStringAnnotation(
+                    tag = "LEARN_MORE",
+                    annotation = "https://jatext.vercel.app/view-once-privacy.html",
+                )
+                withStyle(
+                    SpanStyle(
+                        color = ink.textColor,
+                        fontWeight = FontWeight.SemiBold,
+                        textDecoration = TextDecoration.Underline,
+                        fontSize = 14.sp,
+                    )
+                ) {
+                    append("Learn more.")
+                }
+                pop()
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = onLongPressMessage,
+                )
+                .padding(vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            ViewOnceCircleBadge(burned = true, tint = ink.subTextColor)
+            ClickableText(
+                text = annotated,
+                onClick = { offset ->
+                    annotated.getStringAnnotations(tag = "LEARN_MORE", start = offset, end = offset)
+                        .firstOrNull()
+                        ?.let { ann ->
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(ann.item)).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                )
+                            }
+                        }
+                },
+            )
+        }
+    } else {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .combinedClickable(
+                    onClick = {
+                        if (!messageId.startsWith("opt-")) {
+                            viewerOpen = true
+                        }
+                    },
+                    onLongClick = onLongPressMessage,
+                )
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            ViewOnceCircleBadge(burned = false, tint = ink.textColor)
+            Text(
+                text = "Click to view.",
+                color = ink.textColor,
+                fontSize = 14.5.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+
+    if (viewerOpen) {
+        Dialog(
+            onDismissRequest = closeAndBurn,
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                decorFitsSystemWindows = false,
+            ),
+        ) {
+            val view = androidx.compose.ui.platform.LocalView.current
+            DisposableEffect(view) {
+                val dlgWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+                dlgWindow?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+                onDispose {}
+            }
+
+            val photoItem = envelope.photo
+            val audioItem = envelope.audio
+            val textBody = envelope.text?.trim().orEmpty()
+
+            val photoModel by produceState<Any?>(
+                initialValue = null,
+                photoItem?.url,
+                photoItem?.att?.h,
+            ) {
+                if (photoItem == null || photoItem.url.isBlank()) {
+                    value = null
+                } else {
+                    val abs = TursoApiClient.resolveAbsoluteMediaUrl(photoItem.url)
+                    value = if (photoItem.att != null) {
+                        JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(context, abs, photoItem.att)
+                    } else {
+                        abs
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFA07080D))
+                    .padding(horizontal = 18.dp, vertical = 38.dp),
+            ) {
+                // Top Bar with View Once pill + X Close button
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0x26FFFFFF))
+                            .border(1.dp, Color(0x38FFFFFF), RoundedCornerShape(999.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        ViewOnceCircleBadge(burned = false, tint = Color.White)
+                        Text(
+                            text = "View once",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+
+                    IconButton(
+                        onClick = closeAndBurn,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x28FFFFFF))
+                            .border(1.dp, Color(0x40FFFFFF), CircleShape),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Close",
+                            tint = Color.White,
+                        )
+                    }
+                }
+
+                // Center Content: Photo, Audio, Text, or any combination!
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.Center)
+                        .padding(vertical = 54.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    if (photoItem != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f, fill = false)
+                                .heightIn(min = 180.dp, max = 520.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(Color(0xFF11131B)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (photoModel != null) {
+                                AsyncImage(
+                                    model = photoModel,
+                                    contentDescription = "View once photo",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            } else {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    strokeWidth = 2.5.dp,
+                                    modifier = Modifier.size(32.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    if (audioItem != null && audioItem.url.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = 360.dp)
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(Color(0xFF171A26))
+                                .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(20.dp))
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                        ) {
+                            NativeVoiceNoteBubblePlayer(
+                                attachmentUrl = audioItem.url,
+                                attachmentType = audioItem.mime,
+                                encryptedAttachment = audioItem.att,
+                                ink = ResolvedBubbleColors(
+                                    textColor = Color.White,
+                                    subTextColor = Color(0xB8FFFFFF),
+                                    voiceNoteInkColor = Color.White,
+                                    isLightSurface = false,
+                                ),
+                            )
+                        }
+                    }
+
+                    if (textBody.isNotEmpty()) {
+                        val isTextOnly = photoItem == null && audioItem == null
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = 520.dp)
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(if (isTextOnly) Color(0xFF151824) else Color(0xCC12141E))
+                                .border(1.dp, Color(0x30FFFFFF), RoundedCornerShape(22.dp))
+                                .padding(horizontal = 22.dp, vertical = if (isTextOnly) 28.dp else 16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = textBody,
+                                color = Color.White,
+                                fontSize = if (isTextOnly && textBody.length <= 120) 22.sp else 16.5.sp,
+                                lineHeight = if (isTextOnly && textBody.length <= 120) 30.sp else 23.sp,
+                                fontWeight = if (isTextOnly) FontWeight.SemiBold else FontWeight.Medium,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

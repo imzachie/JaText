@@ -729,4 +729,54 @@ export function IosPlusCircleIcon(props: UiIconProps) {
   );
 }
 
+export function PinIcon({ filled, ...props }: UiIconProps & { filled?: boolean }) {
+  return (
+    <BaseSvg {...props}>
+      <path
+        d="M15 4.5 19.5 9l-3.8 1.5-2.7 2.7.5 4.3L5 9l4.3.5 2.7-2.7L15 4.5Z"
+        fill={filled ? "currentColor" : "none"}
+        strokeLinejoin="round"
+      />
+      <path d="M9.2 14.8 4.5 19.5" strokeLinecap="round" />
+    </BaseSvg>
+  );
+}
+
+export function FolderIcon(props: UiIconProps) {
+  return (
+    <BaseSvg {...props}>
+      <path
+        d="M3 6.8A1.8 1.8 0 0 1 4.8 5h4.3l1.9 2.2h8.2A1.8 1.8 0 0 1 21 9v8.2A1.8 1.8 0 0 1 19.2 19H4.8A1.8 1.8 0 0 1 3 17.2V6.8Z"
+        strokeLinejoin="round"
+      />
+    </BaseSvg>
+  );
+}
+
+export function ChevronUpIcon(props: UiIconProps) {
+  return (
+    <BaseSvg {...props}>
+      <path d="m6 15 6-6 6 6" strokeLinecap="round" strokeLinejoin="round" />
+    </BaseSvg>
+  );
+}
+
+export function ChevronDownIcon(props: UiIconProps) {
+  return (
+    <BaseSvg {...props}>
+      <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+    </BaseSvg>
+  );
+}
+
+export function KeyIcon(props: UiIconProps) {
+  return (
+    <BaseSvg {...props}>
+      <circle cx="8.5" cy="15.5" r="4.5" />
+      <path d="m11.7 12.3 8.3-8.3M16 8l2.5 2.5M18.5 5.5 21 8" strokeLinecap="round" strokeLinejoin="round" />
+    </BaseSvg>
+  );
+}
+
+
 

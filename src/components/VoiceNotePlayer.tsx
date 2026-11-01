@@ -42,6 +42,8 @@ export function VoiceNotePlayer({
   const [playing, setPlaying] = useState(false);
   const [currentSec, setCurrentSec] = useState(0);
   const [durationSec, setDurationSec] = useState(meta?.durationSec ?? 0);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubSec, setScrubSec] = useState<number | null>(null);
   const [rateIndex, setRateIndex] = useState(0);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
@@ -238,20 +240,59 @@ export function VoiceNotePlayer({
     }
   }
 
-  function seekOnWaveform(event: MouseEvent<HTMLDivElement>) {
-    event.stopPropagation();
-    if (longPressTriggeredRef.current) {
-      longPressTriggeredRef.current = false;
-      return;
-    }
+  function resolveWaveformRatio(target: HTMLDivElement, clientX: number): number {
+    const rect = target.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+  }
+
+  function applyWaveformSeekRatio(ratio: number, commitToAudio: boolean) {
     const audio = audioRef.current;
-    if (!audio) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
-    const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : durationSec;
-    if (total > 0) {
-      audio.currentTime = ratio * total;
-      setCurrentSec(ratio * total);
+    const total =
+      audio && Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : durationSec > 0
+          ? durationSec
+          : meta?.durationSec ?? 0;
+    if (total <= 0) return;
+    const nextSec = ratio * total;
+    setScrubSec(nextSec);
+    setCurrentSec(nextSec);
+    if (commitToAudio && audio) {
+      audio.currentTime = nextSec;
+    }
+  }
+
+  function handleWaveformPointerDown(event: PointerEvent<HTMLDivElement>) {
+    event.stopPropagation();
+    clearLongPressTimer();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignore synthetic events
+    }
+    setIsScrubbing(true);
+    const ratio = resolveWaveformRatio(event.currentTarget, event.clientX);
+    applyWaveformSeekRatio(ratio, true);
+  }
+
+  function handleWaveformPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (!isScrubbing) return;
+    event.stopPropagation();
+    const ratio = resolveWaveformRatio(event.currentTarget, event.clientX);
+    applyWaveformSeekRatio(ratio, true);
+  }
+
+  function handleWaveformPointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (!isScrubbing) return;
+    event.stopPropagation();
+    const ratio = resolveWaveformRatio(event.currentTarget, event.clientX);
+    applyWaveformSeekRatio(ratio, true);
+    setIsScrubbing(false);
+    setScrubSec(null);
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Ignore
     }
   }
 
@@ -293,8 +334,9 @@ export function VoiceNotePlayer({
   }
 
   const effectiveDuration = durationSec > 0 ? durationSec : meta?.durationSec ?? 0;
+  const displayedSec = isScrubbing && scrubSec !== null ? scrubSec : currentSec;
   const progress =
-    effectiveDuration > 0 ? Math.max(0, Math.min(1, currentSec / effectiveDuration)) : 0;
+    effectiveDuration > 0 ? Math.max(0, Math.min(1, displayedSec / effectiveDuration)) : 0;
 
   return (
     <div
@@ -314,8 +356,13 @@ export function VoiceNotePlayer({
         onEnded={() => {
           setPlaying(false);
           setCurrentSec(0);
+          setScrubSec(null);
         }}
-        onTimeUpdate={(event) => setCurrentSec(event.currentTarget.currentTime)}
+        onTimeUpdate={(event) => {
+          if (!isScrubbing) {
+            setCurrentSec(event.currentTarget.currentTime);
+          }
+        }}
         onLoadedMetadata={(event) => {
           const dur = event.currentTarget.duration;
           if (Number.isFinite(dur) && dur > 0) {
@@ -336,14 +383,34 @@ export function VoiceNotePlayer({
 
         <div className="voice-note-body">
           <div
-            className="voice-note-waveform"
+            className={`voice-note-waveform ${isScrubbing ? "is-scrubbing" : ""}`}
             role="slider"
             tabIndex={0}
             aria-label="Voice note progress"
             aria-valuemin={0}
             aria-valuemax={Math.round(effectiveDuration)}
-            aria-valuenow={Math.round(currentSec)}
-            onClick={seekOnWaveform}
+            aria-valuenow={Math.round(displayedSec)}
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={handleWaveformPointerDown}
+            onPointerMove={handleWaveformPointerMove}
+            onPointerUp={handleWaveformPointerUp}
+            onPointerCancel={() => {
+              setIsScrubbing(false);
+              setScrubSec(null);
+            }}
+            onKeyDown={(e) => {
+              if (effectiveDuration <= 0) return;
+              if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                e.preventDefault();
+                const delta = e.key === "ArrowRight" ? 2 : -2;
+                const nextRatio = Math.max(
+                  0,
+                  Math.min(1, (displayedSec + delta) / effectiveDuration),
+                );
+                applyWaveformSeekRatio(nextRatio, true);
+                setScrubSec(null);
+              }
+            }}
           >
             {bars.map((height, idx) => {
               const barRatio = (idx + 0.5) / bars.length;
@@ -356,13 +423,18 @@ export function VoiceNotePlayer({
                 />
               );
             })}
+            <span
+              className="voice-wave-scrubber-thumb"
+              style={{ left: `${progress * 100}%` }}
+              aria-hidden="true"
+            />
           </div>
 
           <div className="voice-note-footer">
             <span className="voice-note-duration">
               <MicVoiceIcon size={12} />{" "}
-              {playing || currentSec > 0
-                ? `${formatAudioDuration(currentSec)} / ${formatAudioDuration(effectiveDuration)}`
+              {playing || displayedSec > 0 || isScrubbing
+                ? `${formatAudioDuration(displayedSec)} / ${formatAudioDuration(effectiveDuration)}`
                 : formatAudioDuration(effectiveDuration)}
             </span>
 

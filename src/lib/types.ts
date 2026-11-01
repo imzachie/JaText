@@ -309,6 +309,8 @@ export interface JaTextStore {
   signInEmail: (email: string, password: string) => Promise<void>;
   signUpEmail: (email: string, password: string) => Promise<void>;
   signInGoogle: (demoProfile?: { name: string; email: string }) => Promise<void>;
+  completeTwoFactorLogin?: (challengeToken: string, code: string) => Promise<void>;
+  signInWithPasskey?: (emailHint?: string) => Promise<void>;
   signOut: () => Promise<void>;
 
   checkUsername: (username: string) => Promise<{ available: boolean; message?: string }>;

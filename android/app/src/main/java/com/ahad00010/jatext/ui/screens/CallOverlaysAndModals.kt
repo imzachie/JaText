@@ -140,6 +140,7 @@ import com.ahad00010.jatext.R
 import com.ahad00010.jatext.data.ApkVersionManifest
 import com.ahad00010.jatext.data.GroupDetails
 import com.ahad00010.jatext.data.JaUser
+import com.ahad00010.jatext.data.SoundboardClip
 import com.ahad00010.jatext.data.TursoApiClient
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.ui.components.JaAvatar
@@ -245,6 +246,7 @@ fun WebRtcVideoSurface(
 fun NativeCallOverlay(
     me: JaUser,
     callEngine: NativeCallEngine,
+    customSoundboards: List<SoundboardClip> = emptyList(),
 ) {
     val context = LocalContext.current
     val callState by callEngine.uiState.collectAsState()
@@ -899,6 +901,18 @@ private fun NativeCallFullscreenStage(
                                     .padding(horizontal = 13.dp, vertical = 8.dp)
                             ) {
                                 Text(label, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp)
+                            }
+                        }
+                        customSoundboards.forEach { custom ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFF31284F))
+                                    .border(1.dp, Color(0x55A78BFA), RoundedCornerShape(10.dp))
+                                    .clickable { callEngine.playCustomSoundboard(custom.audioUrl, custom.name) }
+                                    .padding(horizontal = 13.dp, vertical = 8.dp)
+                            ) {
+                                Text(custom.name, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp)
                             }
                         }
                     }

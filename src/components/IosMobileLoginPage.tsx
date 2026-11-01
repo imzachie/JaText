@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   IosArrowLeftIcon,
   IosEyeIcon,
@@ -8,12 +8,23 @@ import {
   IosShieldCheckIcon,
 } from "./IosVectorIcons";
 import { cancelAddAnotherAccount, useMultiAccountState } from "../lib/accountManager";
+import { useI18n } from "../lib/i18n";
 import { detectIosBrowserLabel } from "../lib/iosDetection";
+import { isWebAuthnSupported } from "../lib/securityClient";
 import { useJaText } from "../lib/store";
-import { PUBLIC_TURSO_API_ORIGIN, consumePendingOAuthError } from "../lib/tursoClient";
+import {
+  PUBLIC_TURSO_API_ORIGIN,
+  TwoFactorRequiredError,
+  consumePendingOAuthError,
+  getPendingTwoFactorChallenge,
+  setPendingTwoFactorChallenge,
+  subscribePendingTwoFactorChallenge,
+} from "../lib/tursoClient";
+import { KeyIcon } from "./UiIcons";
 
 export function IosMobileLoginPage() {
   const store = useJaText();
+  const { t } = useI18n();
   const { returnToSlotId, accounts } = useMultiAccountState();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
@@ -22,7 +33,18 @@ export function IosMobileLoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [twoFactorToken, setTwoFactorToken] = useState<string | null>(() =>
+    getPendingTwoFactorChallenge(),
+  );
+  const [twoFactorCode, setTwoFactorCode] = useState("");
   const [error, setError] = useState<string>(() => consumePendingOAuthError() ?? "");
+
+  useEffect(() => {
+    return subscribePendingTwoFactorChallenge(() => {
+      setTwoFactorToken(getPendingTwoFactorChallenge());
+    });
+  }, []);
 
   const returnAccount = returnToSlotId
     ? accounts.find((a) => a.slotId === returnToSlotId)
@@ -68,17 +90,124 @@ export function IosMobileLoginPage() {
         await store.signInEmail(cleanEmail, password);
       }
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : mode === "signup"
-            ? "Could not create account."
-            : "Invalid email or password.",
-      );
+      if (err instanceof TwoFactorRequiredError) {
+        setPendingTwoFactorChallenge(err.challengeToken);
+        setTwoFactorToken(err.challengeToken);
+        setTwoFactorCode("");
+        setError("");
+      } else {
+        setError(
+          err instanceof Error
+            ? err.message
+            : mode === "signup"
+              ? "Could not create account."
+              : "Invalid email or password.",
+        );
+      }
     } finally {
       setBusy(false);
     }
   };
+
+  const handlePasskeySignIn = async () => {
+    if (busy || googleBusy || passkeyBusy || !store.signInWithPasskey) return;
+    setError("");
+    setPasskeyBusy(true);
+    try {
+      await store.signInWithPasskey(email.trim() || undefined);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Passkey sign-in failed.");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  };
+
+  const handleTwoFactorVerify = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!twoFactorToken || !store.completeTwoFactorLogin || busy) return;
+    const clean = twoFactorCode.trim();
+    if (clean.length < 6) {
+      setError("Please enter your 6-digit authentication code.");
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await store.completeTwoFactorLogin(twoFactorToken, clean);
+      setPendingTwoFactorChallenge(null);
+      setTwoFactorToken(null);
+      setTwoFactorCode("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Invalid authentication code.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (twoFactorToken) {
+    return (
+      <div className="jt-ios-login-screen">
+        <div className="jt-ios-login-orb jt-ios-login-orb-1" aria-hidden="true" />
+        <div className="jt-ios-login-orb jt-ios-login-orb-2" aria-hidden="true" />
+        <div className="jt-ios-login-scroll">
+          <div className="jt-ios-login-card">
+            <button
+              type="button"
+              className="jt-ios-login-back-slot"
+              onClick={() => {
+                setPendingTwoFactorChallenge(null);
+                setTwoFactorToken(null);
+                setTwoFactorCode("");
+                setError("");
+              }}
+            >
+              <IosArrowLeftIcon size={15} />
+              <span>Back to Sign In</span>
+            </button>
+
+            <div className="jt-ios-login-header">
+              <div className="jt-ios-login-logo-shell">
+                <img src="/jatext-logo-icon.png" alt="JaText" width={62} height={62} />
+              </div>
+              <span className="jt-ios-login-badge">{t("two_factor_title")}</span>
+              <h1>{t("two_factor_title")}</h1>
+              <p>{t("enter_auth_code")}</p>
+            </div>
+
+            {error && (
+              <div className="jt-ios-login-error" role="alert">
+                {error}
+              </div>
+            )}
+
+            <form className="jt-ios-login-form" onSubmit={handleTwoFactorVerify}>
+              <label className="jt-ios-input-group">
+                <span className="jt-ios-input-label">{t("enter_auth_code")}</span>
+                <div className="jt-ios-input-wrap">
+                  <IosLockIcon size={16} className="jt-ios-input-icon" />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={12}
+                    placeholder="123456"
+                    value={twoFactorCode}
+                    onChange={(e) => setTwoFactorCode(e.target.value)}
+                    autoFocus
+                    required
+                  />
+                </div>
+              </label>
+
+              <button type="submit" className="jt-ios-submit-btn" disabled={busy}>
+                {busy ? "Verifying..." : "Verify & Continue"}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="jt-ios-login-screen">
@@ -137,6 +266,19 @@ export function IosMobileLoginPage() {
             </svg>
             <span>{googleBusy ? "Connecting to Google..." : "Continue with Google"}</span>
           </button>
+
+          {isWebAuthnSupported() && store.signInWithPasskey && (
+            <button
+              type="button"
+              className="jt-ios-google-btn"
+              style={{ marginTop: 8 }}
+              disabled={busy || googleBusy || passkeyBusy}
+              onClick={() => void handlePasskeySignIn()}
+            >
+              <KeyIcon size={17} />
+              <span>{passkeyBusy ? "Checking Passkey..." : t("sign_in_passkey")}</span>
+            </button>
+          )}
 
           <div className="jt-ios-login-divider">
             <span>or continue with email</span>

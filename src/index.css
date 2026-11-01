@@ -10178,13 +10178,13 @@ label,
 .composer-plus-popover {
   position: fixed;
   z-index: 9500;
-  width: 256px;
-  padding: 7px;
+  width: 268px;
+  padding: 8px;
   border-radius: 20px;
-  background: color-mix(in srgb, var(--panel) 88%, rgba(16, 16, 26, 0.92));
+  background: color-mix(in srgb, var(--panel) 94%, rgba(16, 16, 26, 0.96));
   backdrop-filter: blur(22px) saturate(1.45);
   -webkit-backdrop-filter: blur(22px) saturate(1.45);
-  border: 1px solid color-mix(in srgb, var(--border) 82%, rgba(255, 255, 255, 0.16));
+  border: 1px solid color-mix(in srgb, var(--border) 84%, rgba(255, 255, 255, 0.16));
   box-shadow:
     0 20px 48px rgba(0, 0, 0, 0.52),
     0 2px 10px rgba(0, 0, 0, 0.28),
@@ -10276,25 +10276,51 @@ label,
   transform: scale(0.975);
 }
 
-.composer-plus-item-icon {
-  width: 36px;
-  height: 36px;
+.composer-plus-item-icon,
+.composer-plus-popover .composer-plus-item > .composer-plus-item-icon,
+.composer-plus-popover [role="menuitem"] > span.composer-plus-item-icon:first-child {
+  width: 38px;
+  min-width: 38px;
+  max-width: 38px;
+  height: 38px;
   border-radius: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: none;
+  flex: 0 0 38px;
   transition: transform 200ms cubic-bezier(0.22, 1.35, 0.36, 1);
 }
 
+.composer-plus-item-icon svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
 .composer-plus-item:hover .composer-plus-item-icon {
-  transform: scale(1.08);
+  transform: scale(1.06);
 }
 
 .composer-plus-item-icon.upload-tint {
-  background: rgba(56, 151, 240, 0.17);
+  background: rgba(56, 151, 240, 0.18);
   color: #60b4ff;
-  border: 1px solid rgba(56, 151, 240, 0.3);
+  border: 1px solid rgba(56, 151, 240, 0.32);
+}
+
+.composer-plus-item-icon.viewonce-tint {
+  background: rgba(16, 185, 129, 0.17);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.34);
+}
+
+.composer-plus-item.is-active {
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.composer-plus-item.is-active .composer-plus-item-icon.viewonce-tint {
+  background: rgba(16, 185, 129, 0.28);
+  color: #6ee7b7;
+  border-color: rgba(52, 211, 153, 0.56);
 }
 
 .composer-plus-item-icon.schedule-tint {
@@ -11067,3 +11093,478 @@ label,
     transform: translate3d(0, 100%, 0);
   }
 }
+
+/* ==========================================================================
+   JaText v3.9.0: Scrubber, View Once, Bulk Attachments, Search, Pins, Folders,
+   2FA, Passkeys, Custom Soundboards, Blocked Users, & Multi-Language UI
+   ========================================================================== */
+
+.voice-wave-track {
+  position: relative;
+  touch-action: none;
+  user-select: none;
+}
+
+.voice-wave-scrubber-thumb {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background: #ffffff;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.45),
+    0 0 0 2px color-mix(in srgb, var(--accent) 70%, rgba(255, 255, 255, 0.35));
+  pointer-events: none;
+  transition: transform 120ms ease;
+}
+
+.voice-wave-track:hover .voice-wave-scrubber-thumb,
+.voice-wave-track.scrubbing .voice-wave-scrubber-thumb {
+  transform: translate(-50%, -50%) scale(1.28);
+}
+
+/* Composer right-side View Once badge */
+.composer-input-shell {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.composer .composer-input-shell textarea {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+.composer .composer-input-shell.has-viewonce textarea {
+  padding-right: 44px;
+}
+
+.composer-viewonce-badge {
+  position: absolute;
+  right: 7px;
+  bottom: 6px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(52, 211, 153, 0.55);
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 150ms ease, background 150ms ease;
+}
+
+.composer-viewonce-badge:hover {
+  background: rgba(16, 185, 129, 0.32);
+  transform: scale(1.06);
+}
+
+/* Bulk Multi-File Attachment Queue */
+.attach-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 6px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.attach-preview-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 5px 9px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 84%, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.attach-preview-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-preview-chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+
+.attach-preview-chip-remove:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* View Once Bubble & Fullscreen Burn Viewer */
+.jt-vo-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(52, 211, 153, 0.38);
+  background: rgba(16, 185, 129, 0.14);
+  color: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.jt-vo-bubble.jt-vo-unopened:hover {
+  background: rgba(16, 185, 129, 0.24);
+  transform: translateY(-1px);
+}
+
+.jt-vo-bubble.jt-vo-burned {
+  cursor: default;
+  border-color: rgba(148, 163, 184, 0.26);
+  background: rgba(15, 23, 42, 0.18);
+  font-weight: 500;
+  opacity: 0.92;
+}
+
+.jt-vo-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 185, 129, 0.22);
+  color: #34d399;
+  flex-shrink: 0;
+}
+
+.jt-vo-icon.burned {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--muted);
+}
+
+.jt-vo-burned-copy,
+.jt-vo-click-label {
+  line-height: 1.35;
+}
+
+.jt-vo-learn-link {
+  color: inherit;
+  text-decoration: underline;
+  font-weight: 700;
+}
+
+.jt-vo-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  background: rgba(4, 6, 12, 0.96);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  display: flex;
+  flex-direction: column;
+  color: #f8fafc;
+}
+
+.jt-vo-fs-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(14px + env(safe-area-inset-top, 0px)) 18px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.jt-vo-fs-nav-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.jt-vo-fs-nav-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.jt-vo-fs-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+}
+
+.jt-vo-fs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.jt-vo-fs-meta small {
+  font-size: 12px;
+  color: #6ee7b7;
+}
+
+.jt-vo-fs-stage {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 24px 18px calc(28px + env(safe-area-inset-bottom, 0px));
+}
+
+.jt-vo-fs-photo-shell {
+  width: min(720px, 100%);
+  display: flex;
+  justify-content: center;
+}
+
+.jt-vo-fs-photo {
+  max-width: 100%;
+  max-height: 62dvh;
+  border-radius: 18px;
+  object-fit: contain;
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.58);
+}
+
+.jt-vo-fs-audio-card {
+  width: min(420px, 100%);
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.jt-vo-fs-text-card {
+  width: min(680px, 100%);
+  padding: 22px 24px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  font-size: 18px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: center;
+}
+
+.jt-vo-fs-text-card p {
+  margin: 0;
+}
+
+.jt-vo-fs-loading {
+  color: #cbd5e1;
+  font-size: 15px;
+}
+
+/* In-chat Search Bar & Pinned Message Banner */
+.chat-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-search-bar input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.chat-search-counter {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.chat-pinned-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.chat-pinned-banner-jump {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.chat-pinned-banner-jump strong {
+  font-size: 11.5px;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.chat-pinned-banner-jump span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.msg.search-match-active .bubble {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Sidebar Folders, Pins, & Reorder */
+.sidebar-folder-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.sidebar-folder-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.sidebar-folder-pill {
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.sidebar-folder-pill.active {
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--text);
+}
+
+.sidebar-pin-badge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  margin-left: 4px;
+}
+
+/* Settings 2FA, Passkeys, Soundboards, & Blocked Users */
+.security-qr-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  margin-top: 10px;
+}
+
+.security-qr-svg {
+  width: 196px;
+  height: 196px;
+  padding: 10px;
+  border-radius: 14px;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.security-qr-svg svg {
+  width: 100%;
+  height: 100%;
+}
+
+.security-backup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.security-backup-code {
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.soundboard-row,
+.blocked-user-row,
+.passkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+/* DM Mention Autocomplete wrapper */
+.composer-wrap {
+  position: relative;
+}
+

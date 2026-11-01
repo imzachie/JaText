@@ -230,6 +230,18 @@ export async function decryptAndHydrateLinkedWebSession(
   await ensureUserE2EEInitialized(plain.userId);
   if (plain.vault && plain.vault.userId === plain.userId) {
     await importRestoredVaultContents(plain.vault);
+    if (plain.vault.primaryIdentity?.keyId && plain.vault.primaryIdentity?.dhPubB64) {
+      await tursoRpc(
+        "publishE2EEIdentity",
+        {
+          keyId: plain.vault.primaryIdentity.keyId,
+          dhPubB64: plain.vault.primaryIdentity.dhPubB64,
+          sigPubB64: plain.vault.primaryIdentity.sigPubB64,
+          selfSigB64: plain.vault.primaryIdentity.selfSigB64,
+        },
+        { slotId: DEFAULT_ACCOUNT_SLOT_ID },
+      ).catch(() => {});
+    }
   }
   onProgress?.(55);
 

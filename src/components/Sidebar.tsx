@@ -18,8 +18,16 @@ import {
   useCall,
 } from "../lib/calling";
 import { useCallHistoryEntries, type CallHistoryEntry } from "../lib/callHistory";
+import {
+  deleteChatFolder,
+  moveThreadOrder,
+  saveChatFolder,
+  togglePinThread,
+  useChatOrganization,
+} from "../lib/chatOrganization";
 import { useDraftsMap } from "../lib/drafts";
 import { useGroupCall } from "../lib/groupCalling";
+import { useI18n } from "../lib/i18n";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
 import { isAuthorizedIosChatsRuntime } from "../lib/iosDetection";
@@ -34,12 +42,17 @@ import {
   BellIcon,
   BellOffIcon,
   CheckIcon,
+  ChevronDownIcon,
   ChevronUpDownIcon,
+  ChevronUpIcon,
   ClockIcon,
+  EditIcon,
   FlaskIcon,
+  FolderIcon,
   IosPlusCircleIcon,
   IosSettingsGearIcon,
   MessageCircleIcon,
+  PinIcon,
   PlusIcon,
   SettingsIcon,
   SwitchAccountIcon,
@@ -98,6 +111,8 @@ export function Sidebar({
   onOpenAccountSwitcher?: () => void;
 }) {
   const store = useJaText();
+  const { t } = useI18n();
+  const chatOrg = useChatOrganization();
   const { session, startCall, endCall } = useCall();
   const { groupSession, startGroupCall, leaveGroupCall } = useGroupCall();
   const { activeSlotId, accounts } = useMultiAccountState();
@@ -106,6 +121,12 @@ export function Sidebar({
   const { me, friends, incoming, outgoing, previews, activeChatId, setActiveChatId } = store;
   const [tab, setTab] = useState<"chats" | "calls" | "add">("chats");
   const [search, setSearch] = useState("");
+  const [selectedFolderId, setSelectedFolderId] = useState<string>("all");
+  const [folderEditor, setFolderEditor] = useState<{
+    id?: string;
+    name: string;
+    threadIds: string[];
+  } | null>(null);
   const [addName, setAddName] = useState("");
   const [addMsg, setAddMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [addBusy, setAddBusy] = useState(false);
@@ -235,6 +256,14 @@ export function Sidebar({
     return Array.from(byCallId.values()).sort((a, b) => b.timestamp - a.timestamp);
   }, [friendById, me, previews, storedCallHistory]);
 
+  const activeFolder = useMemo(
+    () =>
+      selectedFolderId === "all"
+        ? null
+        : (chatOrg.folders.find((f) => f.id === selectedFolderId) ?? null),
+    [chatOrg.folders, selectedFolderId],
+  );
+
   const sortedFriends = useMemo(() => {
     const filtered = friends.filter(
       (f) =>
@@ -258,6 +287,49 @@ export function Sidebar({
           (!search.trim() || group.name.toLowerCase().includes(search.toLowerCase())),
       ),
     [search, showArchived, store.groups],
+  );
+
+  const orderedThreads = useMemo(() => {
+    type ThreadItem =
+      | { kind: "group"; threadKey: string; group: GroupSummary; ts: number }
+      | { kind: "dm"; threadKey: string; friend: JaUser; ts: number };
+    const items: ThreadItem[] = [
+      ...visibleGroups.map((group) => ({
+        kind: "group" as const,
+        threadKey: `group:${group.id}`,
+        group,
+        ts: group.lastMessageAt ?? 0,
+      })),
+      ...sortedFriends.map((friend) => ({
+        kind: "dm" as const,
+        threadKey: `dm:${friend.id}`,
+        friend,
+        ts: previewByFriend.get(friend.id)?.createdAt ?? 0,
+      })),
+    ];
+    const filtered = activeFolder
+      ? items.filter((item) => activeFolder.threadIds.includes(item.threadKey))
+      : items;
+    const pinnedSet = new Set(chatOrg.pinnedIds);
+    const customIdx = new Map<string, number>();
+    chatOrg.customOrder.forEach((key, idx) => customIdx.set(key, idx));
+
+    return filtered.sort((a, b) => {
+      const aPin = pinnedSet.has(a.threadKey) ? 0 : 1;
+      const bPin = pinnedSet.has(b.threadKey) ? 0 : 1;
+      if (aPin !== bPin) return aPin - bPin;
+      const aOrder = customIdx.get(a.threadKey);
+      const bOrder = customIdx.get(b.threadKey);
+      if (aOrder !== undefined && bOrder !== undefined) return aOrder - bOrder;
+      if (aOrder !== undefined) return -1;
+      if (bOrder !== undefined) return 1;
+      return b.ts - a.ts;
+    });
+  }, [activeFolder, chatOrg.customOrder, chatOrg.pinnedIds, previewByFriend, sortedFriends, visibleGroups]);
+
+  const visibleThreadKeys = useMemo(
+    () => [OFFICIAL_COMMUNITY_ID, ...orderedThreads.map((tItem) => tItem.threadKey)],
+    [orderedThreads],
   );
 
   const archivedCount =
@@ -518,7 +590,7 @@ export function Sidebar({
         <div className="tabs sidebar-tabs">
           <button className={tab === "chats" ? "active" : ""} onClick={() => setTab("chats")}>
             <MessageCircleIcon size={15} />
-            <span>Chats</span>
+            <span>{t("chats")}</span>
             {totalUnreadCount > 0 && (
               <span className="badge unread-tab-badge">
                 {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
@@ -527,11 +599,11 @@ export function Sidebar({
           </button>
           <button className={tab === "calls" ? "active" : ""} onClick={() => setTab("calls")}>
             <Phone size={15} />
-            <span>Calls</span>
+            <span>{t("calls")}</span>
           </button>
           <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}>
             <PlusIcon size={15} />
-            <span>Add</span>
+            <span>{t("add")}</span>
             {incoming.length > 0 && <span className="badge">{incoming.length}</span>}
           </button>
         </div>
@@ -541,10 +613,76 @@ export function Sidebar({
         <div className="sidebar-tab-pane" key="pane-chats">
           <input
             className="search-input"
-            placeholder="Search friends…"
+            placeholder={`${t("search_chats")}…`}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          {!showArchived && (
+            <div className="sidebar-folder-bar" role="tablist" aria-label={t("folders")}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={selectedFolderId === "all"}
+                className={`sidebar-folder-pill ${selectedFolderId === "all" ? "active" : ""}`}
+                onClick={() => setSelectedFolderId("all")}
+              >
+                {t("all_chats")}
+              </button>
+              {chatOrg.folders.map((folder) => {
+                const isSelected = activeFolder?.id === folder.id;
+                return (
+                  <button
+                    key={folder.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={isSelected}
+                    className={`sidebar-folder-pill ${isSelected ? "active" : ""}`}
+                    onClick={() => setSelectedFolderId(folder.id)}
+                    onDoubleClick={() =>
+                      setFolderEditor({
+                        id: folder.id,
+                        name: folder.name,
+                        threadIds: [...folder.threadIds],
+                      })
+                    }
+                  >
+                    <FolderIcon size={13} />
+                    <span>{folder.name}</span>
+                  </button>
+                );
+              })}
+              {activeFolder && (
+                <button
+                  type="button"
+                  className="sidebar-folder-pill"
+                  title="Edit selected folder"
+                  aria-label="Edit selected folder"
+                  onClick={() =>
+                    setFolderEditor({
+                      id: activeFolder.id,
+                      name: activeFolder.name,
+                      threadIds: [...activeFolder.threadIds],
+                    })
+                  }
+                >
+                  <EditIcon size={12} />
+                </button>
+              )}
+              <button
+                type="button"
+                className="sidebar-folder-pill"
+                onClick={() =>
+                  setFolderEditor({
+                    name: "",
+                    threadIds: [],
+                  })
+                }
+              >
+                <PlusIcon size={12} />
+                <span>{t("new_folder")}</span>
+              </button>
+            </div>
+          )}
           <button
             type="button"
             className={`archive-toggle ${showArchived ? "active" : ""}`}
@@ -629,134 +767,124 @@ export function Sidebar({
                 </div>
               </div>
             )}
-            {visibleGroups.map((group) => {
-              const groupDraft = draftsMap[`group:${group.id}`];
-              const groupUnread =
-                store.activeGroupId === group.id ? 0 : (group.unreadCount ?? 0);
-              return (
-                <div
-                  className={`friend-row group-list-row ${
-                    store.activeGroupId === group.id ? "active" : ""
-                  } ${groupUnread > 0 ? "has-unread" : ""}`}
-                  key={group.id}
-                  onClick={() => store.setActiveGroupId(group.id)}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openGroupMenuAt(event.clientX, event.clientY, group);
-                  }}
-                  onPointerDown={(event) =>
-                    startRowHold(event, (x, y) => openGroupMenuAt(x, y, group))
-                  }
-                  onPointerMove={moveRowHold}
-                  onPointerUp={cancelRowHold}
-                  onPointerCancel={cancelRowHold}
-                >
-                  {group.avatarUrl ? (
-                    <AnimatedMediaImg
-                      className="group-avatar sidebar-group-avatar"
-                      src={group.avatarUrl}
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div
-                      className="group-avatar sidebar-group-avatar group-avatar-fallback"
-                      aria-hidden="true"
-                    >
-                      <UsersIcon size={20} />
-                    </div>
-                  )}
-                  <div className="friend-row-text">
-                    <div className="friend-row-top">
-                      <strong>{group.name}</strong>
-                      <span className="friend-row-badges">
-                        {group.isArchived && (
-                          <span title="Archived">
-                            <ArchiveIcon size={13} />
-                          </span>
-                        )}
-                        {group.isSilenced && (
-                          <span title="Silenced">
-                            <BellOffIcon size={13} />
-                          </span>
-                        )}
-                        {group.lastMentionedMe && store.activeGroupId !== group.id && (
-                          <span className="badge mention-badge" title="You were mentioned">
-                            @
-                          </span>
-                        )}
-                        {groupUnread > 0 && (
-                          <span
-                            className={`unread-indicator-badge ${
-                              group.isSilenced || group.isArchived ? "muted-unread" : ""
-                            }`}
-                            title={`${groupUnread} unread`}
-                          >
-                            {groupUnread > 99 ? "99+" : groupUnread}
-                          </span>
-                        )}
-                        {group.lastMessageAt ? (
-                          <span className="muted small">{fmtTime(group.lastMessageAt)}</span>
-                        ) : null}
+            {orderedThreads.map((entry) => {
+              const isPinned = chatOrg.pinnedIds.includes(entry.threadKey);
+              if (entry.kind === "group") {
+                const { group } = entry;
+                const groupDraft = draftsMap[`group:${group.id}`];
+                const groupUnread =
+                  store.activeGroupId === group.id ? 0 : (group.unreadCount ?? 0);
+                return (
+                  <div
+                    className={`friend-row group-list-row ${
+                      store.activeGroupId === group.id ? "active" : ""
+                    } ${groupUnread > 0 ? "has-unread" : ""}`}
+                    key={entry.threadKey}
+                    onClick={() => store.setActiveGroupId(group.id)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      openGroupMenuAt(event.clientX, event.clientY, group);
+                    }}
+                    onPointerDown={(event) =>
+                      startRowHold(event, (x, y) => openGroupMenuAt(x, y, group))
+                    }
+                    onPointerMove={moveRowHold}
+                    onPointerUp={cancelRowHold}
+                    onPointerCancel={cancelRowHold}
+                  >
+                    {group.avatarUrl ? (
+                      <AnimatedMediaImg
+                        className="group-avatar sidebar-group-avatar"
+                        src={group.avatarUrl}
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div
+                        className="group-avatar sidebar-group-avatar group-avatar-fallback"
+                        aria-hidden="true"
+                      >
+                        <UsersIcon size={20} />
+                      </div>
+                    )}
+                    <div className="friend-row-text">
+                      <div className="friend-row-top">
+                        <strong>
+                          {group.name}
+                          {isPinned && (
+                            <span className="sidebar-pin-badge" title={t("pin_chat")}>
+                              <PinIcon size={12} filled />
+                            </span>
+                          )}
+                        </strong>
+                        <span className="friend-row-badges">
+                          {group.isArchived && (
+                            <span title="Archived">
+                              <ArchiveIcon size={13} />
+                            </span>
+                          )}
+                          {group.isSilenced && (
+                            <span title="Silenced">
+                              <BellOffIcon size={13} />
+                            </span>
+                          )}
+                          {group.lastMentionedMe && store.activeGroupId !== group.id && (
+                            <span className="badge mention-badge" title="You were mentioned">
+                              @
+                            </span>
+                          )}
+                          {groupUnread > 0 && (
+                            <span
+                              className={`unread-indicator-badge ${
+                                group.isSilenced || group.isArchived ? "muted-unread" : ""
+                              }`}
+                              title={`${groupUnread} unread`}
+                            >
+                              {groupUnread > 99 ? "99+" : groupUnread}
+                            </span>
+                          )}
+                          {group.lastMessageAt ? (
+                            <span className="muted small">{fmtTime(group.lastMessageAt)}</span>
+                          ) : null}
+                        </span>
+                      </div>
+                      <span className="muted small friend-preview">
+                        {(() => {
+                          if (groupDraft) {
+                            return (
+                              <>
+                                <span className="draft-pill">{t("draft")}:</span> {groupDraft}
+                              </>
+                            );
+                          }
+                          const groupPreviewText = group.lastMessage
+                            ? formatPreviewMessageText(group.lastMessage)
+                            : "";
+                          if (groupPreviewText) {
+                            const prefix =
+                              group.lastSenderId === me.id
+                                ? "You: "
+                                : group.lastSenderName
+                                  ? `${group.lastSenderName}: `
+                                  : "";
+                            return `${prefix}${groupPreviewText}`;
+                          }
+                          return `${group.memberCount} members`;
+                        })()}
                       </span>
                     </div>
-                    <span className="muted small friend-preview">
-                      {(() => {
-                        if (groupDraft) {
-                          return (
-                            <>
-                              <span className="draft-pill">Draft:</span> {groupDraft}
-                            </>
-                          );
-                        }
-                        const groupPreviewText = group.lastMessage
-                          ? formatPreviewMessageText(group.lastMessage)
-                          : "";
-                        if (groupPreviewText) {
-                          const prefix =
-                            group.lastSenderId === me.id
-                              ? "You: "
-                              : group.lastSenderName
-                                ? `${group.lastSenderName}: `
-                                : "";
-                          return `${prefix}${groupPreviewText}`;
-                        }
-                        return `${group.memberCount} members`;
-                      })()}
-                    </span>
                   </div>
-                </div>
-              );
-            })}
-            {sortedFriends.length === 0 &&
-              visibleGroups.length === 0 &&
-              (friends.length > 0 || store.groups.length > 0) && (
-                <div className="empty-box">
-                  <p>{showArchived ? "No archived chats." : "No chats match your search."}</p>
-                </div>
-              )}
-            {friends.length === 0 && store.groups.length === 0 && (
-              <div className="empty-box">
-                <p>
-                  <UserPlusIcon size={18} style={{ color: "var(--accent)" }} /> No friends yet
-                </p>
-                <p className="muted small">
-                  Head to <strong>Add</strong> and add someone by their username. Once they accept,
-                  you can start texting!
-                </p>
-                <button className="primary-btn" onClick={() => setTab("add")}>
-                  Add a friend
-                </button>
-              </div>
-            )}
-            {sortedFriends.map((friend) => {
+                );
+              }
+
+              const { friend } = entry;
               const preview = previewByFriend.get(friend.id);
               const dmDraft = draftsMap[`dm:${friend.id}`];
               const dmUnread =
                 activeChatId === friend.id ? 0 : (preview?.unreadCount ?? 0);
               return (
                 <div
-                  key={friend.id}
+                  key={entry.threadKey}
                   className={`friend-row ${activeChatId === friend.id ? "active" : ""} ${
                     dmUnread > 0 ? "has-unread" : ""
                   }`}
@@ -785,7 +913,14 @@ export function Sidebar({
                   />
                   <div className="friend-row-text">
                     <div className="friend-row-top">
-                      <strong>{friend.displayName}</strong>
+                      <strong>
+                        {friend.displayName}
+                        {isPinned && (
+                          <span className="sidebar-pin-badge" title={t("pin_chat")}>
+                            <PinIcon size={12} filled />
+                          </span>
+                        )}
+                      </strong>
                       <span className="friend-row-badges">
                         {preview?.isArchived && (
                           <span title="Archived">
@@ -817,7 +952,7 @@ export function Sidebar({
                         if (dmDraft) {
                           return (
                             <>
-                              <span className="draft-pill">Draft:</span> {dmDraft}
+                              <span className="draft-pill">{t("draft")}:</span> {dmDraft}
                             </>
                           );
                         }
@@ -835,6 +970,32 @@ export function Sidebar({
                 </div>
               );
             })}
+            {orderedThreads.length === 0 &&
+              (friends.length > 0 || store.groups.length > 0) && (
+                <div className="empty-box">
+                  <p>
+                    {showArchived
+                      ? "No archived chats."
+                      : activeFolder
+                        ? `No chats in "${activeFolder.name}" yet.`
+                        : "No chats match your search."}
+                  </p>
+                </div>
+              )}
+            {friends.length === 0 && store.groups.length === 0 && (
+              <div className="empty-box">
+                <p>
+                  <UserPlusIcon size={18} style={{ color: "var(--accent)" }} /> No friends yet
+                </p>
+                <p className="muted small">
+                  Head to <strong>Add</strong> and add someone by their username. Once they accept,
+                  you can start texting!
+                </p>
+                <button className="primary-btn" onClick={() => setTab("add")}>
+                  Add a friend
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1205,6 +1366,75 @@ export function Sidebar({
           <button
             type="button"
             role="menuitem"
+            onClick={() => {
+              togglePinThread(`dm:${chatMenu.friend.id}`);
+              setChatMenu(null);
+            }}
+          >
+            <span>
+              <PinIcon
+                size={15}
+                filled={chatOrg.pinnedIds.includes(`dm:${chatMenu.friend.id}`)}
+              />
+            </span>
+            {chatOrg.pinnedIds.includes(`dm:${chatMenu.friend.id}`)
+              ? t("unpin_chat")
+              : t("pin_chat")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              moveThreadOrder(`dm:${chatMenu.friend.id}`, "up", visibleThreadKeys);
+              setChatMenu(null);
+            }}
+          >
+            <span>
+              <ChevronUpIcon size={15} />
+            </span>
+            {t("move_up")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              moveThreadOrder(`dm:${chatMenu.friend.id}`, "down", visibleThreadKeys);
+              setChatMenu(null);
+            }}
+          >
+            <span>
+              <ChevronDownIcon size={15} />
+            </span>
+            {t("move_down")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const targetKey = `dm:${chatMenu.friend.id}`;
+              const existing = chatOrg.folders[0];
+              setFolderEditor(
+                existing
+                  ? {
+                      id: existing.id,
+                      name: existing.name,
+                      threadIds: existing.threadIds.includes(targetKey)
+                        ? [...existing.threadIds]
+                        : [...existing.threadIds, targetKey],
+                    }
+                  : { name: "", threadIds: [targetKey] },
+              );
+              setChatMenu(null);
+            }}
+          >
+            <span>
+              <FolderIcon size={15} />
+            </span>
+            {t("folders")}…
+          </button>
+          <button
+            type="button"
+            role="menuitem"
             onClick={() => void updateChat("markDone")}
           >
             <span>
@@ -1329,8 +1559,69 @@ export function Sidebar({
           {({ closeWithAnimation }) => {
             const liveGroup =
               store.groups.find((g) => g.id === groupMenu.group.id) ?? groupMenu.group;
+            const grpKey = `group:${liveGroup.id}`;
+            const grpPinned = chatOrg.pinnedIds.includes(grpKey);
             return (
               <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => closeWithAnimation(() => togglePinThread(grpKey))}
+                >
+                  <span>
+                    <PinIcon size={15} filled={grpPinned} />
+                  </span>
+                  {grpPinned ? t("unpin_chat") : t("pin_chat")}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() =>
+                    closeWithAnimation(() => moveThreadOrder(grpKey, "up", visibleThreadKeys))
+                  }
+                >
+                  <span>
+                    <ChevronUpIcon size={15} />
+                  </span>
+                  {t("move_up")}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() =>
+                    closeWithAnimation(() => moveThreadOrder(grpKey, "down", visibleThreadKeys))
+                  }
+                >
+                  <span>
+                    <ChevronDownIcon size={15} />
+                  </span>
+                  {t("move_down")}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() =>
+                    closeWithAnimation(() => {
+                      const existing = chatOrg.folders[0];
+                      setFolderEditor(
+                        existing
+                          ? {
+                              id: existing.id,
+                              name: existing.name,
+                              threadIds: existing.threadIds.includes(grpKey)
+                                ? [...existing.threadIds]
+                                : [...existing.threadIds, grpKey],
+                            }
+                          : { name: "", threadIds: [grpKey] },
+                      );
+                    })
+                  }
+                >
+                  <span>
+                    <FolderIcon size={15} />
+                  </span>
+                  {t("folders")}…
+                </button>
                 <button
                   type="button"
                   role="menuitem"
@@ -1439,6 +1730,171 @@ export function Sidebar({
         />
       )}
 
+      {folderEditor && (
+        <AnimatedModal
+          closeLabel="Close"
+          onClose={() => setFolderEditor(null)}
+        >
+          {(requestClose) => (
+            <>
+              <h3>{folderEditor.id ? "Edit folder" : t("new_folder")}</h3>
+              {chatOrg.folders.length > 0 && (
+                <div className="sidebar-folder-bar" style={{ padding: "4px 0 8px" }}>
+                  {chatOrg.folders.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      className={`sidebar-folder-pill ${folderEditor.id === f.id ? "active" : ""}`}
+                      onClick={() =>
+                        setFolderEditor({
+                          id: f.id,
+                          name: f.name,
+                          threadIds: [...f.threadIds],
+                        })
+                      }
+                    >
+                      <FolderIcon size={12} /> {f.name}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={`sidebar-folder-pill ${!folderEditor.id ? "active" : ""}`}
+                    onClick={() => setFolderEditor({ name: "", threadIds: [] })}
+                  >
+                    <PlusIcon size={12} /> {t("new_folder")}
+                  </button>
+                </div>
+              )}
+              <label className="field-label">
+                Folder name
+                <input
+                  value={folderEditor.name}
+                  maxLength={32}
+                  placeholder="e.g. Work, Family, Gaming"
+                  onChange={(e) =>
+                    setFolderEditor((cur) => (cur ? { ...cur, name: e.target.value } : null))
+                  }
+                />
+              </label>
+              <div className="muted small" style={{ marginTop: 6, marginBottom: 6 }}>
+                Select chats &amp; groups for this folder:
+              </div>
+              <div
+                style={{
+                  maxHeight: 240,
+                  overflowY: "auto",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                }}
+              >
+                {store.groups.map((grp) => {
+                  const key = `group:${grp.id}`;
+                  const checked = folderEditor.threadIds.includes(key);
+                  return (
+                    <label
+                      key={key}
+                      className="soundboard-row"
+                      style={{ cursor: "pointer" }}
+                    >
+                      <span>
+                        <strong>{grp.name}</strong>{" "}
+                        <span className="muted small">(Group)</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setFolderEditor((cur) => {
+                            if (!cur) return null;
+                            const nextIds = checked
+                              ? cur.threadIds.filter((id) => id !== key)
+                              : [...cur.threadIds, key];
+                            return { ...cur, threadIds: nextIds };
+                          })
+                        }
+                      />
+                    </label>
+                  );
+                })}
+                {friends.map((fr) => {
+                  const key = `dm:${fr.id}`;
+                  const checked = folderEditor.threadIds.includes(key);
+                  return (
+                    <label
+                      key={key}
+                      className="soundboard-row"
+                      style={{ cursor: "pointer" }}
+                    >
+                      <span>
+                        <strong>{fr.displayName}</strong>{" "}
+                        <span className="muted small">@{fr.username}</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setFolderEditor((cur) => {
+                            if (!cur) return null;
+                            const nextIds = checked
+                              ? cur.threadIds.filter((id) => id !== key)
+                              : [...cur.threadIds, key];
+                            return { ...cur, threadIds: nextIds };
+                          })
+                        }
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  justifyContent: "flex-end",
+                  marginTop: 14,
+                }}
+              >
+                {folderEditor.id && (
+                  <button
+                    type="button"
+                    className="ghost-btn"
+                    style={{ marginRight: "auto", color: "#f87171" }}
+                    onClick={() => {
+                      const targetId = folderEditor.id!;
+                      deleteChatFolder(targetId);
+                      if (selectedFolderId === targetId) setSelectedFolderId("all");
+                      requestClose();
+                    }}
+                  >
+                    Delete folder
+                  </button>
+                )}
+                <button type="button" className="ghost-btn" onClick={requestClose}>
+                  {t("cancel")}
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  disabled={!folderEditor.name.trim()}
+                  onClick={() => {
+                    const saved = saveChatFolder({
+                      id: folderEditor.id,
+                      name: folderEditor.name,
+                      threadIds: folderEditor.threadIds,
+                    });
+                    if (saved) setSelectedFolderId(saved.id);
+                    requestClose();
+                  }}
+                >
+                  {t("save")}
+                </button>
+              </div>
+            </>
+          )}
+        </AnimatedModal>
+      )}
+
       {isIosChats && (
         <nav className="ios-liquid-bottom-nav" aria-label="Primary navigation">
           <div
@@ -1463,7 +1919,7 @@ export function Sidebar({
                 </span>
               )}
             </span>
-            <span>Chats</span>
+            <span>{t("chats")}</span>
           </button>
           <button
             type="button"
@@ -1473,7 +1929,7 @@ export function Sidebar({
             <span className="ios-liquid-bottom-icon-wrap">
               <Phone size={22} />
             </span>
-            <span>Calls</span>
+            <span>{t("calls")}</span>
           </button>
           <button
             type="button"
@@ -1486,7 +1942,7 @@ export function Sidebar({
                 <span className="ios-liquid-bottom-badge">{incoming.length}</span>
               )}
             </span>
-            <span>Add</span>
+            <span>{t("add")}</span>
           </button>
           <button
             type="button"
@@ -1496,7 +1952,7 @@ export function Sidebar({
             <span className="ios-liquid-bottom-icon-wrap">
               <IosSettingsGearIcon size={22} />
             </span>
-            <span>Settings</span>
+            <span>{t("settings")}</span>
           </button>
         </nav>
       )}

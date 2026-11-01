@@ -152,6 +152,9 @@ class NativeCallEngine(
     private var localVideoTrack: VideoTrack? = null
     private var screenVideoSource: VideoSource? = null
     private var screenVideoTrack: VideoTrack? = null
+    private var incomingScreenAudioTrack: android.media.AudioTrack? = null
+    private var incomingScreenAudioRate: Int = 0
+    private val screenAudioLock = Any()
 
     private val peerConnections = ConcurrentHashMap<String, PeerConnection>()
     private val dataChannels = ConcurrentHashMap<String, DataChannel>()
@@ -823,6 +826,111 @@ class NativeCallEngine(
         )
     }
 
+    fun playCustomSoundboard(audioUrl: String, name: String) {
+        playRemoteCustomSoundboardUrl(audioUrl)
+        broadcastDataChannelJson(
+            JsonObject(
+                mapOf(
+                    "type" to JsonPrimitive("custom-soundboard"),
+                    "mediaId" to JsonPrimitive(audioUrl),
+                    "name" to JsonPrimitive(name),
+                )
+            )
+        )
+    }
+
+    private fun playRemoteCustomSoundboardUrl(rawUrl: String) {
+        val clean = rawUrl.trim()
+        if (clean.isEmpty()) return
+        val fullUrl = when {
+            clean.startsWith("http://") || clean.startsWith("https://") -> clean
+            clean.startsWith("/") -> "https://jatext.vercel.app$clean"
+            else -> "https://jatext.vercel.app/api/media?id=$clean"
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val mp = android.media.MediaPlayer()
+                mp.setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                mp.setDataSource(fullUrl)
+                mp.setOnPreparedListener { player ->
+                    try {
+                        player.start()
+                    } catch (_: Throwable) {
+                        player.release()
+                    }
+                }
+                mp.setOnCompletionListener { player -> player.release() }
+                mp.setOnErrorListener { player, _, _ ->
+                    player.release()
+                    true
+                }
+                mp.prepareAsync()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun playIncomingScreenPcm(b64: String, sampleRate: Int) {
+        val pcmBytes = try {
+            android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+        } catch (_: Throwable) {
+            return
+        }
+        if (pcmBytes.size < 4) return
+        val sr = sampleRate.coerceIn(8000, 48000)
+        synchronized(screenAudioLock) {
+            var track = incomingScreenAudioTrack
+            if (track == null || incomingScreenAudioRate != sr || track.state != android.media.AudioTrack.STATE_INITIALIZED) {
+                try {
+                    track?.pause()
+                    track?.flush()
+                    track?.release()
+                } catch (_: Throwable) {
+                }
+                val minBuf = android.media.AudioTrack.getMinBufferSize(
+                    sr,
+                    android.media.AudioFormat.CHANNEL_OUT_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT,
+                )
+                val built = android.media.AudioTrack.Builder()
+                    .setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        android.media.AudioFormat.Builder()
+                            .setSampleRate(sr)
+                            .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
+                            .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(maxOf(minBuf * 3, 8192))
+                    .setTransferMode(android.media.AudioTrack.MODE_STREAM)
+                    .build()
+                if (built.state == android.media.AudioTrack.STATE_INITIALIZED) {
+                    built.play()
+                    incomingScreenAudioTrack = built
+                    incomingScreenAudioRate = sr
+                    track = built
+                } else {
+                    built.release()
+                    track = null
+                }
+            }
+            try {
+                track?.write(pcmBytes, 0, pcmBytes.size)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     fun sendFloatingReaction(emoji: String) {
         val id = UUID.randomUUID().toString()
         addReactionBubble(id, emoji)
@@ -912,6 +1020,7 @@ class NativeCallEngine(
                 mapOf(
                     "type" to JsonPrimitive("screen-audio"),
                     "pcmB64" to JsonPrimitive(b64),
+                    "pcm" to JsonPrimitive(b64),
                     "sr" to JsonPrimitive(sampleRate),
                 )
             )
@@ -1478,6 +1587,21 @@ class NativeCallEngine(
                                 JaTextSoundManager.playSoundboardClip(appContext, effect)
                             }
                         }
+                        "custom-soundboard" -> {
+                            val url = obj["mediaId"]?.jsonPrimitive?.contentOrNull ?: return
+                            if (!_uiState.value.isDeafened) {
+                                playRemoteCustomSoundboardUrl(url)
+                            }
+                        }
+                        "screen-audio" -> {
+                            val pcmB64 = obj["pcmB64"]?.jsonPrimitive?.contentOrNull
+                                ?: obj["pcm"]?.jsonPrimitive?.contentOrNull
+                                ?: return
+                            val sr = obj["sr"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 16000
+                            if (!_uiState.value.isDeafened) {
+                                playIncomingScreenPcm(pcmB64, sr)
+                            }
+                        }
                         "reaction" -> {
                             val emoji = obj["emoji"]?.jsonPrimitive?.contentOrNull ?: return
                             val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: UUID.randomUUID().toString()
@@ -1843,6 +1967,17 @@ class NativeCallEngine(
         } catch (_: Throwable) {
         }
         localAudioSource = null
+
+        synchronized(screenAudioLock) {
+            try {
+                incomingScreenAudioTrack?.pause()
+                incomingScreenAudioTrack?.flush()
+                incomingScreenAudioTrack?.release()
+            } catch (_: Throwable) {
+            }
+            incomingScreenAudioTrack = null
+            incomingScreenAudioRate = 0
+        }
 
         configureCallAudioMode(active = false, speakerphone = false)
     }

@@ -239,6 +239,21 @@ async function postWithRetry(
   throw lastErr instanceof Error ? lastErr : new Error("Network error during upload.");
 }
 
+export function resolveTursoMediaUrl(rawUrl?: string | null): string {
+  const clean = (rawUrl ?? "").trim();
+  if (!clean) return "";
+  if (
+    clean.startsWith("http://") ||
+    clean.startsWith("https://") ||
+    clean.startsWith("blob:") ||
+    clean.startsWith("data:")
+  ) {
+    return clean;
+  }
+  const base = getTursoApiBase();
+  return clean.startsWith("/") ? `${base}${clean}` : `${base}/${clean}`;
+}
+
 export async function uploadMediaToTurso(
   rawFile: File,
   slotId = getActiveAccountSlotId(),
@@ -464,12 +479,39 @@ export async function fetchMediaBytesSmart(
   return out;
 }
 
+export class TwoFactorRequiredError extends Error {
+  readonly challengeToken: string;
+  readonly email: string;
+  constructor(challengeToken: string, email = "") {
+    super("Enter your authentication code to finish signing in.");
+    this.name = "TwoFactorRequiredError";
+    this.challengeToken = challengeToken;
+    this.email = email;
+  }
+}
+
 let pendingWebOAuthError: string | null = null;
+let pendingTwoFactorChallengeToken: string | null = null;
+const twoFactorChallengeListeners = new Set<() => void>();
 
 export function consumePendingOAuthError(): string | null {
   const e = pendingWebOAuthError;
   pendingWebOAuthError = null;
   return e;
+}
+
+export function getPendingTwoFactorChallenge(): string | null {
+  return pendingTwoFactorChallengeToken;
+}
+
+export function setPendingTwoFactorChallenge(token: string | null): void {
+  pendingTwoFactorChallengeToken = token;
+  for (const fn of twoFactorChallengeListeners) fn();
+}
+
+export function subscribePendingTwoFactorChallenge(fn: () => void): () => void {
+  twoFactorChallengeListeners.add(fn);
+  return () => twoFactorChallengeListeners.delete(fn);
 }
 
 export async function captureUrlOAuthCallbackIfPresent(
@@ -479,10 +521,12 @@ export async function captureUrlOAuthCallbackIfPresent(
   const url = new URL(window.location.href);
   const tursoToken = url.searchParams.get("tursoToken");
   const authError = url.searchParams.get("authError");
-  if (!tursoToken && !authError) return false;
+  const twoFactorChallenge = url.searchParams.get("twoFactorChallenge");
+  if (!tursoToken && !authError && !twoFactorChallenge) return false;
 
   url.searchParams.delete("tursoToken");
   url.searchParams.delete("authError");
+  url.searchParams.delete("twoFactorChallenge");
   window.history.replaceState({}, "", url.pathname + url.search + url.hash);
 
   // Desktop Web (/chats) is strictly linked-device via Mobile QR; primary mobile runtimes
@@ -493,6 +537,10 @@ export async function captureUrlOAuthCallbackIfPresent(
 
   if (authError) {
     pendingWebOAuthError = authError;
+    return false;
+  }
+  if (twoFactorChallenge) {
+    setPendingTwoFactorChallenge(twoFactorChallenge);
     return false;
   }
   if (tursoToken) {

@@ -413,15 +413,67 @@ async function initSchema(db) {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_sched_due ON scheduled_messages(dispatched_at, scheduled_at)`,
     `CREATE INDEX IF NOT EXISTS idx_sched_sender ON scheduled_messages(sender_id, dispatched_at, scheduled_at)`,
+
+    `CREATE TABLE IF NOT EXISTS view_once_opens (
+      message_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      opened_at INTEGER NOT NULL,
+      PRIMARY KEY (message_id, user_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_vo_user_opened ON view_once_opens(user_id, opened_at)`,
+
+    `CREATE TABLE IF NOT EXISTS user_soundboards (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      audio_url TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      byte_size INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_soundboards_user ON user_soundboards(user_id, created_at)`,
+
+    `CREATE TABLE IF NOT EXISTS user_passkeys (
+      credential_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      public_key_spki_b64 TEXT NOT NULL,
+      algorithm INTEGER NOT NULL DEFAULT -7,
+      sign_count INTEGER NOT NULL DEFAULT 0,
+      label TEXT NOT NULL DEFAULT 'Passkey',
+      transports_json TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      last_used_at INTEGER
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_passkeys_user ON user_passkeys(user_id)`,
+
+    `CREATE TABLE IF NOT EXISTS webauthn_challenges (
+      challenge_id TEXT PRIMARY KEY,
+      challenge_b64 TEXT NOT NULL,
+      user_id TEXT,
+      kind TEXT NOT NULL,
+      rp_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_webauthn_exp ON webauthn_challenges(expires_at)`,
   ];
 
   await db.batch(statements, "write");
-  try {
-    await db.execute(
-      `ALTER TABLE media_blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    // Column already exists on initialized databases
+  const safeAlters = [
+    `ALTER TABLE media_blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN totp_secret TEXT`,
+    `ALTER TABLE users ADD COLUMN totp_pending_secret TEXT`,
+    `ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN totp_backup_codes_json TEXT`,
+    `ALTER TABLE users ADD COLUMN chat_org_json TEXT`,
+    `ALTER TABLE oauth_mobile_handoffs ADD COLUMN challenge_token TEXT`,
+  ];
+  for (const sql of safeAlters) {
+    try {
+      await db.execute(sql);
+    } catch {
+      // Column already exists on initialized databases
+    }
   }
 }
 
@@ -494,6 +546,343 @@ export function verifyAuthToken(token) {
 
 function sha256Base64Url(inputStr) {
   return base64UrlEncode(crypto.createHash("sha256").update(String(inputStr || ""), "utf8").digest());
+}
+
+/* ==================== RFC 6238 TOTP & WebAuthn Passkey Helpers ==================== */
+
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+const ANDROID_PASSKEY_ORIGIN = "android:apk-key-hash:gsPZhijdPT8VSRd7F7oaSYMZORIgJyNKpslsyAPfNGU";
+
+function base32Encode(buf) {
+  let bits = 0;
+  let value = 0;
+  let output = "";
+  for (let i = 0; i < buf.length; i += 1) {
+    value = (value << 8) | buf[i];
+    bits += 8;
+    while (bits >= 5) {
+      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) {
+    output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  }
+  return output;
+}
+
+function base32Decode(raw) {
+  const clean = String(raw || "")
+    .toUpperCase()
+    .replace(/[^A-Z2-7]/g, "");
+  let bits = 0;
+  let value = 0;
+  const out = [];
+  for (let i = 0; i < clean.length; i += 1) {
+    const idx = BASE32_ALPHABET.indexOf(clean[i]);
+    if (idx < 0) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+
+function generateTotpSecretBase32() {
+  return base32Encode(crypto.randomBytes(20));
+}
+
+function computeHotpCode(secretBase32, counter) {
+  const key = base32Decode(secretBase32);
+  const counterBuf = Buffer.alloc(8);
+  let rem = Math.floor(Math.max(0, Number(counter || 0)));
+  for (let i = 7; i >= 0; i -= 1) {
+    counterBuf[i] = rem & 0xff;
+    rem = Math.floor(rem / 256);
+  }
+  const digest = crypto.createHmac("sha1", key).update(counterBuf).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  const binary =
+    ((digest[offset] & 0x7f) << 24) |
+    ((digest[offset + 1] & 0xff) << 16) |
+    ((digest[offset + 2] & 0xff) << 8) |
+    (digest[offset + 3] & 0xff);
+  return String(binary % 1_000_000).padStart(6, "0");
+}
+
+function verifyTotpCode(secretBase32, rawCode, windowSteps = 2) {
+  const code = String(rawCode || "").replace(/\s+/g, "");
+  if (!/^\d{6}$/.test(code) || !secretBase32) return false;
+  const stepNow = Math.floor(Date.now() / 30_000);
+  for (let delta = -windowSteps; delta <= windowSteps; delta += 1) {
+    const candidate = computeHotpCode(secretBase32, stepNow + delta);
+    if (safeEqualStrings(candidate, code)) return true;
+  }
+  return false;
+}
+
+function generateBackupCodes() {
+  const codes = [];
+  for (let i = 0; i < 8; i += 1) {
+    const hex = crypto.randomBytes(4).toString("hex").toUpperCase();
+    codes.push(`${hex.slice(0, 4)}-${hex.slice(4, 8)}`);
+  }
+  return codes;
+}
+
+export function createTwoFactorChallengeToken(userId, email) {
+  const now = Date.now();
+  const header = base64UrlEncode(JSON.stringify({ alg: "HS256", typ: "JT2FA" }));
+  const payload = base64UrlEncode(
+    JSON.stringify({
+      typ: "2fa_challenge",
+      sub: String(userId),
+      email: String(email || ""),
+      iat: Math.floor(now / 1000),
+      exp: Math.floor((now + 10 * 60_000) / 1000),
+    }),
+  );
+  const sig = base64UrlEncode(
+    crypto.createHmac("sha256", getJwtSecret()).update(`${header}.${payload}`).digest(),
+  );
+  return `${header}.${payload}.${sig}`;
+}
+
+export function verifyTwoFactorChallengeToken(token) {
+  if (!token || typeof token !== "string") return null;
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) return null;
+  const [header, payload, sig] = parts;
+  const expected = base64UrlEncode(
+    crypto.createHmac("sha256", getJwtSecret()).update(`${header}.${payload}`).digest(),
+  );
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(base64UrlDecode(payload).toString("utf8"));
+    if (
+      parsed?.typ !== "2fa_challenge" ||
+      !parsed?.sub ||
+      !parsed?.exp ||
+      Number(parsed.exp) * 1000 < Date.now()
+    ) {
+      return null;
+    }
+    return {
+      userId: String(parsed.sub),
+      email: String(parsed.email || ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Minimal CBOR decoder sufficient for WebAuthn `attestationObject` & COSE EC2 P-256 keys.
+ */
+function decodeCborItem(buf, offset = 0) {
+  if (offset >= buf.length) throw new Error("CBOR truncated");
+  const initial = buf[offset];
+  const major = initial >> 5;
+  const info = initial & 0x1f;
+  let pos = offset + 1;
+  let length = 0;
+  if (info < 24) {
+    length = info;
+  } else if (info === 24) {
+    length = buf[pos];
+    pos += 1;
+  } else if (info === 25) {
+    length = buf.readUInt16BE(pos);
+    pos += 2;
+  } else if (info === 26) {
+    length = buf.readUInt32BE(pos);
+    pos += 4;
+  } else if (info === 27) {
+    const hi = buf.readUInt32BE(pos);
+    const lo = buf.readUInt32BE(pos + 4);
+    length = hi * 4294967296 + lo;
+    pos += 8;
+  } else {
+    throw new Error("Unsupported CBOR indefinite length");
+  }
+
+  switch (major) {
+    case 0:
+      return { value: length, next: pos };
+    case 1:
+      return { value: -1 - length, next: pos };
+    case 2: {
+      const slice = buf.subarray(pos, pos + length);
+      return { value: Buffer.from(slice), next: pos + length };
+    }
+    case 3: {
+      const str = buf.subarray(pos, pos + length).toString("utf8");
+      return { value: str, next: pos + length };
+    }
+    case 4: {
+      const arr = [];
+      let cur = pos;
+      for (let i = 0; i < length; i += 1) {
+        const item = decodeCborItem(buf, cur);
+        arr.push(item.value);
+        cur = item.next;
+      }
+      return { value: arr, next: cur };
+    }
+    case 5: {
+      const map = new Map();
+      let cur = pos;
+      for (let i = 0; i < length; i += 1) {
+        const k = decodeCborItem(buf, cur);
+        const v = decodeCborItem(buf, k.next);
+        map.set(k.value, v.value);
+        cur = v.next;
+      }
+      return { value: map, next: cur };
+    }
+    case 7:
+      if (info === 20) return { value: false, next: pos };
+      if (info === 21) return { value: true, next: pos };
+      if (info === 22 || info === 23) return { value: null, next: pos };
+      return { value: length, next: pos };
+    default:
+      throw new Error("Unsupported CBOR major type");
+  }
+}
+
+function extractSpkiFromAttestationOrAuthData(attestationB64, authDataB64) {
+  let authData = authDataB64 ? base64UrlDecode(authDataB64) : null;
+  if (!authData && attestationB64) {
+    const attMap = decodeCborItem(base64UrlDecode(attestationB64), 0).value;
+    if (attMap instanceof Map && Buffer.isBuffer(attMap.get("authData"))) {
+      authData = attMap.get("authData");
+    }
+  }
+  if (!authData || authData.length < 55) {
+    throw new TursoAppError("Invalid passkey authenticator data.");
+  }
+  const flags = authData[32];
+  if ((flags & 0x40) === 0) {
+    throw new TursoAppError("Passkey attestation did not include credential public key.");
+  }
+  const credIdLen = authData.readUInt16BE(53);
+  const coseOffset = 55 + credIdLen;
+  const coseMap = decodeCborItem(authData, coseOffset).value;
+  if (!(coseMap instanceof Map)) {
+    throw new TursoAppError("Could not decode passkey COSE public key.");
+  }
+  const kty = coseMap.get(1);
+  const alg = Number(coseMap.get(3) || -7);
+  if (kty === 2) {
+    // EC2 P-256 -> ASN.1 SubjectPublicKeyInfo (91 bytes)
+    const x = coseMap.get(-2);
+    const y = coseMap.get(-3);
+    if (!Buffer.isBuffer(x) || !Buffer.isBuffer(y) || x.length !== 32 || y.length !== 32) {
+      throw new TursoAppError("Unsupported EC2 coordinate size for passkey.");
+    }
+    const p256Header = Buffer.from(
+      "3059301306072a8648ce3d020106082a8648ce3d03010703420004",
+      "hex",
+    );
+    const spki = Buffer.concat([p256Header, x, y]);
+    return { spkiB64: base64UrlEncode(spki), alg, authData };
+  }
+  if (kty === 3) {
+    // RSA -> Node JWK import -> SPKI DER export
+    const n = coseMap.get(-1);
+    const e = coseMap.get(-2);
+    if (!Buffer.isBuffer(n) || !Buffer.isBuffer(e)) {
+      throw new TursoAppError("Invalid RSA passkey parameters.");
+    }
+    const pubKey = crypto.createPublicKey({
+      key: {
+        kty: "RSA",
+        n: base64UrlEncode(n),
+        e: base64UrlEncode(e),
+      },
+      format: "jwk",
+    });
+    const spki = pubKey.export({ type: "spki", format: "der" });
+    return { spkiB64: base64UrlEncode(spki), alg: alg || -257, authData };
+  }
+  throw new TursoAppError("Unsupported passkey key type. Please use a standard device passkey.");
+}
+
+function isAllowedWebAuthnOrigin(origin, rpId) {
+  const cleanOrigin = String(origin || "").trim();
+  if (!cleanOrigin) return false;
+  if (cleanOrigin === ANDROID_PASSKEY_ORIGIN || cleanOrigin.startsWith("android:apk-key-hash:")) {
+    return cleanOrigin === ANDROID_PASSKEY_ORIGIN;
+  }
+  try {
+    const parsed = new URL(cleanOrigin);
+    if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") return true;
+    if (parsed.protocol !== "https:") return false;
+    return parsed.hostname === rpId || parsed.hostname.endsWith(`.${rpId}`);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeChatOrg(raw) {
+  const obj = raw && typeof raw === "object" ? raw : {};
+  const pinnedIds = Array.isArray(obj.pinnedIds)
+    ? [...new Set(obj.pinnedIds.map((x) => String(x || "").trim()).filter(Boolean))].slice(0, 100)
+    : [];
+  const rawOrder = Array.isArray(obj.customOrder)
+    ? [...new Set(obj.customOrder.map((x) => String(x || "").trim()).filter(Boolean))].slice(0, 300)
+    : [];
+  const customOrder = [
+    "__jatext_community__",
+    ...rawOrder.filter((id) => id !== "__jatext_community__"),
+  ];
+  const folders = Array.isArray(obj.folders)
+    ? obj.folders
+        .map((f) => {
+          if (!f || typeof f !== "object") return null;
+          const id = String(f.id || "").trim().slice(0, 48);
+          const name = String(f.name || "").trim().slice(0, 32);
+          if (!id || !name) return null;
+          const threadIds = Array.isArray(f.threadIds)
+            ? [...new Set(f.threadIds.map((t) => String(t || "").trim()).filter(Boolean))].slice(
+                0,
+                200,
+              )
+            : [];
+          return { id, name, threadIds };
+        })
+        .filter(Boolean)
+        .slice(0, 20)
+    : [];
+  return { pinnedIds, customOrder, folders };
+}
+
+async function listSoundboardsForUser(db, userId) {
+  const res = await db.execute({
+    sql: `SELECT * FROM user_soundboards WHERE user_id = ? ORDER BY created_at DESC LIMIT 60`,
+    args: [userId],
+  });
+  return res.rows.map((r) => ({
+    id: String(r.id),
+    name: String(r.name || "Sound"),
+    audioUrl: String(r.audio_url || ""),
+    durationMs: Number(r.duration_ms || 0),
+    byteSize: Number(r.byte_size || 0),
+    createdAt: Number(r.created_at || 0),
+  }));
+}
+
+async function listOpenedViewOnceIdsForUser(db, userId) {
+  const res = await db.execute({
+    sql: `SELECT message_id FROM view_once_opens WHERE user_id = ? ORDER BY opened_at DESC LIMIT 2000`,
+    args: [userId],
+  });
+  return res.rows.map((r) => String(r.message_id));
 }
 
 function safeEqualStrings(aStr, bStr) {
@@ -584,6 +973,7 @@ export function mapUserRow(row, includePrivate = false) {
     socials: Array.isArray(socials) ? socials : [],
     ...(website ? { website } : {}),
     ...(syncedTheme ? { syncedTheme } : {}),
+    ...(includePrivate ? { totpEnabled: Boolean(Number(row.totp_enabled || 0)) } : {}),
   };
 }
 
@@ -1449,9 +1839,20 @@ export async function upsertGoogleOAuthAccount({ googleSub, email, name, picture
       args: [googleSub, cleanEmail, nextName, nextAvatar, now, uid],
     });
     const updated = await db.execute({ sql: `SELECT * FROM users WHERE id = ?`, args: [uid] });
+    const updatedRow = updated.rows[0];
+    if (Number(updatedRow?.totp_enabled || 0) === 1 && updatedRow?.totp_secret) {
+      return {
+        requiresTwoFactor: true,
+        challengeToken: createTwoFactorChallengeToken(uid, cleanEmail),
+        email: cleanEmail,
+        token: null,
+        me: null,
+      };
+    }
     return {
+      requiresTwoFactor: false,
       token: createAuthToken(uid, cleanEmail),
-      me: mapUserRow(updated.rows[0], true),
+      me: mapUserRow(updatedRow, true),
     };
   }
 
@@ -1464,12 +1865,20 @@ export async function upsertGoogleOAuthAccount({ googleSub, email, name, picture
   });
   const created = await db.execute({ sql: `SELECT * FROM users WHERE id = ?`, args: [uid] });
   return {
+    requiresTwoFactor: false,
     token: createAuthToken(uid, cleanEmail),
     me: mapUserRow(created.rows[0], true),
   };
 }
 
-export async function saveMobileOAuthHandoff({ sessionId, status, token = null, me = null, error = null }) {
+export async function saveMobileOAuthHandoff({
+  sessionId,
+  status,
+  token = null,
+  me = null,
+  error = null,
+  challengeToken = null,
+}) {
   const cleanId = String(sessionId || "").trim();
   if (!/^[a-f0-9]{24,96}$/i.test(cleanId)) return;
   const db = await getDb();
@@ -1481,13 +1890,14 @@ export async function saveMobileOAuthHandoff({ sessionId, status, token = null, 
     })
     .catch(() => undefined);
   await db.execute({
-    sql: `INSERT INTO oauth_mobile_handoffs (session_id, status, token, me_json, error, created_at)
-          VALUES (?, ?, ?, ?, ?, ?)
+    sql: `INSERT INTO oauth_mobile_handoffs (session_id, status, token, me_json, error, challenge_token, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(session_id) DO UPDATE SET
             status = excluded.status,
             token = excluded.token,
             me_json = excluded.me_json,
             error = excluded.error,
+            challenge_token = excluded.challenge_token,
             created_at = excluded.created_at`,
     args: [
       cleanId,
@@ -1495,6 +1905,7 @@ export async function saveMobileOAuthHandoff({ sessionId, status, token = null, 
       token ? String(token) : null,
       me ? JSON.stringify(me) : null,
       error ? String(error) : null,
+      challengeToken ? String(challengeToken) : null,
       now,
     ],
   });
@@ -1522,7 +1933,7 @@ export async function consumeMobileOAuthHandoff(sessionId) {
     return { status: "expired" };
   }
   const status = String(row.status || "pending");
-  if (status === "complete" || status === "error") {
+  if (status === "complete" || status === "error" || status === "two_factor_required") {
     await db
       .execute({ sql: `DELETE FROM oauth_mobile_handoffs WHERE session_id = ?`, args: [cleanId] })
       .catch(() => undefined);
@@ -1530,6 +1941,7 @@ export async function consumeMobileOAuthHandoff(sessionId) {
   return {
     status,
     token: row.token ? String(row.token) : null,
+    challengeToken: row.challenge_token ? String(row.challenge_token) : null,
     me: row.me_json ? safeJsonParse(row.me_json, null) : null,
     error: row.error ? String(row.error) : null,
   };
@@ -1604,6 +2016,55 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         throw new TursoAppError("Incorrect email or password.");
       }
       const uid = String(user.id);
+      if (Number(user.totp_enabled || 0) === 1 && user.totp_secret) {
+        return {
+          requiresTwoFactor: true,
+          challengeToken: createTwoFactorChallengeToken(uid, email),
+          email,
+        };
+      }
+      return {
+        requiresTwoFactor: false,
+        token: createAuthToken(uid, email),
+        me: mapUserRow(user, true),
+      };
+    }
+
+    case "verifyTwoFactorLogin": {
+      const challengeToken = String(args.challengeToken || "").trim();
+      const rawCode = String(args.code || "").trim();
+      const verified = verifyTwoFactorChallengeToken(challengeToken);
+      if (!verified) {
+        throw new TursoAppError("Your 2FA session expired. Please sign in again.", 401);
+      }
+      const res = await db.execute({
+        sql: `SELECT * FROM users WHERE id = ? LIMIT 1`,
+        args: [verified.userId],
+      });
+      if (!res.rows.length) {
+        throw new TursoAppError("Account not found.", 404);
+      }
+      const user = res.rows[0];
+      const secret = String(user.totp_secret || "");
+      const totpOk = secret && verifyTotpCode(secret, rawCode, 2);
+      let backupMatched = false;
+      if (!totpOk) {
+        const cleanBackup = rawCode.toUpperCase().replace(/\s+/g, "");
+        const backups = safeJsonParse(user.totp_backup_codes_json, []);
+        if (Array.isArray(backups) && backups.includes(cleanBackup)) {
+          backupMatched = true;
+          const remaining = backups.filter((c) => c !== cleanBackup);
+          await db.execute({
+            sql: `UPDATE users SET totp_backup_codes_json = ?, updated_at = ? WHERE id = ?`,
+            args: [JSON.stringify(remaining), now, String(user.id)],
+          });
+        }
+      }
+      if (!totpOk && !backupMatched) {
+        throw new TursoAppError("Invalid authentication code. Please try again.");
+      }
+      const uid = String(user.id);
+      const email = String(user.email || verified.email || "");
       return {
         token: createAuthToken(uid, email),
         me: mapUserRow(user, true),
@@ -1650,6 +2111,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         groups,
         vaultRes,
         commDirRes,
+        openedViewOnceIds,
+        soundboards,
       ] = await Promise.all([
         buildSocialAndPreviews(db, meId),
         getStickersForUser(db, meId),
@@ -1669,6 +2132,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
               `SELECT id, username, display_name, avatar_color, avatar_url, created_at FROM users WHERE onboarding_complete = 1 AND username IS NOT NULL ORDER BY created_at DESC LIMIT 200`,
             )
           : Promise.resolve({ rows: [] }),
+        listOpenedViewOnceIdsForUser(db, meId),
+        listSoundboardsForUser(db, meId),
       ]);
 
       const commHasMore = commMsgsRes.rows.length > 120;
@@ -1713,6 +2178,9 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         groups,
         hasRemoteE2EEVault: vaultRes.rows.length > 0,
         remoteVaultKeyId: vaultRes.rows[0] ? String(vaultRes.rows[0].key_id) : null,
+        openedViewOnceIds,
+        soundboards,
+        chatOrganization: normalizeChatOrg(safeJsonParse(meRow.chat_org_json, {})),
         ...(refreshedToken ? { refreshedToken } : {}),
       };
     }
@@ -3565,6 +4033,20 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
                 updated_at = excluded.updated_at`,
         args: [meId, keyId, dhPubB64, sigPubB64, selfSigB64, now],
       });
+      // Prune stale historical keys beyond the 14 newest so active device keys are never crowded out
+      await db
+        .execute({
+          sql: `DELETE FROM e2ee_user_keys
+                WHERE user_id = ?
+                  AND key_id NOT IN (
+                    SELECT key_id FROM e2ee_user_keys
+                    WHERE user_id = ?
+                    ORDER BY updated_at DESC
+                    LIMIT 14
+                  )`,
+          args: [meId, meId],
+        })
+        .catch(() => undefined);
       return { ok: true };
     }
 
@@ -4071,6 +4553,528 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       await requireMeRow(db, auth);
       const sentCount = await flushDueScheduledMessages(db, true);
       return { ok: true, sentCount };
+    }
+
+    /* ---------- View Once Permanent Burn ---------- */
+    case "markViewOnceOpened": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const messageId = String(args.messageId || "").trim();
+      if (!messageId) throw new TursoAppError("messageId is required.");
+      await db.execute({
+        sql: `INSERT OR IGNORE INTO view_once_opens (message_id, user_id, opened_at) VALUES (?, ?, ?)`,
+        args: [messageId, meId, now],
+      });
+      return { ok: true, messageId };
+    }
+
+    case "getMyViewOnceOpenedIds": {
+      const meRow = await requireMeRow(db, auth);
+      const openedIds = await listOpenedViewOnceIdsForUser(db, String(meRow.id));
+      return { openedIds };
+    }
+
+    /* ---------- Custom Soundboards (<=10MB, <=10s) ---------- */
+    case "listMySoundboards": {
+      const meRow = await requireMeRow(db, auth);
+      const soundboards = await listSoundboardsForUser(db, String(meRow.id));
+      return { soundboards };
+    }
+
+    case "createSoundboardClip": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const name = String(args.name || "").trim().slice(0, 40);
+      const audioUrl = String(args.audioUrl || "").trim();
+      const durationMs = Math.round(Number(args.durationMs || 0));
+      const byteSize = Math.round(Number(args.byteSize || 0));
+      if (!name) throw new TursoAppError("Enter a name for your soundboard clip.");
+      if (!audioUrl) throw new TursoAppError("Upload an audio file first.");
+      if (byteSize > 10 * 1024 * 1024) {
+        throw new TursoAppError("Soundboard audio must be 10 MB or smaller.");
+      }
+      if (durationMs <= 0 || durationMs > 10_500) {
+        throw new TursoAppError("Soundboard audio must be 10 seconds or shorter.");
+      }
+      const cntRes = await db.execute({
+        sql: `SELECT COUNT(*) AS cnt FROM user_soundboards WHERE user_id = ?`,
+        args: [meId],
+      });
+      if (Number(cntRes.rows[0]?.cnt || 0) >= 40) {
+        throw new TursoAppError("You can store up to 40 custom soundboard clips.");
+      }
+      const id = newId();
+      await db.execute({
+        sql: `INSERT INTO user_soundboards (id, user_id, name, audio_url, duration_ms, byte_size, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        args: [id, meId, name, audioUrl, durationMs, byteSize, now],
+      });
+      return {
+        clip: {
+          id,
+          name,
+          audioUrl,
+          durationMs,
+          byteSize,
+          createdAt: now,
+        },
+      };
+    }
+
+    case "deleteSoundboardClip": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const clipId = String(args.clipId || "").trim();
+      if (!clipId) throw new TursoAppError("clipId is required.");
+      await db.execute({
+        sql: `DELETE FROM user_soundboards WHERE id = ? AND user_id = ?`,
+        args: [clipId, meId],
+      });
+      return { ok: true };
+    }
+
+    /* ---------- Blocked Users Hydrated Directory ---------- */
+    case "getBlockedUsers": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const res = await db.execute({
+        sql: `SELECT blocked_id, created_at FROM user_blocks WHERE blocker_id = ? ORDER BY created_at DESC`,
+        args: [meId],
+      });
+      const ids = res.rows.map((r) => String(r.blocked_id));
+      if (!ids.length) return { users: [] };
+      const umap = await getUsersMap(db, ids);
+      const users = res.rows
+        .map((r) => {
+          const u = mapUserRow(umap.get(String(r.blocked_id)));
+          if (!u) return null;
+          return { ...u, blockedAt: Number(r.created_at || 0) };
+        })
+        .filter(Boolean);
+      return { users };
+    }
+
+    /* ---------- Synced Chat Pins, Custom Order & Folders ---------- */
+    case "getChatOrganization": {
+      const meRow = await requireMeRow(db, auth);
+      return {
+        chatOrganization: normalizeChatOrg(safeJsonParse(meRow.chat_org_json, {})),
+      };
+    }
+
+    case "saveChatOrganization": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const normalized = normalizeChatOrg(args.chatOrganization || args);
+      await db.execute({
+        sql: `UPDATE users SET chat_org_json = ?, updated_at = ? WHERE id = ?`,
+        args: [JSON.stringify(normalized), now, meId],
+      });
+      return { ok: true, chatOrganization: normalized };
+    }
+
+    /* ---------- Two-Factor Authentication (RFC 6238 TOTP) & Passkeys ---------- */
+    case "getSecuritySettings": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const pkRes = await db.execute({
+        sql: `SELECT credential_id, label, created_at, last_used_at FROM user_passkeys WHERE user_id = ? ORDER BY created_at DESC`,
+        args: [meId],
+      });
+      const backups = safeJsonParse(meRow.totp_backup_codes_json, []);
+      return {
+        totpEnabled: Boolean(Number(meRow.totp_enabled || 0)),
+        backupCodesRemaining: Array.isArray(backups) ? backups.length : 0,
+        passkeys: pkRes.rows.map((r) => ({
+          credentialId: String(r.credential_id),
+          label: String(r.label || "Passkey"),
+          createdAt: Number(r.created_at || 0),
+          ...(r.last_used_at != null ? { lastUsedAt: Number(r.last_used_at) } : {}),
+        })),
+      };
+    }
+
+    case "beginTotpSetup": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const secret = generateTotpSecretBase32();
+      await db.execute({
+        sql: `UPDATE users SET totp_pending_secret = ?, updated_at = ? WHERE id = ?`,
+        args: [secret, now, meId],
+      });
+      const label = encodeURIComponent(
+        `JaText:${String(meRow.email || meRow.username || meId)}`,
+      );
+      const otpauthUrl = `otpauth://totp/${label}?secret=${secret}&issuer=JaText&algorithm=SHA1&digits=6&period=30`;
+      return { secret, otpauthUrl };
+    }
+
+    case "confirmTotpSetup": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const pending = String(meRow.totp_pending_secret || "");
+      const code = String(args.code || "").trim();
+      if (!pending) {
+        throw new TursoAppError("Start 2FA setup first.");
+      }
+      if (!verifyTotpCode(pending, code, 2)) {
+        throw new TursoAppError("Invalid 6-digit authentication code. Check your authenticator app and try again.");
+      }
+      const backupCodes = generateBackupCodes();
+      await db.execute({
+        sql: `UPDATE users
+              SET totp_secret = ?, totp_pending_secret = NULL, totp_enabled = 1,
+                  totp_backup_codes_json = ?, updated_at = ?
+              WHERE id = ?`,
+        args: [pending, JSON.stringify(backupCodes), now, meId],
+      });
+      return { ok: true, totpEnabled: true, backupCodes };
+    }
+
+    case "disableTotp": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const code = String(args.code || "").trim();
+      const secret = String(meRow.totp_secret || "");
+      const backups = safeJsonParse(meRow.totp_backup_codes_json, []);
+      const okTotp = secret && verifyTotpCode(secret, code, 2);
+      const okBackup =
+        Array.isArray(backups) && backups.includes(code.toUpperCase().replace(/\s+/g, ""));
+      if (Number(meRow.totp_enabled || 0) === 1 && secret && !okTotp && !okBackup) {
+        throw new TursoAppError("Enter a valid authentication code or backup code to disable 2FA.");
+      }
+      await db.execute({
+        sql: `UPDATE users
+              SET totp_secret = NULL, totp_pending_secret = NULL, totp_enabled = 0,
+                  totp_backup_codes_json = NULL, updated_at = ?
+              WHERE id = ?`,
+        args: [now, meId],
+      });
+      return { ok: true, totpEnabled: false };
+    }
+
+    case "beginPasskeyRegistration": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const rpId = String(args.rpId || "jatext.vercel.app").trim().toLowerCase();
+      const challengeId = newId();
+      const challengeB64 = base64UrlEncode(crypto.randomBytes(32));
+      await db
+        .execute({ sql: `DELETE FROM webauthn_challenges WHERE expires_at < ?`, args: [now] })
+        .catch(() => undefined);
+      await db.execute({
+        sql: `INSERT INTO webauthn_challenges (challenge_id, challenge_b64, user_id, kind, rp_id, expires_at, created_at)
+              VALUES (?, ?, ?, 'register', ?, ?, ?)`,
+        args: [challengeId, challengeB64, meId, rpId, now + 5 * 60_000, now],
+      });
+      const existingRes = await db.execute({
+        sql: `SELECT credential_id FROM user_passkeys WHERE user_id = ?`,
+        args: [meId],
+      });
+      return {
+        challengeId,
+        options: {
+          rp: { name: "JaText", id: rpId },
+          user: {
+            id: base64UrlEncode(Buffer.from(meId, "utf8")),
+            name: String(meRow.email || meRow.username || meId),
+            displayName: String(meRow.display_name || meRow.username || "JaText User"),
+          },
+          challenge: challengeB64,
+          pubKeyCredParams: [
+            { type: "public-key", alg: -7 },
+            { type: "public-key", alg: -257 },
+          ],
+          timeout: 60000,
+          attestation: "none",
+          authenticatorSelection: {
+            residentKey: "preferred",
+            userVerification: "preferred",
+          },
+          excludeCredentials: existingRes.rows.map((r) => ({
+            type: "public-key",
+            id: String(r.credential_id),
+          })),
+        },
+      };
+    }
+
+    case "finishPasskeyRegistration": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const challengeId = String(args.challengeId || "").trim();
+      const credentialId = String(args.credentialId || "").trim();
+      const clientDataJSONB64 = String(args.clientDataJSON || "").trim();
+      const attestationObjectB64 = String(args.attestationObject || "").trim();
+      const authenticatorDataB64 = String(args.authenticatorData || "").trim();
+      const providedSpkiB64 = String(args.publicKeySpki || "").trim();
+      const providedAlg = Number(args.publicKeyAlgorithm || -7);
+      const label = String(args.label || "Passkey").trim().slice(0, 48) || "Passkey";
+      const transports = Array.isArray(args.transports) ? args.transports.map(String) : [];
+
+      if (!challengeId || !credentialId || !clientDataJSONB64) {
+        throw new TursoAppError("Incomplete passkey registration response.");
+      }
+
+      const chRes = await db.execute({
+        sql: `SELECT * FROM webauthn_challenges WHERE challenge_id = ? AND user_id = ? AND kind = 'register' LIMIT 1`,
+        args: [challengeId, meId],
+      });
+      await db
+        .execute({ sql: `DELETE FROM webauthn_challenges WHERE challenge_id = ?`, args: [challengeId] })
+        .catch(() => undefined);
+
+      if (!chRes.rows.length || Number(chRes.rows[0].expires_at) < now) {
+        throw new TursoAppError("Passkey challenge expired. Please try again.");
+      }
+      const chRow = chRes.rows[0];
+      const rpId = String(chRow.rp_id);
+
+      const clientData = safeJsonParse(base64UrlDecode(clientDataJSONB64).toString("utf8"), null);
+      if (
+        !clientData ||
+        clientData.type !== "webauthn.create" ||
+        String(clientData.challenge || "") !== String(chRow.challenge_b64)
+      ) {
+        throw new TursoAppError("Passkey challenge verification failed.");
+      }
+      if (!isAllowedWebAuthnOrigin(clientData.origin, rpId)) {
+        throw new TursoAppError("Passkey origin verification failed.");
+      }
+
+      let spkiB64 = providedSpkiB64;
+      let alg = providedAlg;
+      let authDataBuf = authenticatorDataB64 ? base64UrlDecode(authenticatorDataB64) : null;
+      if (!spkiB64 || !authDataBuf) {
+        const extracted = extractSpkiFromAttestationOrAuthData(
+          attestationObjectB64,
+          authenticatorDataB64,
+        );
+        if (!spkiB64) spkiB64 = extracted.spkiB64;
+        if (!alg) alg = extracted.alg;
+        if (!authDataBuf) authDataBuf = extracted.authData;
+      }
+
+      const expectedRpHash = crypto.createHash("sha256").update(rpId, "utf8").digest();
+      if (
+        !authDataBuf ||
+        authDataBuf.length < 37 ||
+        !crypto.timingSafeEqual(authDataBuf.subarray(0, 32), expectedRpHash)
+      ) {
+        throw new TursoAppError("Passkey RP ID verification failed.");
+      }
+      if ((authDataBuf[32] & 0x01) === 0) {
+        throw new TursoAppError("User presence flag was not asserted by passkey.");
+      }
+
+      // Validate that Node crypto can import the SPKI public key cleanly
+      crypto.createPublicKey({
+        key: base64UrlDecode(spkiB64),
+        format: "der",
+        type: "spki",
+      });
+
+      const signCount = authDataBuf.readUInt32BE(33);
+      await db.execute({
+        sql: `INSERT INTO user_passkeys (
+                credential_id, user_id, public_key_spki_b64, algorithm, sign_count, label, transports_json, created_at, last_used_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(credential_id) DO UPDATE SET
+                public_key_spki_b64 = excluded.public_key_spki_b64,
+                algorithm = excluded.algorithm,
+                label = excluded.label,
+                last_used_at = excluded.last_used_at`,
+        args: [
+          credentialId,
+          meId,
+          spkiB64,
+          alg || -7,
+          signCount,
+          label,
+          JSON.stringify(transports),
+          now,
+          now,
+        ],
+      });
+
+      return {
+        ok: true,
+        passkey: {
+          credentialId,
+          label,
+          createdAt: now,
+          lastUsedAt: now,
+        },
+      };
+    }
+
+    case "deletePasskey": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const credentialId = String(args.credentialId || "").trim();
+      if (!credentialId) throw new TursoAppError("credentialId is required.");
+      await db.execute({
+        sql: `DELETE FROM user_passkeys WHERE credential_id = ? AND user_id = ?`,
+        args: [credentialId, meId],
+      });
+      return { ok: true };
+    }
+
+    case "beginPasskeyLogin": {
+      const rpId = String(args.rpId || "jatext.vercel.app").trim().toLowerCase();
+      const emailHint = String(args.email || "").trim().toLowerCase();
+      const challengeId = newId();
+      const challengeB64 = base64UrlEncode(crypto.randomBytes(32));
+      await db
+        .execute({ sql: `DELETE FROM webauthn_challenges WHERE expires_at < ?`, args: [now] })
+        .catch(() => undefined);
+
+      let allowCredentials = [];
+      let hintUserId = null;
+      if (emailHint) {
+        const uRes = await db.execute({
+          sql: `SELECT id FROM users WHERE email = ? LIMIT 1`,
+          args: [emailHint],
+        });
+        if (uRes.rows.length) {
+          hintUserId = String(uRes.rows[0].id);
+          const pkRes = await db.execute({
+            sql: `SELECT credential_id, transports_json FROM user_passkeys WHERE user_id = ?`,
+            args: [hintUserId],
+          });
+          allowCredentials = pkRes.rows.map((r) => ({
+            type: "public-key",
+            id: String(r.credential_id),
+            transports: safeJsonParse(r.transports_json, []),
+          }));
+        }
+      }
+
+      await db.execute({
+        sql: `INSERT INTO webauthn_challenges (challenge_id, challenge_b64, user_id, kind, rp_id, expires_at, created_at)
+              VALUES (?, ?, ?, 'login', ?, ?, ?)`,
+        args: [challengeId, challengeB64, hintUserId, rpId, now + 5 * 60_000, now],
+      });
+
+      return {
+        challengeId,
+        options: {
+          challenge: challengeB64,
+          rpId,
+          timeout: 60000,
+          userVerification: "preferred",
+          ...(allowCredentials.length ? { allowCredentials } : {}),
+        },
+      };
+    }
+
+    case "finishPasskeyLogin": {
+      const challengeId = String(args.challengeId || "").trim();
+      const credentialId = String(args.credentialId || "").trim();
+      const clientDataJSONB64 = String(args.clientDataJSON || "").trim();
+      const authenticatorDataB64 = String(args.authenticatorData || "").trim();
+      const signatureB64 = String(args.signature || "").trim();
+
+      if (
+        !challengeId ||
+        !credentialId ||
+        !clientDataJSONB64 ||
+        !authenticatorDataB64 ||
+        !signatureB64
+      ) {
+        throw new TursoAppError("Incomplete passkey sign-in assertion.");
+      }
+
+      const chRes = await db.execute({
+        sql: `SELECT * FROM webauthn_challenges WHERE challenge_id = ? AND kind = 'login' LIMIT 1`,
+        args: [challengeId],
+      });
+      await db
+        .execute({ sql: `DELETE FROM webauthn_challenges WHERE challenge_id = ?`, args: [challengeId] })
+        .catch(() => undefined);
+
+      if (!chRes.rows.length || Number(chRes.rows[0].expires_at) < now) {
+        throw new TursoAppError("Passkey sign-in challenge expired. Please try again.");
+      }
+      const chRow = chRes.rows[0];
+      const rpId = String(chRow.rp_id);
+
+      const pkRes = await db.execute({
+        sql: `SELECT * FROM user_passkeys WHERE credential_id = ? LIMIT 1`,
+        args: [credentialId],
+      });
+      if (!pkRes.rows.length) {
+        throw new TursoAppError("Passkey is not registered on JaText.");
+      }
+      const pkRow = pkRes.rows[0];
+      const userId = String(pkRow.user_id);
+
+      const clientDataBuf = base64UrlDecode(clientDataJSONB64);
+      const clientData = safeJsonParse(clientDataBuf.toString("utf8"), null);
+      if (
+        !clientData ||
+        clientData.type !== "webauthn.get" ||
+        String(clientData.challenge || "") !== String(chRow.challenge_b64)
+      ) {
+        throw new TursoAppError("Passkey assertion challenge mismatch.");
+      }
+      if (!isAllowedWebAuthnOrigin(clientData.origin, rpId)) {
+        throw new TursoAppError("Passkey origin mismatch.");
+      }
+
+      const authDataBuf = base64UrlDecode(authenticatorDataB64);
+      const expectedRpHash = crypto.createHash("sha256").update(rpId, "utf8").digest();
+      if (
+        authDataBuf.length < 37 ||
+        !crypto.timingSafeEqual(authDataBuf.subarray(0, 32), expectedRpHash)
+      ) {
+        throw new TursoAppError("Passkey RP ID mismatch.");
+      }
+      if ((authDataBuf[32] & 0x01) === 0) {
+        throw new TursoAppError("Passkey user presence check failed.");
+      }
+
+      const clientDataHash = crypto.createHash("sha256").update(clientDataBuf).digest();
+      const signedPayload = Buffer.concat([authDataBuf, clientDataHash]);
+      const signatureBuf = base64UrlDecode(signatureB64);
+      const pubKeyObj = crypto.createPublicKey({
+        key: base64UrlDecode(String(pkRow.public_key_spki_b64)),
+        format: "der",
+        type: "spki",
+      });
+
+      let verifiedSig = crypto.verify("sha256", signedPayload, pubKeyObj, signatureBuf);
+      if (!verifiedSig && signatureBuf.length === 64 && signatureBuf[0] !== 0x30) {
+        verifiedSig = crypto.verify(
+          "sha256",
+          signedPayload,
+          { key: pubKeyObj, dsaEncoding: "ieee-p1363" },
+          signatureBuf,
+        );
+      }
+      if (!verifiedSig) {
+        throw new TursoAppError("Invalid passkey cryptographic signature.", 401);
+      }
+
+      const newSignCount = authDataBuf.readUInt32BE(33);
+      await db.execute({
+        sql: `UPDATE user_passkeys SET sign_count = ?, last_used_at = ? WHERE credential_id = ?`,
+        args: [Math.max(Number(pkRow.sign_count || 0), newSignCount), now, credentialId],
+      });
+
+      const userRes = await db.execute({
+        sql: `SELECT * FROM users WHERE id = ? LIMIT 1`,
+        args: [userId],
+      });
+      if (!userRes.rows.length) {
+        throw new TursoAppError("Account no longer exists.", 404);
+      }
+      const userRow = userRes.rows[0];
+      return {
+        requiresTwoFactor: false,
+        token: createAuthToken(userId, String(userRow.email || "")),
+        me: mapUserRow(userRow, true),
+      };
     }
 
     default:

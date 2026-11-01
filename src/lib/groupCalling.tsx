@@ -16,6 +16,8 @@ import {
   GROUP_CALL_SIGNAL_PREFIX,
   acquireSwitchedCameraTrack,
   playCallRingChime,
+  playCustomSoundboardAudio,
+  playIncomingScreenAudioPcm,
   playSynthesizedSoundboard,
   preloadSoundboardAudio,
   type CallMode,
@@ -91,6 +93,8 @@ type GroupDataChannelPacket =
     }
   | { type: "reaction"; emoji: string; id: string }
   | { type: "soundboard"; effectId: SoundboardEffectId }
+  | { type: "custom-soundboard"; mediaId: string; name?: string }
+  | { type: "screen-audio"; pcm?: string; pcmB64?: string; sr?: number; ch?: number }
   | { type: "caption"; text: string }
   | { type: "renegotiate-offer"; sdp: RTCSessionDescriptionInit }
   | { type: "renegotiate-answer"; sdp: RTCSessionDescriptionInit }
@@ -159,6 +163,7 @@ export interface GroupCallContextValue {
   toggleCaptions: () => void;
   sendCallReaction: (emoji: string) => void;
   playSoundboard: (effectId: SoundboardEffectId) => void;
+  playCustomSoundboard: (mediaId: string, name?: string) => void;
   setMinimized: (minimized: boolean) => void;
   setLayoutMode: (layout: "grid" | "spotlight") => void;
   dismissCallError: () => void;
@@ -700,6 +705,15 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
           } else if (msg.type === "soundboard") {
             if (!isDeafenedRef.current) {
               playSynthesizedSoundboard(msg.effectId);
+            }
+          } else if (msg.type === "custom-soundboard") {
+            if (!isDeafenedRef.current && msg.mediaId) {
+              playCustomSoundboardAudio(msg.mediaId);
+            }
+          } else if (msg.type === "screen-audio") {
+            const rawPcm = msg.pcmB64 || msg.pcm;
+            if (!isDeafenedRef.current && rawPcm) {
+              playIncomingScreenAudioPcm(rawPcm, msg.sr ?? 16000, msg.ch ?? 1);
             }
           } else if (msg.type === "caption") {
             if (msg.text.trim()) {
@@ -2399,6 +2413,16 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
     [broadcastMeshData],
   );
 
+  const playCustomSoundboard = useCallback(
+    (mediaId: string, name?: string) => {
+      if (!isDeafenedRef.current) {
+        playCustomSoundboardAudio(mediaId);
+      }
+      broadcastMeshData({ type: "custom-soundboard", mediaId, name });
+    },
+    [broadcastMeshData],
+  );
+
   // Keep group call alive across app switches / backgrounding & restore evicted camera/audio
   useEffect(() => {
     if (!groupSession || groupSession.phase === "incoming") return;
@@ -2537,6 +2561,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       toggleCaptions,
       sendCallReaction,
       playSoundboard,
+      playCustomSoundboard,
       setMinimized,
       setLayoutMode,
       dismissCallError: () => setCallError(null),
@@ -2567,6 +2592,7 @@ export function GroupCallProvider({ children }: { children: ReactNode }) {
       minimized,
       mobileSharePickerOpen,
       participants,
+      playCustomSoundboard,
       playSoundboard,
       reactions,
       retryDismissedGroupCall,

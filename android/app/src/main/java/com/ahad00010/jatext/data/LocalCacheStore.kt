@@ -434,4 +434,78 @@ class LocalCacheStore(private val appContext: Context) :
         } catch (_: Throwable) {
         }
     }
+
+    /* ==================== v3.9.0 Drafts, Language, View Once, Pins, Folders & Soundboards ==================== */
+
+    fun getLanguageCode(): String = prefs.getString("app_language_code", "en") ?: "en"
+
+    fun setLanguageCode(code: String) {
+        prefs.edit().putString("app_language_code", code).apply()
+    }
+
+    fun getDrafts(slotId: String): Map<String, String> {
+        val raw = getKv("drafts:$slotId") ?: return emptyMap()
+        return try {
+            JaTextJson.decodeFromString<Map<String, String>>(raw)
+        } catch (_: Throwable) {
+            emptyMap()
+        }
+    }
+
+    fun saveDrafts(slotId: String, drafts: Map<String, String>) {
+        val cleaned = drafts.filterValues { it.isNotBlank() }
+        putKv("drafts:$slotId", JaTextJson.encodeToString(cleaned))
+    }
+
+    fun getOpenedViewOnceIds(slotId: String): Set<String> {
+        val raw = getKv("vo_opened:$slotId") ?: return emptySet()
+        return try {
+            JaTextJson.decodeFromString<List<String>>(raw).toSet()
+        } catch (_: Throwable) {
+            emptySet()
+        }
+    }
+
+    fun saveOpenedViewOnceIds(slotId: String, ids: Set<String>) {
+        putKv("vo_opened:$slotId", JaTextJson.encodeToString(ids.toList().takeLast(2500)))
+    }
+
+    fun getChatOrganization(slotId: String): ChatOrganizationSpec {
+        val raw = getKv("chat_org:$slotId") ?: return ChatOrganizationSpec()
+        return try {
+            JaTextJson.decodeFromString<ChatOrganizationSpec>(raw)
+        } catch (_: Throwable) {
+            ChatOrganizationSpec()
+        }
+    }
+
+    fun saveChatOrganization(slotId: String, org: ChatOrganizationSpec) {
+        putKv("chat_org:$slotId", JaTextJson.encodeToString(org))
+    }
+
+    fun getPinnedMessagesMap(slotId: String): Map<String, List<ClientPinnedMessage>> {
+        val raw = getKv("msg_pins:$slotId") ?: return emptyMap()
+        return try {
+            JaTextJson.decodeFromString<Map<String, List<ClientPinnedMessage>>>(raw)
+        } catch (_: Throwable) {
+            emptyMap()
+        }
+    }
+
+    fun savePinnedMessagesMap(slotId: String, map: Map<String, List<ClientPinnedMessage>>) {
+        putKv("msg_pins:$slotId", JaTextJson.encodeToString(map))
+    }
+
+    fun getSoundboards(slotId: String): List<SoundboardClip> {
+        val raw = getKv("soundboards:$slotId") ?: return emptyList()
+        return try {
+            JaTextJson.decodeFromString<List<SoundboardClip>>(raw)
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    fun saveSoundboards(slotId: String, clips: List<SoundboardClip>) {
+        putKv("soundboards:$slotId", JaTextJson.encodeToString(clips))
+    }
 }

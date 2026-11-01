@@ -18,8 +18,33 @@ export interface ComposerPlusMenuProps {
   disabled?: boolean;
   currentDraft?: string;
   replyToId?: string;
+  viewOnceActive?: boolean;
+  onToggleViewOnce?: () => void;
   onConsumeDraft?: () => void;
   onUploadAttachment: () => void;
+}
+
+export function ViewOnceRingIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" aria-hidden="true">
+      <circle
+        cx="12"
+        cy="12"
+        r="8.75"
+        stroke="currentColor"
+        strokeWidth="2.05"
+        strokeDasharray="4.1 2.7"
+        strokeLinecap="round"
+      />
+      <path
+        d="M10.75 9.6 12.35 8.5v7"
+        stroke="currentColor"
+        strokeWidth="2.15"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function pad2(n: number): string {
@@ -149,6 +174,8 @@ export function ComposerPlusMenu({
   disabled = false,
   currentDraft = "",
   replyToId,
+  viewOnceActive = false,
+  onToggleViewOnce,
   onConsumeDraft,
   onUploadAttachment,
 }: ComposerPlusMenuProps) {
@@ -479,9 +506,34 @@ export function ComposerPlusMenu({
               </span>
               <span className="composer-plus-item-copy">
                 <strong>Upload attachment</strong>
-                <small>Photos, videos, or files</small>
+                <small>Send one or multiple files of any type</small>
               </span>
             </button>
+
+            {onToggleViewOnce && (
+              <button
+                type="button"
+                role="menuitem"
+                className={`composer-plus-item item-view-once ${viewOnceActive ? "is-active" : ""}`}
+                onClick={() => {
+                  closeMenuAnimated();
+                  onToggleViewOnce();
+                }}
+              >
+                <span className="composer-plus-item-icon viewonce-tint" aria-hidden="true">
+                  <ViewOnceRingIcon size={18} />
+                </span>
+                <span className="composer-plus-item-copy">
+                  <strong>View once</strong>
+                  <small>
+                    {viewOnceActive
+                      ? "Active · Tap to turn off View once"
+                      : "Text, photo, or audio disappears after viewing"}
+                  </small>
+                </span>
+                {viewOnceActive && <span className="composer-plus-count-pill">ON</span>}
+              </button>
+            )}
 
             <button
               type="button"
@@ -513,30 +565,6 @@ export function ComposerPlusMenu({
                 <span className="composer-plus-count-pill">{chatScheduled.length}</span>
               )}
             </button>
-
-            {chatScheduled.length > 0 && (
-              <button
-                type="button"
-                role="menuitem"
-                className="composer-plus-item item-scheduled-list"
-                onClick={() => openScheduleModal("list")}
-              >
-                <span className="composer-plus-item-icon list-tint" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none">
-                    <path
-                      d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"
-                      stroke="currentColor"
-                      strokeWidth="2.15"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </span>
-                <span className="composer-plus-item-copy">
-                  <strong>Scheduled message</strong>
-                  <small>Manage {chatScheduled.length} pending</small>
-                </span>
-              </button>
-            )}
           </div>,
           document.body,
         )}

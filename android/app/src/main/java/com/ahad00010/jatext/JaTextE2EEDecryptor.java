@@ -1186,6 +1186,9 @@ public final class JaTextE2EEDecryptor {
                 ? "Incoming video call"
                 : "Incoming voice call";
         }
+        if (s.startsWith("__JATEXT_VO_V1__:")) {
+            return "Click to view.";
+        }
         if (s.startsWith("__JATEXT_WALLPAPER__:") || s.startsWith("__JATEXT_WP__:")) {
             return "Updated the chat wallpaper";
         }

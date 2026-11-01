@@ -25,7 +25,15 @@ import {
   prewarmDecryptedGroupBatch,
 } from "./e2ee/messagePipeline";
 import { removeMessageFromConversationCache } from "./chatCache";
+import { ingestServerChatOrganization, type ChatOrganizationState } from "./chatOrganization";
 import { isAuthorizedIosChatsRuntime } from "./iosDetection";
+import {
+  ingestServerSoundboards,
+  signInWithPasskeyInBrowser,
+  type CustomSoundboardClip,
+} from "./securityClient";
+import { setPendingTwoFactorChallenge, TwoFactorRequiredError } from "./tursoClient";
+import { ingestServerOpenedViewOnceIds } from "./viewOnce";
 import { OAUTH_RETURN_CHATS_FLAG, OAUTH_RETURN_IOS_CHATS_FLAG } from "./webRoute";
 import { OFFICIAL_COMMUNITY_ID } from "./types";
 import type {
@@ -65,6 +73,9 @@ interface BootstrapResponse {
   groups: GroupSummary[];
   hasRemoteE2EEVault: boolean;
   remoteVaultKeyId: string | null;
+  openedViewOnceIds?: string[];
+  soundboards?: CustomSoundboardClip[];
+  chatOrganization?: Partial<ChatOrganizationState>;
 }
 
 interface SyncResponse {
@@ -301,6 +312,9 @@ export function useTursoReactiveSession(
     setGroupsQuery(boot.groups);
     setServerHasRemoteVault(Boolean(boot.hasRemoteE2EEVault));
     setServerRemoteVaultKeyId(boot.remoteVaultKeyId);
+    ingestServerOpenedViewOnceIds(boot.openedViewOnceIds);
+    ingestServerSoundboards(boot.soundboards);
+    ingestServerChatOrganization(boot.chatOrganization);
   }, []);
 
   const runBootstrap = useCallback(
@@ -836,11 +850,50 @@ export function useTursoReactiveSession(
 
   const authSignInEmail = useCallback(
     async (email: string, password: string) => {
+      const res = await tursoRpc<{
+        requiresTwoFactor?: boolean;
+        challengeToken?: string;
+        email?: string;
+        token?: string;
+        me?: JaUser;
+      }>("signInEmail", { email: email.trim().toLowerCase(), password }, { slotId });
+      if (res.requiresTwoFactor && res.challengeToken) {
+        setPendingTwoFactorChallenge(res.challengeToken);
+        throw new TwoFactorRequiredError(res.challengeToken, res.email || email);
+      }
+      if (!res.token || !res.me) {
+        throw new Error("Sign-in did not return an active session.");
+      }
+      await setTursoTokenForSlot(slotId, res.token, PUBLIC_TURSO_API_ORIGIN);
+      setMeQuery(res.me);
+      setIsAuthenticated(true);
+      setAuthLoading(false);
+      await runBootstrap(slotId);
+    },
+    [runBootstrap, slotId],
+  );
+
+  const authCompleteTwoFactorLogin = useCallback(
+    async (challengeToken: string, code: string) => {
       const res = await tursoRpc<{ token: string; me: JaUser }>(
-        "signInEmail",
-        { email: email.trim().toLowerCase(), password },
-        { slotId },
+        "verifyTwoFactorLogin",
+        { challengeToken: challengeToken.trim(), code: code.trim() },
+        { slotId, skipAuthClear: true },
       );
+      setPendingTwoFactorChallenge(null);
+      await setTursoTokenForSlot(slotId, res.token, PUBLIC_TURSO_API_ORIGIN);
+      setMeQuery(res.me);
+      setIsAuthenticated(true);
+      setAuthLoading(false);
+      await runBootstrap(slotId);
+    },
+    [runBootstrap, slotId],
+  );
+
+  const authSignInPasskey = useCallback(
+    async (emailHint?: string) => {
+      const res = await signInWithPasskeyInBrowser(emailHint);
+      setPendingTwoFactorChallenge(null);
       await setTursoTokenForSlot(slotId, res.token, PUBLIC_TURSO_API_ORIGIN);
       setMeQuery(res.me);
       setIsAuthenticated(true);
@@ -2053,6 +2106,8 @@ export function useTursoReactiveSession(
     authSignInEmail,
     authSignUpEmail,
     authSignInGoogle,
+    authCompleteTwoFactorLogin,
+    authSignInPasskey,
     authSignOut,
     upload,
     ...mutations,

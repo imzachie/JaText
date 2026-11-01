@@ -25,7 +25,7 @@ import {
   type ScreenAudioMixer,
 } from "./screenShareMedia";
 import { useJaText } from "./store";
-import { hasInFlightTursoMutation } from "./tursoClient";
+import { hasInFlightTursoMutation, resolveTursoMediaUrl } from "./tursoClient";
 import type { ChatMessage, JaUser } from "./types";
 
 export const CALL_INVITE_PREFIX = "__JATEXT_CALL__:";
@@ -152,6 +152,8 @@ type DataChannelMessage =
   | { type: "reaction"; emoji: string; id: string }
   | { type: "caption"; text: string; isFinal: boolean }
   | { type: "soundboard"; effectId: SoundboardEffectId }
+  | { type: "custom-soundboard"; mediaId: string; name?: string }
+  | { type: "screen-audio"; pcm?: string; pcmB64?: string; sr?: number; ch?: number }
   | { type: "renegotiate-offer"; sdp: RTCSessionDescriptionInit }
   | { type: "renegotiate-answer"; sdp: RTCSessionDescriptionInit }
   | { type: "hangup" };
@@ -243,6 +245,7 @@ export interface CallContextValue {
   toggleCaptions: () => void;
   sendCallReaction: (emoji: string) => void;
   playSoundboard: (effectId: SoundboardEffectId) => void;
+  playCustomSoundboard: (mediaId: string, name?: string) => void;
   reconnectIce: () => Promise<void>;
   setMinimized: (minimized: boolean) => void;
   setLayoutMode: (mode: "spotlight" | "grid") => void;
@@ -345,6 +348,7 @@ export function formatPreviewMessageText(body: string): string {
     return labelPart || "New message";
   }
   const clean = stripBubbleStyleFromText(body).replace(/[\u200B\u200C\u2063]/g, "");
+  if (clean.startsWith("__JATEXT_VO_V1__:")) return "Click to view.";
   if (isHiddenCallSignal(clean)) return "";
   if (clean.startsWith(GROUP_CALL_INVITE_PREFIX)) {
     try {
@@ -509,6 +513,91 @@ export function playSynthesizedSoundboard(effectId: SoundboardEffectId): void {
     void audio.play().catch(() => undefined);
   } catch {
     // Ignore audio playback errors.
+  }
+}
+
+export function playCustomSoundboardAudio(mediaId: string): void {
+  if (!mediaId) return;
+  const url = resolveTursoMediaUrl(mediaId);
+  const ctx = getCallAudioCtx();
+  const cached = decodedSoundboardBuffers.get(url);
+  if (ctx && cached) {
+    try {
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
+      source.buffer = cached;
+      gain.gain.value = 0.92;
+      source.connect(gain);
+      gain.connect(ctx.destination);
+      source.start(0);
+      return;
+    } catch {
+      // Fall through to HTMLAudioElement playback.
+    }
+  }
+  void loadSoundboardBuffer(url);
+  try {
+    const audio = new Audio(url);
+    audio.volume = 0.92;
+    void audio.play().catch(() => undefined);
+  } catch {
+    // Ignore audio playback errors.
+  }
+}
+
+let screenAudioNextScheduleSec = 0;
+
+export function playIncomingScreenAudioPcm(
+  pcmBase64: string,
+  sampleRate = 48000,
+  channels = 1,
+): void {
+  if (!pcmBase64) return;
+  const ctx = getCallAudioCtx();
+  if (!ctx) return;
+  try {
+    const bin = atob(pcmBase64);
+    const totalBytes = bin.length & ~1;
+    if (totalBytes < 4) return;
+    const ch = Math.max(1, Math.min(2, channels || 1));
+    const sr = Math.max(8000, Math.min(96000, sampleRate || 48000));
+    const totalSamples = totalBytes >> 1;
+    const frameCount = Math.floor(totalSamples / ch);
+    if (frameCount <= 0) return;
+
+    const buffer = ctx.createBuffer(ch, frameCount, sr);
+    const chData: Float32Array[] = [];
+    for (let c = 0; c < ch; c++) chData.push(buffer.getChannelData(c));
+
+    let byteIdx = 0;
+    for (let f = 0; f < frameCount; f++) {
+      for (let c = 0; c < ch; c++) {
+        const lo = bin.charCodeAt(byteIdx);
+        const hi = bin.charCodeAt(byteIdx + 1);
+        byteIdx += 2;
+        let sample = lo | (hi << 8);
+        if (sample >= 0x8000) sample -= 0x10000;
+        chData[c][f] = sample / 32768;
+      }
+    }
+
+    const now = ctx.currentTime;
+    if (
+      screenAudioNextScheduleSec < now + 0.005 ||
+      screenAudioNextScheduleSec > now + 0.32
+    ) {
+      screenAudioNextScheduleSec = now + 0.035;
+    }
+    const source = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    gain.gain.value = 0.95;
+    source.buffer = buffer;
+    source.connect(gain);
+    gain.connect(ctx.destination);
+    source.start(screenAudioNextScheduleSec);
+    screenAudioNextScheduleSec += buffer.duration;
+  } catch {
+    // Ignore malformed screen audio frame.
   }
 }
 
@@ -964,6 +1053,15 @@ export function CallProvider({ children }: { children: ReactNode }) {
           } else if (msg.type === "soundboard") {
             if (!isDeafenedRef.current) {
               playSynthesizedSoundboard(msg.effectId);
+            }
+          } else if (msg.type === "custom-soundboard") {
+            if (!isDeafenedRef.current && msg.mediaId) {
+              playCustomSoundboardAudio(msg.mediaId);
+            }
+          } else if (msg.type === "screen-audio") {
+            const rawPcm = msg.pcmB64 || msg.pcm;
+            if (!isDeafenedRef.current && rawPcm) {
+              playIncomingScreenAudioPcm(rawPcm, msg.sr ?? 16000, msg.ch ?? 1);
             }
           } else if (msg.type === "caption") {
             if (msg.text.trim()) {
@@ -2609,6 +2707,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
     [sendDataChannelPacket],
   );
 
+  const playCustomSoundboard = useCallback(
+    (mediaId: string, name?: string) => {
+      playCustomSoundboardAudio(mediaId);
+      sendDataChannelPacket({ type: "custom-soundboard", mediaId, name });
+    },
+    [sendDataChannelPacket],
+  );
+
   const reconnectIce = useCallback(async () => {
     const pc = pcRef.current;
     const cur = sessionRef.current;
@@ -2844,6 +2950,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       toggleCaptions,
       sendCallReaction,
       playSoundboard,
+      playCustomSoundboard,
       reconnectIce,
       setMinimized,
       setLayoutMode,
@@ -2876,6 +2983,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       peerMuted,
       peerScreenSharing,
       peerSpeaking,
+      playCustomSoundboard,
       playSoundboard,
       reactions,
       reconnectIce,

@@ -28,6 +28,7 @@ import {
   type SoundboardEffectId,
 } from "../lib/calling";
 import { useJaText } from "../lib/store";
+import { useCustomSoundboards } from "../lib/securityClient";
 import { Avatar } from "./Avatar";
 import { MobileScreenShareSheet, SharedMediaPlaybackBar } from "./MobileScreenShareSheet";
 import { DrumIcon, RocketIcon, SoundWaveIcon, SparklesIcon, UsersIcon } from "./UiIcons";
@@ -150,11 +151,13 @@ export function CallOverlay() {
     toggleCaptions,
     sendCallReaction,
     playSoundboard,
+    playCustomSoundboard,
     reconnectIce,
     setMinimized,
     setLayoutMode,
     dismissCallError,
   } = useCall();
+  const customSoundboards = useCustomSoundboards();
 
   const [elapsedSec, setElapsedSec] = useState(0);
   const [openDrawer, setOpenDrawer] = useState<"none" | "reactions" | "soundboard" | "stats">(
@@ -855,6 +858,17 @@ export function CallOverlay() {
             >
               {renderSoundboardIcon(item.id)}
               <span>{item.label}</span>
+            </button>
+          ))}
+          {customSoundboards.map((clip) => (
+            <button
+              key={clip.id}
+              type="button"
+              className="call-sound-pill"
+              onClick={() => playCustomSoundboard(clip.audioUrl, clip.name)}
+            >
+              <Music2 size={15} />
+              <span>{clip.name}</span>
             </button>
           ))}
         </div>

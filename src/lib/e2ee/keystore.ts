@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from "react";
 import { ensureInfiniteLoopGifBytes, sniffImageMime } from "../imageUtils";
-import { fetchMediaBytesSmart } from "../tursoClient";
+import { fetchMediaBytesSmart, tursoRpc } from "../tursoClient";
 import {
+  E2EE_AUTOSYNC_STICKER_NAME,
   E2EE_SIGNAL_PREFIX,
   computeKeyFingerprint,
   computeSafetyNumber,
@@ -11,6 +12,7 @@ import {
   generateGroupEpochSecretB64,
   generateIdentityRecord,
   isEncryptedWireBody,
+  openAutoSyncKeyring,
   parseEncryptedWireBody,
   sha256Bytes,
   bytesToHex,
@@ -23,6 +25,7 @@ import {
   type EncryptedBlobDescriptor,
   type GroupKeySignalPacket,
   type PublicIdentityBundle,
+  type SealedAutoSyncKeyring,
   type StoredIdentityRecord,
 } from "./cryptoPrimitives";
 
@@ -408,6 +411,82 @@ export function parseGroupKeySignal(body: string | null | undefined): GroupKeySi
 }
 
 const pendingVerifications = new Set<string>();
+let lastSelfHealKeyringAt = 0;
+const lastGroupEpochPullAt = new Map<string, number>();
+
+async function trySelfHealKeyringAndPeers(peerId?: string, groupId?: string): Promise<void> {
+  if (!activeState) return;
+  const now = Date.now();
+  const tasks: Promise<unknown>[] = [];
+
+  if (peerId && peerId !== activeState.userId) {
+    tasks.push(
+      tursoRpc<{ bundles?: PublicIdentityBundle[] }>("getUserE2EEIdentities", {
+        userIds: [peerId, activeState.userId],
+      })
+        .then(async (res) => {
+          for (const b of res?.bundles ?? []) {
+            await ingestPeerIdentityBundle(b).catch(() => undefined);
+          }
+        })
+        .catch(() => undefined),
+    );
+  }
+
+  if (groupId) {
+    const prevGrpPull = lastGroupEpochPullAt.get(groupId) ?? 0;
+    if (now - prevGrpPull > 6_000) {
+      lastGroupEpochPullAt.set(groupId, now);
+      tasks.push(
+        tursoRpc<{
+          packets?: Array<{ senderId: string; packetJson: string }>;
+        }>("getGroupEpochKeys", { groupId })
+          .then(async (res) => {
+            for (const row of res?.packets ?? []) {
+              const raw = row.packetJson.startsWith(E2EE_SIGNAL_PREFIX)
+                ? row.packetJson
+                : `${E2EE_SIGNAL_PREFIX}${row.packetJson}`;
+              const parsed = parseGroupKeySignal(raw);
+              if (parsed) {
+                await ingestGroupKeySignalPacket(parsed, row.senderId).catch(() => undefined);
+              }
+            }
+          })
+          .catch(() => undefined),
+      );
+    }
+  }
+
+  if (now - lastSelfHealKeyringAt > 8_000) {
+    lastSelfHealKeyringAt = now;
+    const myUid = activeState.userId;
+    tasks.push(
+      tursoRpc<{
+        stickerFavorites?: Array<{ name: string; url: string }>;
+        recentStickers?: Array<{ name: string; url: string }>;
+      }>("bootstrap", {})
+        .then(async (boot) => {
+          const items = [...(boot?.stickerFavorites ?? []), ...(boot?.recentStickers ?? [])].filter(
+            (s) => s.name === E2EE_AUTOSYNC_STICKER_NAME && s.url,
+          );
+          for (const item of items.slice(0, 3)) {
+            const resp = await fetch(item.url);
+            if (!resp.ok) continue;
+            const env = (await resp.json()) as SealedAutoSyncKeyring;
+            const remoteContents = await openAutoSyncKeyring(env, myUid);
+            if (remoteContents) {
+              await mergeAutoSyncedKeyring(remoteContents);
+            }
+          }
+        })
+        .catch(() => undefined),
+    );
+  }
+
+  if (tasks.length > 0) {
+    await Promise.all(tasks);
+  }
+}
 
 export function getPeerKnownBundles(entry?: PeerKeyEntry | null): PublicIdentityBundle[] {
   if (!entry) return [];
@@ -1132,26 +1211,38 @@ export async function decryptWireMessageCached(params: {
     try {
       if (envelope.c === "dm") {
         const peerId = senderId === activeState.userId ? (receiverId ?? "") : senderId;
-        const peerEntry = activeState.peerKeys[peerId];
-        const peerPublic =
-          peerId === activeState.userId
-            ? toPublicIdentityBundle(activeState.primaryIdentity)
-            : peerEntry?.bundle ?? null;
-        const peerPublicCandidates =
-          peerId === activeState.userId
-            ? getAllMyIdentities(activeState).map(toPublicIdentityBundle)
-            : getPeerKnownBundles(peerEntry);
+        const attemptDmDecrypt = async () => {
+          if (!activeState) throw new Error("E2EE state unavailable");
+          const peerEntry = activeState.peerKeys[peerId];
+          const peerPublic =
+            peerId === activeState.userId
+              ? toPublicIdentityBundle(activeState.primaryIdentity)
+              : peerEntry?.bundle ?? null;
+          const peerPublicCandidates =
+            peerId === activeState.userId
+              ? getAllMyIdentities(activeState).map(toPublicIdentityBundle)
+              : getPeerKnownBundles(peerEntry);
 
-        const { payload, signatureVerified } = await decryptDmEnvelope({
-          envelope,
-          myIdentities: getAllMyIdentities(activeState),
-          peerPublic,
-          peerPublicCandidates,
-          myUserId: activeState.userId,
-          senderId,
-          receiverId: receiverId ?? "",
-          fetchOverflowCiphertext,
-        });
+          return await decryptDmEnvelope({
+            envelope,
+            myIdentities: getAllMyIdentities(activeState),
+            peerPublic,
+            peerPublicCandidates,
+            myUserId: activeState.userId,
+            senderId,
+            receiverId: receiverId ?? "",
+            fetchOverflowCiphertext,
+          });
+        };
+
+        let dmOut: { payload: E2EEPlainPayload; signatureVerified: boolean };
+        try {
+          dmOut = await attemptDmDecrypt();
+        } catch {
+          await trySelfHealKeyringAndPeers(peerId, undefined);
+          dmOut = await attemptDmDecrypt();
+        }
+        const { payload, signatureVerified } = dmOut;
         const res: CachedDecryptedResult = {
           payload,
           proof: {
@@ -1175,7 +1266,11 @@ export async function decryptWireMessageCached(params: {
         return res;
       } else {
         const gid = groupId ?? "";
-        const epochEntry = activeState.groupEpochs[gid]?.[envelope.ep];
+        let epochEntry = activeState.groupEpochs[gid]?.[envelope.ep];
+        if (!epochEntry) {
+          await trySelfHealKeyringAndPeers(undefined, gid);
+          epochEntry = activeState?.groupEpochs[gid]?.[envelope.ep];
+        }
         if (!epochEntry) {
           return {
             payload: null,

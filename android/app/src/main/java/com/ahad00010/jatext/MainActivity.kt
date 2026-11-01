@@ -80,6 +80,7 @@ import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
 import com.ahad00010.jatext.crypto.JaTextCryptoEngine
 import com.ahad00010.jatext.data.JaUser
+import com.ahad00010.jatext.data.LocalJaTextLanguage
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
 import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaType
@@ -326,7 +327,10 @@ class MainActivity : ComponentActivity() {
             val uiState by sessionViewModel.state.collectAsState()
             val thanosSnapHost = remember { ThanosSnapHostState() }
             JaTextTheme(config = uiState.themeConfig) {
-                CompositionLocalProvider(LocalThanosSnapHost provides thanosSnapHost) {
+                CompositionLocalProvider(
+                    LocalThanosSnapHost provides thanosSnapHost,
+                    LocalJaTextLanguage provides uiState.languageCode,
+                ) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         JaTextRootHost(
                             activity = this@MainActivity,
@@ -383,9 +387,12 @@ class MainActivity : ComponentActivity() {
         val dataUri = intent.data
         if (dataUri != null && dataUri.scheme == "com.ahad00010.jatext" && dataUri.host == "auth") {
             val tursoToken = dataUri.getQueryParameter("tursoToken")
+            val twoFactorChallenge = dataUri.getQueryParameter("twoFactorChallenge")
             val authError = dataUri.getQueryParameter("authError")
             intent.data = null
-            if (!tursoToken.isNullOrBlank()) {
+            if (!twoFactorChallenge.isNullOrBlank()) {
+                sessionViewModel.promptTwoFactorChallenge(twoFactorChallenge)
+            } else if (!tursoToken.isNullOrBlank()) {
                 sessionViewModel.completeDirectTursoTokenSignIn(tursoToken, null)
             } else if (!authError.isNullOrBlank()) {
                 sessionViewModel.reportExternalAuthError(authError)
@@ -610,6 +617,7 @@ private fun JaTextRootHost(
                             NativeCallOverlay(
                                 me = me,
                                 callEngine = vm.callEngine,
+                                customSoundboards = state.soundboards,
                             )
                         }
                     }

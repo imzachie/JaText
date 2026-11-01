@@ -1,0 +1,15 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.ahad00010.jatext",
+      "sha256_cert_fingerprints": [
+        "82:C3:D9:86:48:DD:3D:3F:15:49:17:7B:17:BA:1A:49:83:19:39:12:20:27:23:4A:A6:C9:6C:C8:03:DF:34:65"
+      ]
+    }
+  }
+]

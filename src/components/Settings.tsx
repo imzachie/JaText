@@ -45,6 +45,13 @@ import { IosDevicesSection } from "./IosDevicesSection";
 import { LegalModal, type LegalTab } from "./LegalModal";
 import { triggerManualMobileUpdateCheck } from "./MobileUpdateGate";
 import { ProfileForm } from "./ProfileForm";
+import {
+  BlockedUsersSettingsBlock,
+  LanguagesSettingsBlock,
+  PrivacyTwoFactorAndPasskeysBlock,
+  SoundboardsSettingsBlock,
+} from "./SettingsV390Blocks";
+import { useI18n } from "../lib/i18n";
 import { WebsiteGlobeIcon } from "./SocialIcons";
 import {
   ArrowLeftIcon,
@@ -104,6 +111,7 @@ export function SettingsModal({
     setSoundsEnabled,
   } = useJaText();
   const { accounts } = useMultiAccountState();
+  const { t } = useI18n();
   const e2ee = useE2EESnapshot();
   const theme = useJaTextTheme();
 
@@ -362,21 +370,21 @@ export function SettingsModal({
   }> = [
     {
       id: "profile",
-      label: "Profile",
-      subtitle: "Avatar, banner, username, bio & accounts",
+      label: t("profile"),
+      subtitle: "Avatar, banner, username, bio & blocked users",
       icon: <UserIcon size={17} />,
     },
     {
       id: "appearance",
-      label: "Appearance",
-      subtitle: "Light, Ash, Dark, Onyx & custom colour themes",
+      label: t("appearance"),
+      subtitle: "Themes, colours & display languages",
       icon: <BubblePaletteIcon size={17} />,
     },
     ...(isIosChats
       ? [
           {
             id: "devices" as SettingsCategory,
-            label: "Devices",
+            label: t("linked_devices"),
             subtitle: "Scan Web QR code & manage linked browsers",
             icon: <IosLaptopIcon size={17} />,
           },
@@ -390,14 +398,14 @@ export function SettingsModal({
     },
     {
       id: "notifications",
-      label: "Alerts & Audio",
-      subtitle: "Activity status, push alerts & custom ringtones",
+      label: t("alerts_audio"),
+      subtitle: "Activity status, push alerts, ringtones & soundboards",
       icon: <BellIcon size={17} />,
     },
     {
       id: "security",
-      label: "Encryption",
-      subtitle: "Zero-knowledge E2EE key & security fingerprint",
+      label: t("privacy"),
+      subtitle: "2FA authenticator, Passkeys & zero-knowledge E2EE",
       icon: <ShieldCheckIcon size={17} />,
     },
     {
@@ -546,6 +554,8 @@ export function SettingsModal({
                       window.setTimeout(() => setSavedNotice(null), 2200);
                     }}
                   />
+
+                  <BlockedUsersSettingsBlock />
                 </section>
               )}
 
@@ -725,6 +735,8 @@ export function SettingsModal({
                       onChange={(e) => handleToggleThemeSync(e.target.checked)}
                     />
                   </label>
+
+                  <LanguagesSettingsBlock />
                 </section>
               )}
 
@@ -960,6 +972,8 @@ export function SettingsModal({
 
                   {soundError && <div className="error-box">{soundError}</div>}
 
+                  <SoundboardsSettingsBlock />
+
                   {isNative &&
                     callWakePerms &&
                     (!callWakePerms.canFullScreenIntent || !callWakePerms.canDrawOverlays) && (
@@ -1029,16 +1043,18 @@ export function SettingsModal({
                 </section>
               )}
 
-              {/* === 5. ENCRYPTION & SECURITY === */}
+              {/* === 5. PRIVACY, 2FA, PASSKEYS & ENCRYPTION === */}
               {activeCategory === "security" && (
                 <section className="settings-pane-section e2ee-settings-section">
                   <div className="settings-pane-head">
-                    <h3>End-to-End Encryption</h3>
+                    <h3>{t("privacy")}</h3>
                     <p className="muted small">
-                      Private chats, group chats, voice notes, and attachments are encrypted right on
-                      your device before leaving your browser or phone.
+                      Manage two-factor authentication (2FA), Passkeys, and your zero-knowledge
+                      end-to-end encryption keys.
                     </p>
                   </div>
+
+                  <PrivacyTwoFactorAndPasskeysBlock />
 
                   <div className="profile-e2ee-header">
                     <span className="profile-e2ee-title">
@@ -1091,7 +1107,7 @@ export function SettingsModal({
                     <div className="settings-inline-legal-card" style={{ marginTop: 4 }}>
                       <h4>App Version &amp; Updates</h4>
                       <p className="muted small">
-                        Installed release: <strong>JaText v3.8.7 (Build 56)</strong>. JaText checks
+                        Installed release: <strong>JaText v3.9.0 (Build 57)</strong>. JaText checks
                         for updates automatically on launch, or you can check manually below.
                       </p>
                       <button
@@ -1111,7 +1127,7 @@ export function SettingsModal({
                     <div className="settings-inline-legal-card" style={{ marginTop: 8 }}>
                       <h4>JaText iOS Liquid Glass PWA</h4>
                       <p className="muted small">
-                        Active release: <strong>JaText v3.8.7</strong> (
+                        Active release: <strong>JaText v3.9.0</strong> (
                         {isRunningAsStandalonePwa()
                           ? "Installed on Home Screen"
                           : "Browser Mode"}

@@ -14,18 +14,28 @@ import com.ahad00010.jatext.MainActivity
 import com.ahad00010.jatext.NativeRuntimeBridge
 import com.ahad00010.jatext.auth.GoogleNativeSignIn
 import com.ahad00010.jatext.auth.GoogleSignInCancelledException
+import com.ahad00010.jatext.auth.PasskeyCancelledException
+import com.ahad00010.jatext.auth.PasskeyManagerHelper
 import com.ahad00010.jatext.crypto.JaTextCryptoEngine
 import com.ahad00010.jatext.data.AccountSlot
 import com.ahad00010.jatext.data.ApkVersionManifest
+import com.ahad00010.jatext.data.BeginTotpSetupResponse
+import com.ahad00010.jatext.data.BlockedUsersResponse
 import com.ahad00010.jatext.data.BootstrapResponse
 import com.ahad00010.jatext.data.CallHistoryEntry
+import com.ahad00010.jatext.data.ChatFolderSpec
 import com.ahad00010.jatext.data.ChatMessage
+import com.ahad00010.jatext.data.ChatOrganizationResponse
+import com.ahad00010.jatext.data.ChatOrganizationSpec
 import com.ahad00010.jatext.data.ChatPreview
 import com.ahad00010.jatext.data.ChatTypingUser
 import com.ahad00010.jatext.data.ClaimDeviceLinkResponse
+import com.ahad00010.jatext.data.ClientPinnedMessage
 import com.ahad00010.jatext.data.CommunityMessage
 import com.ahad00010.jatext.data.CommunityPermissions
 import com.ahad00010.jatext.data.CommunityUser
+import com.ahad00010.jatext.data.ConfirmTotpSetupResponse
+import com.ahad00010.jatext.data.CreateSoundboardResponse
 import com.ahad00010.jatext.data.DeviceLinkStatusResponse
 import com.ahad00010.jatext.data.E2EEPlainPayload
 import com.ahad00010.jatext.data.EncryptedBlobDescriptor
@@ -42,6 +52,7 @@ import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.data.LinkedWebDevice
 import com.ahad00010.jatext.data.ListLinkedDevicesResponse
 import com.ahad00010.jatext.data.ListScheduledMessagesResponse
+import com.ahad00010.jatext.data.ListSoundboardsResponse
 import com.ahad00010.jatext.data.LocalCacheStore
 import com.ahad00010.jatext.data.MessageReaction
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
@@ -49,13 +60,19 @@ import com.ahad00010.jatext.data.PollVoter
 import com.ahad00010.jatext.data.ReplySummary
 import com.ahad00010.jatext.data.ScheduleMessageResponse
 import com.ahad00010.jatext.data.ScheduledMessageItem
+import com.ahad00010.jatext.data.SecuritySettingsResponse
+import com.ahad00010.jatext.data.SoundboardClip
 import com.ahad00010.jatext.data.StickerMedia
 import com.ahad00010.jatext.data.SyncResponse
 import com.ahad00010.jatext.data.SyncedThemePayload
 import com.ahad00010.jatext.data.TursoApiClient
 import com.ahad00010.jatext.data.TursoApiException
+import com.ahad00010.jatext.data.TwoFactorRequiredException
 import com.ahad00010.jatext.data.UserSocialLink
 import com.ahad00010.jatext.data.UserWebsiteLink
+import com.ahad00010.jatext.data.ViewOnceCodec
+import com.ahad00010.jatext.data.ViewOnceEnvelopePayload
+import com.ahad00010.jatext.data.ViewOnceMediaPayload
 import com.ahad00010.jatext.ui.theme.JaTextThemeConfig
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
 import com.ahad00010.jatext.webrtc.NativeCallEngine
@@ -147,6 +164,16 @@ data class SessionUiState(
     val deviceLinkError: String? = null,
     val disconnectingDeviceId: String? = null,
     val scheduledMessages: List<ScheduledMessageItem> = emptyList(),
+    val languageCode: String = "en",
+    val drafts: Map<String, String> = emptyMap(),
+    val openedViewOnceIds: Set<String> = emptySet(),
+    val chatOrganization: ChatOrganizationSpec = ChatOrganizationSpec(),
+    val pinnedMessagesByThread: Map<String, List<ClientPinnedMessage>> = emptyMap(),
+    val soundboards: List<SoundboardClip> = emptyList(),
+    val pendingTwoFactorChallengeToken: String? = null,
+    val pendingTwoFactorEmail: String = "",
+    val securitySettings: SecuritySettingsResponse = SecuritySettingsResponse(),
+    val blockedUsersList: List<JaUser> = emptyList(),
 )
 
 class JaTextSessionViewModel(app: Application) :
@@ -159,13 +186,22 @@ class JaTextSessionViewModel(app: Application) :
     private var rawStickerItemsCache: List<StickerMedia> = emptyList()
 
     private val _state = MutableStateFlow(
-        SessionUiState(
-            slotId = cache.getActiveSlotId(),
-            accounts = cache.getAccounts(),
-            notificationsEnabled = cache.isNotificationsEnabled(),
-            soundsEnabled = cache.isSoundsEnabled(),
-            emojiUsageCounts = cache.getEmojiUsageCounts(cache.getActiveSlotId()),
-        )
+        run {
+            val initSlot = cache.getActiveSlotId()
+            SessionUiState(
+                slotId = initSlot,
+                accounts = cache.getAccounts(),
+                notificationsEnabled = cache.isNotificationsEnabled(),
+                soundsEnabled = cache.isSoundsEnabled(),
+                emojiUsageCounts = cache.getEmojiUsageCounts(initSlot),
+                languageCode = cache.getLanguageCode(),
+                drafts = cache.getDrafts(initSlot),
+                openedViewOnceIds = cache.getOpenedViewOnceIds(initSlot),
+                chatOrganization = normalizeChatOrganization(cache.getChatOrganization(initSlot)),
+                pinnedMessagesByThread = cache.getPinnedMessagesMap(initSlot),
+                soundboards = cache.getSoundboards(initSlot),
+            )
+        }
     )
     val state: StateFlow<SessionUiState> = _state.asStateFlow()
 
@@ -373,12 +409,31 @@ class JaTextSessionViewModel(app: Application) :
         val cleanFavorites = boot.stickerFavorites.filterNot { JaTextCryptoEngine.isInternalSyncSticker(it) }
         val cleanRecents = boot.recentStickers.filterNot { JaTextCryptoEngine.isInternalSyncSticker(it) }
 
+        val mergedOpenedVo = cache.getOpenedViewOnceIds(slotId) + boot.openedViewOnceIds
+        cache.saveOpenedViewOnceIds(slotId, mergedOpenedVo)
+        val effectiveOrg = if (
+            boot.chatOrganization.pinnedIds.isNotEmpty() ||
+            boot.chatOrganization.folders.isNotEmpty() ||
+            boot.chatOrganization.customOrder.size > 1
+        ) {
+            normalizeChatOrganization(boot.chatOrganization).also { cache.saveChatOrganization(slotId, it) }
+        } else {
+            normalizeChatOrganization(cache.getChatOrganization(slotId))
+        }
+        val effectiveSoundboards = if (boot.soundboards.isNotEmpty() || !fromCache) {
+            boot.soundboards.also { cache.saveSoundboards(slotId, it) }
+        } else {
+            cache.getSoundboards(slotId)
+        }
+
         _state.update { prev ->
             prev.copy(
                 loading = false,
                 isAuthenticated = true,
                 slotId = slotId,
                 addingAccountReturnSlotId = null,
+                pendingTwoFactorChallengeToken = null,
+                pendingTwoFactorEmail = "",
                 accounts = cache.getAccounts(),
                 me = boot.me,
                 friends = boot.friends,
@@ -388,6 +443,11 @@ class JaTextSessionViewModel(app: Application) :
                 previews = boot.previews,
                 friendActivities = boot.friendActivities,
                 emojiUsageCounts = cache.getEmojiUsageCounts(slotId),
+                drafts = cache.getDrafts(slotId),
+                openedViewOnceIds = mergedOpenedVo,
+                chatOrganization = effectiveOrg,
+                pinnedMessagesByThread = cache.getPinnedMessagesMap(slotId),
+                soundboards = effectiveSoundboards,
                 groups = boot.groups,
                 communityPermissions = boot.communityPermissions,
                 communityDirectory = boot.communityDirectory,
@@ -419,7 +479,7 @@ class JaTextSessionViewModel(app: Application) :
     ) {
         if (myId.isBlank()) return
         val hydratedPreviews = rawPreviews.map { p ->
-            val text = JaTextCryptoEngine.decryptPreviewText(
+            val rawDec = JaTextCryptoEngine.decryptPreviewText(
                 context = appCtx,
                 myUserId = myId,
                 peerOrGroupId = p.friendId,
@@ -428,10 +488,11 @@ class JaTextSessionViewModel(app: Application) :
                 isGroup = false,
                 token = token
             )
+            val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "Click to view." else rawDec
             p.copy(body = text)
         }
         val hydratedGroups = rawGroups.map { g ->
-            val text = JaTextCryptoEngine.decryptPreviewText(
+            val rawDec = JaTextCryptoEngine.decryptPreviewText(
                 context = appCtx,
                 myUserId = myId,
                 peerOrGroupId = g.id,
@@ -440,6 +501,7 @@ class JaTextSessionViewModel(app: Application) :
                 isGroup = true,
                 token = token
             )
+            val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "Click to view." else rawDec
             g.copy(lastMessage = text)
         }
         _state.update { it.copy(previews = hydratedPreviews, groups = hydratedGroups) }
@@ -571,7 +633,7 @@ class JaTextSessionViewModel(app: Application) :
                 }.orEmpty()
                 val hasMore = msgRoot["hasMore"]?.jsonPrimitive?.booleanOrNull == true
                 val members = _state.value.groupDetails?.members.orEmpty()
-                val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(appCtx, myId, activeGrp, rawMsgs, members)
+                val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(appCtx, myId, activeGrp, rawMsgs, members, token)
                 syncWallpaperFromGroupMessages(activeGrp, outcome.messages)
                 cache.saveGroupMessagesCache(st.slotId, activeGrp, outcome.messages)
                 if (_state.value.activeGroupId == activeGrp) {
@@ -820,7 +882,8 @@ class JaTextSessionViewModel(app: Application) :
                         myUser.id,
                         syncGroup,
                         sync.changedGroupMessages,
-                        members
+                        members,
+                        token,
                     )
                     if (outcome.seenByMessageId.isNotEmpty()) {
                         deltaGroupSeen = outcome.seenByMessageId
@@ -834,18 +897,20 @@ class JaTextSessionViewModel(app: Application) :
             }
 
             val hydratedPreviews = sync.social?.previews?.map { p ->
-                val text = JaTextCryptoEngine.decryptPreviewText(
+                val rawDec = JaTextCryptoEngine.decryptPreviewText(
                     appCtx, myUser.id, p.friendId, p.senderId, p.body, false, token
                 )
+                val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "Click to view." else rawDec
                 // If user already has this chat open, unread count is 0 and mark read!
                 val effectiveUnread = if (_state.value.activeChatId == p.friendId) 0 else p.unreadCount
                 p.copy(body = text, unreadCount = effectiveUnread)
             }
 
             val hydratedGroups = sync.groups?.map { g ->
-                val text = JaTextCryptoEngine.decryptPreviewText(
+                val rawDec = JaTextCryptoEngine.decryptPreviewText(
                     appCtx, myUser.id, g.id, g.lastSenderId.orEmpty(), g.lastMessage, true, token
                 )
+                val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "Click to view." else rawDec
                 val effectiveUnread = if (_state.value.activeGroupId == g.id) 0 else g.unreadCount
                 g.copy(lastMessage = text, unreadCount = effectiveUnread)
             }
@@ -1116,15 +1181,87 @@ class JaTextSessionViewModel(app: Application) :
 
     suspend fun signInEmail(email: String, password: String) {
         val slot = _state.value.slotId
+        val cleanEmail = email.trim().lowercase()
         val root = TursoApiClient.rpcRaw(
             op = "signInEmail",
-            args = mapOf("email" to email.trim().lowercase(), "password" to password),
+            args = mapOf("email" to cleanEmail, "password" to password),
         ).jsonObject
+        val requiresTwoFactor = root["requiresTwoFactor"]?.jsonPrimitive?.booleanOrNull == true
+        val challengeToken = root["challengeToken"]?.jsonPrimitive?.contentOrNull
+        if (requiresTwoFactor && !challengeToken.isNullOrBlank()) {
+            promptTwoFactorChallenge(challengeToken, cleanEmail)
+            return
+        }
         val token = root["token"]?.jsonPrimitive?.contentOrNull
             ?: throw IllegalStateException("Server did not return an auth token.")
         val me = JaTextJson.decodeFromJsonElement(JaUser.serializer(), root["me"]!!)
         val effectiveSlot = cache.upsertSlotSession(slot, token, me)
         bootstrapActiveSlot(effectiveSlot, initialUser = me)
+    }
+
+    fun promptTwoFactorChallenge(challengeToken: String, email: String = "") {
+        mobileOAuthPollJob?.cancel()
+        activeMobileOAuthSessionId = null
+        _state.update {
+            it.copy(
+                googleSignInInFlight = false,
+                authError = null,
+                pendingTwoFactorChallengeToken = challengeToken.trim(),
+                pendingTwoFactorEmail = email.trim(),
+            )
+        }
+    }
+
+    fun cancelTwoFactorChallenge() {
+        _state.update {
+            it.copy(
+                pendingTwoFactorChallengeToken = null,
+                pendingTwoFactorEmail = "",
+                authError = null,
+            )
+        }
+    }
+
+    suspend fun verifyTwoFactorLogin(code: String) {
+        val challengeToken = _state.value.pendingTwoFactorChallengeToken
+            ?: throw IllegalStateException("2FA session expired. Please sign in again.")
+        val slot = _state.value.slotId
+        val root = TursoApiClient.rpcRaw(
+            op = "verifyTwoFactorLogin",
+            args = mapOf(
+                "challengeToken" to challengeToken.trim(),
+                "code" to code.trim(),
+            ),
+        ).jsonObject
+        val token = root["token"]?.jsonPrimitive?.contentOrNull
+            ?: throw IllegalStateException("Invalid authentication code.")
+        val me = JaTextJson.decodeFromJsonElement(JaUser.serializer(), root["me"]!!)
+        _state.update {
+            it.copy(
+                pendingTwoFactorChallengeToken = null,
+                pendingTwoFactorEmail = "",
+                authError = null,
+            )
+        }
+        val effectiveSlot = cache.upsertSlotSession(slot, token, me)
+        bootstrapActiveSlot(effectiveSlot, initialUser = me)
+    }
+
+    fun startPasskeySignIn(activity: Activity, emailHint: String? = null) {
+        _state.update { it.copy(authError = null) }
+        viewModelScope.launch {
+            try {
+                val (token, me) = PasskeyManagerHelper.signInWithPasskey(activity, emailHint)
+                val slot = _state.value.slotId
+                val effectiveSlot = cache.upsertSlotSession(slot, token, me)
+                bootstrapActiveSlot(effectiveSlot, initialUser = me)
+            } catch (_: PasskeyCancelledException) {
+            } catch (e: Throwable) {
+                _state.update {
+                    it.copy(authError = e.message ?: "Passkey sign-in failed.")
+                }
+            }
+        }
     }
 
     suspend fun signUpEmail(email: String, password: String) {
@@ -1214,6 +1351,8 @@ class JaTextSessionViewModel(app: Application) :
                 GoogleNativeSignIn.launchInAppGoogleOAuthSheet(activity, mobileSessionId)
             } catch (_: GoogleSignInCancelledException) {
                 _state.update { it.copy(googleSignInInFlight = false, authError = null) }
+            } catch (twoFactor: TwoFactorRequiredException) {
+                promptTwoFactorChallenge(twoFactor.challengeToken, twoFactor.email)
             } catch (e: Throwable) {
                 _state.update {
                     it.copy(
@@ -1237,6 +1376,14 @@ class JaTextSessionViewModel(app: Application) :
                         val tok = poll.token
                         if (!tok.isNullOrBlank()) {
                             completeDirectTursoTokenSignIn(tok, poll.me)
+                            MainActivity.bringToFrontAfterAuth()
+                            return@launch
+                        }
+                    }
+                    "two_factor_required" -> {
+                        val ch = poll.challengeToken
+                        if (!ch.isNullOrBlank()) {
+                            promptTwoFactorChallenge(ch)
                             MainActivity.bringToFrontAfterAuth()
                             return@launch
                         }
@@ -1523,7 +1670,8 @@ class JaTextSessionViewModel(app: Application) :
                     myId,
                     groupId,
                     rawMsgs,
-                    effectiveMembers
+                    effectiveMembers,
+                    token,
                 )
                 syncWallpaperFromGroupMessages(groupId, outcome.messages)
                 cache.saveGroupMessagesCache(slot, groupId, outcome.messages)
@@ -4032,7 +4180,7 @@ class JaTextSessionViewModel(app: Application) :
                     op = "listScheduledMessages",
                     token = token,
                 )
-                val hydrated = hydrateScheduledItems(me.id, resp.items, token)
+                val hydrated = hydrateScheduledItems(me.id, resp.resolvedItems, token)
                     .sortedBy { it.scheduledAt }
                 _state.update { it.copy(scheduledMessages = hydrated) }
                 rearmScheduledFlushTimer(hydrated)
@@ -4119,7 +4267,7 @@ class JaTextSessionViewModel(app: Application) :
                     args = args,
                     token = token,
                 )
-                val uiItem = resp.item.copy(body = cleanText)
+                val uiItem = resp.resolvedItem.copy(body = cleanText)
                 val updated = (_state.value.scheduledMessages.filterNot { it.id == uiItem.id } + uiItem)
                     .sortedBy { it.scheduledAt }
                 _state.update { it.copy(scheduledMessages = updated) }
@@ -4147,6 +4295,556 @@ class JaTextSessionViewModel(app: Application) :
                 )
             }.onFailure {
                 refreshScheduledMessages()
+            }
+        }
+    }
+
+    /* ==================== v3.9.0 Language, Drafts, View Once, Bulk Send, Pins, Folders, Soundboards & Security ==================== */
+
+    fun setAppLanguage(code: String) {
+        val clean = code.trim().ifBlank { "en" }
+        cache.setLanguageCode(clean)
+        _state.update { it.copy(languageCode = clean) }
+    }
+
+    fun updateChatDraft(threadKey: String, text: String) {
+        val slot = _state.value.slotId
+        val next = _state.value.drafts.toMutableMap()
+        if (text.isBlank()) {
+            next.remove(threadKey)
+        } else {
+            next[threadKey] = text
+        }
+        cache.saveDrafts(slot, next)
+        _state.update { it.copy(drafts = next) }
+    }
+
+    fun markViewOnceMessageOpened(messageId: String) {
+        val cleanId = messageId.trim()
+        if (cleanId.isEmpty() || cleanId.startsWith("opt-")) return
+        val slot = _state.value.slotId
+        val updated = _state.value.openedViewOnceIds + cleanId
+        cache.saveOpenedViewOnceIds(slot, updated)
+        _state.update { it.copy(openedViewOnceIds = updated) }
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw(
+                    op = "markViewOnceOpened",
+                    args = mapOf("messageId" to cleanId),
+                    token = token,
+                )
+            }
+        }
+    }
+
+    fun sendBulkAttachments(
+        uris: List<Uri>,
+        caption: String = "",
+        replyTo: ReplySummary? = null,
+    ) {
+        if (uris.isEmpty()) return
+        uris.forEachIndexed { idx, uri ->
+            sendChatMessage(
+                text = if (idx == 0) caption else "",
+                replyTo = if (idx == 0) replyTo else null,
+                attachmentUri = uri,
+            )
+        }
+    }
+
+    fun sendViewOnceMessage(
+        text: String,
+        photoUri: Uri? = null,
+        audioUri: Uri? = null,
+        localVoiceFile: File? = null,
+        replyTo: ReplySummary? = null,
+    ) {
+        val st = _state.value
+        val me = st.me ?: return
+        val token = currentAuthToken() ?: return
+        val cleanText = text.trim()
+        if (cleanText.isEmpty() && photoUri == null && audioUri == null && localVoiceFile == null) return
+
+        val isCommunity = st.activeChatId == OFFICIAL_COMMUNITY_ID
+        if (isCommunity) {
+            showToast("View once is available in end-to-end encrypted DMs and Groups.")
+            return
+        }
+
+        val tempId = "opt-${UUID.randomUUID()}"
+        val now = System.currentTimeMillis()
+        val placeholderEnvelope = ViewOnceCodec.encode(
+            ViewOnceEnvelopePayload(
+                v = 1,
+                text = cleanText.takeIf { it.isNotEmpty() },
+            )
+        )
+
+        if (st.activeChatId != null) {
+            val receiverId = st.activeChatId
+            val optMsg = ChatMessage(
+                id = tempId,
+                renderKey = tempId,
+                senderId = me.id,
+                receiverId = receiverId,
+                body = placeholderEnvelope,
+                deliveryStatus = "sent",
+                createdAt = now,
+                replyTo = replyTo,
+            )
+            _state.update { it.copy(dmMessages = it.dmMessages + optMsg) }
+
+            viewModelScope.launch {
+                try {
+                    var photoMedia: ViewOnceMediaPayload? = null
+                    if (photoUri != null) {
+                        val readPhoto = readAttachmentBytes(photoUri, null)
+                        if (readPhoto != null) {
+                            val (plainBytes, fName, fMime, cachedFile) = readPhoto
+                            val (ctBytes, desc) = JaTextCryptoEngine.encryptAttachmentBytes(plainBytes, fName, fMime)
+                            if (cachedFile != null) JaTextCryptoEngine.seedOutgoingDecryptedMedia(desc.h, cachedFile)
+                            val upUrl = TursoApiClient.uploadMediaBytes(ctBytes, "e2ee-vo-img.bin", "application/octet-stream", token)
+                            photoMedia = ViewOnceMediaPayload(url = upUrl, name = fName, mime = fMime, att = desc)
+                        }
+                    }
+
+                    var audioMedia: ViewOnceMediaPayload? = null
+                    if (localVoiceFile != null || audioUri != null) {
+                        val readAudio = readAttachmentBytes(audioUri, localVoiceFile)
+                        if (readAudio != null) {
+                            val (plainBytes, fName, fMime, cachedFile) = readAudio
+                            val (ctBytes, desc) = JaTextCryptoEngine.encryptAttachmentBytes(plainBytes, fName, fMime)
+                            if (cachedFile != null) JaTextCryptoEngine.seedOutgoingDecryptedMedia(desc.h, cachedFile)
+                            val upUrl = TursoApiClient.uploadMediaBytes(ctBytes, "e2ee-vo-aud.bin", "application/octet-stream", token)
+                            audioMedia = ViewOnceMediaPayload(url = upUrl, name = fName, mime = fMime, att = desc)
+                        }
+                    }
+
+                    val voBody = ViewOnceCodec.encode(
+                        ViewOnceEnvelopePayload(
+                            v = 1,
+                            text = cleanText.takeIf { it.isNotEmpty() },
+                            photo = photoMedia,
+                            audio = audioMedia,
+                        )
+                    )
+                    val payload = E2EEPlainPayload(v = 1, b = voBody)
+                    val wire = JaTextCryptoEngine.encryptDmMessage(appCtx, me.id, receiverId, payload, token)
+                        ?: throw IllegalStateException("Could not encrypt view-once message.")
+                    val args = mutableMapOf<String, Any?>(
+                        "receiverId" to receiverId,
+                        "body" to wire,
+                    )
+                    if (replyTo != null) args["replyToId"] = replyTo.id
+
+                    val root = TursoApiClient.rpcRaw("sendMessage", args, token).jsonObject
+                    val serverMsg = root["message"]?.let {
+                        JaTextJson.decodeFromJsonElement(ChatMessage.serializer(), it)
+                    }
+                    if (serverMsg != null) {
+                        val hydrated = JaTextCryptoEngine.hydrateDmMessages(appCtx, me.id, listOf(serverMsg), token)
+                        _state.update { cur ->
+                            val withoutOpt = cur.dmMessages.filterNot { m -> m.id == tempId }
+                            cur.copy(dmMessages = mergeDmMessages(withoutOpt, hydrated))
+                        }
+                    }
+                    triggerImmediateSync(true)
+                } catch (e: Throwable) {
+                    _state.update { cur -> cur.copy(dmMessages = cur.dmMessages.filterNot { m -> m.id == tempId }) }
+                    showToast(e.message ?: "Failed to send view-once message")
+                }
+            }
+        } else if (st.activeGroupId != null) {
+            val groupId = st.activeGroupId
+            val optMsg = GroupMessage(
+                id = tempId,
+                renderKey = tempId,
+                senderId = me.id,
+                senderName = me.displayName,
+                senderUsername = me.username,
+                senderAvatarUrl = me.avatarUrl,
+                senderAvatarColor = me.avatarColor,
+                body = placeholderEnvelope,
+                createdAt = now,
+                replyTo = replyTo,
+            )
+            _state.update { it.copy(groupMessages = it.groupMessages + optMsg) }
+
+            viewModelScope.launch {
+                try {
+                    val memberIds = _state.value.groupDetails?.members?.map { it.id }.orEmpty()
+                    var photoMedia: ViewOnceMediaPayload? = null
+                    if (photoUri != null) {
+                        val readPhoto = readAttachmentBytes(photoUri, null)
+                        if (readPhoto != null) {
+                            val (plainBytes, fName, fMime, cachedFile) = readPhoto
+                            val (ctBytes, desc) = JaTextCryptoEngine.encryptAttachmentBytes(plainBytes, fName, fMime)
+                            if (cachedFile != null) JaTextCryptoEngine.seedOutgoingDecryptedMedia(desc.h, cachedFile)
+                            val upUrl = TursoApiClient.uploadMediaBytes(ctBytes, "e2ee-vo-img.bin", "application/octet-stream", token)
+                            photoMedia = ViewOnceMediaPayload(url = upUrl, name = fName, mime = fMime, att = desc)
+                        }
+                    }
+
+                    var audioMedia: ViewOnceMediaPayload? = null
+                    if (localVoiceFile != null || audioUri != null) {
+                        val readAudio = readAttachmentBytes(audioUri, localVoiceFile)
+                        if (readAudio != null) {
+                            val (plainBytes, fName, fMime, cachedFile) = readAudio
+                            val (ctBytes, desc) = JaTextCryptoEngine.encryptAttachmentBytes(plainBytes, fName, fMime)
+                            if (cachedFile != null) JaTextCryptoEngine.seedOutgoingDecryptedMedia(desc.h, cachedFile)
+                            val upUrl = TursoApiClient.uploadMediaBytes(ctBytes, "e2ee-vo-aud.bin", "application/octet-stream", token)
+                            audioMedia = ViewOnceMediaPayload(url = upUrl, name = fName, mime = fMime, att = desc)
+                        }
+                    }
+
+                    val voBody = ViewOnceCodec.encode(
+                        ViewOnceEnvelopePayload(
+                            v = 1,
+                            text = cleanText.takeIf { it.isNotEmpty() },
+                            photo = photoMedia,
+                            audio = audioMedia,
+                        )
+                    )
+                    val payload = E2EEPlainPayload(v = 1, b = voBody)
+                    val wire = JaTextCryptoEngine.encryptGroupMessage(appCtx, me.id, groupId, memberIds, payload, token)
+                    val args = mutableMapOf<String, Any?>(
+                        "groupId" to groupId,
+                        "body" to wire,
+                    )
+                    if (replyTo != null) args["replyToId"] = replyTo.id
+
+                    val root = TursoApiClient.rpcRaw("sendGroupMessage", args, token).jsonObject
+                    val serverMsg = root["message"]?.let {
+                        JaTextJson.decodeFromJsonElement(GroupMessage.serializer(), it)
+                    }
+                    if (serverMsg != null) {
+                        val hydrated = JaTextCryptoEngine.hydrateGroupMessages(appCtx, me.id, groupId, listOf(serverMsg))
+                        _state.update { cur ->
+                            val withoutOpt = cur.groupMessages.filterNot { m -> m.id == tempId }
+                            cur.copy(groupMessages = mergeGroupMessages(withoutOpt, hydrated))
+                        }
+                    }
+                    triggerImmediateSync(true)
+                } catch (e: Throwable) {
+                    _state.update { cur -> cur.copy(groupMessages = cur.groupMessages.filterNot { m -> m.id == tempId }) }
+                    showToast(e.message ?: "Failed to send view-once message")
+                }
+            }
+        }
+    }
+
+    private fun normalizeChatOrganization(spec: ChatOrganizationSpec): ChatOrganizationSpec {
+        val cleanPinned = spec.pinnedIds
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it != OFFICIAL_COMMUNITY_ID }
+            .distinct()
+        val cleanOrder = listOf(OFFICIAL_COMMUNITY_ID) + spec.customOrder
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it != OFFICIAL_COMMUNITY_ID }
+            .distinct()
+        val cleanFolders = spec.folders.mapNotNull { f ->
+            val name = f.name.trim().take(32)
+            if (name.isEmpty()) null else f.copy(
+                id = f.id.ifBlank { "fld-${UUID.randomUUID()}" },
+                name = name,
+                threadIds = f.threadIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+            )
+        }
+        return ChatOrganizationSpec(
+            pinnedIds = cleanPinned,
+            customOrder = cleanOrder,
+            folders = cleanFolders,
+        )
+    }
+
+    private fun persistAndSyncChatOrganization(next: ChatOrganizationSpec) {
+        val normalized = normalizeChatOrganization(next)
+        val slot = _state.value.slotId
+        cache.saveChatOrganization(slot, normalized)
+        _state.update { it.copy(chatOrganization = normalized) }
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            runCatching {
+                val payload = mapOf(
+                    "pinnedIds" to normalized.pinnedIds,
+                    "customOrder" to normalized.customOrder,
+                    "folders" to normalized.folders.map { f ->
+                        mapOf(
+                            "id" to f.id,
+                            "name" to f.name,
+                            "threadIds" to f.threadIds,
+                        )
+                    },
+                )
+                TursoApiClient.rpcRaw(
+                    op = "saveChatOrganization",
+                    args = mapOf("chatOrganization" to payload),
+                    token = token,
+                )
+            }
+        }
+    }
+
+    fun togglePinThread(threadKey: String) {
+        if (threadKey == OFFICIAL_COMMUNITY_ID || threadKey.isBlank()) return
+        val cur = _state.value.chatOrganization
+        val nextPinned = if (cur.pinnedIds.contains(threadKey)) {
+            cur.pinnedIds.filterNot { it == threadKey }
+        } else {
+            listOf(threadKey) + cur.pinnedIds
+        }
+        persistAndSyncChatOrganization(cur.copy(pinnedIds = nextPinned))
+    }
+
+    fun moveThreadInOrder(visibleOrderedKeys: List<String>, threadKey: String, delta: Int) {
+        if (threadKey == OFFICIAL_COMMUNITY_ID || delta == 0) return
+        val nonCommunity = visibleOrderedKeys.filterNot { it == OFFICIAL_COMMUNITY_ID }.toMutableList()
+        val idx = nonCommunity.indexOf(threadKey)
+        if (idx < 0) return
+        val target = (idx + delta).coerceIn(0, nonCommunity.lastIndex)
+        if (target == idx) return
+        nonCommunity.removeAt(idx)
+        nonCommunity.add(target, threadKey)
+        val cur = _state.value.chatOrganization
+        val remaining = cur.customOrder.filterNot { it == OFFICIAL_COMMUNITY_ID || nonCommunity.contains(it) }
+        persistAndSyncChatOrganization(
+            cur.copy(customOrder = listOf(OFFICIAL_COMMUNITY_ID) + nonCommunity + remaining)
+        )
+    }
+
+    fun saveChatFolder(folderId: String?, name: String, threadIds: List<String>) {
+        val cleanName = name.trim().take(32)
+        if (cleanName.isEmpty()) return
+        val cur = _state.value.chatOrganization
+        val id = folderId?.takeIf { it.isNotBlank() } ?: "fld-${UUID.randomUUID()}"
+        val spec = ChatFolderSpec(id = id, name = cleanName, threadIds = threadIds.distinct())
+        val exists = cur.folders.any { it.id == id }
+        val nextFolders = if (exists) {
+            cur.folders.map { if (it.id == id) spec else it }
+        } else {
+            cur.folders + spec
+        }
+        persistAndSyncChatOrganization(cur.copy(folders = nextFolders))
+    }
+
+    fun deleteChatFolder(folderId: String) {
+        val cur = _state.value.chatOrganization
+        persistAndSyncChatOrganization(cur.copy(folders = cur.folders.filterNot { it.id == folderId }))
+    }
+
+    fun togglePinMessageInThread(
+        threadKey: String,
+        messageId: String,
+        senderName: String,
+        preview: String,
+    ) {
+        if (threadKey.isBlank() || messageId.isBlank()) return
+        val slot = _state.value.slotId
+        val fullMap = _state.value.pinnedMessagesByThread.toMutableMap()
+        val currentList = fullMap[threadKey].orEmpty()
+        val exists = currentList.any { it.id == messageId }
+        val nextList = if (exists) {
+            currentList.filterNot { it.id == messageId }
+        } else {
+            listOf(
+                ClientPinnedMessage(
+                    id = messageId,
+                    senderName = senderName,
+                    preview = preview.ifBlank { "Attachment" }.take(140),
+                    pinnedAt = System.currentTimeMillis(),
+                )
+            ) + currentList
+        }
+        if (nextList.isEmpty()) {
+            fullMap.remove(threadKey)
+        } else {
+            fullMap[threadKey] = nextList.take(25)
+        }
+        cache.savePinnedMessagesMap(slot, fullMap)
+        _state.update { it.copy(pinnedMessagesByThread = fullMap) }
+    }
+
+    fun refreshSoundboards() {
+        val token = currentAuthToken() ?: return
+        val slot = _state.value.slotId
+        viewModelScope.launch {
+            runCatching {
+                val resp = TursoApiClient.rpc<ListSoundboardsResponse>("listMySoundboards", emptyMap(), token)
+                cache.saveSoundboards(slot, resp.soundboards)
+                _state.update { it.copy(soundboards = resp.soundboards) }
+            }
+        }
+    }
+
+    fun createCustomSoundboardFromUri(
+        name: String,
+        audioUri: Uri,
+        onDone: () -> Unit = {},
+        onError: (String) -> Unit = {},
+    ) {
+        val token = currentAuthToken() ?: return
+        val slot = _state.value.slotId
+        val cleanName = name.trim().take(40)
+        if (cleanName.isEmpty()) {
+            onError("Enter a name for your soundboard clip.")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val readMeta = withContext(Dispatchers.IO) { readAttachmentBytes(audioUri, null) }
+                    ?: throw IllegalStateException("Unable to read selected audio file.")
+                val (bytes, fName, fMime, _) = readMeta
+                if (bytes.size > 10 * 1024 * 1024) {
+                    throw IllegalStateException("Audio file must be 10 MB or smaller.")
+                }
+                val durationMs = withContext(Dispatchers.IO) {
+                    val retriever = android.media.MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(appCtx, audioUri)
+                        retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                            ?.toIntOrNull() ?: 0
+                    } finally {
+                        runCatching { retriever.release() }
+                    }
+                }
+                if (durationMs <= 0) {
+                    throw IllegalStateException("Could not determine audio duration.")
+                }
+                if (durationMs > 10_350) {
+                    throw IllegalStateException("Soundboard clips must be 10 seconds or shorter.")
+                }
+                val uploadedUrl = TursoApiClient.uploadMediaBytes(
+                    bytes = bytes,
+                    fileName = fName.ifBlank { "soundboard.mp3" },
+                    mimeType = fMime.ifBlank { "audio/mpeg" },
+                    token = token,
+                )
+                val resp = TursoApiClient.rpc<CreateSoundboardResponse>(
+                    op = "createSoundboardClip",
+                    args = mapOf(
+                        "name" to cleanName,
+                        "audioUrl" to uploadedUrl,
+                        "durationMs" to durationMs.coerceAtMost(10_000),
+                        "byteSize" to bytes.size,
+                    ),
+                    token = token,
+                )
+                val next = listOf(resp.clip) + _state.value.soundboards.filterNot { it.id == resp.clip.id }
+                cache.saveSoundboards(slot, next)
+                _state.update { it.copy(soundboards = next) }
+                onDone()
+            } catch (e: Throwable) {
+                val msg = e.message ?: "Failed to create soundboard clip."
+                onError(msg)
+                showToast(msg)
+            }
+        }
+    }
+
+    fun deleteCustomSoundboard(clipId: String) {
+        val token = currentAuthToken() ?: return
+        val slot = _state.value.slotId
+        val next = _state.value.soundboards.filterNot { it.id == clipId }
+        cache.saveSoundboards(slot, next)
+        _state.update { it.copy(soundboards = next) }
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw("deleteSoundboardClip", mapOf("clipId" to clipId), token)
+            }.onFailure {
+                refreshSoundboards()
+            }
+        }
+    }
+
+    fun refreshBlockedUsersList() {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            runCatching {
+                val resp = TursoApiClient.rpc<BlockedUsersResponse>("getBlockedUsers", emptyMap(), token)
+                _state.update { it.copy(blockedUsersList = resp.users) }
+            }
+        }
+    }
+
+    fun unblockUserFromSettings(userId: String) {
+        _state.update { cur ->
+            cur.copy(
+                blockedUserIds = cur.blockedUserIds.filterNot { id -> id == userId },
+                blockedUsersList = cur.blockedUsersList.filterNot { u -> u.id == userId },
+            )
+        }
+        setBlockedUser(userId, false)
+    }
+
+    fun refreshSecuritySettings() {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            runCatching {
+                val resp = TursoApiClient.rpc<SecuritySettingsResponse>("getSecuritySettings", emptyMap(), token)
+                _state.update { it.copy(securitySettings = resp) }
+            }
+        }
+    }
+
+    suspend fun beginTotpSetup(): BeginTotpSetupResponse {
+        val token = currentAuthToken() ?: throw IllegalStateException("Not authenticated.")
+        return TursoApiClient.rpc("beginTotpSetup", emptyMap(), token)
+    }
+
+    suspend fun confirmTotpSetup(code: String): ConfirmTotpSetupResponse {
+        val token = currentAuthToken() ?: throw IllegalStateException("Not authenticated.")
+        val resp = TursoApiClient.rpc<ConfirmTotpSetupResponse>(
+            op = "confirmTotpSetup",
+            args = mapOf("code" to code.trim()),
+            token = token,
+        )
+        refreshSecuritySettings()
+        return resp
+    }
+
+    suspend fun disableTotp(code: String) {
+        val token = currentAuthToken() ?: throw IllegalStateException("Not authenticated.")
+        TursoApiClient.rpcRaw("disableTotp", mapOf("code" to code.trim()), token)
+        refreshSecuritySettings()
+    }
+
+    fun registerPasskey(
+        activity: Activity,
+        label: String = "Android Passkey",
+        onDone: () -> Unit = {},
+        onError: (String) -> Unit = {},
+    ) {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            try {
+                PasskeyManagerHelper.registerPasskey(activity, token, label)
+                refreshSecuritySettings()
+                showToast("Passkey added")
+                onDone()
+            } catch (_: PasskeyCancelledException) {
+            } catch (e: Throwable) {
+                val msg = e.message ?: "Could not register passkey."
+                onError(msg)
+                showToast(msg)
+            }
+        }
+    }
+
+    fun deletePasskey(credentialId: String) {
+        val token = currentAuthToken() ?: return
+        _state.update { cur ->
+            cur.copy(
+                securitySettings = cur.securitySettings.copy(
+                    passkeys = cur.securitySettings.passkeys.filterNot { it.credentialId == credentialId }
+                )
+            )
+        }
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw("deletePasskey", mapOf("credentialId" to credentialId), token)
+            }.onFailure {
+                refreshSecuritySettings()
             }
         }
     }
