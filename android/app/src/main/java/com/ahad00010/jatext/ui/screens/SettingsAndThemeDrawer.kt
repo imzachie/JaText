@@ -11,6 +11,21 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -37,11 +52,14 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
@@ -95,19 +113,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.ahad00010.jatext.BuildConfig
 import com.ahad00010.jatext.JaTextSoundManager
@@ -123,6 +150,18 @@ import com.ahad00010.jatext.ui.components.JaWebInput
 import com.ahad00010.jatext.ui.components.RichMarkdownText
 import com.ahad00010.jatext.ui.components.jaBouncyClick
 import com.ahad00010.jatext.ui.icons.SOCIAL_PLATFORM_SPECS
+import com.ahad00010.jatext.ui.icons.SettingsAccountKeySvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsAddStatusPlusIcon
+import com.ahad00010.jatext.ui.icons.SettingsBackChevronSvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsChatsBubbleSvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsChevronRightSvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsLegalDocSvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsLinkedDevicesSvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsNotificationsBadgeSvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsPrivacyLockSvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsQrCodeSvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsSearchSvgIcon
+import com.ahad00010.jatext.ui.icons.SettingsSocialsLinksSvgIcon
 import com.ahad00010.jatext.ui.icons.SocialBrandVectorIcon
 import com.ahad00010.jatext.ui.icons.WebUiIconKind
 import com.ahad00010.jatext.ui.icons.WebUiSvgIcon
@@ -134,6 +173,8 @@ import com.ahad00010.jatext.ui.theme.CustomThemeData
 import com.ahad00010.jatext.ui.theme.JaTextPalette
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
+import com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily
+import com.ahad00010.jatext.ui.theme.SfProTextFontFamily
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.emptyBackdrop
 import com.kyant.backdrop.components.LiquidAmbientMeshBackdrop
@@ -178,9 +219,12 @@ fun SettingsModalScreen(
     val settingsBackdrop = remember { emptyBackdrop() }
     val systemNavBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
-    var activeCategory by remember { mutableStateOf("profile") } // profile | appearance | devices | socials | audio | encryption | legal
+    var openSubpage by remember { mutableStateOf<String?>(null) } // null = "You" Hub | profile | appearance | devices | socials | audio | encryption | legal
     var showCustomThemeDrawer by remember { mutableStateOf(false) }
     var showQrScanner by remember { mutableStateOf(false) }
+    var showCustomStatusDialog by remember { mutableStateOf(false) }
+    var isSearchingSettings by remember { mutableStateOf(false) }
+    var settingsSearchQuery by remember { mutableStateOf("") }
     var legalDialogTab by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(showCustomThemeDrawer, showQrScanner) {
@@ -196,151 +240,204 @@ fun SettingsModalScreen(
         when {
             showQrScanner -> showQrScanner = false
             showCustomThemeDrawer -> showCustomThemeDrawer = false
+            showCustomStatusDialog -> showCustomStatusDialog = false
+            isSearchingSettings -> {
+                isSearchingSettings = false
+                settingsSearchQuery = ""
+            }
+            openSubpage != null -> openSubpage = null
             else -> onClose()
         }
     }
 
-    val categories = listOf(
-        Triple("profile", com.ahad00010.jatext.data.jt("settings.profile"), Icons.Rounded.Person),
-        Triple("appearance", com.ahad00010.jatext.data.jt("settings.appearance"), Icons.Rounded.Palette),
-        Triple("devices", com.ahad00010.jatext.data.jt("settings.devices"), Icons.Rounded.Devices),
-        Triple("socials", com.ahad00010.jatext.data.jt("settings.socials"), Icons.Rounded.Link),
-        Triple("audio", com.ahad00010.jatext.data.jt("settings.alerts"), Icons.Rounded.NotificationsActive),
-        Triple("encryption", com.ahad00010.jatext.data.jt("settings.privacy"), Icons.Rounded.Lock),
-        Triple("legal", com.ahad00010.jatext.data.jt("settings.legal"), Icons.Rounded.Gavel),
+    val subpageTitles = mapOf(
+        "devices" to com.ahad00010.jatext.data.jt("settings.devices"),
+        "profile" to com.ahad00010.jatext.data.jt("settings.profile"),
+        "encryption" to com.ahad00010.jatext.data.jt("settings.privacy"),
+        "appearance" to com.ahad00010.jatext.data.jt("settings.appearance"),
+        "audio" to com.ahad00010.jatext.data.jt("settings.alerts"),
+        "socials" to com.ahad00010.jatext.data.jt("settings.socials"),
+        "legal" to com.ahad00010.jatext.data.jt("settings.legal"),
     )
 
     val tintedActionColor = if (palette.isDark) palette.accent else IOS_LIQUID_BLUE
+    val pageCanvasSolidColor = when {
+        !palette.isDark -> palette.bgSecondary
+        palette.bgPrimary == Color(0xFF000000) -> Color.Black
+        else -> palette.bgSecondary
+    }
 
     CompositionLocalProvider(LocalLiquidGlassOptics provides liquidOptics) {
         Box(modifier = Modifier.fillMaxSize()) {
-            /* ==================== Layer 0: Ambient iOS 26 Liquid Glass Background ==================== */
+            /* ==================== Layer 0: Theme-Adaptive Settings Canvas ==================== */
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .then(
                         if (palette.rootGradientBrush != null) Modifier.background(palette.rootGradientBrush)
-                        else Modifier.background(palette.bgPrimary)
+                        else Modifier.background(pageCanvasSolidColor)
                     )
             ) {
-                LiquidAmbientMeshBackdrop(
-                    accentColor = palette.accent,
-                    secondaryColor = Color(0xFF6366F1),
-                    isDark = palette.isDark,
-                )
+                if (palette.rootGradientBrush != null || (palette.isDark && openSubpage != null)) {
+                    LiquidAmbientMeshBackdrop(
+                        accentColor = palette.accent,
+                        secondaryColor = Color(0xFF6366F1),
+                        isDark = palette.isDark,
+                    )
+                }
             }
 
-            /* ==================== Layer 1: iOS 26 Liquid Glass Settings Foreground ==================== */
-            Column(
+            /* ==================== Layer 1: Smooth Push/Pop "You" Hub <-> Subpage Container ==================== */
+            AnimatedContent(
+                targetState = openSubpage,
+                transitionSpec = {
+                    val pushing = initialState == null && targetState != null
+                    val popping = initialState != null && targetState == null
+                    when {
+                        pushing -> (
+                            slideInHorizontally(
+                                animationSpec = tween(280, easing = FastOutSlowInEasing),
+                                initialOffsetX = { fullWidth -> fullWidth / 3 },
+                            ) + fadeIn(animationSpec = tween(220))
+                        ) togetherWith (
+                            slideOutHorizontally(
+                                animationSpec = tween(260, easing = FastOutSlowInEasing),
+                                targetOffsetX = { fullWidth -> -fullWidth / 5 },
+                            ) + fadeOut(animationSpec = tween(175))
+                        )
+                        popping -> (
+                            slideInHorizontally(
+                                animationSpec = tween(260, easing = FastOutSlowInEasing),
+                                initialOffsetX = { fullWidth -> -fullWidth / 4 },
+                            ) + fadeIn(animationSpec = tween(200))
+                        ) togetherWith (
+                            slideOutHorizontally(
+                                animationSpec = tween(250, easing = FastOutSlowInEasing),
+                                targetOffsetX = { fullWidth -> fullWidth / 3 },
+                            ) + fadeOut(animationSpec = tween(170))
+                        )
+                        else -> fadeIn(animationSpec = tween(200)) togetherWith fadeOut(animationSpec = tween(150))
+                    }
+                },
+                label = "YouSettingsSubpageTransition",
                 modifier = Modifier
                     .fillMaxSize()
-                    .statusBarsPadding()
-                    .then(
-                        if (embeddedInBottomBar) Modifier else Modifier.navigationBarsPadding()
+                    .then(if (embeddedInBottomBar) Modifier else Modifier.navigationBarsPadding())
+                    .imePadding(),
+            ) { targetSubpage ->
+                if (targetSubpage == null) {
+                    YouHubRootScreen(
+                        me = me,
+                        state = state,
+                        palette = palette,
+                        pageCanvasSolidColor = pageCanvasSolidColor,
+                        embeddedInBottomBar = embeddedInBottomBar,
+                        systemNavBottomPadding = systemNavBottomPadding,
+                        isSearching = isSearchingSettings,
+                        searchQuery = settingsSearchQuery,
+                        onToggleSearch = {
+                            isSearchingSettings = !isSearchingSettings
+                            if (!isSearchingSettings) settingsSearchQuery = ""
+                        },
+                        onSearchQueryChange = { settingsSearchQuery = it },
+                        onOpenQrScanner = {
+                            vm.clearDeviceLinkFeedback()
+                            showQrScanner = true
+                        },
+                        onOpenCustomStatusDialog = { showCustomStatusDialog = true },
+                        onSelectSubpage = { catId ->
+                            isSearchingSettings = false
+                            settingsSearchQuery = ""
+                            openSubpage = catId
+                        },
+                        onCloseModal = if (!embeddedInBottomBar) onClose else null,
                     )
-                    .imePadding()
-            ) {
-                /* ==================== iOS 26 Settings Top Header ==================== */
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Settings",
-                            color = palette.textPrimary,
-                            fontSize = 26.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
-                            letterSpacing = (-0.5).sp,
-                        )
-                        Text(
-                            text = "JaText v${BuildConfig.VERSION_NAME} · Build ${BuildConfig.VERSION_CODE}",
-                            color = palette.textSecondary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                    LiquidButton(
-                        onClick = { vm.checkApkUpdate(manual = true) },
-                        backdrop = settingsBackdrop,
-                        isDark = palette.isDark,
-                        height = 38.dp,
-                        horizontalPadding = 14.dp,
+                } else {
+                    val currentCat = targetSubpage
+                    val subpageTitle = subpageTitles[currentCat] ?: "Settings"
+                    val categoryScrollState = key(currentCat) { rememberScrollState() }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
                     ) {
-                        Text(
-                            text = "Check updates",
-                            color = palette.textPrimary,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    if (!embeddedInBottomBar) {
-                        LiquidIconButton(
-                            onClick = onClose,
-                            backdrop = settingsBackdrop,
-                            isDark = palette.isDark,
-                            size = 38.dp,
+                        /* ==================== Subpage Navigation Bar (< You | Title | Action) ==================== */
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Close,
-                                contentDescription = "Close Settings",
-                                tint = palette.textPrimary,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
-                }
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .jaBouncyClick { openSubpage = null }
+                                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                SettingsBackChevronSvgIcon(
+                                    tint = tintedActionColor,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(Modifier.width(2.dp))
+                                Text(
+                                    text = "You",
+                                    color = tintedActionColor,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
 
-                /* ==================== iOS 26 Liquid Glass Category Pills ==================== */
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    categories.forEach { (id, label, icon) ->
-                        val selected = activeCategory == id
-                        LiquidPillChip(
-                            selected = selected,
-                            onClick = { activeCategory = id },
-                            backdrop = settingsBackdrop,
-                            isDark = palette.isDark,
-                            accentColor = tintedActionColor,
-                            horizontalPadding = 14.dp,
-                            verticalPadding = 9.dp,
-                        ) {
-                            Icon(
-                                imageVector = icon,
-                                contentDescription = null,
-                                tint = if (selected) Color.White else palette.textSecondary,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
                             Text(
-                                text = label,
-                                color = if (selected) Color.White else palette.textPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                text = subpageTitle,
+                                color = palette.textPrimary,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = SfProDisplayFontFamily,
+                                letterSpacing = (-0.3).sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
                             )
+
+                            LiquidButton(
+                                onClick = { vm.checkApkUpdate(manual = true) },
+                                backdrop = settingsBackdrop,
+                                isDark = palette.isDark,
+                                height = 34.dp,
+                                horizontalPadding = 12.dp,
+                            ) {
+                                Text(
+                                    text = "Check updates",
+                                    color = palette.textPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+
+                            if (!embeddedInBottomBar) {
+                                LiquidIconButton(
+                                    onClick = onClose,
+                                    backdrop = settingsBackdrop,
+                                    isDark = palette.isDark,
+                                    size = 34.dp,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Close Settings",
+                                        tint = palette.textPrimary,
+                                        modifier = Modifier.size(17.dp),
+                                    )
+                                }
+                            }
                         }
-                    }
-                }
 
-                Spacer(Modifier.height(4.dp))
-
-                /* ==================== 120 FPS Category Body (No Dual-Tab Crossfade Overhead) ==================== */
-                val categoryScrollState = key(activeCategory) { rememberScrollState() }
-                val currentCat = activeCategory
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(categoryScrollState)
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(categoryScrollState)
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     when (currentCat) {
                             "profile" -> {
@@ -1800,6 +1897,8 @@ fun SettingsModalScreen(
                                 else 36.dp
                             )
                         )
+                        }
+                    }
                 }
             }
 
@@ -1821,7 +1920,21 @@ fun SettingsModalScreen(
                     onDismiss = { showQrScanner = false },
                     onQrScanned = { rawCode ->
                         showQrScanner = false
+                        openSubpage = "devices"
                         vm.handleScannedDeviceQrCode(rawCode)
+                    },
+                )
+            }
+
+            if (showCustomStatusDialog) {
+                CustomStatusBubbleEditDialog(
+                    me = me,
+                    palette = palette,
+                    onDismiss = { showCustomStatusDialog = false },
+                    onSaveStatus = { newCustomStatus ->
+                        val currentPref = me.statusPreference.orEmpty().ifBlank { "online" }
+                        vm.setPresenceStatus(currentPref, newCustomStatus)
+                        showCustomStatusDialog = false
                     },
                 )
             }
@@ -1831,6 +1944,832 @@ fun SettingsModalScreen(
                     initialTab = tab,
                     onDismiss = { legalDialogTab = null },
                 )
+            }
+        }
+    }
+}
+
+/* ==================== 1:1 "You" Hub Screen (Settings Roadmap.png) ==================== */
+
+private data class YouSettingsMenuEntry(
+    val id: String,
+    val label: String,
+    val subtitleHint: String,
+    val keywords: String,
+    val icon: @Composable (Color) -> Unit,
+)
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun YouHubRootScreen(
+    me: JaUser,
+    state: SessionUiState,
+    palette: JaTextPalette,
+    pageCanvasSolidColor: Color,
+    embeddedInBottomBar: Boolean,
+    systemNavBottomPadding: androidx.compose.ui.unit.Dp,
+    isSearching: Boolean,
+    searchQuery: String,
+    onToggleSearch: () -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onOpenQrScanner: () -> Unit,
+    onOpenCustomStatusDialog: () -> Unit,
+    onSelectSubpage: (String) -> Unit,
+    onCloseModal: (() -> Unit)? = null,
+) {
+    val rootScroll = rememberScrollState()
+    val searchFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(isSearching) {
+        if (isSearching) {
+            delay(80)
+            runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
+
+    val cleanAvatarColorId = remember(me.avatarColor) {
+        JaTextThemeManager.stripProfileMetaFromColorId(me.avatarColor)
+    }
+    val avatarColorSpec = remember(cleanAvatarColorId) {
+        JaTextThemeManager.avatarColorSpec(cleanAvatarColorId)
+    }
+    val avatarTopOutlineColor = avatarColorSpec.ringColor
+
+    val resolvedBannerUrl = remember(me.bannerUrl) {
+        me.bannerUrl?.takeIf { it.isNotBlank() }?.let { TursoApiClient.resolveAbsoluteMediaUrl(it) }
+    }
+
+    val cardBgColor = when {
+        palette.rootGradientBrush != null ->
+            if (palette.isDark) palette.surface.copy(alpha = 0.84f) else Color.White.copy(alpha = 0.90f)
+        palette.isDark -> palette.surface
+        else -> Color.White
+    }
+    val cardBorderColor = if (palette.isDark) {
+        palette.border.copy(alpha = 0.68f)
+    } else {
+        palette.border.copy(alpha = 0.42f)
+    }
+    val floatingPillBg = if (palette.isDark) {
+        palette.surface.copy(alpha = 0.88f)
+    } else {
+        Color.White.copy(alpha = 0.92f)
+    }
+
+    val statusTopInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val bannerHeight = statusTopInset + 132.dp
+    val avatarSize = 108.dp
+    val avatarHalf = 54.dp
+
+    val topCardEntry = remember {
+        YouSettingsMenuEntry(
+            id = "devices",
+            label = "Linked devices",
+            subtitleHint = "Link & manage Desktop Web sessions",
+            keywords = "linked devices desktop web qr code browser computer session",
+            icon = { tint -> SettingsLinkedDevicesSvgIcon(tint = tint, modifier = Modifier.size(22.dp)) },
+        )
+    }
+
+    val mainCardEntries = remember {
+        listOf(
+            YouSettingsMenuEntry(
+                id = "profile",
+                label = "Account",
+                subtitleHint = "Profile, avatar, banner, bio & blocked users",
+                keywords = "account profile avatar banner username display name pronouns bio switch account sign out logout blocked users",
+                icon = { tint -> SettingsAccountKeySvgIcon(tint = tint, modifier = Modifier.size(22.dp)) },
+            ),
+            YouSettingsMenuEntry(
+                id = "encryption",
+                label = "Privacy",
+                subtitleHint = "2FA, Passkeys & end-to-end encryption",
+                keywords = "privacy security encryption e2ee 2fa totp authenticator passkey biometric lock fingerprint keys",
+                icon = { tint -> SettingsPrivacyLockSvgIcon(tint = tint, modifier = Modifier.size(22.dp)) },
+            ),
+            YouSettingsMenuEntry(
+                id = "appearance",
+                label = "Chats",
+                subtitleHint = "Themes, wallpapers, chat bubbles & language",
+                keywords = "chats appearance theme dark light oled onyx custom wallpaper bubble font language translation",
+                icon = { tint -> SettingsChatsBubbleSvgIcon(tint = tint, modifier = Modifier.size(22.dp)) },
+            ),
+            YouSettingsMenuEntry(
+                id = "audio",
+                label = "Notifications",
+                subtitleHint = "Alerts, ringtones, sounds & soundboards",
+                keywords = "notifications alerts audio sound ringtone push vibration soundboard status activity",
+                icon = { tint -> SettingsNotificationsBadgeSvgIcon(tint = tint, modifier = Modifier.size(22.dp)) },
+            ),
+            YouSettingsMenuEntry(
+                id = "socials",
+                label = "Socials",
+                subtitleHint = "Social links & personal website",
+                keywords = "socials links website discord github instagram youtube x twitter tiktok",
+                icon = { tint -> SettingsSocialsLinksSvgIcon(tint = tint, modifier = Modifier.size(22.dp)) },
+            ),
+            YouSettingsMenuEntry(
+                id = "legal",
+                label = "Legal",
+                subtitleHint = "Terms of Service, Privacy Policy & app version",
+                keywords = "legal terms of service privacy policy rules version updates",
+                icon = { tint -> SettingsLegalDocSvgIcon(tint = tint, modifier = Modifier.size(22.dp)) },
+            ),
+        )
+    }
+
+    val trimmedQuery = searchQuery.trim()
+    val filteredEntries = remember(trimmedQuery) {
+        if (trimmedQuery.isBlank()) {
+            emptyList()
+        } else {
+            val q = trimmedQuery.lowercase(Locale.ROOT)
+            (listOf(topCardEntry) + mainCardEntries).filter { entry ->
+                entry.label.lowercase(Locale.ROOT).contains(q) ||
+                    entry.subtitleHint.lowercase(Locale.ROOT).contains(q) ||
+                    entry.keywords.contains(q)
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rootScroll),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        /* ---------- 1. Hero Banner + Top-Only Avatar Colour Outline + Search & QR Shortcuts ---------- */
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(bannerHeight + avatarHalf),
+        ) {
+            // Banner preview across the top
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(bannerHeight)
+                    .background(
+                        Brush.linearGradient(
+                            colors = if (palette.isDark) {
+                                listOf(
+                                    avatarTopOutlineColor.copy(alpha = 0.24f),
+                                    palette.bgTertiary,
+                                )
+                            } else {
+                                listOf(
+                                    Color(0xFFECEEF4),
+                                    avatarTopOutlineColor.copy(alpha = 0.14f),
+                                )
+                            }
+                        )
+                    )
+                    .clickable { onSelectSubpage("profile") },
+            ) {
+                if (resolvedBannerUrl.isNullOrBlank()) {
+                    // Subtle ambient decorative pattern when user has not uploaded a custom banner yet
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        if (size.width <= 0f || size.height <= 0f) return@Canvas
+                        val patternTint = if (palette.isDark) {
+                            Color.White.copy(alpha = 0.055f)
+                        } else {
+                            Color.Black.copy(alpha = 0.045f)
+                        }
+                        val stroke = Stroke(width = 1.4.dp.toPx())
+                        drawCircle(
+                            color = patternTint,
+                            radius = size.minDimension * 0.42f,
+                            center = Offset(size.width * 0.18f, size.height * 0.35f),
+                            style = stroke,
+                        )
+                        drawCircle(
+                            color = patternTint,
+                            radius = size.minDimension * 0.52f,
+                            center = Offset(size.width * 0.84f, size.height * 0.28f),
+                            style = stroke,
+                        )
+                        drawCircle(
+                            color = patternTint,
+                            radius = size.minDimension * 0.30f,
+                            center = Offset(size.width * 0.52f, size.height * 0.18f),
+                            style = stroke,
+                        )
+                    }
+                } else {
+                    AsyncImage(
+                        model = resolvedBannerUrl,
+                        contentDescription = "Profile banner",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+
+            // Centered circular avatar overlapping banner bottom edge
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .size(avatarSize + 6.dp)
+                    .clip(CircleShape)
+                    .background(pageCanvasSolidColor)
+                    .jaBouncyClick { onSelectSubpage("profile") },
+                contentAlignment = Alignment.Center,
+            ) {
+                JaAvatar(
+                    avatarUrl = me.avatarUrl,
+                    displayName = me.displayName.ifBlank { me.username },
+                    avatarColor = me.avatarColor,
+                    size = avatarSize,
+                    ringWidth = 0.dp,
+                )
+            }
+
+            // Avatar colour outline ONLY AT TOP + horizontal banner split stroke (1:1 Settings Roadmap.png)
+            Canvas(modifier = Modifier.matchParentSize()) {
+                if (size.width <= 0f || size.height <= 0f) return@Canvas
+                val splitY = bannerHeight.toPx()
+                val cx = size.width / 2f
+                val arcRadius = (avatarSize.toPx() / 2f) + 2.2.dp.toPx()
+                val sw = 2.6.dp.toPx()
+
+                val topOutlinePath = Path().apply {
+                    moveTo(0f, splitY)
+                    lineTo((cx - arcRadius).coerceAtLeast(0f), splitY)
+                    arcTo(
+                        rect = Rect(
+                            left = cx - arcRadius,
+                            top = splitY - arcRadius,
+                            right = cx + arcRadius,
+                            bottom = splitY + arcRadius,
+                        ),
+                        startAngleDegrees = 180f,
+                        sweepAngleDegrees = 180f,
+                        forceMoveTo = false,
+                    )
+                    lineTo(size.width, splitY)
+                }
+                drawPath(
+                    path = topOutlinePath,
+                    color = avatarTopOutlineColor,
+                    style = Stroke(width = sw, cap = StrokeCap.Round),
+                )
+            }
+
+            // Floating custom status thought-bubble on top of the account when set
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !me.customStatus.isNullOrBlank(),
+                enter = scaleIn(
+                    animationSpec = spring(
+                        dampingRatio = 0.68f,
+                        stiffness = Spring.StiffnessMediumLow,
+                    )
+                ) + fadeIn(tween(180)),
+                exit = scaleOut(tween(140)) + fadeOut(tween(120)),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = avatarSize - 12.dp, start = 64.dp),
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.Start,
+                    modifier = Modifier.jaBouncyClick { onOpenCustomStatusDialog() },
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .widthIn(min = 48.dp, max = 196.dp)
+                            .shadow(6.dp, RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(cardBgColor)
+                            .border(1.dp, cardBorderColor, RoundedCornerShape(16.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            text = me.customStatus.orEmpty(),
+                            color = palette.textPrimary,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            lineHeight = 15.5.sp,
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.padding(start = 10.dp, top = 2.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.5.dp)
+                                .shadow(2.dp, CircleShape)
+                                .clip(CircleShape)
+                                .background(cardBgColor)
+                                .border(0.8.dp, cardBorderColor, CircleShape)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 5.dp, top = 1.5.dp)
+                            .size(4.5.dp)
+                            .clip(CircleShape)
+                            .background(cardBgColor)
+                            .border(0.8.dp, cardBorderColor, CircleShape)
+                    )
+                }
+            }
+
+            // Top-left Search settings & Top-right Scan QR Code circular buttons
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .shadow(4.dp, CircleShape)
+                        .clip(CircleShape)
+                        .background(floatingPillBg)
+                        .border(1.dp, cardBorderColor, CircleShape)
+                        .jaBouncyClick { onToggleSearch() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    SettingsSearchSvgIcon(
+                        tint = palette.textPrimary,
+                        modifier = Modifier.size(18.5.dp),
+                    )
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .shadow(4.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(floatingPillBg)
+                            .border(1.dp, cardBorderColor, CircleShape)
+                            .jaBouncyClick { onOpenQrScanner() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        SettingsQrCodeSvgIcon(
+                            tint = palette.textPrimary,
+                            modifier = Modifier.size(18.5.dp),
+                        )
+                    }
+
+                    if (onCloseModal != null) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .shadow(4.dp, CircleShape)
+                                .clip(CircleShape)
+                                .background(floatingPillBg)
+                                .border(1.dp, cardBorderColor, CircleShape)
+                                .jaBouncyClick { onCloseModal() },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "Close",
+                                tint = palette.textPrimary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        /* ---------- 2. Display Name + Green (+) Custom Status Button ---------- */
+        Spacer(Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .jaBouncyClick { onOpenCustomStatusDialog() }
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = me.displayName.ifBlank { me.username },
+                color = palette.textPrimary,
+                fontSize = 23.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = SfProDisplayFontFamily,
+                letterSpacing = (-0.3).sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.width(6.dp))
+            SettingsAddStatusPlusIcon(
+                modifier = Modifier.size(20.dp),
+                tint = Color(0xFF25D366),
+            )
+        }
+
+        /* ---------- 3. Animated Live Settings Search Bar ---------- */
+        AnimatedVisibility(
+            visible = isSearching,
+            enter = expandVertically(tween(220, easing = FastOutSlowInEasing)) + fadeIn(tween(180)),
+            exit = shrinkVertically(tween(190, easing = FastOutSlowInEasing)) + fadeOut(tween(140)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(cardBgColor)
+                    .border(1.dp, cardBorderColor, RoundedCornerShape(14.dp))
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                SettingsSearchSvgIcon(
+                    tint = palette.textSecondary,
+                    modifier = Modifier.size(17.dp),
+                )
+                Box(modifier = Modifier.weight(1f)) {
+                    if (searchQuery.isEmpty()) {
+                        Text(
+                            text = "Search settings...",
+                            color = palette.textTertiary,
+                            fontSize = 15.sp,
+                        )
+                    }
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = onSearchQueryChange,
+                        singleLine = true,
+                        cursorBrush = SolidColor(palette.accent),
+                        textStyle = TextStyle(
+                            color = palette.textPrimary,
+                            fontSize = 15.sp,
+                            fontFamily = SfProTextFontFamily,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(searchFocusRequester),
+                    )
+                }
+                if (searchQuery.isNotEmpty()) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Clear search",
+                        tint = palette.textSecondary,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { onSearchQueryChange("") },
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        /* ---------- 4. "Settings" Header + 1:1 Grouped Cards ---------- */
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+        ) {
+            Text(
+                text = "Settings",
+                color = palette.textSecondary,
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 6.dp, bottom = 7.dp),
+            )
+
+            if (trimmedQuery.isNotBlank()) {
+                YouSettingsCard(
+                    cardBgColor = cardBgColor,
+                    cardBorderColor = cardBorderColor,
+                ) {
+                    if (filteredEntries.isEmpty()) {
+                        Text(
+                            text = "No matching settings found.",
+                            color = palette.textSecondary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 18.dp),
+                        )
+                    } else {
+                        filteredEntries.forEachIndexed { idx, entry ->
+                            YouSettingsRowItem(
+                                entry = entry,
+                                palette = palette,
+                                showSubtitle = true,
+                                trailingBadge = if (entry.id == "devices" && state.linkedDevices.isNotEmpty()) {
+                                    "${state.linkedDevices.size}"
+                                } else null,
+                                onClick = { onSelectSubpage(entry.id) },
+                            )
+                            if (idx < filteredEntries.lastIndex) {
+                                YouSettingsInsetDivider(palette = palette)
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Top Card: ONLY "Linked devices" (1:1 Settings Roadmap.png)
+                YouSettingsCard(
+                    cardBgColor = cardBgColor,
+                    cardBorderColor = cardBorderColor,
+                ) {
+                    YouSettingsRowItem(
+                        entry = topCardEntry,
+                        palette = palette,
+                        showSubtitle = false,
+                        trailingBadge = if (state.linkedDevices.isNotEmpty()) {
+                            "${state.linkedDevices.size}"
+                        } else null,
+                        onClick = { onSelectSubpage(topCardEntry.id) },
+                    )
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                // Second Card: Account, Privacy, Chats, Notifications, Socials, Legal
+                YouSettingsCard(
+                    cardBgColor = cardBgColor,
+                    cardBorderColor = cardBorderColor,
+                ) {
+                    mainCardEntries.forEachIndexed { idx, entry ->
+                        YouSettingsRowItem(
+                            entry = entry,
+                            palette = palette,
+                            showSubtitle = false,
+                            trailingBadge = null,
+                            onClick = { onSelectSubpage(entry.id) },
+                        )
+                        if (idx < mainCardEntries.lastIndex) {
+                            YouSettingsInsetDivider(palette = palette)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(
+            Modifier.height(
+                if (embeddedInBottomBar) systemNavBottomPadding + 132.dp
+                else 40.dp
+            )
+        )
+    }
+}
+
+@Composable
+private fun YouSettingsCard(
+    cardBgColor: Color,
+    cardBorderColor: Color,
+    content: @Composable () -> Unit,
+) {
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(cardBgColor)
+            .border(0.8.dp, cardBorderColor, shape),
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun YouSettingsRowItem(
+    entry: YouSettingsMenuEntry,
+    palette: JaTextPalette,
+    showSubtitle: Boolean,
+    trailingBadge: String?,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 14.5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(26.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            entry.icon(palette.textPrimary)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = entry.label,
+                color = palette.textPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (showSubtitle) {
+                Text(
+                    text = entry.subtitleHint,
+                    color = palette.textSecondary,
+                    fontSize = 12.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (!trailingBadge.isNullOrBlank()) {
+            Text(
+                text = trailingBadge,
+                color = palette.textSecondary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(end = 6.dp),
+            )
+        }
+        SettingsChevronRightSvgIcon(
+            tint = palette.textTertiary,
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+@Composable
+private fun YouSettingsInsetDivider(palette: JaTextPalette) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 56.dp)
+            .height(0.65.dp)
+            .background(
+                if (palette.isDark) palette.border.copy(alpha = 0.55f)
+                else palette.border.copy(alpha = 0.48f)
+            )
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CustomStatusBubbleEditDialog(
+    me: JaUser,
+    palette: JaTextPalette,
+    onDismiss: () -> Unit,
+    onSaveStatus: (String) -> Unit,
+) {
+    var draft by remember(me.customStatus) { mutableStateOf(me.customStatus.orEmpty()) }
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { focusRequester.requestFocus() }
+    }
+
+    val cardBg = if (palette.isDark) palette.surfaceElevated else Color.White
+    val presets = remember {
+        listOf("Available", "Busy", "Studying", "At work", "In a call", "Gaming")
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(cardBg)
+                .border(1.dp, palette.border, RoundedCornerShape(24.dp))
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "Custom status",
+                    color = palette.textPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = SfProDisplayFontFamily,
+                )
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Close",
+                    tint = palette.textSecondary,
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clickable { onDismiss() },
+                )
+            }
+
+            Text(
+                text = "Appears as a status bubble above your avatar.",
+                color = palette.textSecondary,
+                fontSize = 13.sp,
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (palette.isDark) palette.bgSecondary else palette.bgSecondary)
+                    .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+            ) {
+                if (draft.isEmpty()) {
+                    Text(
+                        text = "What's on your mind?",
+                        color = palette.textTertiary,
+                        fontSize = 15.sp,
+                    )
+                }
+                BasicTextField(
+                    value = draft,
+                    onValueChange = { if (it.length <= 80) draft = it },
+                    singleLine = true,
+                    cursorBrush = SolidColor(palette.accent),
+                    textStyle = TextStyle(
+                        color = palette.textPrimary,
+                        fontSize = 15.sp,
+                        fontFamily = SfProTextFontFamily,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                )
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                presets.forEach { preset ->
+                    val active = draft.trim().equals(preset, ignoreCase = true)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(
+                                if (active) palette.accent.copy(alpha = 0.18f)
+                                else palette.bgSecondary
+                            )
+                            .border(
+                                1.dp,
+                                if (active) palette.accent else palette.border,
+                                RoundedCornerShape(999.dp),
+                            )
+                            .clickable { draft = preset }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            text = preset,
+                            color = if (active) palette.accent else palette.textSecondary,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!me.customStatus.isNullOrBlank() || draft.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(palette.danger.copy(alpha = 0.12f))
+                            .clickable { onSaveStatus("") }
+                            .padding(horizontal = 14.dp, vertical = 11.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Clear",
+                            color = palette.danger,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF25D366))
+                        .jaBouncyClick { onSaveStatus(draft.trim()) }
+                        .padding(horizontal = 20.dp, vertical = 11.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Save",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }

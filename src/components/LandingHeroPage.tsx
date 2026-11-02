@@ -130,7 +130,7 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
-    version: "v3.9.3",
+    version: "v3.9.4",
     date: "November 2, 2026",
     headline: "5-Tab Mobile Navigation (Updates, Calls, Groups, Chats, You), Live Mobile Typing Indicators & Friend Request Fix",
     latest: true,
@@ -476,7 +476,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.9.3 · Live
+                v3.9.4 · Live
               </span>
             </span>
           </a>
@@ -615,7 +615,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.9.3 (Build 60)</strong>
+                    <strong>v3.9.4 (Build 61)</strong>
                     <span>{isIosVisitor ? "iOS Web & Liquid Glass PWA" : "Web & Signed APK"}</span>
                   </div>
                 </div>
@@ -997,7 +997,7 @@ export function LandingHeroPage() {
                   <>
                     Launch the full JaText web app at{" "}
                     <strong>jatext.vercel.app/chats</strong> or grab the latest signed Android
-                    Release APK (v3.9.3).
+                    Release APK (v3.9.4).
                   </>
                 )}
               </p>
@@ -1027,7 +1027,7 @@ export function LandingHeroPage() {
                   href="/downloads/JaText-release.apk"
                   className="jt-btn-secondary jt-btn-lg"
                 >
-                  Get Android APK (v3.9.3)
+                  Get Android APK (v3.9.4)
                 </a>
               )}
             </div>
@@ -1040,7 +1040,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.9.3</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.9.4</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

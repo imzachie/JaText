@@ -38,7 +38,8 @@ import {
   type DefaultThemeId,
 } from "../lib/themeEngine";
 import { AnimatedModal } from "./AnimatedModal";
-import { Avatar } from "./Avatar";
+import { AnimatedMediaImg, Avatar } from "./Avatar";
+import { colorById } from "../lib/colors";
 import { Phone } from "./CallIcons";
 import { LockIcon } from "./E2EEModals";
 import { IosDevicesSection } from "./IosDevicesSection";
@@ -83,6 +84,113 @@ export type SettingsCategory =
 function encodeSoundOptionValue(sel: SoundSelection): string {
   if (sel.mode === "default") return "default:";
   return `${sel.mode}:${sel.uri}`;
+}
+
+function YouSearchSvg({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="10.6" cy="10.6" r="6.3" />
+      <line x1="15.2" y1="15.2" x2="19.8" y2="19.8" />
+    </svg>
+  );
+}
+
+function YouQrCodeSvg({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="6.6" height="6.6" rx="1.35" />
+      <rect x="5.8" y="5.8" width="2" height="2" rx="0.45" fill="currentColor" stroke="none" />
+      <rect x="13.9" y="3.5" width="6.6" height="6.6" rx="1.35" />
+      <rect x="16.2" y="5.8" width="2" height="2" rx="0.45" fill="currentColor" stroke="none" />
+      <rect x="3.5" y="13.9" width="6.6" height="6.6" rx="1.35" />
+      <rect x="5.8" y="16.2" width="2" height="2" rx="0.45" fill="currentColor" stroke="none" />
+      <path d="M14.1 14.1h2.5v2.5M19.8 14.1v3.1M14.1 19.8h3.1" />
+      <circle cx="19.6" cy="19.6" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function YouAddStatusPlusSvg({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9.2" stroke="#25D366" strokeWidth="1.85" />
+      <path d="M7.8 12h8.4M12 7.8v8.4" stroke="#25D366" strokeWidth="1.95" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function YouLinkedDevicesSvg({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="4.2" y="5.4" width="15.6" height="10.4" rx="1.5" />
+      <line x1="2.1" y1="18.4" x2="21.9" y2="18.4" />
+    </svg>
+  );
+}
+
+function YouAccountKeySvg({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="7.1" r="3.55" />
+      <circle cx="12" cy="6.5" r="0.85" fill="currentColor" stroke="none" />
+      <path d="M12 10.65V19.7M12 16h2.8M12 18.6h3.3" />
+    </svg>
+  );
+}
+
+function YouPrivacyLockSvg({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8.5 10.7V7.6a3.5 3.5 0 0 1 7 0v3.1" />
+      <rect x="5.9" y="10.7" width="12.2" height="8.8" rx="2.3" />
+    </svg>
+  );
+}
+
+function YouChatsBubbleSvg({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5.1 15.3A8.3 6.8 0 1 1 8.9 17.9L4.5 19.1Z" />
+    </svg>
+  );
+}
+
+function YouNotificationsBadgeSvg({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M13.6 5.8H8.3A3.5 3.5 0 0 0 4.8 9.3v6.4a3.5 3.5 0 0 0 3.5 3.5h6.4a3.5 3.5 0 0 0 3.5-3.5v-5.3" />
+      <circle cx="18" cy="6" r="2.45" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function YouSocialsGlobeSvg({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="7.6" />
+      <ellipse cx="12" cy="12" rx="3.5" ry="7.6" />
+      <line x1="4.7" y1="12" x2="19.3" y2="12" />
+    </svg>
+  );
+}
+
+function YouLegalDocSvg({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="5.6" y="4.2" width="12.8" height="15.6" rx="2.4" />
+      <line x1="8.8" y1="9" x2="15.2" y2="9" />
+      <line x1="8.8" y1="12.4" x2="15.2" y2="12.4" />
+      <line x1="8.8" y1="15.8" x2="12.8" y2="15.8" />
+    </svg>
+  );
+}
+
+function YouChevronRightSvg({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.15" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="9.2 5.8 15.4 12 9.2 18.2" />
+    </svg>
+  );
 }
 
 export function SettingsModal({
@@ -148,6 +256,12 @@ export function SettingsModal({
   const isPrimaryMobile = isNative || isIosChats;
   const iosPwaState = useIosPwaState();
   const [iosUpdateNotice, setIosUpdateNotice] = useState<string | null>(null);
+  const [youSearchOpen, setYouSearchOpen] = useState(false);
+  const [youSearchQuery, setYouSearchQuery] = useState("");
+  const [customStatusModalOpen, setCustomStatusModalOpen] = useState(false);
+  const [customStatusDraft, setCustomStatusDraft] = useState(me?.customStatus ?? "");
+  const [autoStartQrScanner, setAutoStartQrScanner] = useState(false);
+  const youSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!isNative) return;
@@ -419,99 +533,368 @@ export function SettingsModal({
   const activeCategoryMeta =
     categories.find((c) => c.id === activeCategory) ?? categories[0];
 
+  const avatarOutlineHex = colorById(currentUser.avatarColor).hex;
+  const youTopItem = {
+    id: "devices" as SettingsCategory,
+    label: "Linked devices",
+    keywords: "linked devices qr scan web desktop browser computer",
+    icon: <YouLinkedDevicesSvg size={22} />,
+  };
+  const youMainItems: Array<{
+    id: SettingsCategory;
+    label: string;
+    keywords: string;
+    icon: React.ReactNode;
+  }> = [
+    {
+      id: "profile",
+      label: "Account",
+      keywords: "account profile avatar banner username display name pronouns bio switch sign out blocked",
+      icon: <YouAccountKeySvg size={22} />,
+    },
+    {
+      id: "security",
+      label: "Privacy",
+      keywords: "privacy security 2fa totp authenticator passkey e2ee encryption keys",
+      icon: <YouPrivacyLockSvg size={22} />,
+    },
+    {
+      id: "appearance",
+      label: "Chats",
+      keywords: "chats appearance theme dark light oled wallpaper bubble font language",
+      icon: <YouChatsBubbleSvg size={22} />,
+    },
+    {
+      id: "notifications",
+      label: "Notifications",
+      keywords: "notifications alerts audio ringtone soundboard push status",
+      icon: <YouNotificationsBadgeSvg size={22} />,
+    },
+    {
+      id: "socials",
+      label: "Socials",
+      keywords: "socials website links discord github instagram youtube",
+      icon: <YouSocialsGlobeSvg size={22} />,
+    },
+    {
+      id: "legal",
+      label: "Legal",
+      keywords: "legal terms privacy policy rules updates",
+      icon: <YouLegalDocSvg size={22} />,
+    },
+  ];
+  const trimmedYouQuery = youSearchQuery.trim().toLowerCase();
+  const filteredYouItems = trimmedYouQuery
+    ? [youTopItem, ...youMainItems].filter(
+        (item) =>
+          item.label.toLowerCase().includes(trimmedYouQuery) ||
+          item.keywords.includes(trimmedYouQuery),
+      )
+    : [];
+
   return (
     <>
       <AnimatedModal
         onClose={handleCloseModal}
-        cardClassName="modal-card settings-shell-modal"
+        cardClassName={`modal-card settings-shell-modal ${isIosChats ? "you-roadmap-modal-shell" : ""}`}
         closeLabel="Close settings"
       >
         {(requestClose) => (
           <div className={`settings-layout mobile-view-${mobileMenuView}`}>
-            {/* ---------- Left Sidebar / Mobile Category List ---------- */}
-            <aside className="settings-sidebar" aria-label="Settings categories">
-              <div className="settings-sidebar-top">
-                <div className="settings-sidebar-brand">
-                  <SettingsIcon size={19} style={{ color: "var(--accent)" }} />
-                  <span>Settings</span>
-                </div>
+            {/* ---------- Left Sidebar / Mobile "You" Hub ---------- */}
+            <aside
+              className={`settings-sidebar ${isIosChats ? "you-roadmap-sidebar" : ""}`}
+              aria-label="Settings categories"
+            >
+              {isIosChats ? (
+                <div className="you-roadmap-root">
+                  <div className="you-roadmap-hero">
+                    <div
+                      className="you-roadmap-banner"
+                      onClick={() => selectCategory("profile")}
+                      style={
+                        {
+                          "--you-avatar-ring": avatarOutlineHex,
+                        } as React.CSSProperties
+                      }
+                    >
+                      {currentUser.bannerUrl ? (
+                        <AnimatedMediaImg
+                          src={currentUser.bannerUrl}
+                          alt="Profile banner"
+                          className="you-roadmap-banner-img"
+                        />
+                      ) : (
+                        <div className="you-roadmap-banner-pattern" aria-hidden="true" />
+                      )}
+                    </div>
 
-                <div className="settings-user-summary">
-                  <Avatar user={currentUser} size={40} />
-                  <div className="settings-user-summary-text">
-                    <strong>{currentUser.displayName}</strong>
-                    <span className="muted small">
-                      {currentUser.email ?? `@${currentUser.username}`}
-                    </span>
+                    {/* Top-only avatar colour outline (upper semicircle arc) */}
+                    <svg
+                      className="you-roadmap-avatar-arc-svg"
+                      viewBox="0 0 116 116"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M 2 58 A 56 56 0 0 1 114 58"
+                        fill="none"
+                        stroke={avatarOutlineHex}
+                        strokeWidth="2.8"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+
+                    <div className="you-roadmap-top-actions">
+                      <button
+                        type="button"
+                        className="you-roadmap-circle-btn"
+                        aria-label="Search settings"
+                        title="Search settings"
+                        onClick={() => {
+                          setYouSearchOpen((prev) => {
+                            const next = !prev;
+                            if (!next) setYouSearchQuery("");
+                            else {
+                              window.setTimeout(() => youSearchInputRef.current?.focus(), 60);
+                            }
+                            return next;
+                          });
+                        }}
+                      >
+                        <YouSearchSvg size={18} />
+                      </button>
+
+                      <div className="you-roadmap-top-right-group">
+                        <button
+                          type="button"
+                          className="you-roadmap-circle-btn"
+                          aria-label="Scan QR Code"
+                          title="Scan QR Code"
+                          onClick={() => {
+                            setAutoStartQrScanner(true);
+                            selectCategory("devices");
+                          }}
+                        >
+                          <YouQrCodeSvg size={18} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {currentUser.customStatus?.trim() ? (
+                      <button
+                        type="button"
+                        className="you-roadmap-status-bubble"
+                        onClick={() => {
+                          setCustomStatusDraft(currentUser.customStatus ?? "");
+                          setCustomStatusModalOpen(true);
+                        }}
+                      >
+                        <span className="you-roadmap-status-bubble-pill">
+                          {currentUser.customStatus}
+                        </span>
+                        <span className="you-roadmap-status-dot-lg" aria-hidden="true" />
+                        <span className="you-roadmap-status-dot-sm" aria-hidden="true" />
+                      </button>
+                    ) : null}
+
+                    <div
+                      className="you-roadmap-avatar-holder"
+                      onClick={() => selectCategory("profile")}
+                    >
+                      <Avatar user={currentUser} size={106} ringWidth={0} />
+                    </div>
                   </div>
-                </div>
 
-                {onOpenAccountSwitcher && (
                   <button
                     type="button"
-                    className="ghost-btn settings-sidebar-switch-btn"
-                    onClick={onOpenAccountSwitcher}
+                    className="you-roadmap-name-row"
+                    onClick={() => {
+                      setCustomStatusDraft(currentUser.customStatus ?? "");
+                      setCustomStatusModalOpen(true);
+                    }}
                   >
-                    <SwitchAccountIcon size={15} />
-                    <span>
-                      {accounts.length > 1
-                        ? `Switch account (${accounts.length})`
-                        : "Add another account"}
+                    <span className="you-roadmap-display-name">
+                      {currentUser.displayName || currentUser.username}
                     </span>
+                    <YouAddStatusPlusSvg size={20} />
                   </button>
-                )}
-              </div>
 
-              <nav className="settings-nav-list">
-                {categories.map((cat) => {
-                  const isActive = activeCategory === cat.id;
-                  return (
+                  {youSearchOpen && (
+                    <div className="you-roadmap-search-bar">
+                      <YouSearchSvg size={16} />
+                      <input
+                        ref={youSearchInputRef}
+                        type="search"
+                        value={youSearchQuery}
+                        onChange={(e) => setYouSearchQuery(e.target.value)}
+                        placeholder="Search settings..."
+                        aria-label="Search settings"
+                      />
+                      {youSearchQuery && (
+                        <button
+                          type="button"
+                          className="you-roadmap-search-clear"
+                          onClick={() => setYouSearchQuery("")}
+                          aria-label="Clear search"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="you-roadmap-cards-wrap">
+                    <div className="you-roadmap-section-label">Settings</div>
+
+                    {trimmedYouQuery ? (
+                      <div className="you-roadmap-card">
+                        {filteredYouItems.length === 0 ? (
+                          <div className="you-roadmap-empty">No matching settings found.</div>
+                        ) : (
+                          filteredYouItems.map((item) => (
+                            <button
+                              type="button"
+                              key={item.id}
+                              className="you-roadmap-row"
+                              onClick={() => {
+                                setYouSearchOpen(false);
+                                setYouSearchQuery("");
+                                selectCategory(item.id);
+                              }}
+                            >
+                              <span className="you-roadmap-row-icon">{item.icon}</span>
+                              <span className="you-roadmap-row-label">{item.label}</span>
+                              <span className="you-roadmap-row-chevron">
+                                <YouChevronRightSvg size={16} />
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        {/* Top Card: ONLY Linked devices */}
+                        <div className="you-roadmap-card">
+                          <button
+                            type="button"
+                            className="you-roadmap-row"
+                            onClick={() => selectCategory(youTopItem.id)}
+                          >
+                            <span className="you-roadmap-row-icon">{youTopItem.icon}</span>
+                            <span className="you-roadmap-row-label">{youTopItem.label}</span>
+                            <span className="you-roadmap-row-chevron">
+                              <YouChevronRightSvg size={16} />
+                            </span>
+                          </button>
+                        </div>
+
+                        {/* Second Card: Account, Privacy, Chats, Notifications, Socials, Legal */}
+                        <div className="you-roadmap-card">
+                          {youMainItems.map((item) => (
+                            <button
+                              type="button"
+                              key={item.id}
+                              className="you-roadmap-row"
+                              onClick={() => selectCategory(item.id)}
+                            >
+                              <span className="you-roadmap-row-icon">{item.icon}</span>
+                              <span className="you-roadmap-row-label">{item.label}</span>
+                              <span className="you-roadmap-row-chevron">
+                                <YouChevronRightSvg size={16} />
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="settings-sidebar-top">
+                    <div className="settings-sidebar-brand">
+                      <SettingsIcon size={19} style={{ color: "var(--accent)" }} />
+                      <span>Settings</span>
+                    </div>
+
+                    <div className="settings-user-summary">
+                      <Avatar user={currentUser} size={40} />
+                      <div className="settings-user-summary-text">
+                        <strong>{currentUser.displayName}</strong>
+                        <span className="muted small">
+                          {currentUser.email ?? `@${currentUser.username}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {onOpenAccountSwitcher && (
+                      <button
+                        type="button"
+                        className="ghost-btn settings-sidebar-switch-btn"
+                        onClick={onOpenAccountSwitcher}
+                      >
+                        <SwitchAccountIcon size={15} />
+                        <span>
+                          {accounts.length > 1
+                            ? `Switch account (${accounts.length})`
+                            : "Add another account"}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+
+                  <nav className="settings-nav-list">
+                    {categories.map((cat) => {
+                      const isActive = activeCategory === cat.id;
+                      return (
+                        <button
+                          type="button"
+                          key={cat.id}
+                          className={`settings-nav-item ${isActive ? "active" : ""}`}
+                          onClick={() => selectCategory(cat.id)}
+                        >
+                          <span className="settings-nav-icon">{cat.icon}</span>
+                          <span className="settings-nav-copy">
+                            <strong>{cat.label}</strong>
+                            <small>{cat.subtitle}</small>
+                          </span>
+                          <span className="settings-nav-chevron" aria-hidden="true">
+                            <svg
+                              width="15"
+                              height="15"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <polyline points="9 18 15 12 9 6" />
+                            </svg>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </nav>
+
+                  <div className="settings-sidebar-foot">
                     <button
                       type="button"
-                      key={cat.id}
-                      className={`settings-nav-item ${isActive ? "active" : ""}`}
-                      onClick={() => selectCategory(cat.id)}
+                      className="danger-btn settings-signout-btn"
+                      onClick={() => {
+                        requestClose();
+                        void signOut();
+                      }}
                     >
-                      <span className="settings-nav-icon">{cat.icon}</span>
-                      <span className="settings-nav-copy">
-                        <strong>{cat.label}</strong>
-                        <small>{cat.subtitle}</small>
-                      </span>
-                      <span className="settings-nav-chevron" aria-hidden="true">
-                        <svg
-                          width="15"
-                          height="15"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <polyline points="9 18 15 12 9 6" />
-                        </svg>
-                      </span>
+                      {isPrimaryMobile
+                        ? accounts.length > 1
+                          ? `Sign out of @${currentUser.username}`
+                          : "Sign out"
+                        : "Unlink device"}
                     </button>
-                  );
-                })}
-              </nav>
-
-              <div className="settings-sidebar-foot">
-                <button
-                  type="button"
-                  className="danger-btn settings-signout-btn"
-                  onClick={() => {
-                    requestClose();
-                    void signOut();
-                  }}
-                >
-                  {isPrimaryMobile
-                    ? accounts.length > 1
-                      ? `Sign out of @${currentUser.username}`
-                      : "Sign out"
-                    : "Unlink device"}
-                </button>
-              </div>
+                  </div>
+                </>
+              )}
             </aside>
 
             {/* ---------- Right Content Pane ---------- */}
@@ -523,7 +906,7 @@ export function SettingsModal({
                   onClick={() => setMobileMenuView("list")}
                 >
                   <ArrowLeftIcon size={16} />
-                  <span>Categories</span>
+                  <span>{isIosChats ? "You" : "Categories"}</span>
                 </button>
                 <strong>{activeCategoryMeta.label}</strong>
               </div>
@@ -556,6 +939,37 @@ export function SettingsModal({
                   />
 
                   <BlockedUsersSettingsBlock />
+
+                  {isIosChats && (
+                    <div className="you-roadmap-account-actions">
+                      {onOpenAccountSwitcher && (
+                        <button
+                          type="button"
+                          className="ghost-btn settings-sidebar-switch-btn"
+                          onClick={onOpenAccountSwitcher}
+                        >
+                          <SwitchAccountIcon size={15} />
+                          <span>
+                            {accounts.length > 1
+                              ? `Switch account (${accounts.length})`
+                              : "Add another account"}
+                          </span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="danger-btn settings-signout-btn"
+                        onClick={() => {
+                          requestClose();
+                          void signOut();
+                        }}
+                      >
+                        {accounts.length > 1
+                          ? `Sign out of @${currentUser.username}`
+                          : "Sign out"}
+                      </button>
+                    </div>
+                  )}
                 </section>
               )}
 
@@ -750,7 +1164,10 @@ export function SettingsModal({
                       computer with zero-knowledge E2EE key sync, or disconnect any session below.
                     </p>
                   </div>
-                  <IosDevicesSection />
+                  <IosDevicesSection
+                    autoStartScanner={autoStartQrScanner}
+                    onAutoStartConsumed={() => setAutoStartQrScanner(false)}
+                  />
                 </section>
               )}
 
@@ -1266,6 +1683,88 @@ export function SettingsModal({
           </div>
         )}
       </AnimatedModal>
+
+      {customStatusModalOpen && (
+        <div
+          className="you-custom-status-backdrop"
+          onClick={() => setCustomStatusModalOpen(false)}
+        >
+          <div
+            className="you-custom-status-dialog"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Custom status"
+          >
+            <div className="you-custom-status-head">
+              <strong>Custom status</strong>
+              <button
+                type="button"
+                className="you-custom-status-close"
+                onClick={() => setCustomStatusModalOpen(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <p className="muted small" style={{ margin: 0 }}>
+              Appears as a status bubble above your avatar.
+            </p>
+            <input
+              type="text"
+              className="you-custom-status-input"
+              maxLength={80}
+              value={customStatusDraft}
+              onChange={(e) => setCustomStatusDraft(e.target.value)}
+              placeholder="What's on your mind?"
+              autoFocus
+            />
+            <div className="you-custom-status-presets">
+              {["Available", "Busy", "Studying", "At work", "In a call", "Gaming"].map(
+                (preset) => (
+                  <button
+                    type="button"
+                    key={preset}
+                    className={`you-custom-status-chip ${
+                      customStatusDraft.trim().toLowerCase() === preset.toLowerCase()
+                        ? "active"
+                        : ""
+                    }`}
+                    onClick={() => setCustomStatusDraft(preset)}
+                  >
+                    {preset}
+                  </button>
+                ),
+              )}
+            </div>
+            <div className="you-custom-status-foot">
+              {(currentUser.customStatus?.trim() || customStatusDraft.trim()) && (
+                <button
+                  type="button"
+                  className="danger-btn"
+                  onClick={() => {
+                    void updateActivity(activityStatus, "");
+                    setCustomStatusDraft("");
+                    setCustomStatusModalOpen(false);
+                  }}
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                type="button"
+                className="you-custom-status-save"
+                onClick={() => {
+                  void updateActivity(activityStatus, customStatusDraft.trim());
+                  setCustomStatusModalOpen(false);
+                }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {legalModalTab && (
         <LegalModal initialTab={legalModalTab} onClose={() => setLegalModalTab(null)} />
