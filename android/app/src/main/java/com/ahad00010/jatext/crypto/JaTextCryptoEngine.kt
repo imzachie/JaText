@@ -561,11 +561,39 @@ object JaTextCryptoEngine {
     }
 
     fun loadGroupEpochMap(context: Context, userId: String) {
+        loadPeerBundlesFromDisk(context)
         val prefs = context.getSharedPreferences("jatext_e2ee_keystore", Context.MODE_PRIVATE)
         val raw = prefs.getString("group_epochs:$userId", null) ?: return
         try {
             val map = JaTextJson.decodeFromString<Map<String, String>>(raw)
             groupEpochSecrets.putAll(map)
+        } catch (_: Throwable) {
+        }
+    }
+
+    fun loadPeerBundlesFromDisk(context: Context) {
+        try {
+            val prefs = context.getSharedPreferences("jatext_e2ee_keystore", Context.MODE_PRIVATE)
+            val raw = prefs.getString("peer_bundles_v1", null) ?: return
+            val bundles = JaTextJson.decodeFromString<List<PublicIdentityBundle>>(raw)
+            registerPeerBundles(bundles)
+        } catch (_: Throwable) {
+        }
+    }
+
+    fun savePeerBundlesToDisk(context: Context) {
+        try {
+            val snapshot = mutableListOf<PublicIdentityBundle>()
+            for ((_, list) in peerBundlesByUserId.entries) {
+                synchronized(list) {
+                    snapshot.addAll(list)
+                }
+            }
+            if (snapshot.isEmpty()) return
+            val prefs = context.getSharedPreferences("jatext_e2ee_keystore", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("peer_bundles_v1", JaTextJson.encodeToString(snapshot.toList()))
+                .apply()
         } catch (_: Throwable) {
         }
     }
@@ -714,6 +742,9 @@ object JaTextCryptoEngine {
 
     fun isEncryptedWireBody(body: String?): Boolean =
         body != null && body.contains(E2EE_WIRE_MARKER)
+
+    fun isRawWireOrCorruptedPreview(body: String?): Boolean =
+        body != null && (body.contains(E2EE_WIRE_MARKER) || body.contains("JATEXT_E2EE_V1:{"))
 
     fun isSilentControlPayload(plainOrWire: String?): Boolean {
         if (plainOrWire.isNullOrBlank()) return false
@@ -2370,6 +2401,238 @@ object JaTextCryptoEngine {
         ).messages
     }
 
+    private fun normalizePossibleCorruptedWire(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.contains(E2EE_WIRE_MARKER)) return trimmed
+        val corruptedIdx = trimmed.indexOf("JATEXT_E2EE_V1:{")
+        if (corruptedIdx >= 0) {
+            return E2EE_WIRE_MARKER + trimmed.substring(corruptedIdx + "JATEXT_E2EE_V1:".length)
+        }
+        return trimmed
+    }
+
+    private fun decryptDmWireLocalFast(
+        context: Context,
+        myUserId: String,
+        senderId: String,
+        receiverId: String,
+        wireBody: String,
+    ): DecryptedWireResult? {
+        val trimmedWire = normalizePossibleCorruptedWire(wireBody)
+        decryptedByWireCache[trimmedWire]?.let { return it }
+        val markerIdx = trimmedWire.indexOf(E2EE_WIRE_MARKER)
+        if (markerIdx < 0) return null
+        val rawJson = trimmedWire.substring(markerIdx + E2EE_WIRE_MARKER.length).lineSequence().first().trim()
+        val env = try {
+            JaTextJson.decodeFromString<DMEncryptedEnvelope>(rawJson)
+        } catch (_: Throwable) {
+            return null
+        }
+        if (env.v != 1 || env.c != "dm" || env.ct.isNullOrBlank()) return null
+        val ctBytes = try {
+            b64UrlDecode(env.ct)
+        } catch (_: Throwable) {
+            return null
+        }
+        val myIdentities = loadLocalIdentities(context, myUserId)
+        if (myIdentities.isEmpty()) return null
+        val peerId = if (senderId == myUserId) receiverId else senderId
+        val peerBundles = getCachedPeerBundles(peerId)
+
+        val epkRaw = try {
+            b64UrlDecode(env.epk)
+        } catch (_: Throwable) {
+            return null
+        }
+        val epkPub = try {
+            importRawP256Public(epkRaw)
+        } catch (_: Throwable) {
+            return null
+        }
+        val aad = "JaText-DM-AAD-v1|$senderId|$receiverId|${env.sk}|${env.rk}|${env.epk}"
+            .toByteArray(Charsets.UTF_8)
+        val ivBytes = try {
+            b64UrlDecode(env.iv)
+        } catch (_: Throwable) {
+            return null
+        }
+
+        var plainBytes: ByteArray? = null
+        val wra = env.wra
+        if (wra != null) {
+            for (id in myIdentities) {
+                val entry = wra[id.keyId] ?: continue
+                try {
+                    val rawM = b64UrlDecode(entry)
+                    if (rawM.size < 29) continue
+                    val myPriv = importPkcs8Private(b64UrlDecode(id.dhPrivPkcs8B64))
+                    val ssM = ecdhSharedSecret(myPriv, epkPub)
+                    val kwkM = hkdfSha256(ssM, epkRaw, "JaText-DM-WrapM-v1|$senderId|$receiverId|${id.keyId}")
+                    val cek = aesGcmDecrypt(kwkM, rawM.copyOfRange(0, 12), null, rawM.copyOfRange(12, rawM.size))
+                    plainBytes = aesGcmDecrypt(cek, ivBytes, aad, ctBytes)
+                    break
+                } catch (_: Throwable) {
+                }
+            }
+        }
+        if (plainBytes == null) {
+            val isFromMe = senderId == myUserId
+            val wrapRaw = try {
+                b64UrlDecode(if (isFromMe) env.ws else env.wr)
+            } catch (_: Throwable) {
+                ByteArray(0)
+            }
+            if (wrapRaw.size >= 29) {
+                val wrapIv = wrapRaw.copyOfRange(0, 12)
+                val wrapCt = wrapRaw.copyOfRange(12, wrapRaw.size)
+                val peerDhs = buildList {
+                    if (!env.sdh.isNullOrBlank()) add(env.sdh)
+                    for (b in peerBundles) {
+                        if (b.dhPubB64.isNotBlank() && !contains(b.dhPubB64)) add(b.dhPubB64)
+                    }
+                    if (peerId == myUserId) {
+                        for (own in myIdentities) {
+                            if (own.dhPubB64.isNotBlank() && !contains(own.dhPubB64)) add(own.dhPubB64)
+                        }
+                    }
+                }
+                outer@ for (id in myIdentities) {
+                    val myPriv = try {
+                        importPkcs8Private(b64UrlDecode(id.dhPrivPkcs8B64))
+                    } catch (_: Throwable) {
+                        continue
+                    }
+                    val ssEphem = try {
+                        ecdhSharedSecret(myPriv, epkPub)
+                    } catch (_: Throwable) {
+                        continue
+                    }
+                    val info = if (isFromMe) {
+                        "JaText-DM-WrapS-v1|$senderId|$receiverId|${env.sk}"
+                    } else {
+                        "JaText-DM-WrapR-v1|$senderId|$receiverId|${env.rk}"
+                    }
+                    for (peerDh in peerDhs) {
+                        try {
+                            val peerPub = importRawP256Public(b64UrlDecode(peerDh))
+                            val ssStatic = ecdhSharedSecret(myPriv, peerPub)
+                            val kwk = hkdfSha256(ssEphem + ssStatic, epkRaw, info)
+                            val cek = aesGcmDecrypt(kwk, wrapIv, null, wrapCt)
+                            plainBytes = aesGcmDecrypt(cek, ivBytes, aad, ctBytes)
+                            break@outer
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+            }
+        }
+        val resolvedPlain = plainBytes ?: return null
+        val payload = try {
+            JaTextJson.decodeFromString<E2EEPlainPayload>(String(resolvedPlain, Charsets.UTF_8))
+        } catch (_: Throwable) {
+            return null
+        }
+        val res = DecryptedWireResult(
+            payload = payload,
+            proof = MessageE2EEProof(
+                encrypted = true,
+                algorithm = "ECDH-P256 + HKDF-SHA256 + AES-256-GCM",
+                senderKeyId = env.sk,
+                receiverKeyId = env.rk,
+                signatureVerified = true,
+                ciphertextPreview = env.ct.take(48),
+            )
+        )
+        decryptedByWireCache[trimmedWire] = res
+        return res
+    }
+
+    private fun decryptGroupWireLocalFast(
+        groupId: String,
+        senderId: String,
+        wireBody: String,
+    ): DecryptedWireResult? {
+        val trimmed = normalizePossibleCorruptedWire(wireBody)
+        decryptedByWireCache[trimmed]?.let { return it }
+        val markerIdx = trimmed.indexOf(E2EE_WIRE_MARKER)
+        if (markerIdx < 0) return null
+        val rawJson = trimmed.substring(markerIdx + E2EE_WIRE_MARKER.length).lineSequence().first().trim()
+        val env = try {
+            JaTextJson.decodeFromString<GroupEncryptedEnvelope>(rawJson)
+        } catch (_: Throwable) {
+            return null
+        }
+        if (env.v != 1 || env.c != "grp" || env.ct.isNullOrBlank()) return null
+        val rawSecretEntry = groupEpochSecrets["$groupId:${env.ep}"] ?: return null
+        val candidateSecrets = rawSecretEntry
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        if (candidateSecrets.isEmpty()) return null
+        val ctBytes = try { b64UrlDecode(env.ct) } catch (_: Throwable) { return null }
+        val salt = try { b64UrlDecode(env.s) } catch (_: Throwable) { return null }
+        val iv = try { b64UrlDecode(env.iv) } catch (_: Throwable) { return null }
+        val aad = "JaText-Grp-AAD-v1|$groupId|${env.ep}|$senderId|${env.sk}|${env.s}".toByteArray(Charsets.UTF_8)
+        for (secretCandidate in candidateSecrets) {
+            try {
+                val epochSecret = b64UrlDecode(secretCandidate)
+                val msgKey = hkdfSha256(epochSecret, salt, "JaText-Grp-Msg-v1|$groupId|${env.ep}|$senderId|${env.sk}")
+                val plain = aesGcmDecrypt(msgKey, iv, aad, ctBytes)
+                val payload = JaTextJson.decodeFromString<E2EEPlainPayload>(String(plain, Charsets.UTF_8))
+                val res = DecryptedWireResult(
+                    payload = payload,
+                    proof = MessageE2EEProof(
+                        encrypted = true,
+                        algorithm = "GroupEpoch-HKDF-SHA256 + AES-256-GCM",
+                        senderKeyId = env.sk,
+                        epoch = env.ep,
+                        signatureVerified = true,
+                        ciphertextPreview = env.ct.take(48),
+                    )
+                )
+                decryptedByWireCache[trimmed] = res
+                return res
+            } catch (_: Throwable) {
+            }
+        }
+        return null
+    }
+
+    fun decryptPreviewTextLocalFast(
+        context: Context,
+        myUserId: String,
+        peerOrGroupId: String,
+        senderId: String,
+        rawPreview: String,
+        isGroup: Boolean,
+    ): String? {
+        if (rawPreview.isBlank()) return "No messages yet"
+        if (isRawWireOrCorruptedPreview(rawPreview)) {
+            val dec = if (isGroup) {
+                decryptGroupWireLocalFast(peerOrGroupId, senderId, rawPreview)
+            } else {
+                val receiverId = if (senderId == myUserId) peerOrGroupId else myUserId
+                decryptDmWireLocalFast(context, myUserId, senderId, receiverId, rawPreview)
+            } ?: return null
+            val p = dec.payload
+            val trimB = p.b.trim()
+            return when {
+                trimB.startsWith(CALL_INVITE_PREFIX) || trimB.startsWith(GROUP_CALL_INVITE_PREFIX) ->
+                    formatPreviewPlainText(p.b)
+                p.stk != null -> "Sent a sticker"
+                p.att != null -> when {
+                    p.att.t.startsWith("audio/") -> "Voice message"
+                    p.att.t.startsWith("image/") -> "Photo"
+                    p.att.t.startsWith("video/") -> "Video"
+                    else -> p.att.n.ifBlank { "Attachment" }
+                }
+                else -> formatPreviewPlainText(p.b)
+            }
+        }
+        return formatPreviewPlainText(rawPreview)
+    }
+
     suspend fun decryptPreviewText(
         context: Context,
         myUserId: String,
@@ -2380,12 +2643,13 @@ object JaTextCryptoEngine {
         token: String,
     ): String {
         if (rawPreview.isBlank()) return "No messages yet"
-        if (isEncryptedWireBody(rawPreview)) {
+        val normalizedRaw = normalizePossibleCorruptedWire(rawPreview)
+        if (isEncryptedWireBody(normalizedRaw)) {
             val dec = if (isGroup) {
-                decryptGroupWire(peerOrGroupId, "", senderId, rawPreview)
+                decryptGroupWire(peerOrGroupId, "", senderId, normalizedRaw, context, myUserId, token)
             } else {
                 val receiverId = if (senderId == myUserId) peerOrGroupId else myUserId
-                decryptDmWire(context, myUserId, "", senderId, receiverId, rawPreview, token)
+                decryptDmWire(context, myUserId, "", senderId, receiverId, normalizedRaw, token)
             }
             if (dec != null) {
                 val p = dec.payload

@@ -116,6 +116,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.ahad00010.jatext.R
+import com.ahad00010.jatext.crypto.JaTextCryptoEngine
 import com.ahad00010.jatext.data.CallHistoryEntry
 import com.ahad00010.jatext.data.ChatPreview
 import com.ahad00010.jatext.data.GroupSummary
@@ -2276,12 +2277,15 @@ private fun DmSidebarRow(
             Spacer(Modifier.height(2.dp))
             val cleanDraft = draftText?.trim().orEmpty()
             val hasDraft = cleanDraft.isNotEmpty()
+            val cleanPreviewBody = preview?.body?.takeUnless {
+                JaTextCryptoEngine.isRawWireOrCorruptedPreview(it)
+            }.orEmpty()
             val previewCopy = when {
                 typingToMe -> "typing…"
                 hasDraft -> "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $cleanDraft"
-                preview != null && preview.body.isNotBlank() && preview.body != "No messages yet" -> {
-                    val prefix = if (preview.senderId == myUserId) "You: " else ""
-                    "$prefix${preview.body}"
+                cleanPreviewBody.isNotBlank() && cleanPreviewBody != "No messages yet" -> {
+                    val prefix = if (preview?.senderId == myUserId) "You: " else ""
+                    "$prefix$cleanPreviewBody"
                 }
                 isSelf -> "Message yourself"
                 else -> "@${friend.username}"
@@ -2405,16 +2409,19 @@ private fun GroupSidebarRow(
             val cleanDraft = draftText?.trim().orEmpty()
             val hasDraft = cleanDraft.isNotEmpty()
             val hasTyping = !typingLabel.isNullOrBlank()
+            val cleanGroupLastMsg = group.lastMessage.takeUnless {
+                JaTextCryptoEngine.isRawWireOrCorruptedPreview(it)
+            }.orEmpty()
             val subText = when {
                 hasTyping -> typingLabel.orEmpty()
                 hasDraft -> "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $cleanDraft"
-                group.lastMessage.isNotBlank() -> {
+                cleanGroupLastMsg.isNotBlank() -> {
                     val prefix = when {
                         group.lastSenderId == myUserId -> "You: "
                         !group.lastSenderName.isNullOrBlank() -> "${group.lastSenderName}: "
                         else -> ""
                     }
-                    "$prefix${group.lastMessage}"
+                    "$prefix$cleanGroupLastMsg"
                 }
                 else -> "${group.memberCount} members"
             }

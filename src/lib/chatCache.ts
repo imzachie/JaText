@@ -72,6 +72,7 @@ export function isPlaceholderEncryptedText(text?: string | null): boolean {
   if (!text) return false;
   return (
     text.includes("__JATEXT_E2EE_V1__:") ||
+    text.includes("JATEXT_E2EE_V1:{") ||
     text === "Encrypted message" ||
     text === "🔒 Encrypted message" ||
     text.startsWith("🔒 Decrypting") ||
