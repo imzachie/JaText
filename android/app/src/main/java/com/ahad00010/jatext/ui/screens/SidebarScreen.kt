@@ -128,19 +128,18 @@ import com.ahad00010.jatext.ui.components.JaWebPrimaryButton
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.navigation.IosAddNavIcon
 import com.kyant.backdrop.navigation.IosCallsNavIcon
 import com.kyant.backdrop.navigation.IosChatsNavIcon
-import com.kyant.backdrop.navigation.IosSettingsGearIcon
+import com.kyant.backdrop.navigation.IosGroupsNavIcon
+import com.kyant.backdrop.navigation.IosUpdatesNavIcon
 import com.kyant.backdrop.navigation.LiquidBottomTab
 import com.kyant.backdrop.navigation.LiquidBottomTabs
-import com.kyant.backdrop.navigation.LiquidSeparatedSearchButton
 import com.kyant.backdrop.navigation.LocalLiquidBottomTabContentColor
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val BOTTOM_NAV_TAB_IDS = listOf("chats", "calls", "add", "settings")
+private val BOTTOM_NAV_TAB_IDS = listOf("updates", "calls", "groups", "chats", "you")
 
 private sealed interface SidebarHoldTarget {
     data object Community : SidebarHoldTarget
@@ -149,8 +148,8 @@ private sealed interface SidebarHoldTarget {
 }
 
 /**
- * Main screen with iOS 26 Liquid Glass bottom navigation bar (`Chats`, `Calls`, `Add`, `Settings`)
- * powered by Kyant0/AndroidLiquidGlass (`com.kyant.backdrop`).
+ * Main screen with 5-tab Liquid Glass bottom navigation bar (`Updates`, `Calls`, `Groups`, `Chats`, `You`),
+ * defaulting to the 4th tab (`Chats`) on launch.
  */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -166,11 +165,14 @@ fun SidebarScreen(
     val focusManager = LocalFocusManager.current
     val searchFocusRequester = remember { FocusRequester() }
 
-    var activeTab by remember { mutableStateOf("chats") } // "chats" | "calls" | "add" | "settings"
+    // Always default to opening "chats" on the 4th tab (index 3)
+    var activeTab by remember { mutableStateOf("chats") } // "updates" | "calls" | "groups" | "chats" | "you"
+    var showAddFriendsView by remember { mutableStateOf(false) }
     var settingsSubOverlayOpen by remember { mutableStateOf(false) }
     var isSearchOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    var showArchived by remember { mutableStateOf(false) }
+    var showArchivedDms by remember { mutableStateOf(false) }
+    var showArchivedGroups by remember { mutableStateOf(false) }
     var addUsername by remember { mutableStateOf("") }
     var showAccountSwitcher by remember { mutableStateOf(false) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
@@ -179,20 +181,26 @@ fun SidebarScreen(
     var showFolderEditorDialog by remember { mutableStateOf(false) }
     var holdTarget by remember { mutableStateOf<SidebarHoldTarget?>(null) }
 
-    LaunchedEffect(isSearchOpen, activeTab) {
-        if (isSearchOpen && activeTab == "chats") {
+    LaunchedEffect(isSearchOpen, activeTab, showAddFriendsView) {
+        if (isSearchOpen && !showAddFriendsView && (activeTab == "chats" || activeTab == "groups")) {
             kotlinx.coroutines.delay(90)
             runCatching { searchFocusRequester.requestFocus() }
         }
     }
 
-    BackHandler(enabled = (isSearchOpen || activeTab != "chats") && !settingsSubOverlayOpen) {
-        if (isSearchOpen) {
-            isSearchOpen = false
-            searchQuery = ""
-            focusManager.clearFocus()
-        } else {
-            activeTab = "chats"
+    BackHandler(enabled = (isSearchOpen || showAddFriendsView || activeTab != "chats") && !settingsSubOverlayOpen) {
+        when {
+            isSearchOpen -> {
+                isSearchOpen = false
+                searchQuery = ""
+                focusManager.clearFocus()
+            }
+            showAddFriendsView -> {
+                showAddFriendsView = false
+            }
+            else -> {
+                activeTab = "chats"
+            }
         }
     }
 
@@ -203,17 +211,32 @@ fun SidebarScreen(
 
     val previewByFriend = remember(state.previews) { state.previews.associateBy { it.friendId } }
     val activityByFriend = remember(state.friendActivities) { state.friendActivities.associateBy { it.userId } }
-    val typingDmSenders = remember(state.dmMessages, state.friendActivities) { emptySet<String>() }
-
-    val archivedCount = remember(state.friends, state.previews, state.groups) {
-        val dmArch = state.friends.count { previewByFriend[it.id]?.isArchived == true }
-        val grpArch = state.groups.count { it.isArchived }
-        dmArch + grpArch
+    val typingDmSenders = remember(state.dmTypingUserIds, state.friendActivities) {
+        buildSet {
+            addAll(state.dmTypingUserIds)
+            state.friendActivities.forEach { if (it.isTyping) add(it.userId) }
+        }
     }
 
-    val totalUnreadCount = remember(
-        state.friends,
-        state.previews,
+    val dmArchivedCount = remember(state.friends, state.previews) {
+        state.friends.count { previewByFriend[it.id]?.isArchived == true }
+    }
+    val groupArchivedCount = remember(state.groups) {
+        state.groups.count { it.isArchived }
+    }
+
+    val totalDmUnreadCount = remember(state.friends, state.previews, state.activeChatId) {
+        var total = 0
+        for (f in state.friends) {
+            val prev = previewByFriend[f.id]
+            if (prev != null && !prev.isArchived && !prev.isMuted && state.activeChatId != f.id) {
+                total += prev.unreadCount
+            }
+        }
+        total
+    }
+
+    val totalGroupUnreadCount = remember(
         state.groups,
         state.communityUnreadCount,
         state.communityMuted,
@@ -229,12 +252,6 @@ fun SidebarScreen(
                 total += grp.unreadCount
             }
         }
-        for (f in state.friends) {
-            val prev = previewByFriend[f.id]
-            if (prev != null && !prev.isArchived && !prev.isMuted && state.activeChatId != f.id) {
-                total += prev.unreadCount
-            }
-        }
         total
     }
 
@@ -242,21 +259,20 @@ fun SidebarScreen(
         state.chatOrganization.folders.firstOrNull { it.id == activeFolderId }
     }
 
-    val visibleGroups = remember(state.groups, showArchived, searchQuery, activeFolder) {
+    val visibleGroups = remember(state.groups, showArchivedGroups, searchQuery) {
         val q = searchQuery.trim().lowercase()
         state.groups.filter { grp ->
-            val inFolder = activeFolder == null || activeFolder.threadIds.contains("group:${grp.id}")
-            inFolder && grp.isArchived == showArchived && (q.isEmpty() || grp.name.lowercase().contains(q))
+            grp.isArchived == showArchivedGroups && (q.isEmpty() || grp.name.lowercase().contains(q))
         }
     }
 
-    val sortedFriends = remember(state.friends, previewByFriend, showArchived, searchQuery, activeFolder) {
+    val sortedFriends = remember(state.friends, previewByFriend, showArchivedDms, searchQuery, activeFolder) {
         val q = searchQuery.trim().lowercase()
         state.friends
             .filter { f ->
                 val inFolder = activeFolder == null || activeFolder.threadIds.contains("dm:${f.id}")
                 val isArch = previewByFriend[f.id]?.isArchived == true
-                inFolder && isArch == showArchived && (
+                inFolder && isArch == showArchivedDms && (
                     q.isEmpty() ||
                         f.displayName.lowercase().contains(q) ||
                         f.username.lowercase().contains(q)
@@ -265,19 +281,11 @@ fun SidebarScreen(
             .sortedByDescending { f -> previewByFriend[f.id]?.createdAt ?: 0L }
     }
 
-    // Unified ordered list of non-community threads (pinned first, then customOrder, then recency)
-    // JaText Community is ALWAYS rendered unconditionally at #1 above this list!
-    val orderedNonCommunityKeys = remember(
-        visibleGroups,
-        sortedFriends,
-        previewByFriend,
-        state.chatOrganization,
-    ) {
+    val orderedDmKeys = remember(sortedFriends, previewByFriend, state.chatOrganization) {
         val pinnedSet = state.chatOrganization.pinnedIds.toSet()
         val orderIdx = state.chatOrganization.customOrder.withIndex().associate { it.value to it.index }
-        val groupKeys = visibleGroups.map { "group:${it.id}" to it.lastMessageAt }
-        val dmKeys = sortedFriends.map { "dm:${it.id}" to (previewByFriend[it.id]?.createdAt ?: 0L) }
-        (groupKeys + dmKeys)
+        sortedFriends
+            .map { "dm:${it.id}" to (previewByFriend[it.id]?.createdAt ?: 0L) }
             .sortedWith(
                 compareByDescending<Pair<String, Long>> { pinnedSet.contains(it.first) }
                     .thenBy { orderIdx[it.first] ?: Int.MAX_VALUE }
@@ -285,6 +293,20 @@ fun SidebarScreen(
             )
             .map { it.first }
     }
+
+    val orderedGroupKeys = remember(visibleGroups, state.chatOrganization) {
+        val pinnedSet = state.chatOrganization.pinnedIds.toSet()
+        val orderIdx = state.chatOrganization.customOrder.withIndex().associate { it.value to it.index }
+        visibleGroups
+            .map { "group:${it.id}" to it.lastMessageAt }
+            .sortedWith(
+                compareByDescending<Pair<String, Long>> { pinnedSet.contains(it.first) }
+                    .thenBy { orderIdx[it.first] ?: Int.MAX_VALUE }
+                    .thenByDescending { it.second }
+            )
+            .map { it.first }
+    }
+
     val groupById = remember(visibleGroups) { visibleGroups.associateBy { it.id } }
     val friendById = remember(sortedFriends) { sortedFriends.associateBy { it.id } }
 
@@ -310,14 +332,14 @@ fun SidebarScreen(
                 )
         ) {
             AnimatedContent(
-                targetState = activeTab,
+                targetState = if (showAddFriendsView && activeTab != "you") "add" else activeTab,
                 transitionSpec = {
                     fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(130))
                 },
                 modifier = Modifier.fillMaxSize(),
                 label = "sidebarTabPane",
             ) { currentTab ->
-                if (currentTab == "settings") {
+                if (currentTab == "you") {
                     SettingsModalScreen(
                         state = state,
                         vm = vm,
@@ -335,7 +357,7 @@ fun SidebarScreen(
                             .padding(top = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        /* ==================== 1. `.sidebar-header` (`[logo] JaText` + SwitchAccount; Settings moved to bottom bar) ==================== */
+                        /* ==================== 1. `.sidebar-header` (`[logo] JaText` + Search / NewGroup / AddFriend / SwitchAccount) ==================== */
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -345,11 +367,19 @@ fun SidebarScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.jatext_logo_icon),
-                                    contentDescription = "JaText",
-                                    modifier = Modifier.size(36.dp),
-                                )
+                                if (currentTab == "add") {
+                                    JaWebIconButton(
+                                        icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                                        contentDescription = "Back",
+                                        onClick = { showAddFriendsView = false },
+                                    )
+                                } else {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.jatext_logo_icon),
+                                        contentDescription = "JaText",
+                                        modifier = Modifier.size(36.dp),
+                                    )
+                                }
                                 Text(
                                     text = "JaText",
                                     color = palette.textPrimary,
@@ -362,6 +392,38 @@ fun SidebarScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
+                                if (currentTab == "chats" || currentTab == "groups") {
+                                    JaWebIconButton(
+                                        icon = Icons.Rounded.Search,
+                                        contentDescription = "Search",
+                                        onClick = {
+                                            if (isSearchOpen) {
+                                                isSearchOpen = false
+                                                searchQuery = ""
+                                                focusManager.clearFocus()
+                                            } else {
+                                                isSearchOpen = true
+                                            }
+                                        },
+                                    )
+                                }
+                                if (currentTab == "groups") {
+                                    JaWebIconButton(
+                                        icon = Icons.Rounded.Add,
+                                        contentDescription = "New group",
+                                        onClick = { showCreateGroupDialog = true },
+                                    )
+                                }
+                                JaWebIconButton(
+                                    icon = Icons.Rounded.PersonAdd,
+                                    contentDescription = "Add friends",
+                                    badgeCount = state.incoming.size,
+                                    onClick = {
+                                        isSearchOpen = false
+                                        searchQuery = ""
+                                        showAddFriendsView = !showAddFriendsView
+                                    },
+                                )
                                 JaWebIconButton(
                                     icon = Icons.Rounded.SwapHoriz,
                                     contentDescription = "Switch or add account",
@@ -371,11 +433,13 @@ fun SidebarScreen(
                             }
                         }
 
-                        /* ==================== 2. Large SF Pro Bold Title ("Chats" / "Calls" / "Add") ==================== */
+                        /* ==================== 2. Large SF Pro Bold Title ==================== */
                         Text(
                             text = when (currentTab) {
+                                "updates" -> "Updates"
                                 "calls" -> com.ahad00010.jatext.data.jt("nav.calls")
-                                "add" -> com.ahad00010.jatext.data.jt("nav.add")
+                                "groups" -> "Groups"
+                                "add" -> "Add Friends"
                                 else -> com.ahad00010.jatext.data.jt("nav.chats")
                             },
                             color = if (palette.isDark) Color.White else Color.Black,
@@ -387,6 +451,288 @@ fun SidebarScreen(
                         )
 
                         when (currentTab) {
+            "updates" -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(bottom = bottomBarListClearance),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(palette.bgTertiary)
+                            .border(1.dp, palette.border, RoundedCornerShape(18.dp))
+                            .padding(horizontal = 24.dp, vertical = 28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        IosUpdatesNavIcon(
+                            tint = palette.textPrimary,
+                            selected = false,
+                            size = 34.dp,
+                        )
+                        Text(
+                            text = "Feature is under maintenance!",
+                            color = palette.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            }
+
+            "groups" -> {
+                AnimatedVisibility(
+                    visible = isSearchOpen,
+                    enter = expandVertically(tween(200)) + fadeIn(tween(180)),
+                    exit = shrinkVertically(tween(160)) + fadeOut(tween(130)),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        JaWebInput(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.weight(1f),
+                            inputModifier = Modifier.focusRequester(searchFocusRequester),
+                            placeholder = "Search groups",
+                            leadingIcon = Icons.Rounded.Search,
+                            trailingContent = if (searchQuery.isNotEmpty()) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Clear",
+                                        tint = palette.textSecondary,
+                                        modifier = Modifier
+                                            .size(17.dp)
+                                            .clickable { searchQuery = "" },
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                        )
+                        Text(
+                            text = "Cancel",
+                            color = palette.accent,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    isSearchOpen = false
+                                    searchQuery = ""
+                                    focusManager.clearFocus()
+                                }
+                                .padding(horizontal = 6.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+
+                // Archived Groups Toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (showArchivedGroups) palette.bgTertiary else Color.Transparent)
+                        .border(
+                            width = 1.dp,
+                            color = if (showArchivedGroups) palette.border else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        .clickable { showArchivedGroups = !showArchivedGroups }
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = if (showArchivedGroups) Icons.AutoMirrored.Rounded.ArrowBack else Icons.Rounded.Archive,
+                        contentDescription = null,
+                        tint = if (showArchivedGroups) palette.textPrimary else palette.textSecondary,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        text = if (showArchivedGroups) {
+                            "Groups"
+                        } else if (groupArchivedCount > 0) {
+                            "Archived ($groupArchivedCount)"
+                        } else {
+                            "Archived"
+                        },
+                        color = if (showArchivedGroups) palette.textPrimary else palette.textSecondary,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    contentPadding = PaddingValues(bottom = bottomBarListClearance),
+                ) {
+                    /* ---- Official JaText Community Row (ALWAYS #1 on Groups tab!) ---- */
+                    if (!showArchivedGroups) {
+                        item(key = "official-community") {
+                            val commUnread = if (state.activeChatId == OFFICIAL_COMMUNITY_ID) 0 else state.communityUnreadCount
+                            val commTypingText = state.communityTypingUsers
+                                .takeIf { it.isNotEmpty() }
+                                ?.let { formatTypingUsersLabel(it) }
+                            val commDraft = state.drafts["community"]?.trim().orEmpty()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(
+                                        if (state.activeChatId == OFFICIAL_COMMUNITY_ID) palette.bgTertiary
+                                        else Color.Transparent
+                                    )
+                                    .border(
+                                        width = 1.dp,
+                                        color = Color(0x384ADE80),
+                                        shape = RoundedCornerShape(16.dp),
+                                    )
+                                    .combinedClickable(
+                                        onClick = { vm.openCommunityChat() },
+                                        onLongClick = { holdTarget = SidebarHoldTarget.Community },
+                                    )
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.jatext_logo_icon),
+                                    contentDescription = "JaText Community",
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape),
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = "JaText Community",
+                                            color = palette.textPrimary,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            if (state.communityMuted) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.NotificationsOff,
+                                                    contentDescription = "Muted",
+                                                    tint = palette.textSecondary,
+                                                    modifier = Modifier.size(14.dp),
+                                                )
+                                            }
+                                            if (commUnread > 0) {
+                                                UnreadCountPill(
+                                                    count = commUnread,
+                                                    muted = state.communityMuted,
+                                                )
+                                            }
+                                            JaVerifiedBadge(size = 17.dp)
+                                            JaOfficialBadge()
+                                        }
+                                    }
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = when {
+                                            !commTypingText.isNullOrBlank() -> commTypingText
+                                            commDraft.isNotEmpty() -> "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $commDraft"
+                                            else -> "Official JaText announcements"
+                                        },
+                                        color = if (!commTypingText.isNullOrBlank() || commDraft.isNotEmpty()) palette.accent else palette.textSecondary,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (!commTypingText.isNullOrBlank() || commDraft.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    items(orderedGroupKeys, key = { it }) { threadKey ->
+                        val gid = threadKey.removePrefix("group:")
+                        val grp = groupById[gid]
+                        if (grp != null) {
+                            val isPinned = state.chatOrganization.pinnedIds.contains(threadKey)
+                            val grpTypingText = state.typingByGroup[grp.id]
+                                ?.takeIf { it.isNotEmpty() }
+                                ?.let { formatTypingUsersLabel(it) }
+                            GroupSidebarRow(
+                                group = grp,
+                                myUserId = me?.id.orEmpty(),
+                                isSelected = state.activeGroupId == grp.id,
+                                isPinned = isPinned,
+                                draftText = state.drafts["group:${grp.id}"],
+                                typingLabel = grpTypingText,
+                                onClick = { vm.openGroupChat(grp.id) },
+                                onLongClick = { holdTarget = SidebarHoldTarget.Group(grp) },
+                            )
+                        }
+                    }
+
+                    if (orderedGroupKeys.isEmpty()) {
+                        item(key = "empty-groups") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+                                    .padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (state.groups.isEmpty() && !showArchivedGroups) {
+                                    Text(
+                                        text = "No groups yet",
+                                        color = palette.textPrimary,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    Text(
+                                        text = "Create an encrypted group chat with up to 50 friends.",
+                                        color = palette.textSecondary,
+                                        fontSize = 13.sp,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                    JaWebPrimaryButton(
+                                        text = "New group",
+                                        onClick = { showCreateGroupDialog = true },
+                                    )
+                                } else {
+                                    Text(
+                                        text = if (showArchivedGroups) "No archived groups." else "No groups match your search.",
+                                        color = palette.textSecondary,
+                                        fontSize = 14.sp,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             "chats" -> {
                 AnimatedVisibility(
                     visible = isSearchOpen,
@@ -438,8 +784,8 @@ fun SidebarScreen(
                     }
                 }
 
-                // Folder Filter Pills ("All", user folders, "+ Folder")
-                if (!showArchived) {
+                // Folder Filter Pills ("All", user folders, "+ Folder") for P2P DMs
+                if (!showArchivedDms) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -539,37 +885,37 @@ fun SidebarScreen(
                     }
                 }
 
-                // `.archive-toggle`
+                // `.archive-toggle` (P2P DMs only)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
-                        .background(if (showArchived) palette.bgTertiary else Color.Transparent)
+                        .background(if (showArchivedDms) palette.bgTertiary else Color.Transparent)
                         .border(
                             width = 1.dp,
-                            color = if (showArchived) palette.border else Color.Transparent,
+                            color = if (showArchivedDms) palette.border else Color.Transparent,
                             shape = RoundedCornerShape(10.dp),
                         )
-                        .clickable { showArchived = !showArchived }
+                        .clickable { showArchivedDms = !showArchivedDms }
                         .padding(horizontal = 10.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
-                        imageVector = if (showArchived) Icons.AutoMirrored.Rounded.ArrowBack else Icons.Rounded.Archive,
+                        imageVector = if (showArchivedDms) Icons.AutoMirrored.Rounded.ArrowBack else Icons.Rounded.Archive,
                         contentDescription = null,
-                        tint = if (showArchived) palette.textPrimary else palette.textSecondary,
+                        tint = if (showArchivedDms) palette.textPrimary else palette.textSecondary,
                         modifier = Modifier.size(15.dp),
                     )
                     Spacer(Modifier.width(7.dp))
                     Text(
-                        text = if (showArchived) {
+                        text = if (showArchivedDms) {
                             "Chats"
-                        } else if (archivedCount > 0) {
-                            "Archived ($archivedCount)"
+                        } else if (dmArchivedCount > 0) {
+                            "Archived ($dmArchivedCount)"
                         } else {
                             "Archived"
                         },
-                        color = if (showArchived) palette.textPrimary else palette.textSecondary,
+                        color = if (showArchivedDms) palette.textPrimary else palette.textSecondary,
                         fontSize = 13.5.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -582,136 +928,32 @@ fun SidebarScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     contentPadding = PaddingValues(bottom = bottomBarListClearance),
                 ) {
-                    /* ---- Official JaText Community Row (`.official-community-row`) ---- */
-                    if (!showArchived) {
-                        item(key = "official-community") {
-                            val commUnread = if (state.activeChatId == OFFICIAL_COMMUNITY_ID) 0 else state.communityUnreadCount
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(
-                                        if (state.activeChatId == OFFICIAL_COMMUNITY_ID) palette.bgTertiary
-                                        else Color.Transparent
-                                    )
-                                    .border(
-                                        width = 1.dp,
-                                        color = Color(0x384ADE80),
-                                        shape = RoundedCornerShape(16.dp),
-                                    )
-                                    .combinedClickable(
-                                        onClick = { vm.openCommunityChat() },
-                                        onLongClick = { holdTarget = SidebarHoldTarget.Community },
-                                    )
-                                    .padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.jatext_logo_icon),
-                                    contentDescription = "JaText Community",
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(CircleShape),
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            text = "JaText Community",
-                                            color = palette.textPrimary,
-                                            fontSize = 15.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            if (state.communityMuted) {
-                                                Icon(
-                                                    imageVector = Icons.Rounded.NotificationsOff,
-                                                    contentDescription = "Muted",
-                                                    tint = palette.textSecondary,
-                                                    modifier = Modifier.size(14.dp),
-                                                )
-                                            }
-                                            if (commUnread > 0) {
-                                                UnreadCountPill(
-                                                    count = commUnread,
-                                                    muted = state.communityMuted,
-                                                )
-                                            }
-                                            JaVerifiedBadge(size = 17.dp)
-                                            JaOfficialBadge()
-                                        }
-                                    }
-                                    Spacer(Modifier.height(2.dp))
-                                    val commDraft = state.drafts["community"]?.trim().orEmpty()
-                                    Text(
-                                        text = if (commDraft.isNotEmpty()) {
-                                            "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $commDraft"
-                                        } else {
-                                            "Official JaText announcements"
-                                        },
-                                        color = if (commDraft.isNotEmpty()) palette.accent else palette.textSecondary,
-                                        fontSize = 13.sp,
-                                        fontWeight = if (commDraft.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    /* ---- Unified Pinned + Ordered Group & 1:1 DM Rows ---- */
-                    items(orderedNonCommunityKeys, key = { it }) { threadKey ->
+                    /* ---- P2P 1:1 Direct Message Rows ONLY (Groups live on the dedicated "Groups" tab) ---- */
+                    items(orderedDmKeys, key = { it }) { threadKey ->
                         val isPinned = state.chatOrganization.pinnedIds.contains(threadKey)
-                        if (threadKey.startsWith("group:")) {
-                            val gid = threadKey.removePrefix("group:")
-                            val grp = groupById[gid]
-                            if (grp != null) {
-                                GroupSidebarRow(
-                                    group = grp,
-                                    myUserId = me?.id.orEmpty(),
-                                    isSelected = state.activeGroupId == grp.id,
-                                    isPinned = isPinned,
-                                    draftText = state.drafts["group:${grp.id}"],
-                                    onClick = { vm.openGroupChat(grp.id) },
-                                    onLongClick = { holdTarget = SidebarHoldTarget.Group(grp) },
-                                )
-                            }
-                        } else if (threadKey.startsWith("dm:")) {
-                            val fid = threadKey.removePrefix("dm:")
-                            val friend = friendById[fid]
-                            if (friend != null) {
-                                val prev = previewByFriend[friend.id]
-                                val act = activityByFriend[friend.id]
-                                DmSidebarRow(
-                                    friend = friend,
-                                    preview = prev,
-                                    myUserId = me?.id.orEmpty(),
-                                    isSelected = state.activeChatId == friend.id,
-                                    isPinned = isPinned,
-                                    draftText = state.drafts["dm:${friend.id}"],
-                                    presenceStatus = act?.status ?: "offline",
-                                    typingToMe = typingDmSenders.contains(friend.id),
-                                    onClick = { vm.openDmChat(friend.id) },
-                                    onAvatarClick = { onOpenProfile(friend) },
-                                    onLongClick = { holdTarget = SidebarHoldTarget.Dm(friend, prev) },
-                                )
-                            }
+                        val fid = threadKey.removePrefix("dm:")
+                        val friend = friendById[fid]
+                        if (friend != null) {
+                            val prev = previewByFriend[friend.id]
+                            val act = activityByFriend[friend.id]
+                            DmSidebarRow(
+                                friend = friend,
+                                preview = prev,
+                                myUserId = me?.id.orEmpty(),
+                                isSelected = state.activeChatId == friend.id,
+                                isPinned = isPinned,
+                                draftText = state.drafts["dm:${friend.id}"],
+                                presenceStatus = act?.status ?: "offline",
+                                typingToMe = typingDmSenders.contains(friend.id),
+                                onClick = { vm.openDmChat(friend.id) },
+                                onAvatarClick = { onOpenProfile(friend) },
+                                onLongClick = { holdTarget = SidebarHoldTarget.Dm(friend, prev) },
+                            )
                         }
                     }
 
                     /* ---- Empty State (`.empty-box`) ---- */
-                    if (orderedNonCommunityKeys.isEmpty()) {
+                    if (orderedDmKeys.isEmpty()) {
                         item(key = "empty-chats") {
                             Column(
                                 modifier = Modifier
@@ -723,7 +965,7 @@ fun SidebarScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                if (state.friends.isEmpty() && state.groups.isEmpty() && !showArchived) {
+                                if (state.friends.isEmpty() && !showArchivedDms) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(
                                             imageVector = Icons.Rounded.PersonAdd,
@@ -740,18 +982,18 @@ fun SidebarScreen(
                                         )
                                     }
                                     Text(
-                                        text = "Head to Add and add someone by their username. Once they accept, you can start texting!",
+                                        text = "Add someone by their username. Once they accept, you can start texting!",
                                         color = palette.textSecondary,
                                         fontSize = 13.sp,
                                         textAlign = TextAlign.Center,
                                     )
                                     JaWebPrimaryButton(
                                         text = "Add a friend",
-                                        onClick = { activeTab = "add" },
+                                        onClick = { showAddFriendsView = true },
                                     )
                                 } else {
                                     Text(
-                                        text = if (showArchived) "No archived chats." else "No chats match your search.",
+                                        text = if (showArchivedDms) "No archived chats." else "No chats match your search.",
                                         color = palette.textSecondary,
                                         fontSize = 14.sp,
                                     )
@@ -929,6 +1171,8 @@ fun SidebarScreen(
                         }
                     } else {
                         items(state.incoming, key = { "in:${it.requestId}" }) { req ->
+                            val sender = req.from.takeIf { it.id.isNotBlank() && it.id != me?.id }
+                                ?: req.peerFor(me?.id)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -939,16 +1183,17 @@ fun SidebarScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 JaAvatar(
-                                    avatarUrl = req.user.avatarUrl,
-                                    displayName = req.user.displayName.ifBlank { req.user.username },
-                                    avatarColor = req.user.avatarColor,
+                                    avatarUrl = sender.avatarUrl,
+                                    displayName = sender.displayName.ifBlank { sender.username },
+                                    avatarColor = sender.avatarColor,
                                     size = 42.dp,
                                     ringWidth = 2.5.dp,
+                                    modifier = Modifier.clickable { onOpenProfile(sender) },
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = req.user.displayName.ifBlank { req.user.username },
+                                        text = sender.displayName.ifBlank { sender.username },
                                         color = palette.textPrimary,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 14.5.sp,
@@ -956,7 +1201,7 @@ fun SidebarScreen(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
-                                        text = "@${req.user.username}",
+                                        text = "@${sender.username}",
                                         color = palette.textSecondary,
                                         fontSize = 12.5.sp,
                                         maxLines = 1,
@@ -988,7 +1233,7 @@ fun SidebarScreen(
                         }
                     }
 
-                    /* ---- Outgoing Sent Requests ---- */
+                    /* ---- Outgoing Sent Requests (Fixed: shows `req.to`, NOT `req.from`!) ---- */
                     if (state.outgoing.isNotEmpty()) {
                         item(key = "outgoing-header") {
                             Text(
@@ -999,6 +1244,8 @@ fun SidebarScreen(
                             )
                         }
                         items(state.outgoing, key = { "out:${it.requestId}" }) { req ->
+                            val recipient = req.to.takeIf { it.id.isNotBlank() && it.id != me?.id }
+                                ?: req.peerFor(me?.id)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1009,22 +1256,23 @@ fun SidebarScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 JaAvatar(
-                                    avatarUrl = req.user.avatarUrl,
-                                    displayName = req.user.displayName.ifBlank { req.user.username },
-                                    avatarColor = req.user.avatarColor,
+                                    avatarUrl = recipient.avatarUrl,
+                                    displayName = recipient.displayName.ifBlank { recipient.username },
+                                    avatarColor = recipient.avatarColor,
                                     size = 40.dp,
                                     ringWidth = 2.5.dp,
+                                    modifier = Modifier.clickable { onOpenProfile(recipient) },
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = req.user.displayName.ifBlank { req.user.username },
+                                        text = recipient.displayName.ifBlank { recipient.username },
                                         color = palette.textPrimary,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 14.sp,
                                     )
                                     Text(
-                                        text = "@${req.user.username}",
+                                        text = "@${recipient.username}",
                                         color = palette.textSecondary,
                                         fontSize = 12.sp,
                                     )
@@ -1064,7 +1312,7 @@ fun SidebarScreen(
             }
         }
 
-        /* ==================== Layer 2: Floating iOS 26.3 Liquid Glass Bottom Navigation Bar ==================== */
+        /* ==================== Layer 2: Floating 5-Tab Liquid Glass Bottom Navigation Bar (1:1 image (1).png) ==================== */
         AnimatedVisibility(
             visible = !isImeVisible && !settingsSubOverlayOpen,
             enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 2 },
@@ -1072,147 +1320,190 @@ fun SidebarScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
-            val selectedNavIndex = BOTTOM_NAV_TAB_IDS.indexOf(activeTab).coerceAtLeast(0)
-            Row(
+            val selectedNavIndex = BOTTOM_NAV_TAB_IDS.indexOf(activeTab).let { if (it >= 0) it else 3 }
+            val activeNavTint = if (palette.isDark) Color.White else Color(0xFF1C1C1E)
+            val inactiveNavTint = if (palette.isDark) Color(0xFFE5E5EA).copy(alpha = 0.86f) else Color(0xFF2C2C2E).copy(alpha = 0.88f)
+            LiquidBottomTabs(
+                selectedTabIndex = { selectedNavIndex },
+                onTabSelected = { idx ->
+                    val nextTab = BOTTOM_NAV_TAB_IDS.getOrElse(idx) { "chats" }
+                    showAddFriendsView = false
+                    if (nextTab != activeTab && isSearchOpen) {
+                        isSearchOpen = false
+                        searchQuery = ""
+                    }
+                    if (activeTab != nextTab) {
+                        activeTab = nextTab
+                    }
+                },
+                backdrop = contentBackdrop,
+                tabsCount = BOTTOM_NAV_TAB_IDS.size,
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                isLightTheme = !palette.isDark,
+                accentColor = activeNavTint,
+                inactiveColor = inactiveNavTint,
             ) {
-                LiquidBottomTabs(
-                    selectedTabIndex = { selectedNavIndex },
-                    onTabSelected = { idx ->
-                        val nextTab = BOTTOM_NAV_TAB_IDS.getOrElse(idx) { "chats" }
-                        if (nextTab != "chats" && isSearchOpen) {
-                            isSearchOpen = false
-                            searchQuery = ""
-                        }
-                        if (activeTab != nextTab) {
-                            activeTab = nextTab
-                        }
-                    },
-                    backdrop = contentBackdrop,
-                    tabsCount = BOTTOM_NAV_TAB_IDS.size,
-                    modifier = Modifier.weight(1f),
-                    isLightTheme = !palette.isDark,
-                    accentColor = palette.accent,
-                    inactiveColor = palette.textPrimary.copy(alpha = 0.85f),
-                ) {
-                    /* 1. Chats */
-                    LiquidBottomTab(onClick = { activeTab = "chats" }) {
-                        val tabTint = LocalLiquidBottomTabContentColor.current
-                        Box(contentAlignment = Alignment.Center) {
-                            IosChatsNavIcon(tint = tabTint, size = 21.dp)
-                            if (totalUnreadCount > 0) {
-                                LiquidTabBadgePill(
-                                    count = totalUnreadCount,
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .offset(x = 9.dp, y = (-4).dp),
-                                )
-                            }
-                        }
-                        Text(
-                            text = com.ahad00010.jatext.data.jt("nav.chats"),
-                            color = tabTint,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-
-                    /* 2. Calls */
-                    LiquidBottomTab(onClick = {
-                        isSearchOpen = false
-                        searchQuery = ""
-                        activeTab = "calls"
-                    }) {
-                        val tabTint = LocalLiquidBottomTabContentColor.current
-                        IosCallsNavIcon(tint = tabTint, size = 21.dp)
-                        Text(
-                            text = com.ahad00010.jatext.data.jt("nav.calls"),
-                            color = tabTint,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-
-                    /* 3. Add */
-                    LiquidBottomTab(onClick = {
-                        isSearchOpen = false
-                        searchQuery = ""
-                        activeTab = "add"
-                    }) {
-                        val tabTint = LocalLiquidBottomTabContentColor.current
-                        Box(contentAlignment = Alignment.Center) {
-                            IosAddNavIcon(tint = tabTint, size = 21.dp)
-                            if (state.incoming.isNotEmpty()) {
-                                LiquidTabBadgePill(
-                                    count = state.incoming.size,
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .offset(x = 9.dp, y = (-4).dp),
-                                )
-                            }
-                        }
-                        Text(
-                            text = com.ahad00010.jatext.data.jt("nav.add"),
-                            color = tabTint,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-
-                    /* 4. Settings (Authentic iOS SF-Symbol `gear` icon) */
-                    LiquidBottomTab(onClick = {
-                        isSearchOpen = false
-                        searchQuery = ""
-                        activeTab = "settings"
-                    }) {
-                        val tabTint = LocalLiquidBottomTabContentColor.current
-                        IosSettingsGearIcon(tint = tabTint, size = 21.dp)
-                        Text(
-                            text = com.ahad00010.jatext.data.jt("nav.settings"),
-                            color = tabTint,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+                /* 1. Updates */
+                LiquidBottomTab(onClick = {
+                    showAddFriendsView = false
+                    isSearchOpen = false
+                    searchQuery = ""
+                    activeTab = "updates"
+                }) {
+                    val tabTint = LocalLiquidBottomTabContentColor.current
+                    val isSel = activeTab == "updates"
+                    IosUpdatesNavIcon(tint = tabTint, selected = isSel, size = 23.dp)
+                    Text(
+                        text = "Updates",
+                        color = tabTint,
+                        fontSize = 10.5.sp,
+                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
 
-                /* Separated iOS 26.3 Circular Search Button (icon-only, no label) */
-                LiquidSeparatedSearchButton(
-                    active = isSearchOpen,
-                    onClick = {
-                        if (activeTab != "chats") {
-                            activeTab = "chats"
-                            isSearchOpen = true
-                        } else if (isSearchOpen) {
-                            isSearchOpen = false
-                            searchQuery = ""
-                            focusManager.clearFocus()
-                        } else {
-                            isSearchOpen = true
+                /* 2. Calls */
+                LiquidBottomTab(onClick = {
+                    showAddFriendsView = false
+                    isSearchOpen = false
+                    searchQuery = ""
+                    activeTab = "calls"
+                }) {
+                    val tabTint = LocalLiquidBottomTabContentColor.current
+                    val isSel = activeTab == "calls"
+                    IosCallsNavIcon(tint = tabTint, selected = isSel, size = 22.dp)
+                    Text(
+                        text = com.ahad00010.jatext.data.jt("nav.calls"),
+                        color = tabTint,
+                        fontSize = 10.5.sp,
+                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                /* 3. Groups (1:1 Communities 3-person icon with "Groups" label) */
+                LiquidBottomTab(onClick = {
+                    showAddFriendsView = false
+                    if (activeTab != "groups") {
+                        isSearchOpen = false
+                        searchQuery = ""
+                    }
+                    activeTab = "groups"
+                }) {
+                    val tabTint = LocalLiquidBottomTabContentColor.current
+                    val isSel = activeTab == "groups"
+                    Box(contentAlignment = Alignment.Center) {
+                        IosGroupsNavIcon(tint = tabTint, selected = isSel, size = 24.dp)
+                        if (totalGroupUnreadCount > 0) {
+                            LiquidTabBadgePill(
+                                count = totalGroupUnreadCount,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 9.dp, y = (-4).dp),
+                            )
                         }
-                    },
-                    backdrop = contentBackdrop,
-                    size = 60.dp,
-                    isLightTheme = !palette.isDark,
-                    accentColor = palette.accent,
-                    inactiveColor = palette.textPrimary.copy(alpha = 0.88f),
-                )
+                    }
+                    Text(
+                        text = "Groups",
+                        color = tabTint,
+                        fontSize = 10.5.sp,
+                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                /* 4. Chats (Default 4th tab, P2P chats only, 1:1 dual speech bubbles) */
+                LiquidBottomTab(onClick = {
+                    showAddFriendsView = false
+                    if (activeTab != "chats") {
+                        isSearchOpen = false
+                        searchQuery = ""
+                    }
+                    activeTab = "chats"
+                }) {
+                    val tabTint = LocalLiquidBottomTabContentColor.current
+                    val isSel = activeTab == "chats" && !showAddFriendsView
+                    Box(contentAlignment = Alignment.Center) {
+                        IosChatsNavIcon(tint = tabTint, selected = isSel, size = 24.dp)
+                        if (totalDmUnreadCount > 0) {
+                            LiquidTabBadgePill(
+                                count = totalDmUnreadCount,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 9.dp, y = (-4).dp),
+                            )
+                        }
+                    }
+                    Text(
+                        text = com.ahad00010.jatext.data.jt("nav.chats"),
+                        color = tabTint,
+                        fontSize = 10.5.sp,
+                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                /* 5. You (Shows user's circular PFP + "You", opens Settings) */
+                LiquidBottomTab(onClick = {
+                    showAddFriendsView = false
+                    isSearchOpen = false
+                    searchQuery = ""
+                    activeTab = "you"
+                }) {
+                    val tabTint = LocalLiquidBottomTabContentColor.current
+                    val isSel = activeTab == "you"
+                    val ringColor = if (isSel) {
+                        tabTint
+                    } else if (palette.isDark) {
+                        Color.White.copy(alpha = 0.40f)
+                    } else {
+                        Color.Black.copy(alpha = 0.25f)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(25.dp)
+                            .clip(CircleShape)
+                            .border(width = if (isSel) 1.7.dp else 1.25.dp, color = ringColor, shape = CircleShape)
+                            .padding(1.5.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (me != null) {
+                            JaAvatar(
+                                avatarUrl = me.avatarUrl,
+                                displayName = me.displayName.ifBlank { me.username },
+                                avatarColor = me.avatarColor,
+                                size = 22.dp,
+                                ringWidth = 0.dp,
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape)
+                                    .background(palette.accent)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "You",
+                        color = tabTint,
+                        fontSize = 10.5.sp,
+                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -1271,7 +1562,7 @@ fun SidebarScreen(
                             icon = Icons.Rounded.ArrowUpward,
                             label = com.ahad00010.jatext.data.jt("sidebar.moveUp"),
                             onClick = {
-                                vm.moveThreadInOrder(orderedNonCommunityKeys, dmKey, -1)
+                                vm.moveThreadInOrder(orderedDmKeys, dmKey, -1)
                                 holdTarget = null
                             }
                         )
@@ -1279,7 +1570,7 @@ fun SidebarScreen(
                             icon = Icons.Rounded.ArrowDownward,
                             label = com.ahad00010.jatext.data.jt("sidebar.moveDown"),
                             onClick = {
-                                vm.moveThreadInOrder(orderedNonCommunityKeys, dmKey, 1)
+                                vm.moveThreadInOrder(orderedDmKeys, dmKey, 1)
                                 holdTarget = null
                             }
                         )
@@ -1340,7 +1631,7 @@ fun SidebarScreen(
                             icon = Icons.Rounded.ArrowUpward,
                             label = com.ahad00010.jatext.data.jt("sidebar.moveUp"),
                             onClick = {
-                                vm.moveThreadInOrder(orderedNonCommunityKeys, grpKey, -1)
+                                vm.moveThreadInOrder(orderedGroupKeys, grpKey, -1)
                                 holdTarget = null
                             }
                         )
@@ -1348,7 +1639,7 @@ fun SidebarScreen(
                             icon = Icons.Rounded.ArrowDownward,
                             label = com.ahad00010.jatext.data.jt("sidebar.moveDown"),
                             onClick = {
-                                vm.moveThreadInOrder(orderedNonCommunityKeys, grpKey, 1)
+                                vm.moveThreadInOrder(orderedGroupKeys, grpKey, 1)
                                 holdTarget = null
                             }
                         )
@@ -2017,6 +2308,7 @@ private fun GroupSidebarRow(
     isSelected: Boolean,
     isPinned: Boolean = false,
     draftText: String? = null,
+    typingLabel: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -2107,7 +2399,9 @@ private fun GroupSidebarRow(
             Spacer(Modifier.height(2.dp))
             val cleanDraft = draftText?.trim().orEmpty()
             val hasDraft = cleanDraft.isNotEmpty()
+            val hasTyping = !typingLabel.isNullOrBlank()
             val subText = when {
+                hasTyping -> typingLabel.orEmpty()
                 hasDraft -> "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $cleanDraft"
                 group.lastMessage.isNotBlank() -> {
                     val prefix = when {
@@ -2122,12 +2416,12 @@ private fun GroupSidebarRow(
             Text(
                 text = subText,
                 color = when {
-                    hasDraft -> palette.accent
+                    hasTyping || hasDraft -> palette.accent
                     unread > 0 -> palette.textPrimary
                     else -> palette.textSecondary
                 },
                 fontSize = 13.sp,
-                fontWeight = if (unread > 0 || hasDraft) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = if (unread > 0 || hasTyping || hasDraft) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -2284,18 +2578,18 @@ private fun LiquidTabBadgePill(
     val label = if (count > 99) "99+" else count.toString()
     Box(
         modifier = modifier
-            .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
+            .defaultMinSize(minWidth = 17.dp, minHeight = 17.dp)
             .clip(CircleShape)
-            .background(Color(0xFFFF3B30))
-            .padding(horizontal = 4.dp, vertical = 1.dp),
+            .background(Color(0xFF42A85F))
+            .padding(horizontal = 4.5.dp, vertical = 1.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
             color = Color.White,
-            fontSize = 9.5.sp,
-            fontWeight = FontWeight.ExtraBold,
-            lineHeight = 10.sp,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            lineHeight = 11.sp,
             maxLines = 1,
         )
     }

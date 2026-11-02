@@ -5,10 +5,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.Dp
@@ -18,49 +22,125 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * iOS 26 SF-Symbol-proportioned speech bubble (`bubble.left.fill` / `message.fill` silhouette)
- * for the "Chats" tab.
+ * 1:1 replica of the "Updates" status-ring speech icon from `image (1).png`:
+ * concentric inner circle + 3-segment status ring with bottom-left speech tail + green status dot at top-right.
  */
 @Composable
-fun IosChatsNavIcon(
+fun IosUpdatesNavIcon(
     tint: Color,
-    size: Dp = 23.dp,
+    selected: Boolean = false,
+    showStatusDot: Boolean = true,
+    size: Dp = 24.dp,
     modifier: Modifier = Modifier,
 ) {
     Canvas(modifier = modifier.size(size)) {
-        val sx = this.size.width / 24f
-        val sy = this.size.height / 24f
-        val path = PathParser()
-            .parsePathString(
-                "M12 3.4C6.8 3.4 2.7 6.85 2.7 11.15C2.7 13.48 3.96 15.56 5.95 16.97C5.76 18.23 5.05 19.56 4.18 20.32C3.95 20.52 4.12 20.89 4.42 20.85C6.38 20.62 8.15 19.78 9.32 18.68C10.18 18.83 11.08 18.91 12 18.91C17.2 18.91 21.3 15.46 21.3 11.15C21.3 6.85 17.2 3.4 12 3.4Z"
+        val w = this.size.width
+        val s = w / 24f
+        val cx = 12f * s
+        val cy = 12f * s
+        val strokeW = (if (selected) 2.1f else 1.85f) * s
+
+        // 1. Inner circle
+        if (selected) {
+            drawCircle(
+                color = tint,
+                radius = 5.0f * s,
+                center = Offset(cx, cy),
+                style = Fill,
             )
-            .toPath()
-        val scaled = Path().apply {
-            addPath(path)
-            transform(
-                androidx.compose.ui.graphics.Matrix().apply {
-                    scale(sx, sy)
-                }
+        } else {
+            drawCircle(
+                color = tint,
+                radius = 4.95f * s,
+                center = Offset(cx, cy),
+                style = Stroke(width = strokeW),
+            )
+        }
+
+        val outerR = 8.85f * s
+        val arcRect = Rect(
+            left = cx - outerR,
+            top = cy - outerR,
+            right = cx + outerR,
+            bottom = cy + outerR,
+        )
+
+        // 2. Top arc (from ~10:45 to ~12:40, stopping before the green dot)
+        drawArc(
+            color = tint,
+            startAngle = 228f,
+            sweepAngle = 60f,
+            useCenter = false,
+            topLeft = arcRect.topLeft,
+            size = arcRect.size,
+            style = Stroke(width = strokeW, cap = StrokeCap.Round),
+        )
+
+        // 3. Right arc (from below the green dot down to ~4:45)
+        drawArc(
+            color = tint,
+            startAngle = 346f,
+            sweepAngle = 66f,
+            useCenter = false,
+            topLeft = arcRect.topLeft,
+            size = arcRect.size,
+            style = Stroke(width = strokeW, cap = StrokeCap.Round),
+        )
+
+        // 4. Bottom + bottom-left speech-bubble tail + left arc (continuous path)
+        val tailPath = Path().apply {
+            arcTo(
+                rect = arcRect,
+                startAngleDegrees = 74f,
+                sweepAngleDegrees = 48f,
+                forceMoveTo = true,
+            )
+            // Kick out to bottom-left speech tail tip and back onto the lower-left ring
+            lineTo(4.15f * s, 19.65f * s)
+            val rejoinDeg = 148.0 * PI / 180.0
+            lineTo(
+                cx + outerR * cos(rejoinDeg).toFloat(),
+                cy + outerR * sin(rejoinDeg).toFloat(),
+            )
+            arcTo(
+                rect = arcRect,
+                startAngleDegrees = 148f,
+                sweepAngleDegrees = 56f,
+                forceMoveTo = false,
             )
         }
         drawPath(
-            path = scaled,
+            path = tailPath,
             color = tint,
             style = Stroke(
-                width = 1.9f * sx,
+                width = strokeW,
                 cap = StrokeCap.Round,
                 join = StrokeJoin.Round,
             ),
         )
+
+        // 5. Green status dot at ~1:30 (`317°`)
+        if (showStatusDot) {
+            val dotRad = 317.0 * PI / 180.0
+            drawCircle(
+                color = Color(0xFF42A85F),
+                radius = 2.2f * s,
+                center = Offset(
+                    cx + outerR * cos(dotRad).toFloat(),
+                    cy + outerR * sin(dotRad).toFloat(),
+                ),
+            )
+        }
     }
 }
 
 /**
- * iOS 26 SF-Symbol handset (`phone` silhouette) for the "Calls" tab.
+ * 1:1 replica of the "Calls" handset icon from `image (1).png` (outlined when inactive, filled when active).
  */
 @Composable
 fun IosCallsNavIcon(
     tint: Color,
+    selected: Boolean = false,
     size: Dp = 23.dp,
     modifier: Modifier = Modifier,
 ) {
@@ -74,26 +154,199 @@ fun IosCallsNavIcon(
             .toPath()
         val scaled = Path().apply {
             addPath(path)
-            transform(
-                androidx.compose.ui.graphics.Matrix().apply {
-                    scale(sx, sy)
-                }
-            )
+            transform(Matrix().apply { scale(sx, sy) })
         }
         drawPath(
             path = scaled,
             color = tint,
-            style = Stroke(
-                width = 1.85f * sx,
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round,
-            ),
+            style = if (selected) {
+                Fill
+            } else {
+                Stroke(
+                    width = 1.85f * sx,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                )
+            },
         )
     }
 }
 
 /**
- * iOS 26 SF-Symbol `plus.circle` icon for the "Add" tab.
+ * 1:1 replica of the 3-people "Communities / Groups" icon from `image (1).png`:
+ * elevated larger center person + two symmetric flanking people with flat-bottomed dome shoulders.
+ */
+@Composable
+fun IosGroupsNavIcon(
+    tint: Color,
+    selected: Boolean = false,
+    size: Dp = 25.dp,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(size)) {
+        val sx = this.size.width / 24f
+        val sy = this.size.height / 24f
+        val strokeW = 1.75f * sx
+
+        val centerDome = PathParser()
+            .parsePathString("M7.0 18.6C7.0 15.15 9.1 13.35 12.0 13.35C14.9 13.35 17.0 15.15 17.0 18.6Z")
+            .toPath()
+            .let { p -> Path().apply { addPath(p); transform(Matrix().apply { scale(sx, sy) }) } }
+
+        if (selected) {
+            // Center head + dome filled
+            drawCircle(
+                color = tint,
+                radius = 2.55f * sx,
+                center = Offset(12.0f * sx, 7.65f * sy),
+                style = Fill,
+            )
+            drawPath(path = centerDome, color = tint, style = Fill)
+
+            // Side heads filled
+            drawCircle(
+                color = tint,
+                radius = 1.95f * sx,
+                center = Offset(5.7f * sx, 9.65f * sy),
+                style = Fill,
+            )
+            drawCircle(
+                color = tint,
+                radius = 1.95f * sx,
+                center = Offset(18.3f * sx, 9.65f * sy),
+                style = Fill,
+            )
+
+            // Side domes with crisp cutout around the foreground center dome
+            val centerMask = PathParser()
+                .parsePathString("M5.65 19.4C5.65 14.3 8.35 12.05 12.0 12.05C15.65 12.05 18.35 14.3 18.35 19.4Z")
+                .toPath()
+                .let { p -> Path().apply { addPath(p); transform(Matrix().apply { scale(sx, sy) }) } }
+
+            val leftFull = PathParser()
+                .parsePathString("M1.6 18.1C1.6 15.55 3.15 14.15 5.35 14.15C7.35 14.15 8.8 15.35 8.8 18.1Z")
+                .toPath()
+                .let { p -> Path().apply { addPath(p); transform(Matrix().apply { scale(sx, sy) }) } }
+            val rightFull = PathParser()
+                .parsePathString("M15.2 18.1C15.2 15.35 16.65 14.15 18.65 14.15C20.85 14.15 22.4 15.55 22.4 18.1Z")
+                .toPath()
+                .let { p -> Path().apply { addPath(p); transform(Matrix().apply { scale(sx, sy) }) } }
+
+            val leftCut = Path().apply { op(leftFull, centerMask, PathOperation.Difference) }
+            val rightCut = Path().apply { op(rightFull, centerMask, PathOperation.Difference) }
+            drawPath(path = leftCut, color = tint, style = Fill)
+            drawPath(path = rightCut, color = tint, style = Fill)
+        } else {
+            // Center head + dome stroked
+            drawCircle(
+                color = tint,
+                radius = 2.45f * sx,
+                center = Offset(12.0f * sx, 7.65f * sy),
+                style = Stroke(width = strokeW),
+            )
+            drawPath(
+                path = centerDome,
+                color = tint,
+                style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+
+            // Left head + tucked left dome
+            drawCircle(
+                color = tint,
+                radius = 1.85f * sx,
+                center = Offset(5.7f * sx, 9.65f * sy),
+                style = Stroke(width = 1.68f * sx),
+            )
+            val leftShoulder = PathParser()
+                .parsePathString("M7.15 15.05C6.55 14.65 5.8 14.45 5.0 14.45C3.05 14.45 1.8 15.85 1.8 18.05L5.35 18.05")
+                .toPath()
+                .let { p -> Path().apply { addPath(p); transform(Matrix().apply { scale(sx, sy) }) } }
+            drawPath(
+                path = leftShoulder,
+                color = tint,
+                style = Stroke(width = 1.68f * sx, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+
+            // Right head + tucked right dome
+            drawCircle(
+                color = tint,
+                radius = 1.85f * sx,
+                center = Offset(18.3f * sx, 9.65f * sy),
+                style = Stroke(width = 1.68f * sx),
+            )
+            val rightShoulder = PathParser()
+                .parsePathString("M16.85 15.05C17.45 14.65 18.2 14.45 19.0 14.45C20.95 14.45 22.2 15.85 22.2 18.05L18.65 18.05")
+                .toPath()
+                .let { p -> Path().apply { addPath(p); transform(Matrix().apply { scale(sx, sy) }) } }
+            drawPath(
+                path = rightShoulder,
+                color = tint,
+                style = Stroke(width = 1.68f * sx, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+        }
+    }
+}
+
+/**
+ * 1:1 replica of the dual-overlapping speech bubbles "Chats" icon from `image (1).png`:
+ * primary left bubble (bottom-left tail) + peeking right bubble (bottom-right tail),
+ * solid-filled with crisp transparent separation crescent when selected, outlined when unselected.
+ */
+@Composable
+fun IosChatsNavIcon(
+    tint: Color,
+    selected: Boolean = true,
+    size: Dp = 25.dp,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(size)) {
+        val sx = this.size.width / 24f
+        val sy = this.size.height / 24f
+
+        val frontBubble = PathParser()
+            .parsePathString(
+                "M10.1 4.2C5.8 4.2 2.4 6.95 2.4 10.45C2.4 12.35 3.45 14.04 5.1 15.18C4.92 16.32 4.28 17.52 3.55 18.22C3.35 18.4 3.5 18.74 3.78 18.7C5.45 18.5 6.98 17.78 8.0 16.82C8.68 16.95 9.38 17.02 10.1 17.02C14.4 17.02 17.8 14.22 17.8 10.61C17.8 7.05 14.4 4.2 10.1 4.2Z"
+            )
+            .toPath()
+            .let { p -> Path().apply { addPath(p); transform(Matrix().apply { scale(sx, sy) }) } }
+
+        val backBubble = PathParser()
+            .parsePathString(
+                "M15.1 6.35C18.75 6.35 21.65 8.75 21.65 11.75C21.65 13.4 20.75 14.88 19.32 15.86C19.48 16.86 20.02 17.9 20.65 18.52C20.82 18.68 20.68 18.98 20.44 18.95C19.02 18.78 17.72 18.14 16.85 17.32C16.28 17.43 15.7 17.5 15.1 17.5C11.45 17.5 8.55 15.08 8.55 12.05C8.55 8.92 11.45 6.35 15.1 6.35Z"
+            )
+            .toPath()
+            .let { p -> Path().apply { addPath(p); transform(Matrix().apply { scale(sx, sy) }) } }
+
+        val frontExpandedMask = PathParser()
+            .parsePathString(
+                "M10.1 2.75C5.0 2.75 0.95 6.1 0.95 10.45C0.95 15.0 5.0 18.55 10.1 18.55C15.2 18.55 19.35 15.0 19.35 10.6C19.35 6.15 15.2 2.75 10.1 2.75Z"
+            )
+            .toPath()
+            .let { p -> Path().apply { addPath(p); transform(Matrix().apply { scale(sx, sy) }) } }
+
+        if (selected) {
+            drawPath(path = frontBubble, color = tint, style = Fill)
+            val backPeeking = Path().apply { op(backBubble, frontExpandedMask, PathOperation.Difference) }
+            drawPath(path = backPeeking, color = tint, style = Fill)
+        } else {
+            val strokeW = 1.78f * sx
+            drawPath(
+                path = frontBubble,
+                color = tint,
+                style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+            val backPeeking = Path().apply { op(backBubble, frontExpandedMask, PathOperation.Difference) }
+            drawPath(
+                path = backPeeking,
+                color = tint,
+                style = Stroke(width = 1.65f * sx, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+        }
+    }
+}
+
+/**
+ * Legacy helper icons preserved for internal reuse if needed.
  */
 @Composable
 fun IosAddNavIcon(
@@ -128,10 +381,6 @@ fun IosAddNavIcon(
     }
 }
 
-/**
- * Authentic Apple iOS SF-Symbol `gear` icon for the "Settings" tab:
- * precision 10-tooth outer cog wheel + machined rim + 3 120-degree inner spokes + center hub ring.
- */
 @Composable
 fun IosSettingsGearIcon(
     tint: Color,
@@ -146,7 +395,6 @@ fun IosSettingsGearIcon(
         val cy = h / 2f
         val center = Offset(cx, cy)
 
-        // 1. 10 evenly spaced precision rounded cogs around the outer gear wheel
         val teethCount = 10
         for (i in 0 until teethCount) {
             val angleRad = (i * (360.0 / teethCount) - 90.0) * (PI / 180.0)
@@ -160,16 +408,12 @@ fun IosSettingsGearIcon(
                 cap = StrokeCap.Round,
             )
         }
-
-        // 2. Machined outer gear wheel ring
         drawCircle(
             color = tint,
             radius = 7.35f * s,
             center = center,
             style = Stroke(width = 1.85f * s),
         )
-
-        // 3. Signature Apple iOS 3-spoke inner wheel (-90deg, 30deg, 150deg)
         val spokeAngles = doubleArrayOf(-90.0, 30.0, 150.0)
         for (deg in spokeAngles) {
             val rad = deg * (PI / 180.0)
@@ -183,8 +427,6 @@ fun IosSettingsGearIcon(
                 cap = StrokeCap.Round,
             )
         }
-
-        // 4. Concentric inner hub ring
         drawCircle(
             color = tint,
             radius = 2.25f * s,
@@ -193,34 +435,3 @@ fun IosSettingsGearIcon(
         )
     }
 }
-
-/**
- * Authentic Apple iOS 26.3 SF-Symbol `magnifyingglass` icon for the separated circular Search button.
- */
-@Composable
-fun IosSearchNavIcon(
-    tint: Color,
-    size: Dp = 24.dp,
-    modifier: Modifier = Modifier,
-) {
-    Canvas(modifier = modifier.size(size)) {
-        val w = this.size.width
-        val s = w / 24f
-        val lensCenter = Offset(10.5f * s, 10.5f * s)
-        val radius = 6.2f * s
-        drawCircle(
-            color = tint,
-            radius = radius,
-            center = lensCenter,
-            style = Stroke(width = 2.05f * s),
-        )
-        drawLine(
-            color = tint,
-            start = Offset(15.05f * s, 15.05f * s),
-            end = Offset(20.15f * s, 20.15f * s),
-            strokeWidth = 2.2f * s,
-            cap = StrokeCap.Round,
-        )
-    }
-}
-

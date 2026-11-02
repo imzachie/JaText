@@ -778,5 +778,187 @@ export function KeyIcon(props: UiIconProps) {
   );
 }
 
+export function IosUpdatesStatusIcon({
+  size = 24,
+  selected = false,
+  className,
+}: UiIconProps & { selected?: boolean }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+    >
+      <circle
+        cx="12"
+        cy="12"
+        r="5"
+        fill={selected ? "currentColor" : "none"}
+        stroke={selected ? "none" : "currentColor"}
+        strokeWidth="1.85"
+      />
+      {/* Top arc */}
+      <path
+        d="M6.08 5.42A8.85 8.85 0 0 1 14.95 3.65"
+        stroke="currentColor"
+        strokeWidth={selected ? "2.05" : "1.85"}
+        strokeLinecap="round"
+      />
+      {/* Right arc */}
+      <path
+        d="M20.58 9.86A8.85 8.85 0 0 1 17.52 18.92"
+        stroke="currentColor"
+        strokeWidth={selected ? "2.05" : "1.85"}
+        strokeLinecap="round"
+      />
+      {/* Bottom + speech tail + left arc */}
+      <path
+        d="M14.44 20.51A8.85 8.85 0 0 1 7.05 19.34L4.15 19.65L4.5 16.7A8.85 8.85 0 0 1 4.18 7.86"
+        stroke="currentColor"
+        strokeWidth={selected ? "2.05" : "1.85"}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* Green status dot at ~1:30 */}
+      <circle cx="18.45" cy="5.95" r="2.2" fill="#42A85F" />
+    </svg>
+  );
+}
+
+export function IosCallsHandsetIcon({
+  size = 22,
+  selected = false,
+  className,
+}: UiIconProps & { selected?: boolean }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={selected ? "currentColor" : "none"}
+      stroke={selected ? "none" : "currentColor"}
+      strokeWidth="1.85"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M6.62 10.79C8.06 13.62 10.38 15.94 13.21 17.38L15.41 15.18C15.69 14.9 16.08 14.82 16.43 14.93C17.55 15.3 18.75 15.5 20 15.5C20.55 15.5 21 15.95 21 16.5V20C21 20.55 20.55 21 20 21C10.61 21 3 13.39 3 4C3 3.45 3.45 3 4 3H7.5C8.05 3 8.5 3.45 8.5 4C8.5 5.25 8.7 6.45 9.07 7.57C9.18 7.92 9.1 8.31 8.82 8.59L6.62 10.79Z" />
+    </svg>
+  );
+}
+
+export function IosGroupsPeopleIcon({
+  size = 24,
+  selected = false,
+  className,
+}: UiIconProps & { selected?: boolean }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+    >
+      <circle
+        cx="12"
+        cy="7.65"
+        r="2.45"
+        fill={selected ? "currentColor" : "none"}
+        stroke={selected ? "none" : "currentColor"}
+        strokeWidth="1.75"
+      />
+      <path
+        d="M7 18.6C7 15.15 9.1 13.35 12 13.35C14.9 13.35 17 15.15 17 18.6Z"
+        fill={selected ? "currentColor" : "none"}
+        stroke={selected ? "none" : "currentColor"}
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <circle
+        cx="5.7"
+        cy="9.65"
+        r="1.85"
+        fill={selected ? "currentColor" : "none"}
+        stroke={selected ? "none" : "currentColor"}
+        strokeWidth="1.68"
+      />
+      <path
+        d="M7.15 15.05C6.55 14.65 5.8 14.45 5 14.45C3.05 14.45 1.8 15.85 1.8 18.05L5.35 18.05"
+        stroke="currentColor"
+        strokeWidth="1.68"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle
+        cx="18.3"
+        cy="9.65"
+        r="1.85"
+        fill={selected ? "currentColor" : "none"}
+        stroke={selected ? "none" : "currentColor"}
+        strokeWidth="1.68"
+      />
+      <path
+        d="M16.85 15.05C17.45 14.65 18.2 14.45 19 14.45C20.95 14.45 22.2 15.85 22.2 18.05L18.65 18.05"
+        stroke="currentColor"
+        strokeWidth="1.68"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function IosDualChatsBubbleIcon({
+  size = 24,
+  selected = true,
+  className,
+}: UiIconProps & { selected?: boolean }) {
+  const maskId = `dual-chat-mask-${selected ? "sel" : "out"}`;
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+    >
+      <defs>
+        <mask id={maskId}>
+          <rect x="0" y="0" width="24" height="24" fill="white" />
+          <path
+            d="M10.1 2.75C5 2.75 0.95 6.1 0.95 10.45C0.95 15 5 18.55 10.1 18.55C15.2 18.55 19.35 15 19.35 10.6C19.35 6.15 15.2 2.75 10.1 2.75Z"
+            fill="black"
+          />
+        </mask>
+      </defs>
+      <path
+        d="M10.1 4.2C5.8 4.2 2.4 6.95 2.4 10.45C2.4 12.35 3.45 14.04 5.1 15.18C4.92 16.32 4.28 17.52 3.55 18.22C3.35 18.4 3.5 18.74 3.78 18.7C5.45 18.5 6.98 17.78 8 16.82C8.68 16.95 9.38 17.02 10.1 17.02C14.4 17.02 17.8 14.22 17.8 10.61C17.8 7.05 14.4 4.2 10.1 4.2Z"
+        fill={selected ? "currentColor" : "none"}
+        stroke={selected ? "none" : "currentColor"}
+        strokeWidth="1.78"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        mask={`url(#${maskId})`}
+        d="M15.1 6.35C18.75 6.35 21.65 8.75 21.65 11.75C21.65 13.4 20.75 14.88 19.32 15.86C19.48 16.86 20.02 17.9 20.65 18.52C20.82 18.68 20.68 18.98 20.44 18.95C19.02 18.78 17.72 18.14 16.85 17.32C16.28 17.43 15.7 17.5 15.1 17.5C11.45 17.5 8.55 15.08 8.55 12.05C8.55 8.92 11.45 6.35 15.1 6.35Z"
+        fill={selected ? "currentColor" : "none"}
+        stroke={selected ? "none" : "currentColor"}
+        strokeWidth="1.65"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+
 
 

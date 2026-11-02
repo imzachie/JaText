@@ -97,6 +97,8 @@ interface SyncResponse {
     stickerFavorites: StickerMedia[];
     recentStickers: StickerMedia[];
   };
+  dmTypingUserIds?: string[];
+  typingByGroup?: Record<string, ChatTypingUser[]>;
   groupTypingUsers: ChatTypingUser[];
   communityTypingUsers: ChatTypingUser[];
 }
@@ -688,6 +690,10 @@ export function useTursoReactiveSession(
       }
       if (res.social) {
         const soc = res.social;
+        const dmSet = new Set(res.dmTypingUserIds ?? []);
+        const patchedActivities = soc.friendActivities.map((a) =>
+          dmSet.has(a.userId) && !a.isTyping ? { ...a, isTyping: true } : a,
+        );
         setRawFriendsQuery((prev) =>
           prev && sameJsonValue(prev, soc.friends) ? prev : soc.friends,
         );
@@ -697,11 +703,26 @@ export function useTursoReactiveSession(
           sameJsonValue(prev, soc.blockedUserIds) ? prev : soc.blockedUserIds,
         );
         setPreviewsQuery((prev) =>
-          prev && sameJsonValue(prev, soc.previews) ? prev : soc.previews,
+          sameJsonValue(prev, soc.previews) ? prev : soc.previews,
         );
         setFriendActivities((prev) =>
-          sameJsonValue(prev, soc.friendActivities) ? prev : soc.friendActivities,
+          sameJsonValue(prev, patchedActivities) ? prev : patchedActivities,
         );
+      } else if (Array.isArray(res.dmTypingUserIds)) {
+        const dmSet = new Set(res.dmTypingUserIds);
+        setFriendActivities((prev) => {
+          if (!prev) return prev;
+          let changed = false;
+          const next = prev.map((a) => {
+            const nextTyping = dmSet.has(a.userId);
+            if (Boolean(a.isTyping) !== nextTyping) {
+              changed = true;
+              return { ...a, isTyping: nextTyping };
+            }
+            return a;
+          });
+          return changed ? next : prev;
+        });
       }
       if (res.changedDmMessages?.length && activeChatRef.current === curChat) {
         const visibleDm = res.changedDmMessages.filter(

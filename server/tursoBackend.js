@@ -2205,8 +2205,9 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         commDeltaRes,
         grpMsgDeltaRes,
         callGrpDeltaRes,
-        grpTypingRes,
+        allGrpTypingRes,
         commTypingRes,
+        dmTypingRes,
         myGroupsCheck,
         stickerDeltaRes,
       ] = await Promise.all([
@@ -2260,18 +2261,20 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
                 LIMIT 60`,
           args: [meId, sinceTs, recentCallWindowTs],
         }),
-        activeGroupId
-          ? db.execute({
-              sql: `SELECT user_id FROM chat_typing WHERE channel_id = ? AND typing_at > ? AND user_id != ?`,
-              args: [`group:${activeGroupId}`, syncStartedAt - 6_000, meId],
-            })
-          : Promise.resolve({ rows: [] }),
-        args.includeCommunity
-          ? db.execute({
-              sql: `SELECT user_id FROM chat_typing WHERE channel_id = 'community' AND typing_at > ? AND user_id != ?`,
-              args: [syncStartedAt - 6_000, meId],
-            })
-          : Promise.resolve({ rows: [] }),
+        db.execute({
+          sql: `SELECT ct.channel_id, ct.user_id FROM chat_typing ct
+                INNER JOIN group_members gm ON ct.channel_id = ('group:' || gm.group_id)
+                WHERE gm.user_id = ? AND ct.typing_at > ? AND ct.user_id != ?`,
+          args: [meId, syncStartedAt - 6_000, meId],
+        }),
+        db.execute({
+          sql: `SELECT user_id FROM chat_typing WHERE channel_id = 'community' AND typing_at > ? AND user_id != ?`,
+          args: [syncStartedAt - 6_000, meId],
+        }),
+        db.execute({
+          sql: `SELECT user_id FROM presence WHERE typing_to_id = ? AND typing_at > ?`,
+          args: [meId, syncStartedAt - 6_000],
+        }),
         db.execute({
           sql: `SELECT 1 FROM group_members gm
                 LEFT JOIN groups g ON g.id = gm.group_id
@@ -2361,24 +2364,34 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           ? await listMyGroupsHydrated(db, meId)
           : undefined;
 
-      // Resolve typing users
-      const mapTypingUsers = async (rows) => {
-        if (!rows.length) return [];
-        const umap = await getUsersMap(
-          db,
-          rows.map((r) => String(r.user_id)),
-        );
-        return rows
-          .map((r) => mapUserRow(umap.get(String(r.user_id))))
-          .filter(Boolean)
-          .map((u) => ({ id: u.id, displayName: u.displayName, username: u.username }));
-      };
-
-      const [groupTypingUsers, communityTypingUsers, stickersDelta] = await Promise.all([
-        mapTypingUsers(grpTypingRes.rows),
-        mapTypingUsers(commTypingRes.rows),
+      // Resolve typing users across active group, all member groups, community, and 1:1 DMs
+      const dmTypingUserIds = dmTypingRes.rows.map((r) => String(r.user_id)).filter(Boolean);
+      const allTypingIds = Array.from(
+        new Set([
+          ...allGrpTypingRes.rows.map((r) => String(r.user_id)),
+          ...commTypingRes.rows.map((r) => String(r.user_id)),
+        ]),
+      ).filter(Boolean);
+      const [typingUsersMap, stickersDelta] = await Promise.all([
+        allTypingIds.length > 0 ? getUsersMap(db, allTypingIds) : Promise.resolve(new Map()),
         stickerDeltaRes.rows.length > 0 ? getStickersForUser(db, meId) : Promise.resolve(null),
       ]);
+
+      const typingByGroup = {};
+      for (const r of allGrpTypingRes.rows) {
+        const ch = String(r.channel_id || "");
+        if (!ch.startsWith("group:")) continue;
+        const gid = ch.slice("group:".length);
+        const u = mapUserRow(typingUsersMap.get(String(r.user_id)));
+        if (!gid || !u) continue;
+        if (!typingByGroup[gid]) typingByGroup[gid] = [];
+        typingByGroup[gid].push({ id: u.id, displayName: u.displayName, username: u.username });
+      }
+      const groupTypingUsers = activeGroupId ? typingByGroup[activeGroupId] || [] : [];
+      const communityTypingUsers = commTypingRes.rows
+        .map((r) => mapUserRow(typingUsersMap.get(String(r.user_id))))
+        .filter(Boolean)
+        .map((u) => ({ id: u.id, displayName: u.displayName, username: u.username }));
 
       return {
         serverTime: syncStartedAt,
@@ -2391,6 +2404,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         ...(callGroupMessages.length ? { callGroupMessages } : {}),
         ...(changedCommunityMessages.length ? { changedCommunityMessages } : {}),
         ...(groups ? { groups } : {}),
+        dmTypingUserIds,
+        typingByGroup,
         groupTypingUsers,
         communityTypingUsers,
       };

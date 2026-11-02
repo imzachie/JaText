@@ -96,6 +96,18 @@ data class FriendRequest(
         get() = id
     val user: JaUser
         get() = from
+    val sender: JaUser
+        get() = from
+    val recipient: JaUser
+        get() = to
+
+    fun peerFor(myUserId: String?): JaUser {
+        if (!myUserId.isNullOrBlank()) {
+            if (from.id == myUserId && to.id.isNotBlank()) return to
+            if (to.id == myUserId && from.id.isNotBlank()) return from
+        }
+        return if (to.id.isNotBlank() && from.id.isBlank()) to else from
+    }
 }
 
 @Serializable
@@ -514,6 +526,8 @@ data class SyncResponse(
     val callGroupMessages: List<GroupMessage>? = null,
     val changedCommunityMessages: List<CommunityMessage>? = null,
     val groups: List<GroupSummary>? = null,
+    val dmTypingUserIds: List<String> = emptyList(),
+    val typingByGroup: Map<String, List<ChatTypingUser>> = emptyMap(),
     val groupTypingUsers: List<ChatTypingUser> = emptyList(),
     val communityTypingUsers: List<ChatTypingUser> = emptyList(),
     val refreshedToken: String? = null,
