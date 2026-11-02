@@ -17,8 +17,8 @@ android {
         applicationId "com.ahad00010.jatext"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 65
-        versionName "3.9.8"
+        versionCode 66
+        versionName "3.9.9"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "API_ORIGIN", "\"https://jatext.vercel.app\""
         ndk {

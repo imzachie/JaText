@@ -39,6 +39,7 @@ object ViewOnceCodec {
 
     fun maskSpoilersAndMarkdownForPreview(body: String?): String {
         if (body.isNullOrBlank()) return ""
+        if (body.contains("__JATEXT_E2EE_V1__:") || body.contains("JATEXT_E2EE_V1:{")) return ""
         if (isViewOnceBody(body)) return "View once"
         return body
             .replace(SPOILER_SPAN_REGEX, SPOILER_PREVIEW_MASK)

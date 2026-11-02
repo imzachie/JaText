@@ -423,7 +423,6 @@ class JaTextSessionViewModel(app: Application) :
                     }
                 }
                 applyBootstrapState(targetSlotId, activeTok, boot, fromCache = false)
-                cache.saveBootstrapCache(targetSlotId, boot)
                 ensureE2EEPublishedAndSynced(boot.me, boot.friends, activeTok)
                 refreshScheduledMessages()
                 registerFcmDeviceTokenIfAvailable(activeTok)
@@ -511,6 +510,109 @@ class JaTextSessionViewModel(app: Application) :
             cache.getSoundboards(slotId)
         }
 
+        val existingPreviewByFriend = _state.value.previews.associateBy { it.friendId }
+        val initialPreviews = boot.previews.map { p ->
+            val fastDec = if (myId.isNotBlank()) {
+                JaTextCryptoEngine.decryptPreviewTextLocalFast(
+                    context = appCtx,
+                    myUserId = myId,
+                    peerOrGroupId = p.friendId,
+                    senderId = p.senderId,
+                    rawPreview = p.body,
+                    isGroup = false,
+                )
+            } else null
+            val resolvedText = when {
+                fastDec != null -> if (ViewOnceCodec.isViewOnceBody(fastDec)) "View once" else fastDec
+                else -> {
+                    val existing = existingPreviewByFriend[p.friendId]
+                    if (
+                        existing != null &&
+                        existing.createdAt == p.createdAt &&
+                        existing.body.isNotBlank() &&
+                        !JaTextCryptoEngine.isRawWireOrCorruptedPreview(existing.body)
+                    ) {
+                        existing.body
+                    } else {
+                        val cachedLatest = cache.loadDmMessagesCache(slotId, p.friendId)
+                            ?.lastOrNull {
+                                it.unsentAt == null &&
+                                    it.createdAt == p.createdAt &&
+                                    !JaTextCryptoEngine.isRawWireOrCorruptedPreview(it.body)
+                            }
+                        if (cachedLatest != null) {
+                            when {
+                                ViewOnceCodec.isViewOnceBody(cachedLatest.body) -> "View once"
+                                cachedLatest.attachmentType == "sticker" || cachedLatest.stickerKey != null -> "Sent a sticker"
+                                cachedLatest.attachmentType?.startsWith("audio/") == true -> "Voice message"
+                                cachedLatest.attachmentType?.startsWith("image/") == true -> "Photo"
+                                cachedLatest.attachmentType?.startsWith("video/") == true -> "Video"
+                                else -> JaTextCryptoEngine.formatPreviewPlainText(cachedLatest.body)
+                            }
+                        } else {
+                            ""
+                        }
+                    }
+                }
+            }
+            p.copy(body = resolvedText)
+        }.sortedByDescending { it.createdAt }
+
+        val existingGroupById = _state.value.groups.associateBy { it.id }
+        val initialGroups = boot.groups.map { g ->
+            val fastDec = if (myId.isNotBlank()) {
+                JaTextCryptoEngine.decryptPreviewTextLocalFast(
+                    context = appCtx,
+                    myUserId = myId,
+                    peerOrGroupId = g.id,
+                    senderId = g.lastSenderId.orEmpty(),
+                    rawPreview = g.lastMessage,
+                    isGroup = true,
+                )
+            } else null
+            val resolvedText = when {
+                fastDec != null -> if (ViewOnceCodec.isViewOnceBody(fastDec)) "View once" else fastDec
+                else -> {
+                    val existing = existingGroupById[g.id]
+                    if (
+                        existing != null &&
+                        existing.lastMessageAt == g.lastMessageAt &&
+                        existing.lastMessage.isNotBlank() &&
+                        !JaTextCryptoEngine.isRawWireOrCorruptedPreview(existing.lastMessage)
+                    ) {
+                        existing.lastMessage
+                    } else {
+                        val cachedLatest = cache.loadGroupMessagesCache(slotId, g.id)
+                            ?.lastOrNull {
+                                it.unsentAt == null &&
+                                    it.createdAt == g.lastMessageAt &&
+                                    !JaTextCryptoEngine.isRawWireOrCorruptedPreview(it.body)
+                            }
+                        if (cachedLatest != null) {
+                            when {
+                                ViewOnceCodec.isViewOnceBody(cachedLatest.body) -> "View once"
+                                cachedLatest.attachmentType == "sticker" || cachedLatest.stickerKey != null -> "Sent a sticker"
+                                cachedLatest.attachmentType?.startsWith("audio/") == true -> "Voice message"
+                                cachedLatest.attachmentType?.startsWith("image/") == true -> "Photo"
+                                cachedLatest.attachmentType?.startsWith("video/") == true -> "Video"
+                                else -> JaTextCryptoEngine.formatPreviewPlainText(cachedLatest.body)
+                            }
+                        } else {
+                            ""
+                        }
+                    }
+                }
+            }
+            g.copy(lastMessage = resolvedText)
+        }.sortedByDescending { it.lastMessageAt }
+
+        if (!fromCache) {
+            cache.saveBootstrapCache(
+                slotId,
+                boot.copy(previews = initialPreviews, groups = initialGroups),
+            )
+        }
+
         _state.update { prev ->
             prev.copy(
                 loading = false,
@@ -525,7 +627,7 @@ class JaTextSessionViewModel(app: Application) :
                 incoming = boot.incoming,
                 outgoing = boot.outgoing,
                 blockedUserIds = boot.blockedUserIds,
-                previews = boot.previews,
+                previews = initialPreviews,
                 friendActivities = boot.friendActivities,
                 emojiUsageCounts = cache.getEmojiUsageCounts(slotId),
                 drafts = cache.getDrafts(slotId),
@@ -533,7 +635,7 @@ class JaTextSessionViewModel(app: Application) :
                 chatOrganization = effectiveOrg,
                 pinnedMessagesByThread = cache.getPinnedMessagesMap(slotId),
                 soundboards = effectiveSoundboards,
-                groups = boot.groups,
+                groups = initialGroups,
                 communityPermissions = boot.communityPermissions,
                 communityDirectory = boot.communityDirectory,
                 communityMuted = boot.communityMuted,
@@ -551,17 +653,24 @@ class JaTextSessionViewModel(app: Application) :
             )
         }
         syncPushSuppressionState()
-        viewModelScope.launch {
-            decryptSidebarPreviewsAsync(boot.me.id, boot.previews, boot.groups, token)
+        val needsAsyncDecryption = !fromCache ||
+            boot.previews.any { JaTextCryptoEngine.isRawWireOrCorruptedPreview(it.body) } ||
+            boot.groups.any { JaTextCryptoEngine.isRawWireOrCorruptedPreview(it.lastMessage) }
+        if (needsAsyncDecryption) {
+            viewModelScope.launch {
+                decryptSidebarPreviewsAsync(slotId, boot, token)
+            }
         }
     }
 
     private suspend fun decryptSidebarPreviewsAsync(
-        myId: String,
-        rawPreviews: List<ChatPreview>,
-        rawGroups: List<GroupSummary>,
+        slotId: String,
+        boot: BootstrapResponse,
         token: String,
     ) {
+        val myId = boot.me.id
+        val rawPreviews = boot.previews
+        val rawGroups = boot.groups
         if (myId.isBlank()) return
         val hydratedPreviews = rawPreviews.map { p ->
             val rawDec = JaTextCryptoEngine.decryptPreviewText(
@@ -589,6 +698,7 @@ class JaTextSessionViewModel(app: Application) :
             val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "View once" else rawDec
             g.copy(lastMessage = text)
         }.sortedByDescending { it.lastMessageAt }
+        JaTextCryptoEngine.savePeerBundlesToDisk(appCtx)
         lastNotifiedDmTsByFriend.clear()
         for (p in hydratedPreviews) {
             lastNotifiedDmTsByFriend[p.friendId] = p.createdAt
@@ -598,7 +708,13 @@ class JaTextSessionViewModel(app: Application) :
             lastNotifiedGroupTsById[g.id] = g.lastMessageAt
         }
         deltaNotifBaselineReady = true
-        _state.update { it.copy(previews = hydratedPreviews, groups = hydratedGroups) }
+        if (_state.value.slotId == slotId && _state.value.me?.id == myId) {
+            _state.update { it.copy(previews = hydratedPreviews, groups = hydratedGroups) }
+        }
+        cache.saveBootstrapCache(
+            slotId,
+            boot.copy(previews = hydratedPreviews, groups = hydratedGroups),
+        )
 
         // If the app opened during an active/ringing incoming call (<60s old), immediately inspect recent signals!
         val nowMs = System.currentTimeMillis()
@@ -1204,6 +1320,18 @@ class JaTextSessionViewModel(app: Application) :
                     communityTypingUsers = sync.communityTypingUsers,
                 )
             }
+            if (hydratedPreviews != null || hydratedGroups != null) {
+                JaTextCryptoEngine.savePeerBundlesToDisk(appCtx)
+                cache.loadBootstrapCache(st.slotId)?.let { cached ->
+                    cache.saveBootstrapCache(
+                        st.slotId,
+                        cached.copy(
+                            previews = _state.value.previews,
+                            groups = _state.value.groups,
+                        ),
+                    )
+                }
+            }
             if (hydratedDmDelta.isNotEmpty() && activeFriend != null && _state.value.activeChatId == activeFriend) {
                 syncWallpaperFromDmMessages(activeFriend, _state.value.dmMessages)
                 cache.saveDmMessagesCache(st.slotId, activeFriend, _state.value.dmMessages)
@@ -1722,7 +1850,9 @@ class JaTextSessionViewModel(app: Application) :
     fun openDmChat(friendId: String, highlightMessageId: String? = null) {
         clearActiveTypingSignal()
         val slot = _state.value.slotId
-        val cached = cache.loadDmMessagesCache(slot, friendId).orEmpty()
+        val cached = cache.loadDmMessagesCache(slot, friendId)
+            .orEmpty()
+            .filterNot { JaTextCryptoEngine.isRawWireOrCorruptedPreview(it.body) }
         _state.update { prev ->
             prev.copy(
                 activeChatId = friendId,
@@ -1820,7 +1950,9 @@ class JaTextSessionViewModel(app: Application) :
     fun openGroupChat(groupId: String, highlightMessageId: String? = null) {
         clearActiveTypingSignal()
         val slot = _state.value.slotId
-        val cachedMsgs = cache.loadGroupMessagesCache(slot, groupId).orEmpty()
+        val cachedMsgs = cache.loadGroupMessagesCache(slot, groupId)
+            .orEmpty()
+            .filterNot { JaTextCryptoEngine.isRawWireOrCorruptedPreview(it.body) }
         val cachedDet = cache.loadGroupDetailsCache(slot, groupId)
         _state.update { prev ->
             prev.copy(
@@ -3825,7 +3957,6 @@ class JaTextSessionViewModel(app: Application) :
                     forceRehydrate = true,
                 )
                 applyBootstrapState(_state.value.slotId, effectiveToken, boot, fromCache = false)
-                cache.saveBootstrapCache(_state.value.slotId, boot)
                 rehydrateActiveThreadAfterKeySync(boot.me.id, effectiveToken)
                 showToast("Synced messages & encryption keys!")
             } catch (e: Throwable) {
