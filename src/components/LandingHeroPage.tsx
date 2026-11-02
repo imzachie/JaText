@@ -130,10 +130,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.9.8",
+    date: "November 3, 2026",
+    headline: "Compact Mobile Chat Header Icons, Search in 3-Dots Menu & Uncut Last Seen Presence",
+    latest: true,
+    bullets: [
+      "Refined mobile chat headers across Android and /ios/chats with sleeker, smaller action icons and avatars so contact names and live status lines have generous breathing room.",
+      "Moved Search in Chat directly into the 3-dots overflow menu on mobile and displayed the complete Last Seen timestamp cleanly beneath names and profile cards without ellipsis truncation.",
+    ],
+  },
+  {
     version: "v3.9.7",
     date: "November 2, 2026",
     headline: "Spoiler Preview Masking, Seamless Reinstall E2EE Keyring Sync, Full-Bleed View Once, Linked Device Login Security & Instant Owner Console",
-    latest: true,
     bullets: [
       "Redacted spoiler syntax across Chats, Groups, drafts, reply quotes, pinned banners, and notifications so raw spoiler pipes or hidden text never leak outside message bubbles.",
       "Restored E2EE identity and group epoch keyrings automatically across app reinstalls and new logins before first hydration, removed Elect Moderators from self-chat, rendered View Once directly on the full-bleed root window, auto-terminated linked web devices on new logins, and eliminated the Owner Settings open lag spike.",
@@ -494,7 +503,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.9.7 · Live
+                v3.9.8 · Live
               </span>
             </span>
           </a>
@@ -633,7 +642,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.9.7 (Build 64)</strong>
+                    <strong>v3.9.8 (Build 65)</strong>
                     <span>{isIosVisitor ? "iOS Web & Liquid Glass PWA" : "Web & Signed APK"}</span>
                   </div>
                 </div>
@@ -1015,7 +1024,7 @@ export function LandingHeroPage() {
                   <>
                     Launch the full JaText web app at{" "}
                     <strong>jatext.vercel.app/chats</strong> or grab the latest signed Android
-                    Release APK (v3.9.7).
+                    Release APK (v3.9.8).
                   </>
                 )}
               </p>
@@ -1045,7 +1054,7 @@ export function LandingHeroPage() {
                   href="/downloads/JaText-release.apk"
                   className="jt-btn-secondary jt-btn-lg"
                 >
-                  Get Android APK (v3.9.7)
+                  Get Android APK (v3.9.8)
                 </a>
               )}
             </div>
@@ -1058,7 +1067,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.9.7</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.9.8</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

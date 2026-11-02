@@ -2207,18 +2207,19 @@ export function ChatView({
         <button className="chat-title" onClick={() => onOpenProfile(friend)}>
           <strong>{isSelfChat ? `${friend.displayName} (You)` : friend.displayName}</strong>
           <span className="muted small chat-presence">
-            @{friend.username} · {friendStatusLabel}
+            <span className="chat-presence-desktop-extra">@{friend.username} · </span>
+            {friendStatusLabel}
             {!isSelfChat && peerE2EE ? (
               peerE2EE.verifiedKeyId === peerE2EE.bundle.keyId ? (
-                <>
+                <span className="chat-presence-desktop-extra">
                   {" · "}
                   <ShieldCheckIcon size={12} /> Encrypted &amp; Verified
-                </>
+                </span>
               ) : (
-                <>
+                <span className="chat-presence-desktop-extra">
                   {" · "}
                   <LockClosedIcon size={12} /> Encrypted
-                </>
+                </span>
               )
             ) : null}
           </span>
@@ -2226,7 +2227,7 @@ export function ChatView({
         <div className="chat-header-actions" aria-label="Chat actions">
           <button
             type="button"
-            className={`icon-btn ${searchOpen ? "menu-open" : ""}`}
+            className={`icon-btn chat-header-search-btn ${searchOpen ? "menu-open" : ""}`}
             title="Search in chat"
             aria-label="Search in chat"
             onClick={() => {
@@ -2885,6 +2886,27 @@ export function ChatView({
         >
           {({ closeWithAnimation }) => (
             <>
+              <button
+                type="button"
+                role="menuitem"
+                className="mobile-only-menu-item"
+                onClick={() =>
+                  closeWithAnimation(() => {
+                    setSearchOpen((open) => {
+                      if (open) {
+                        setSearchQuery("");
+                        setSearchMatchIdx(0);
+                      }
+                      return !open;
+                    });
+                  })
+                }
+              >
+                <span>
+                  <SearchIcon size={15} />
+                </span>{" "}
+                {searchOpen ? "Close search" : "Search in chat"}
+              </button>
               <button
                 type="button"
                 role="menuitem"

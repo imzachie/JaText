@@ -520,6 +520,7 @@ enum class WebUiIconKind {
     Star,
     Link,
     Transcript,
+    Search,
 }
 
 @Composable
@@ -698,6 +699,21 @@ fun WebUiSvgIcon(
                 drawLine(tint, Offset(7f * s, 9f * s), Offset(17f * s, 9f * s), strokeWidth = sw, cap = StrokeCap.Round)
                 drawLine(tint, Offset(7f * s, 13f * s), Offset(17f * s, 13f * s), strokeWidth = sw, cap = StrokeCap.Round)
                 drawLine(tint, Offset(7f * s, 16.5f * s), Offset(12.5f * s, 16.5f * s), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            WebUiIconKind.Search -> {
+                drawCircle(
+                    color = tint,
+                    radius = 7f * s,
+                    center = Offset(11f * s, 11f * s),
+                    style = stroke,
+                )
+                drawLine(
+                    color = tint,
+                    start = Offset(16.2f * s, 16.2f * s),
+                    end = Offset(21f * s, 21f * s),
+                    strokeWidth = sw,
+                    cap = StrokeCap.Round,
+                )
             }
         }
     }

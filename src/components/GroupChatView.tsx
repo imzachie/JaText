@@ -2921,7 +2921,7 @@ export function GroupChatView({
         <div className="chat-header-actions">
           <button
             type="button"
-            className={`icon-btn ${searchOpen ? "menu-open" : ""}`}
+            className={`icon-btn chat-header-search-btn ${searchOpen ? "menu-open" : ""}`}
             title="Search in group"
             aria-label="Search in group"
             onClick={() => {
@@ -2984,7 +2984,7 @@ export function GroupChatView({
           >
             <Video size={18} />
           </button>
-          <button type="button" className="ghost-btn" onClick={openManageModal}>
+          <button type="button" className="ghost-btn chat-header-manage-btn" onClick={openManageModal}>
             Manage
           </button>
           <button
@@ -4160,6 +4160,27 @@ export function GroupChatView({
         >
           {({ closeWithAnimation }) => (
             <>
+              <button
+                type="button"
+                role="menuitem"
+                className="mobile-only-menu-item"
+                onClick={() =>
+                  closeWithAnimation(() => {
+                    setSearchOpen((open) => {
+                      if (open) {
+                        setSearchQuery("");
+                        setSearchMatchIdx(0);
+                      }
+                      return !open;
+                    });
+                  })
+                }
+              >
+                <span>
+                  <SearchIcon size={15} />
+                </span>{" "}
+                {searchOpen ? "Close search" : "Search in group"}
+              </button>
               <button
                 type="button"
                 role="menuitem"

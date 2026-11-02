@@ -602,6 +602,7 @@ html[data-jt-mode="light"] .logo-full {
 }
 .chat-title strong { font-size: 17px; }
 .back-btn { display: none; }
+.mobile-only-menu-item { display: none !important; }
 .chat-header-actions { display: flex; align-items: center; gap: 6px; flex: none; }
 .chat-action-placeholder {
   width: 38px;
@@ -2140,6 +2141,47 @@ html[data-jt-mode="light"] .logo-full {
     transform: scale(0.86) translate3d(-3px, 0, 0);
     background: rgba(255, 255, 255, 0.08);
   }
+  .mobile-only-menu-item {
+    display: flex !important;
+  }
+  .chat-header-search-btn,
+  .chat-header-manage-btn,
+  .chat-presence-desktop-extra {
+    display: none !important;
+  }
+  .chat-header {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .chat-header .avatar-wrap,
+  .chat-header .avatar,
+  .chat-header .community-mark {
+    width: 36px !important;
+    height: 36px !important;
+  }
+  .chat-header .back-btn,
+  .chat-header-actions .icon-btn {
+    width: 32px;
+    height: 32px;
+  }
+  .chat-header .back-btn svg,
+  .chat-header-actions .icon-btn svg {
+    width: 15.5px;
+    height: 15.5px;
+  }
+  .chat-header-actions {
+    gap: 4px;
+  }
+  .chat-title strong {
+    font-size: 15.5px;
+  }
+  .chat-header .chat-presence {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    line-height: 1.25;
+    font-size: 11.5px;
+  }
   .msg-col { max-width: 80%; }
   .group-msg-col { max-width: 86%; }
   .mention-autocomplete {
@@ -2185,22 +2227,22 @@ html[data-jt-mode="light"] .logo-full {
 
 @media (max-width: 520px) {
   .chat-header {
-    gap: 8px;
-    padding: 9px 12px;
+    gap: 7px;
+    padding: 8px 10px;
   }
-  .chat-header-actions { gap: 3px; }
+  .chat-header-actions { gap: 4px; }
   .chat-action-placeholder {
     width: 32px;
-    height: 36px;
+    height: 32px;
   }
   .back-btn {
-    width: 34px;
-    height: 34px;
+    width: 32px;
+    height: 32px;
   }
   .chat-header .avatar-wrap,
   .chat-header .avatar {
-    width: 40px !important;
-    height: 40px !important;
+    width: 36px !important;
+    height: 36px !important;
   }
   .composer {
     gap: 6px;

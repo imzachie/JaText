@@ -661,16 +661,16 @@ fun ChatThreadScreen(
                         if (hasWallpaper) {
                             Modifier
                                 .statusBarsPadding()
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                                .clip(RoundedCornerShape(20.dp))
+                                .padding(horizontal = 8.dp, vertical = 5.dp)
+                                .clip(RoundedCornerShape(18.dp))
                                 .background(headerCardBg)
-                                .border(1.dp, headerCardBorder, RoundedCornerShape(20.dp))
-                                .padding(horizontal = 10.dp, vertical = 9.dp)
+                                .border(1.dp, headerCardBorder, RoundedCornerShape(18.dp))
+                                .padding(horizontal = 9.dp, vertical = 7.dp)
                         } else {
                             Modifier
                                 .background(headerCardBg)
                                 .statusBarsPadding()
-                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
                         }
                     ),
                 verticalAlignment = Alignment.CenterVertically,
@@ -678,19 +678,19 @@ fun ChatThreadScreen(
                 JaWebIconButton(
                     icon = Icons.AutoMirrored.Rounded.ArrowBack,
                     contentDescription = "Back",
-                    size = 38.dp,
-                    iconSize = 18.dp,
+                    size = 32.dp,
+                    iconSize = 16.dp,
                     containerColor = headerIconBg,
                     borderColor = headerIconBorder,
                     iconTint = headerTitleColor,
                     onClick = { vm.closeActiveChat() },
                 )
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(7.dp))
 
                 Row(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable {
                             when {
                                 activeFriend != null -> onOpenPeerProfile(activeFriend)
@@ -706,7 +706,7 @@ fun ChatThreadScreen(
                                 painter = painterResource(id = R.drawable.jatext_logo_icon),
                                 contentDescription = "JaText Community",
                                 modifier = Modifier
-                                    .size(40.dp)
+                                    .size(36.dp)
                                     .clip(CircleShape),
                             )
                         }
@@ -714,8 +714,8 @@ fun ChatThreadScreen(
                             JaGroupAvatar(
                                 avatarUrl = activeGroup.avatarUrl,
                                 name = activeGroup.name,
-                                size = 40.dp,
-                                ringWidth = 2.5.dp,
+                                size = 36.dp,
+                                ringWidth = 2.dp,
                             )
                         }
                         activeFriend != null -> {
@@ -735,14 +735,14 @@ fun ChatThreadScreen(
                                 avatarUrl = activeFriend.avatarUrl,
                                 displayName = activeFriend.displayName.ifBlank { activeFriend.username },
                                 avatarColor = activeFriend.avatarColor,
-                                size = 40.dp,
-                                ringWidth = 2.5.dp,
+                                size = 36.dp,
+                                ringWidth = 2.dp,
                                 presenceStatus = peerPresence,
                                 statusBorderColor = if (hasWallpaper) Color(0xFF141620) else palette.bgSecondary,
                             )
                         }
                     }
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(8.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
@@ -756,16 +756,16 @@ fun ChatThreadScreen(
                                     else -> "Chat"
                                 },
                                 color = headerTitleColor,
-                                fontSize = 16.5.sp,
+                                fontSize = 15.5.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false),
                             )
                             if (isCommunity) {
-                                Spacer(Modifier.width(6.dp))
-                                JaVerifiedBadge(size = 16.dp)
                                 Spacer(Modifier.width(5.dp))
+                                JaVerifiedBadge(size = 15.dp)
+                                Spacer(Modifier.width(4.dp))
                                 JaOfficialBadge()
                             }
                         }
@@ -800,30 +800,27 @@ fun ChatThreadScreen(
                                 if (activeGroupTypers.isNotEmpty()) {
                                     formatTypingUsersLabel(activeGroupTypers)
                                 } else {
-                                    "${state.groupDetails?.members?.size ?: activeGroup.memberCount} members · End-to-End Encrypted"
+                                    "${state.groupDetails?.members?.size ?: activeGroup.memberCount} members · Encrypted"
                                 }
                             }
-                            isSelfChat -> "Message yourself · @${activeFriend?.username.orEmpty()}"
+                            isSelfChat -> "Message yourself"
                             isDmPeerTyping -> "typing…"
                             friendActivity?.online == true -> {
-                                val statusLabel = when (friendActivity.statusPreference) {
+                                when (friendActivity.statusPreference) {
                                     "dnd" -> "Do Not Disturb"
                                     "away", "idle" -> "Idle"
                                     else -> "Online"
                                 }
-                                "$statusLabel · @${activeFriend?.username.orEmpty()}"
                             }
-                            activeFriend != null -> {
-                                val presenceLabel = formatLastSeenPresenceLabel(friendActivity?.lastSeenAt)
-                                "$presenceLabel · @${activeFriend.username}"
-                            }
+                            activeFriend != null -> formatLastSeenPresenceLabel(friendActivity?.lastSeenAt)
                             else -> "End-to-End Encrypted"
                         }
+                        var subtitleFontSizeSp by remember(subtitle) { mutableFloatStateOf(11.5f) }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (statusDotColor != null && !subtitle.contains("typing")) {
                                 Box(
                                     modifier = Modifier
-                                        .size(7.dp)
+                                        .size(6.5.dp)
                                         .clip(CircleShape)
                                         .background(statusDotColor)
                                 )
@@ -832,21 +829,28 @@ fun ChatThreadScreen(
                             Text(
                                 text = subtitle,
                                 color = if (subtitle.contains("typing")) palette.accent else headerSubColor,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                                fontSize = subtitleFontSizeSp.sp,
+                                lineHeight = (subtitleFontSizeSp + 2.5f).sp,
+                                maxLines = 2,
+                                softWrap = true,
+                                overflow = TextOverflow.Clip,
+                                onTextLayout = { layoutResult ->
+                                    if (layoutResult.lineCount > 1 && subtitleFontSizeSp > 10f) {
+                                        subtitleFontSizeSp = (subtitleFontSizeSp - 0.5f).coerceAtLeast(10f)
+                                    }
+                                },
                             )
                         }
                     }
                 }
 
                 if (!isCommunity && !isSelfChat) {
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(5.dp))
                     JaWebIconButton(
                         icon = Icons.Rounded.Call,
                         contentDescription = "Voice Call",
-                        size = 38.dp,
-                        iconSize = 17.dp,
+                        size = 32.dp,
+                        iconSize = 15.5.dp,
                         containerColor = headerIconBg,
                         borderColor = headerIconBorder,
                         iconTint = headerTitleColor,
@@ -856,12 +860,12 @@ fun ChatThreadScreen(
                             else if (activeGroup != null) vm.callEngine.startGroupCall(me, activeGroup, "voice")
                         },
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(5.dp))
                     JaWebIconButton(
                         icon = Icons.Rounded.Videocam,
                         contentDescription = "Video Call",
-                        size = 38.dp,
-                        iconSize = 17.dp,
+                        size = 32.dp,
+                        iconSize = 15.5.dp,
                         containerColor = headerIconBg,
                         borderColor = headerIconBorder,
                         iconTint = headerTitleColor,
@@ -872,12 +876,12 @@ fun ChatThreadScreen(
                         },
                     )
                 } else if (isCommunity && state.communityPermissions.isOwner) {
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(5.dp))
                     JaWebIconButton(
                         icon = Icons.Rounded.HowToReg,
                         contentDescription = "Elect moderators",
-                        size = 38.dp,
-                        iconSize = 18.dp,
+                        size = 32.dp,
+                        iconSize = 16.dp,
                         containerColor = headerIconBg,
                         borderColor = headerIconBorder,
                         iconTint = headerTitleColor,
@@ -885,26 +889,11 @@ fun ChatThreadScreen(
                     )
                 }
 
-                Spacer(Modifier.width(6.dp))
-                JaWebIconButton(
-                    icon = Icons.Rounded.Search,
-                    contentDescription = "Search in chat",
-                    size = 38.dp,
-                    iconSize = 18.dp,
-                    containerColor = headerIconBg,
-                    borderColor = headerIconBorder,
-                    iconTint = if (showInChatSearch) palette.accent else headerTitleColor,
-                    onClick = {
-                        showInChatSearch = !showInChatSearch
-                        if (!showInChatSearch) inChatSearchQuery = ""
-                    },
-                )
-
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(5.dp))
                 Box {
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(32.dp)
                             .jaBouncyClick(pressedScale = 0.88f) { showOverflowMenu = true }
                             .clip(CircleShape)
                             .background(headerIconBg)
@@ -913,8 +902,8 @@ fun ChatThreadScreen(
                     ) {
                         WebUiSvgIcon(
                             kind = WebUiIconKind.MoreVertical,
-                            tint = headerTitleColor,
-                            size = 18.dp,
+                            tint = if (showInChatSearch) palette.accent else headerTitleColor,
+                            size = 16.dp,
                         )
                     }
                     val activePreview = activeFriend?.let { fr ->
@@ -929,6 +918,16 @@ fun ChatThreadScreen(
                         border = BorderStroke(1.dp, palette.border),
                         modifier = Modifier.widthIn(min = 232.dp),
                     ) {
+                        ChatOverflowSvgItem(
+                            icon = WebUiIconKind.Search,
+                            label = if (showInChatSearch) "Close search" else com.ahad00010.jatext.data.jt("chat.searchInChat"),
+                            iconTint = if (showInChatSearch) palette.accent else palette.textSecondary,
+                            onClick = {
+                                showOverflowMenu = false
+                                showInChatSearch = !showInChatSearch
+                                if (!showInChatSearch) inChatSearchQuery = ""
+                            },
+                        )
                         if (activeFriend != null) {
                             ChatOverflowSvgItem(
                                 icon = WebUiIconKind.User,
@@ -5259,7 +5258,7 @@ private fun LiveTypingIndicatorRow(
     }
 }
 
-private fun formatLastSeenPresenceLabel(lastSeenAt: Long?): String {
+internal fun formatLastSeenPresenceLabel(lastSeenAt: Long?): String {
     if (lastSeenAt == null || lastSeenAt <= 0L) return "Offline"
     val diffMs = (System.currentTimeMillis() - lastSeenAt).coerceAtLeast(0L)
     if (diffMs < 60_000L) return "Last seen just now"
