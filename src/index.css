@@ -11568,3 +11568,432 @@ label,
   position: relative;
 }
 
+/* ================= JaText v3.9.5 Polish & Owner Console ================= */
+
+/* 1. Live clickable in-app message notification toast pill */
+.jatext-live-toast-pill {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 14px);
+  right: 16px;
+  z-index: 9850;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  max-width: min(360px, calc(100vw - 28px));
+  padding: 11px 15px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: var(--text);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34);
+  cursor: pointer;
+  text-align: left;
+  animation: jatextToastSlideIn 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 0.16s ease, border-color 0.16s ease;
+}
+
+.jatext-live-toast-pill:hover {
+  transform: translateY(-1px) scale(1.01);
+  border-color: var(--accent);
+}
+
+.jatext-live-toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.jatext-live-toast-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.jatext-live-toast-copy strong {
+  font-size: 13.5px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jatext-live-toast-copy span {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes jatextToastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 2. Always-visible smooth search bar under Chats & Groups headers */
+.ios-always-search-shell,
+.desktop-always-search-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 4px 0 10px;
+  border-radius: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  transition:
+    transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.ios-always-search-shell:focus-within,
+.desktop-always-search-shell:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  transform: translateY(-1px);
+}
+
+.always-search-icon {
+  position: absolute;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  pointer-events: none;
+  transition: color 0.18s ease;
+}
+
+.ios-always-search-shell:focus-within .always-search-icon,
+.desktop-always-search-shell:focus-within .always-search-icon {
+  color: var(--accent);
+}
+
+.always-search-input {
+  width: 100%;
+  margin: 0 !important;
+  padding-left: 36px !important;
+  padding-right: 34px !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.always-search-clear-btn {
+  position: absolute;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.always-search-clear-btn:hover {
+  transform: scale(1.08);
+}
+
+/* 3. In-chat search highlight & mobile-friendly spoilers */
+.md-search-highlight {
+  background: rgba(250, 204, 21, 0.45);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.55);
+}
+
+.md-spoiler {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.md-spoiler.revealed {
+  user-select: text;
+}
+
+/* 4. Custom Status thought-bubble on PFP in ProfileCard */
+.profile-avatar-with-status {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.profile-pfp-status-bubble {
+  position: relative;
+  margin-left: 12px;
+  margin-top: 18px;
+  max-width: min(230px, 56vw);
+  padding: 7px 12px;
+  border-radius: 16px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+  animation: jatextStatusPop 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.profile-pfp-status-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.profile-pfp-status-tail-lg {
+  position: absolute;
+  left: -6px;
+  bottom: 8px;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.profile-pfp-status-tail-sm {
+  position: absolute;
+  left: -12px;
+  bottom: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+@keyframes jatextStatusPop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 5. Custom Notification Sound active badge */
+.custom-sound-active-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  font-size: 12px;
+}
+
+/* 6. Red Owner Settings row & Owner Admin Console */
+.you-roadmap-row-danger .you-roadmap-row-label,
+.you-roadmap-row-danger .you-roadmap-row-icon,
+.you-roadmap-row-danger .you-roadmap-row-chevron {
+  color: #ef4444 !important;
+}
+
+.settings-nav-item-danger strong,
+.settings-nav-item-danger .settings-nav-icon,
+.owner-settings-heading {
+  color: #ef4444 !important;
+}
+
+.owner-admin-root {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.owner-danger-banner {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.owner-danger-banner-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ef4444;
+  font-size: 14px;
+}
+
+.owner-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
+  gap: 8px;
+}
+
+.owner-stat-card {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.owner-stat-card span {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.owner-stat-card strong {
+  font-size: 17px;
+}
+
+.owner-section-card {
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.owner-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.owner-section-head h4 {
+  margin: 0;
+  font-size: 14.5px;
+}
+
+.owner-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.owner-inline-row .search-input {
+  margin: 0;
+  flex: 1;
+}
+
+.owner-user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 290px;
+  overflow-y: auto;
+}
+
+.owner-user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background-color 0.16s ease;
+}
+
+.owner-user-row.active {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.owner-user-row.suspended {
+  opacity: 0.78;
+}
+
+.owner-user-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.owner-user-row-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.owner-pill {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.owner-pill.owner {
+  background: rgba(239, 68, 68, 0.16);
+  color: #ef4444;
+}
+
+.owner-pill.danger {
+  background: rgba(239, 68, 68, 0.22);
+  color: #f87171;
+}
+
+.owner-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.owner-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 8px;
+}
+
+.owner-delete-zone {
+  margin-top: 4px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(239, 68, 68, 0.09);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+

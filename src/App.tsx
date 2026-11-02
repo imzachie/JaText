@@ -177,6 +177,32 @@ function AppContent() {
   const previousPreviews = useRef<Map<string, string> | null>(null);
   const previousGroups = useRef<Map<string, string> | null>(null);
   const previousAnnouncementId = useRef<string | null | undefined>(undefined);
+  const [inAppToastNotif, setInAppToastNotif] = useState<{
+    id: string;
+    title: string;
+    body: string;
+    onOpen: () => void;
+  } | null>(null);
+  const inAppToastTimerRef = useRef<number | null>(null);
+
+  const showInAppToast = useCallback(
+    (title: string, body: string, onOpen: () => void) => {
+      if (inAppToastTimerRef.current !== null) {
+        window.clearTimeout(inAppToastTimerRef.current);
+      }
+      setInAppToastNotif({
+        id: `${Date.now()}-${Math.random()}`,
+        title,
+        body,
+        onOpen,
+      });
+      inAppToastTimerRef.current = window.setTimeout(() => {
+        inAppToastTimerRef.current = null;
+        setInAppToastNotif(null);
+      }, 4600);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
@@ -216,10 +242,11 @@ function AppContent() {
     };
   }, [setActiveChatId, setActiveGroupId, setCallMinimized, setGroupCallMinimized]);
 
-  const activeFriend = useMemo(
-    () => store.friends.find((f) => f.id === store.activeChatId) ?? null,
-    [store.activeChatId, store.friends],
-  );
+  const activeFriend = useMemo(() => {
+    if (!store.activeChatId || store.activeChatId === OFFICIAL_COMMUNITY_ID) return null;
+    if (store.me && store.activeChatId === store.me.id) return store.me;
+    return store.friends.find((f) => f.id === store.activeChatId) ?? null;
+  }, [store.activeChatId, store.friends, store.me]);
   const activeCommunity = activeChatId === OFFICIAL_COMMUNITY_ID;
   const activeGroup = !!store.activeGroupId;
   const hasActivePane = Boolean(activeFriend || activeCommunity || activeGroup);
@@ -369,42 +396,20 @@ function AppContent() {
 
     const previous = previousPreviews.current;
     const current = new Map<string, string>();
-    const now = Date.now();
-    let pendingHydration = false;
-
     for (const preview of previews) {
-      const sig = `${preview.createdAt}:${preview.senderId}`;
-      const isPendingE2EE =
-        Boolean(previous) &&
-        previous?.get(preview.friendId) !== sig &&
-        isPlaceholderNotificationText(preview.body) &&
-        now - preview.createdAt < 12_000;
-      if (isPendingE2EE) {
-        pendingHydration = true;
-        const prevSig = previous?.get(preview.friendId);
-        if (prevSig !== undefined) current.set(preview.friendId, prevSig);
-      } else {
-        current.set(preview.friendId, sig);
-      }
+      current.set(preview.friendId, `${preview.createdAt}:${preview.senderId}`);
     }
-
     previousPreviews.current = current;
     if (!previous) return;
 
-    let fallbackTimer: number | null = null;
-    if (pendingHydration) {
-      fallbackTimer = window.setTimeout(() => {
-        previousPreviews.current = new Map(current);
-      }, 12_200);
-    }
-
     for (const preview of previews) {
       const sig = `${preview.createdAt}:${preview.senderId}`;
-      if (previous.get(preview.friendId) === sig || current.get(preview.friendId) !== sig) {
+      if (previous.get(preview.friendId) === sig) {
         continue;
       }
       if (
         preview.createdAt === 0 ||
+        preview.friendId === me.id ||
         preview.senderId === me.id ||
         preview.isMuted ||
         preview.isArchived ||
@@ -422,46 +427,61 @@ function AppContent() {
       const appInForeground = isNative
         ? isNativeActiveRef.current && document.visibilityState === "visible"
         : document.visibilityState === "visible" && document.hasFocus();
+      const viewingThisExactChat = appInForeground && activeChatId === friend.id && !activeGroupId;
 
-      // Play default JaText Notification-FIXED.mp3 on Desktop Web both in-app & unfocused/minimized!
-      if (soundsEnabled && (appInForeground || !isNative)) {
+      if (soundsEnabled && (!viewingThisExactChat || !isNative)) {
         playMessageSound("received");
       }
 
       const readableText = formatPreviewMessageText(preview.body);
-
-      // Show OS/browser notification when unfocused/minimized (or viewing another chat while unfocused)
-      if (
+      const shouldDispatchAlert =
         notificationsEnabled &&
-        !appInForeground &&
-        (!isNative || !firebasePushActiveRef.current)
-      ) {
+        !viewingThisExactChat &&
+        (!isNative || !firebasePushActiveRef.current);
+
+      if (shouldDispatchAlert) {
         const dispatchDmNotification = (finalText: string) => {
-          if (isPlaceholderNotificationText(finalText)) return;
+          const cleanBody = isPlaceholderNotificationText(finalText)
+            ? "Sent you a message"
+            : finalText;
+          const openChat = () => {
+            setActiveGroupId(null);
+            setActiveChatId(friend.id);
+          };
           if (isNative) {
             void JaTextNative.showDecryptedNotification({
               tag: `dm:${friend.id}`,
               title: `New message from ${friend.displayName}`,
-              body: finalText,
+              body: cleanBody,
               senderId: friend.id,
             }).catch(() => undefined);
-          } else if ("Notification" in window && Notification.permission === "granted") {
-            try {
-              const notification = new Notification(`Message from ${friend.displayName}`, {
-                body: finalText,
-                icon: "/jatext-logo-icon.png",
-                badge: "/jatext-logo-icon.png",
-                tag: `jatext-${friend.id}`,
-                silent: true,
-              });
-              notification.onclick = () => {
-                window.focus();
-                setActiveGroupId(null);
-                setActiveChatId(friend.id);
-                notification.close();
-              };
-            } catch {
-              // Mobile browsers / WebViews disallow direct Notification construction.
+          } else {
+            let shownOsNotif = false;
+            if (
+              !appInForeground &&
+              "Notification" in window &&
+              Notification.permission === "granted"
+            ) {
+              try {
+                const notification = new Notification(`Message from ${friend.displayName}`, {
+                  body: cleanBody,
+                  icon: "/jatext-logo-icon.png",
+                  badge: "/jatext-logo-icon.png",
+                  tag: `jatext-dm-${friend.id}-${preview.createdAt}`,
+                  silent: true,
+                });
+                notification.onclick = () => {
+                  window.focus();
+                  openChat();
+                  notification.close();
+                };
+                shownOsNotif = true;
+              } catch {
+                // Browser disallowed direct Notification construction; fall back to in-app toast
+              }
+            }
+            if (appInForeground || !shownOsNotif) {
+              showInAppToast(friend.displayName || `@${friend.username}`, cleanBody, openChat);
             }
           }
         };
@@ -478,28 +498,26 @@ function AppContent() {
                   (latest.attachmentType?.startsWith("audio/")
                     ? "Voice note"
                     : latest.attachmentName || "Sent you an attachment")
-                : "";
-              if (resolved && !isPlaceholderNotificationText(resolved)) {
-                dispatchDmNotification(resolved);
-              }
+                : "Sent you a message";
+              dispatchDmNotification(resolved);
             })
-            .catch(() => undefined);
+            .catch(() => dispatchDmNotification("Sent you a message"));
         } else {
           dispatchDmNotification(readableText || "Sent you an attachment");
         }
       }
     }
-
-    return () => {
-      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
-    };
   }, [
+    activeChatId,
+    activeGroupId,
     friends,
     me,
     notificationsEnabled,
     previews,
     previewsReady,
     setActiveChatId,
+    setActiveGroupId,
+    showInAppToast,
     soundsEnabled,
     store,
   ]);
@@ -512,33 +530,23 @@ function AppContent() {
 
     const previous = previousGroups.current;
     const current = new Map<string, string>();
-    const now = Date.now();
     for (const group of groups) {
-      const sig = `${group.lastMessageAt}:${group.lastSenderId ?? ""}`;
-      const isPendingGroupE2EE =
-        Boolean(previous) &&
-        previous?.get(group.id) !== sig &&
-        isPlaceholderNotificationText(group.lastMessage) &&
-        now - group.lastMessageAt < 12_000;
-      if (isPendingGroupE2EE) {
-        const prevSig = previous?.get(group.id);
-        if (prevSig !== undefined) current.set(group.id, prevSig);
-      } else {
-        current.set(group.id, sig);
-      }
+      current.set(group.id, `${group.lastMessageAt}:${group.lastSenderId ?? ""}`);
     }
     previousGroups.current = current;
     if (!previous) return;
 
     for (const group of groups) {
       const signature = `${group.lastMessageAt}:${group.lastSenderId ?? ""}`;
-      if (previous.get(group.id) === signature || current.get(group.id) !== signature) continue;
+      if (previous.get(group.id) === signature) continue;
       if (
-        !group.lastMentionedMe ||
-        group.isSilenced ||
+        group.lastMessageAt === 0 ||
         group.isArchived ||
+        (group.isSilenced && !group.lastMentionedMe) ||
+        !group.lastSenderId ||
         group.lastSenderId === me.id ||
-        me.statusPreference === "dnd"
+        me.statusPreference === "dnd" ||
+        isHiddenCallSignal(group.lastMessage)
       ) {
         continue;
       }
@@ -547,46 +555,65 @@ function AppContent() {
       const appInForeground = isNative
         ? isNativeActiveRef.current && document.visibilityState === "visible"
         : document.visibilityState === "visible" && document.hasFocus();
+      const viewingThisExactGroup = appInForeground && activeGroupId === group.id;
 
-      if (soundsEnabled && (appInForeground || !isNative)) {
+      if (soundsEnabled && (!viewingThisExactGroup || !isNative)) {
         playMessageSound("received");
       }
 
       const senderLabel = group.lastSenderName || "Someone";
-      const title = `${senderLabel} mentioned you in ${group.name}`;
+      const title = group.lastMentionedMe
+        ? `${senderLabel} mentioned you in ${group.name}`
+        : `${group.name} · ${senderLabel}`;
       const readableGroupBody = formatPreviewMessageText(group.lastMessage);
 
       if (
         notificationsEnabled &&
-        !appInForeground &&
+        !viewingThisExactGroup &&
         (!isNative || !firebasePushActiveRef.current)
       ) {
         const dispatchGroupNotification = (finalGroupBody: string) => {
-          if (isPlaceholderNotificationText(finalGroupBody)) return;
+          const cleanBody = isPlaceholderNotificationText(finalGroupBody)
+            ? "New message in group"
+            : finalGroupBody;
+          const openGroup = () => {
+            setActiveChatId(null);
+            setActiveGroupId(group.id);
+          };
           if (isNative) {
             void JaTextNative.showDecryptedNotification({
               tag: `group:${group.id}`,
               title,
-              body: finalGroupBody,
+              body: cleanBody,
               groupId: group.id,
             }).catch(() => undefined);
-          } else if ("Notification" in window && Notification.permission === "granted") {
-            try {
-              const notification = new Notification(title, {
-                body: finalGroupBody,
-                icon: "/jatext-logo-icon.png",
-                badge: "/jatext-logo-icon.png",
-                tag: `jatext-group-${group.id}`,
-                silent: true,
-              });
-              notification.onclick = () => {
-                window.focus();
-                setActiveChatId(null);
-                setActiveGroupId(group.id);
-                notification.close();
-              };
-            } catch {
-              // Mobile browsers / WebViews disallow direct Notification construction.
+          } else {
+            let shownOsNotif = false;
+            if (
+              !appInForeground &&
+              "Notification" in window &&
+              Notification.permission === "granted"
+            ) {
+              try {
+                const notification = new Notification(title, {
+                  body: cleanBody,
+                  icon: "/jatext-logo-icon.png",
+                  badge: "/jatext-logo-icon.png",
+                  tag: `jatext-group-${group.id}-${group.lastMessageAt}`,
+                  silent: true,
+                });
+                notification.onclick = () => {
+                  window.focus();
+                  openGroup();
+                  notification.close();
+                };
+                shownOsNotif = true;
+              } catch {
+                // Fall back to in-app toast
+              }
+            }
+            if (appInForeground || !shownOsNotif) {
+              showInAppToast(title, cleanBody, openGroup);
             }
           }
         };
@@ -602,24 +629,25 @@ function AppContent() {
                 ? formatPreviewMessageText(latest.body) ||
                   latest.stickerName ||
                   latest.attachmentName ||
-                  "Mentioned you in group"
-                : "";
-              if (resolved && !isPlaceholderNotificationText(resolved)) {
-                dispatchGroupNotification(resolved);
-              }
+                  "New message in group"
+                : "New message in group";
+              dispatchGroupNotification(resolved);
             })
-            .catch(() => undefined);
+            .catch(() => dispatchGroupNotification("New message in group"));
         } else {
           dispatchGroupNotification(readableGroupBody || "Open group chat");
         }
       }
     }
   }, [
+    activeGroupId,
     groups,
     me,
     notificationsEnabled,
     previewsReady,
+    setActiveChatId,
     setActiveGroupId,
+    showInAppToast,
     soundsEnabled,
     store,
   ]);
@@ -920,6 +948,36 @@ function AppContent() {
       )}
       {isPrimaryMobile && accountSwitcherOpen && (
         <AccountSwitcherModal onClose={() => setAccountSwitcherOpen(false)} />
+      )}
+      {inAppToastNotif && (
+        <div
+          key={inAppToastNotif.id}
+          className="jatext-live-toast-pill"
+          role="status"
+          onClick={() => {
+            inAppToastNotif.onOpen();
+            setInAppToastNotif(null);
+          }}
+        >
+          <span className="jatext-live-toast-icon" aria-hidden="true">
+            <MessageCircleIcon size={16} />
+          </span>
+          <div className="jatext-live-toast-copy">
+            <strong>{inAppToastNotif.title}</strong>
+            <span>{inAppToastNotif.body}</span>
+          </div>
+          <button
+            type="button"
+            className="icon-btn jatext-live-toast-close"
+            aria-label="Dismiss notification"
+            onClick={(e) => {
+              e.stopPropagation();
+              setInAppToastNotif(null);
+            }}
+          >
+            <CloseIcon size={13} />
+          </button>
+        </div>
       )}
       {webNotifPromptVisible && !isIosChats && (
         <div className="desktop-notif-banner" role="region" aria-label="Enable desktop notifications">

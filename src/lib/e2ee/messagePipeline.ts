@@ -203,7 +203,22 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
     }
   }
 
-  const peerEntry = state.peerKeys[receiverId];
+  let peerEntry = state.peerKeys[receiverId];
+  if (!peerEntry && receiverId === state.userId) {
+    const ownPrimary = getAllMyIdentities(state)[0];
+    if (ownPrimary) {
+      await ingestPeerIdentityBundle({
+        userId: state.userId,
+        keyId: ownPrimary.keyId,
+        dhPubB64: ownPrimary.dhPubB64,
+        sigPubB64: ownPrimary.sigPubB64,
+        selfSigB64: ownPrimary.selfSigB64,
+        ts: nowTs,
+      }).catch(() => undefined);
+      state = getActiveE2EEState() ?? state;
+      peerEntry = state.peerKeys[receiverId];
+    }
+  }
   if (!peerEntry) return null;
 
   let attachmentId: TStorageId | undefined;
@@ -637,20 +652,30 @@ function resolveSpilledText(
   return "Decrypting long message…";
 }
 
+function sanitizeViewOnceReplyPreview(text: string): string {
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith("__JATEXT_VO_V1__:")) {
+    return "View once";
+  }
+  return text;
+}
+
 function resolveReplyBody(
   reply: { id: string; senderId: string; body: string } | undefined,
   dmPeerReceiverId?: string,
   groupId?: string,
 ): string | undefined {
   if (!reply) return undefined;
-  if (!isEncryptedWireBody(reply.body)) return reply.body;
+  if (!isEncryptedWireBody(reply.body)) return sanitizeViewOnceReplyPreview(reply.body);
 
   const state = getActiveE2EEState();
   const cacheKey = buildMessageDecryptCacheKey(`reply:${reply.id}`, reply.body, 0);
   const cached = getCachedDecryptedMessage(cacheKey, reply.body);
   if (cached) {
     if (cached.payload) {
-      return cached.payload.b || cached.payload.att?.n || cached.payload.stk?.n || "Attachment";
+      const resolved =
+        cached.payload.b || cached.payload.att?.n || cached.payload.stk?.n || "Attachment";
+      return sanitizeViewOnceReplyPreview(resolved);
     }
     return cached.proof.error ?? "Encrypted message";
   }

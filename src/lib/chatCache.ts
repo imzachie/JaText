@@ -402,10 +402,20 @@ if (typeof window !== "undefined") {
 /* Per-Conversation 1:1 DM & Group Chat Cache Accessors                */
 /* ------------------------------------------------------------------ */
 
+function rankDeliveryStatus(status?: ChatMessage["deliveryStatus"]): number {
+  if (status === "read") return 3;
+  if (status === "delivered") return 2;
+  if (status === "sent") return 1;
+  return 0;
+}
+
 export function mergeLiveWithCachedMessages<
   T extends {
     id: string;
+    senderId?: string;
+    receiverId?: string;
     body: string;
+    deliveryStatus?: ChatMessage["deliveryStatus"];
     editedAt?: number;
     unsentAt?: number;
     attachmentUrl?: string;
@@ -423,8 +433,21 @@ export function mergeLiveWithCachedMessages<
   let changed = false;
   const out = liveMessages.map((msg) => {
     if (msg.unsentAt) return msg;
+    const isSelfMsg = Boolean(msg.senderId && msg.receiverId && msg.senderId === msg.receiverId);
     const prev = cachedById.get(msg.id);
-    if (!prev || (prev.editedAt ?? 0) !== (msg.editedAt ?? 0)) return msg;
+    if (!prev || (prev.editedAt ?? 0) !== (msg.editedAt ?? 0)) {
+      if (isSelfMsg && msg.deliveryStatus !== "read") {
+        changed = true;
+        return { ...msg, deliveryStatus: "read" as const };
+      }
+      return msg;
+    }
+
+    const bestDelivery: ChatMessage["deliveryStatus"] | undefined = isSelfMsg
+      ? "read"
+      : rankDeliveryStatus(msg.deliveryStatus) >= rankDeliveryStatus(prev.deliveryStatus)
+        ? msg.deliveryStatus
+        : prev.deliveryStatus;
 
     const liveNeedsDecrypt = isPlaceholderEncryptedText(msg.body);
     const prevWasDecrypted = !isPlaceholderEncryptedText(prev.body);
@@ -432,6 +455,7 @@ export function mergeLiveWithCachedMessages<
       changed = true;
       return {
         ...msg,
+        ...(bestDelivery ? { deliveryStatus: bestDelivery } : {}),
         body: prev.body,
         bubbleStyle:
           msg.bubbleStyle && msg.bubbleStyle !== "default"
@@ -451,6 +475,10 @@ export function mergeLiveWithCachedMessages<
             : msg.attachmentType ?? prev.attachmentType,
         e2ee: prev.e2ee ?? msg.e2ee,
       };
+    }
+    if (bestDelivery && bestDelivery !== msg.deliveryStatus) {
+      changed = true;
+      return { ...msg, deliveryStatus: bestDelivery };
     }
     return msg;
   });
@@ -521,7 +549,10 @@ export function setCachedDmConversation(
   ) {
     return;
   }
-  const shouldNotify = !existing || existingIdsSig !== nextIdsSig;
+  const shouldNotify =
+    !existing ||
+    existingIdsSig !== nextIdsSig ||
+    recentExistingStatuses !== recentNextStatuses;
   slotData.dms[friendId] = {
     messages: capped,
     rawRows: trimRawRowsForCache(rawRows),

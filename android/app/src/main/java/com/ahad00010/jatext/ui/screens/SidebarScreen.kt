@@ -3,10 +3,16 @@ package com.ahad00010.jatext.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -94,8 +100,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
@@ -181,17 +189,9 @@ fun SidebarScreen(
     var showFolderEditorDialog by remember { mutableStateOf(false) }
     var holdTarget by remember { mutableStateOf<SidebarHoldTarget?>(null) }
 
-    LaunchedEffect(isSearchOpen, activeTab, showAddFriendsView) {
-        if (isSearchOpen && !showAddFriendsView && (activeTab == "chats" || activeTab == "groups")) {
-            kotlinx.coroutines.delay(90)
-            runCatching { searchFocusRequester.requestFocus() }
-        }
-    }
-
-    BackHandler(enabled = (isSearchOpen || showAddFriendsView || activeTab != "chats") && !settingsSubOverlayOpen) {
+    BackHandler(enabled = (searchQuery.isNotEmpty() || showAddFriendsView || activeTab != "chats") && !settingsSubOverlayOpen) {
         when {
-            isSearchOpen -> {
-                isSearchOpen = false
+            searchQuery.isNotEmpty() -> {
                 searchQuery = ""
                 focusManager.clearFocus()
             }
@@ -266,16 +266,23 @@ fun SidebarScreen(
         }
     }
 
-    val sortedFriends = remember(state.friends, previewByFriend, showArchivedDms, searchQuery, activeFolder) {
+    val sortedFriends = remember(me, state.friends, previewByFriend, showArchivedDms, searchQuery, activeFolder) {
         val q = searchQuery.trim().lowercase()
-        state.friends
+        val candidates = if (me != null) {
+            listOf(me) + state.friends.filter { it.id != me.id }
+        } else {
+            state.friends
+        }
+        candidates
             .filter { f ->
+                val isSelf = me != null && f.id == me.id
                 val inFolder = activeFolder == null || activeFolder.threadIds.contains("dm:${f.id}")
                 val isArch = previewByFriend[f.id]?.isArchived == true
                 inFolder && isArch == showArchivedDms && (
                     q.isEmpty() ||
                         f.displayName.lowercase().contains(q) ||
-                        f.username.lowercase().contains(q)
+                        f.username.lowercase().contains(q) ||
+                        (isSelf && "message yourself (you) note to self".contains(q))
                     )
             }
             .sortedByDescending { f -> previewByFriend[f.id]?.createdAt ?: 0L }
@@ -288,7 +295,7 @@ fun SidebarScreen(
             .map { "dm:${it.id}" to (previewByFriend[it.id]?.createdAt ?: 0L) }
             .sortedWith(
                 compareByDescending<Pair<String, Long>> { pinnedSet.contains(it.first) }
-                    .thenBy { orderIdx[it.first] ?: Int.MAX_VALUE }
+                    .thenBy { if (pinnedSet.contains(it.first)) (orderIdx[it.first] ?: Int.MAX_VALUE) else Int.MAX_VALUE }
                     .thenByDescending { it.second }
             )
             .map { it.first }
@@ -301,7 +308,7 @@ fun SidebarScreen(
             .map { "group:${it.id}" to it.lastMessageAt }
             .sortedWith(
                 compareByDescending<Pair<String, Long>> { pinnedSet.contains(it.first) }
-                    .thenBy { orderIdx[it.first] ?: Int.MAX_VALUE }
+                    .thenBy { if (pinnedSet.contains(it.first)) (orderIdx[it.first] ?: Int.MAX_VALUE) else Int.MAX_VALUE }
                     .thenByDescending { it.second }
             )
             .map { it.first }
@@ -392,21 +399,6 @@ fun SidebarScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                if (currentTab == "chats" || currentTab == "groups") {
-                                    JaWebIconButton(
-                                        icon = Icons.Rounded.Search,
-                                        contentDescription = "Search",
-                                        onClick = {
-                                            if (isSearchOpen) {
-                                                isSearchOpen = false
-                                                searchQuery = ""
-                                                focusManager.clearFocus()
-                                            } else {
-                                                isSearchOpen = true
-                                            }
-                                        },
-                                    )
-                                }
                                 if (currentTab == "groups") {
                                     JaWebIconButton(
                                         icon = Icons.Rounded.Add,
@@ -419,7 +411,6 @@ fun SidebarScreen(
                                     contentDescription = "Add friends",
                                     badgeCount = state.incoming.size,
                                     onClick = {
-                                        isSearchOpen = false
                                         searchQuery = ""
                                         showAddFriendsView = !showAddFriendsView
                                     },
@@ -486,55 +477,15 @@ fun SidebarScreen(
             }
 
             "groups" -> {
-                AnimatedVisibility(
-                    visible = isSearchOpen,
-                    enter = expandVertically(tween(200)) + fadeIn(tween(180)),
-                    exit = shrinkVertically(tween(160)) + fadeOut(tween(130)),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        JaWebInput(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            modifier = Modifier.weight(1f),
-                            inputModifier = Modifier.focusRequester(searchFocusRequester),
-                            placeholder = "Search groups",
-                            leadingIcon = Icons.Rounded.Search,
-                            trailingContent = if (searchQuery.isNotEmpty()) {
-                                {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "Clear",
-                                        tint = palette.textSecondary,
-                                        modifier = Modifier
-                                            .size(17.dp)
-                                            .clickable { searchQuery = "" },
-                                    )
-                                }
-                            } else {
-                                null
-                            },
-                        )
-                        Text(
-                            text = "Cancel",
-                            color = palette.accent,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable {
-                                    isSearchOpen = false
-                                    searchQuery = ""
-                                    focusManager.clearFocus()
-                                }
-                                .padding(horizontal = 6.dp, vertical = 8.dp),
-                        )
-                    }
-                }
+                SidebarAlwaysSearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    placeholder = "Search groups",
+                    onClear = {
+                        searchQuery = ""
+                        focusManager.clearFocus()
+                    },
+                )
 
                 // Archived Groups Toggle
                 Row(
@@ -734,55 +685,15 @@ fun SidebarScreen(
             }
 
             "chats" -> {
-                AnimatedVisibility(
-                    visible = isSearchOpen,
-                    enter = expandVertically(tween(200)) + fadeIn(tween(180)),
-                    exit = shrinkVertically(tween(160)) + fadeOut(tween(130)),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        JaWebInput(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            modifier = Modifier.weight(1f),
-                            inputModifier = Modifier.focusRequester(searchFocusRequester),
-                            placeholder = com.ahad00010.jatext.data.jt("sidebar.search"),
-                            leadingIcon = Icons.Rounded.Search,
-                            trailingContent = if (searchQuery.isNotEmpty()) {
-                                {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "Clear",
-                                        tint = palette.textSecondary,
-                                        modifier = Modifier
-                                            .size(17.dp)
-                                            .clickable { searchQuery = "" },
-                                    )
-                                }
-                            } else {
-                                null
-                            },
-                        )
-                        Text(
-                            text = "Cancel",
-                            color = palette.accent,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable {
-                                    isSearchOpen = false
-                                    searchQuery = ""
-                                    focusManager.clearFocus()
-                                }
-                                .padding(horizontal = 6.dp, vertical = 8.dp),
-                        )
-                    }
-                }
+                SidebarAlwaysSearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    placeholder = com.ahad00010.jatext.data.jt("sidebar.search"),
+                    onClear = {
+                        searchQuery = ""
+                        focusManager.clearFocus()
+                    },
+                )
 
                 // Folder Filter Pills ("All", user folders, "+ Folder") for P2P DMs
                 if (!showArchivedDms) {
@@ -934,20 +845,26 @@ fun SidebarScreen(
                         val fid = threadKey.removePrefix("dm:")
                         val friend = friendById[fid]
                         if (friend != null) {
+                            val isSelf = me != null && friend.id == me.id
                             val prev = previewByFriend[friend.id]
                             val act = activityByFriend[friend.id]
                             DmSidebarRow(
                                 friend = friend,
                                 preview = prev,
                                 myUserId = me?.id.orEmpty(),
+                                isSelf = isSelf,
                                 isSelected = state.activeChatId == friend.id,
                                 isPinned = isPinned,
                                 draftText = state.drafts["dm:${friend.id}"],
-                                presenceStatus = act?.status ?: "offline",
-                                typingToMe = typingDmSenders.contains(friend.id),
+                                presenceStatus = if (isSelf) "online" else (act?.status ?: "offline"),
+                                typingToMe = !isSelf && typingDmSenders.contains(friend.id),
                                 onClick = { vm.openDmChat(friend.id) },
                                 onAvatarClick = { onOpenProfile(friend) },
-                                onLongClick = { holdTarget = SidebarHoldTarget.Dm(friend, prev) },
+                                onLongClick = {
+                                    if (!isSelf) {
+                                        holdTarget = SidebarHoldTarget.Dm(friend, prev)
+                                    }
+                                },
                             )
                         }
                     }
@@ -2184,12 +2101,85 @@ private fun UnreadCountPill(
     }
 }
 
+@Composable
+private fun SidebarAlwaysSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    placeholder: String,
+    onClear: () -> Unit,
+) {
+    val palette = LocalJaTextPalette.current
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (focused) 1.008f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "searchScale",
+    )
+    val showCancel = focused || query.isNotEmpty()
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        JaWebInput(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.weight(1f),
+            inputModifier = Modifier.onFocusChanged { focused = it.isFocused },
+            placeholder = placeholder,
+            leadingIcon = Icons.Rounded.Search,
+            trailingContent = if (query.isNotEmpty()) {
+                {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Clear search",
+                        tint = palette.textSecondary,
+                        modifier = Modifier
+                            .size(17.dp)
+                            .clip(CircleShape)
+                            .clickable { onQueryChange("") },
+                    )
+                }
+            } else {
+                null
+            },
+        )
+        AnimatedVisibility(
+            visible = showCancel,
+            enter = fadeIn(tween(170)) + scaleIn(tween(170), initialScale = 0.92f),
+            exit = fadeOut(tween(130)) + scaleOut(tween(130), targetScale = 0.92f),
+        ) {
+            Text(
+                text = "Cancel",
+                color = palette.accent,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onClear() }
+                    .padding(horizontal = 6.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DmSidebarRow(
     friend: JaUser,
     preview: ChatPreview?,
     myUserId: String,
+    isSelf: Boolean = false,
     isSelected: Boolean,
     isPinned: Boolean = false,
     draftText: String? = null,
@@ -2200,7 +2190,7 @@ private fun DmSidebarRow(
     onLongClick: () -> Unit,
 ) {
     val palette = LocalJaTextPalette.current
-    val unread = if (isSelected) 0 else (preview?.unreadCount ?: 0)
+    val unread = if (isSelf || isSelected) 0 else (preview?.unreadCount ?: 0)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -2231,8 +2221,9 @@ private fun DmSidebarRow(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                val baseName = friend.displayName.ifBlank { friend.username }
                 Text(
-                    text = friend.displayName.ifBlank { friend.username },
+                    text = if (isSelf) "$baseName (You)" else baseName,
                     color = palette.textPrimary,
                     fontSize = 15.sp,
                     fontWeight = if (unread > 0) FontWeight.ExtraBold else FontWeight.Bold,
@@ -2278,10 +2269,11 @@ private fun DmSidebarRow(
             val previewCopy = when {
                 typingToMe -> "typing…"
                 hasDraft -> "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $cleanDraft"
-                preview != null && preview.body.isNotBlank() -> {
+                preview != null && preview.body.isNotBlank() && preview.body != "No messages yet" -> {
                     val prefix = if (preview.senderId == myUserId) "You: " else ""
                     "$prefix${preview.body}"
                 }
+                isSelf -> "Message yourself"
                 else -> "@${friend.username}"
             }
             Text(

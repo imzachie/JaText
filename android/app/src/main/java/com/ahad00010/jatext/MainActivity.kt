@@ -313,6 +313,18 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
 
         // Only enable lock-screen wakeup flags when actually woken up by an incoming call intent!
         if (intent?.getStringExtra("type") == "incoming_call") {
@@ -668,7 +680,7 @@ private fun JaTextRootHost(
             PostUpdateWelcomeDialog(onDismiss = { vm.dismissPostUpdateWelcome() })
         }
 
-        // Global Mobile-Only "Update your JaText version!" Modal — works on EVERY screen (including Login!)
+         // Global Mobile-Only "Update your JaText version!" Modal - works on EVERY screen (including Login!)
         val liveUpdate = state.availableUpdate
         if (liveUpdate != null) {
             MobileUpdatePromptModal(

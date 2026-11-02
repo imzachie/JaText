@@ -300,6 +300,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onOpenProfile,
   onOpenImage,
   activeSearchMatchId,
+  highlightQuery,
   onOpenMessageMenu,
   onOpenMessageMenuAt,
   onReactToMessage,
@@ -328,6 +329,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onOpenProfile: (user: JaUser) => void;
   onOpenImage: (url: string) => void;
   activeSearchMatchId?: string | null;
+  highlightQuery?: string;
   onOpenMessageMenu: (event: MouseEvent, message: GroupMessage) => void;
   onOpenMessageMenuAt: (x: number, y: number, message: GroupMessage) => void;
   onReactToMessage: (message: GroupMessage, emoji: string) => void;
@@ -871,6 +873,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                               text={message.body}
                               mine={mine}
                               mentionContext={mentionContext}
+                              highlightQuery={highlightQuery}
                             />
                             <MessageLinkEmbeds text={message.body} />
                           </>
@@ -3182,6 +3185,7 @@ export function GroupChatView({
         onOpenProfile={onOpenProfile}
         onOpenImage={openImagePreview}
         activeSearchMatchId={activeSearchMatchId}
+        highlightQuery={searchOpen ? searchQuery : undefined}
         onOpenMessageMenu={openMessageMenu}
         onOpenMessageMenuAt={openMessageMenuAt}
         onReactToMessage={reactToMessage}
@@ -3258,8 +3262,15 @@ export function GroupChatView({
               {replyTo
                 ? replyTo.unsentAt
                   ? "This message was unsent"
-                  : replyTo.body || replyTo.attachmentName || replyTo.stickerName || "Attachment"
-                : forwardedMessage?.body || forwardedMessage?.attachmentName || "Forwarded message"}
+                  : isViewOnceBody(replyTo.body)
+                    ? "View once"
+                    : formatPreviewMessageText(replyTo.body) ||
+                      replyTo.attachmentName ||
+                      replyTo.stickerName ||
+                      "Attachment"
+                : forwardedMessage?.body
+                  ? formatPreviewMessageText(forwardedMessage.body)
+                  : forwardedMessage?.attachmentName || "Forwarded message"}
             </span>
           </div>
           <button

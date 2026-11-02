@@ -1213,11 +1213,22 @@ public final class JaTextE2EEDecryptor {
         String body,
         Bundle extras
     ) {
+        postSystemMessageNotification(ctx, tag, title, body, extras, false);
+    }
+
+    public static void postSystemMessageNotification(
+        Context ctx,
+        String tag,
+        String title,
+        String body,
+        Bundle extras,
+        boolean allowWhenForeground
+    ) {
         if (ctx == null || body == null || body.isEmpty()) return;
         if (body.contains(E2EE_MARKER) || body.startsWith("__JATEXT_") || body.contains("JATEXT_E2EE")) {
             return;
         }
-        if (MainActivity.isActivelyVisibleUnlocked(ctx)) return;
+        if (!allowWhenForeground && MainActivity.isActivelyVisibleUnlocked(ctx)) return;
 
         String resolvedTag = (tag != null && !tag.isEmpty())
             ? tag

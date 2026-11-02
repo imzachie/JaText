@@ -24,7 +24,13 @@ data class ViewOnceEnvelopePayload(
 object ViewOnceCodec {
     fun isViewOnceBody(body: String?): Boolean {
         if (body.isNullOrBlank()) return false
-        return body.trimStart().startsWith(VIEW_ONCE_WIRE_PREFIX)
+        val trimmed = body.trimStart()
+        return trimmed.startsWith(VIEW_ONCE_WIRE_PREFIX) || trimmed.contains(VIEW_ONCE_WIRE_PREFIX)
+    }
+
+    fun sanitizePreview(body: String?): String {
+        if (body.isNullOrBlank()) return ""
+        return if (isViewOnceBody(body)) "View once" else body
     }
 
     fun encode(envelope: ViewOnceEnvelopePayload): String {

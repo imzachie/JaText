@@ -34,6 +34,8 @@ export interface JaUser {
   socials?: UserSocialLink[];
   website?: UserWebsiteLink;
   syncedTheme?: SyncedThemePayload;
+  totpEnabled?: boolean;
+  isOwner?: boolean;
 }
 
 export type StatusPreference = "online" | "dnd" | "offline";
@@ -44,6 +46,7 @@ export interface FriendActivity {
   status: ActivityStatus;
   customStatus: string;
   isTyping: boolean;
+  lastSeenAt?: number;
 }
 
 export interface FriendRequest {
@@ -120,7 +123,8 @@ export interface CommunityMessage {
   senderAvatarColor: string;
   body: string;
   bubbleStyle?: BubbleStyleId;
-  type: "text" | "poll" | "sticker";
+  type: "text" | "poll" | "sticker" | "deleted";
+  deleted?: boolean;
   pollOptions: string[];
   pollEndedAt?: number;
   votes: { userId: string; optionIndex: number }[];

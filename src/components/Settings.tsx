@@ -45,6 +45,7 @@ import { LockIcon } from "./E2EEModals";
 import { IosDevicesSection } from "./IosDevicesSection";
 import { LegalModal, type LegalTab } from "./LegalModal";
 import { triggerManualMobileUpdateCheck } from "./MobileUpdateGate";
+import { isAuthorizedJaTextOwner, OwnerSettingsPanel } from "./OwnerSettingsPanel";
 import { ProfileForm } from "./ProfileForm";
 import {
   BlockedUsersSettingsBlock,
@@ -79,10 +80,12 @@ export type SettingsCategory =
   | "socials"
   | "notifications"
   | "security"
-  | "legal";
+  | "legal"
+  | "owner";
 
 function encodeSoundOptionValue(sel: SoundSelection): string {
   if (sel.mode === "default") return "default:";
+  if (sel.mode === "custom") return "custom:active";
   return `${sel.mode}:${sel.uri}`;
 }
 
@@ -219,7 +222,7 @@ export function SettingsModal({
     setSoundsEnabled,
   } = useJaText();
   const { accounts } = useMultiAccountState();
-  const { t } = useI18n();
+  useI18n();
   const e2ee = useE2EESnapshot();
   const theme = useJaTextTheme();
 
@@ -476,21 +479,30 @@ export function SettingsModal({
     }
   }
 
+  const isOwnerAccount = isAuthorizedJaTextOwner(currentUser);
+
   const categories: Array<{
     id: SettingsCategory;
     label: string;
     subtitle: string;
     icon: React.ReactNode;
+    danger?: boolean;
   }> = [
     {
       id: "profile",
-      label: t("profile"),
+      label: "Account",
       subtitle: "Avatar, banner, username, bio & blocked users",
       icon: <UserIcon size={17} />,
     },
     {
+      id: "security",
+      label: "Privacy",
+      subtitle: "2FA authenticator, Passkeys & zero-knowledge E2EE",
+      icon: <ShieldCheckIcon size={17} />,
+    },
+    {
       id: "appearance",
-      label: t("appearance"),
+      label: "Chats",
       subtitle: "Themes, colours & display languages",
       icon: <BubblePaletteIcon size={17} />,
     },
@@ -498,12 +510,18 @@ export function SettingsModal({
       ? [
           {
             id: "devices" as SettingsCategory,
-            label: t("linked_devices"),
+            label: "Linked devices",
             subtitle: "Scan Web QR code & manage linked browsers",
             icon: <IosLaptopIcon size={17} />,
           },
         ]
       : []),
+    {
+      id: "notifications",
+      label: "Notifications",
+      subtitle: "Activity status, custom notification sound & soundboards",
+      icon: <BellIcon size={17} />,
+    },
     {
       id: "socials",
       label: "Socials",
@@ -511,23 +529,22 @@ export function SettingsModal({
       icon: <WebsiteGlobeIcon size={17} />,
     },
     {
-      id: "notifications",
-      label: t("alerts_audio"),
-      subtitle: "Activity status, push alerts, ringtones & soundboards",
-      icon: <BellIcon size={17} />,
-    },
-    {
-      id: "security",
-      label: t("privacy"),
-      subtitle: "2FA authenticator, Passkeys & zero-knowledge E2EE",
-      icon: <ShieldCheckIcon size={17} />,
-    },
-    {
       id: "legal",
-      label: "Legal Policies",
+      label: "Legal",
       subtitle: "Terms of Service & Privacy Policy",
       icon: <FileTextIcon size={17} />,
     },
+    ...(isOwnerAccount
+      ? [
+          {
+            id: "owner" as SettingsCategory,
+            label: "Owner Settings",
+            subtitle: "Manage accounts, force username changes, bans & deletions",
+            icon: <ShieldCheckIcon size={17} />,
+            danger: true,
+          },
+        ]
+      : []),
   ];
 
   const activeCategoryMeta =
@@ -539,12 +556,14 @@ export function SettingsModal({
     label: "Linked devices",
     keywords: "linked devices qr scan web desktop browser computer",
     icon: <YouLinkedDevicesSvg size={22} />,
+    danger: false,
   };
   const youMainItems: Array<{
     id: SettingsCategory;
     label: string;
     keywords: string;
     icon: React.ReactNode;
+    danger?: boolean;
   }> = [
     {
       id: "profile",
@@ -567,7 +586,7 @@ export function SettingsModal({
     {
       id: "notifications",
       label: "Notifications",
-      keywords: "notifications alerts audio ringtone soundboard push status",
+      keywords: "notifications alerts audio ringtone soundboard push status custom sound",
       icon: <YouNotificationsBadgeSvg size={22} />,
     },
     {
@@ -582,6 +601,17 @@ export function SettingsModal({
       keywords: "legal terms privacy policy rules updates",
       icon: <YouLegalDocSvg size={22} />,
     },
+    ...(isOwnerAccount
+      ? [
+          {
+            id: "owner" as SettingsCategory,
+            label: "Owner Settings",
+            keywords: "owner admin delete account ban suspend username force",
+            icon: <ShieldCheckIcon size={22} />,
+            danger: true,
+          },
+        ]
+      : []),
   ];
   const trimmedYouQuery = youSearchQuery.trim().toLowerCase();
   const filteredYouItems = trimmedYouQuery
@@ -755,7 +785,7 @@ export function SettingsModal({
                             <button
                               type="button"
                               key={item.id}
-                              className="you-roadmap-row"
+                              className={`you-roadmap-row ${item.danger ? "you-roadmap-row-danger" : ""}`}
                               onClick={() => {
                                 setYouSearchOpen(false);
                                 setYouSearchQuery("");
@@ -794,7 +824,7 @@ export function SettingsModal({
                             <button
                               type="button"
                               key={item.id}
-                              className="you-roadmap-row"
+                              className={`you-roadmap-row ${item.danger ? "you-roadmap-row-danger" : ""}`}
                               onClick={() => selectCategory(item.id)}
                             >
                               <span className="you-roadmap-row-icon">{item.icon}</span>
@@ -850,7 +880,9 @@ export function SettingsModal({
                         <button
                           type="button"
                           key={cat.id}
-                          className={`settings-nav-item ${isActive ? "active" : ""}`}
+                          className={`settings-nav-item ${isActive ? "active" : ""} ${
+                            cat.danger ? "settings-nav-item-danger" : ""
+                          }`}
                           onClick={() => selectCategory(cat.id)}
                         >
                           <span className="settings-nav-icon">{cat.icon}</span>
@@ -917,11 +949,11 @@ export function SettingsModal({
                 </div>
               )}
 
-              {/* === 1. PROFILE === */}
+              {/* === 1. ACCOUNT === */}
               {activeCategory === "profile" && (
                 <section className="settings-pane-section">
                   <div className="settings-pane-head">
-                    <h3>Profile</h3>
+                    <h3>Account</h3>
                     <p className="muted small">
                       Update your profile picture, banner, display name, bio, pronouns, and avatar
                       outline colour. Usernames can be changed once every 14 days.
@@ -973,11 +1005,11 @@ export function SettingsModal({
                 </section>
               )}
 
-              {/* === 2. APPEARANCE === */}
+              {/* === 2. CHATS === */}
               {activeCategory === "appearance" && (
                 <section className="settings-pane-section">
                   <div className="settings-pane-head">
-                    <h3>Appearance</h3>
+                    <h3>Chats</h3>
                     <p className="muted small">
                       Pick a crisp default mode, choose any gradient colour theme, or build your own
                       custom theme.
@@ -1158,7 +1190,7 @@ export function SettingsModal({
               {activeCategory === "devices" && isIosChats && (
                 <section className="settings-pane-section">
                   <div className="settings-pane-head">
-                    <h3>Linked Devices</h3>
+                    <h3>Linked devices</h3>
                     <p className="muted small">
                       Scan a QR code on <strong>jatext.vercel.app/chats</strong> to sign in on your
                       computer with zero-knowledge E2EE key sync, or disconnect any session below.
@@ -1171,11 +1203,11 @@ export function SettingsModal({
                 </section>
               )}
 
-              {/* === 3. SOCIALS === === */}
+              {/* === 3. SOCIALS === */}
               {activeCategory === "socials" && (
                 <section className="settings-pane-section">
                   <div className="settings-pane-head">
-                    <h3>Socials &amp; Website</h3>
+                    <h3>Socials</h3>
                     <p className="muted small">
                       Link your social profiles and personal website so friends can visit them right
                       from your profile card.
@@ -1194,11 +1226,11 @@ export function SettingsModal({
                 </section>
               )}
 
-              {/* === 4. NOTIFICATIONS & AUDIO === */}
+              {/* === 4. NOTIFICATIONS === */}
               {activeCategory === "notifications" && (
                 <section className="settings-pane-section activity-settings">
                   <div className="settings-pane-head">
-                    <h3>Activity, Alerts &amp; Audio</h3>
+                    <h3>Notifications</h3>
                     <p className="muted small">
                       Control your online presence, push alerts, notification tones, and call
                       ringtones.
@@ -1289,7 +1321,7 @@ export function SettingsModal({
                       >
                         <option value="default:">{DEFAULT_SOUND_LABEL}</option>
                         {soundPrefs.notificationSound.mode === "custom" && (
-                          <option value={`custom:${soundPrefs.notificationSound.uri}`}>
+                          <option value="custom:active">
                             Custom · {soundPrefs.notificationSound.label}
                           </option>
                         )}
@@ -1303,6 +1335,22 @@ export function SettingsModal({
                           </optgroup>
                         )}
                       </select>
+                      {soundPrefs.notificationSound.mode === "custom" && (
+                        <div className="custom-sound-active-pill">
+                          <span>
+                            Custom sound active: <strong>{soundPrefs.notificationSound.label}</strong>
+                          </span>
+                          <button
+                            type="button"
+                            className="mini-btn"
+                            onClick={() =>
+                              applySoundSelection("notification", defaultSoundSelection(), false)
+                            }
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      )}
                       <input
                         ref={notifFileInputRef}
                         type="file"
@@ -1320,7 +1368,11 @@ export function SettingsModal({
                         onClick={() => notifFileInputRef.current?.click()}
                       >
                         <PlusIcon size={14} />
-                        <span>Add your custom notification sound.</span>
+                        <span>
+                          {soundPrefs.notificationSound.mode === "custom"
+                            ? "Change custom notification sound"
+                            : "Upload custom notification sound"}
+                        </span>
                       </button>
                     </div>
 
@@ -1351,7 +1403,7 @@ export function SettingsModal({
                       >
                         <option value="default:">{DEFAULT_SOUND_LABEL}</option>
                         {soundPrefs.callRingtone.mode === "custom" && (
-                          <option value={`custom:${soundPrefs.callRingtone.uri}`}>
+                          <option value="custom:active">
                             Custom · {soundPrefs.callRingtone.label}
                           </option>
                         )}
@@ -1460,11 +1512,11 @@ export function SettingsModal({
                 </section>
               )}
 
-              {/* === 5. PRIVACY, 2FA, PASSKEYS & ENCRYPTION === */}
+              {/* === 5. PRIVACY === */}
               {activeCategory === "security" && (
                 <section className="settings-pane-section e2ee-settings-section">
                   <div className="settings-pane-head">
-                    <h3>{t("privacy")}</h3>
+                    <h3>Privacy</h3>
                     <p className="muted small">
                       Manage two-factor authentication (2FA), Passkeys, and your zero-knowledge
                       end-to-end encryption keys.
@@ -1617,11 +1669,11 @@ export function SettingsModal({
                 </section>
               )}
 
-              {/* === 6. LEGAL POLICIES === */}
+              {/* === 6. LEGAL === */}
               {activeCategory === "legal" && (
                 <section className="settings-pane-section legal-settings-section">
                   <div className="settings-pane-head">
-                    <h3>Legal Policies</h3>
+                    <h3>Legal</h3>
                     <p className="muted small">
                       Read JaText&apos;s Terms of Service and Privacy Policy below.
                     </p>
@@ -1677,6 +1729,20 @@ export function SettingsModal({
                       </button>
                     </div>
                   )}
+                </section>
+              )}
+
+              {/* === 7. OWNER SETTINGS === */}
+              {activeCategory === "owner" && isOwnerAccount && (
+                <section className="settings-pane-section owner-settings-section">
+                  <div className="settings-pane-head">
+                    <h3 className="owner-settings-heading">Owner Settings</h3>
+                    <p className="muted small">
+                      Exclusive platform administration for @imzachie. Manage accounts, force
+                      username updates, suspend users, or delete accounts permanently.
+                    </p>
+                  </div>
+                  <OwnerSettingsPanel currentUser={currentUser} />
                 </section>
               )}
             </div>

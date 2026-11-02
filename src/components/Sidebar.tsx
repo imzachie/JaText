@@ -270,11 +270,24 @@ export function Sidebar({
   );
 
   const sortedFriends = useMemo(() => {
-    const filtered = friends.filter(
-      (f) =>
-        f.displayName.toLowerCase().includes(search.toLowerCase()) ||
-        f.username.toLowerCase().includes(search.toLowerCase()),
-    );
+    const q = search.trim().toLowerCase();
+    const currentMe = me;
+    const candidates: JaUser[] = currentMe
+      ? [currentMe, ...friends.filter((f) => f.id !== currentMe.id)]
+      : [...friends];
+    const filtered = candidates.filter((f) => {
+      if (!q) return true;
+      if (
+        f.displayName.toLowerCase().includes(q) ||
+        f.username.toLowerCase().includes(q)
+      ) {
+        return true;
+      }
+      if (currentMe && f.id === currentMe.id) {
+        return "message yourself (you) note to self".includes(q);
+      }
+      return false;
+    });
     return filtered
       .filter((friend) => (previewByFriend.get(friend.id)?.isArchived ?? false) === showArchived)
       .sort(
@@ -282,7 +295,7 @@ export function Sidebar({
           (previewByFriend.get(b.id)?.createdAt ?? 0) -
           (previewByFriend.get(a.id)?.createdAt ?? 0),
       );
-  }, [friends, previewByFriend, search, showArchived]);
+  }, [friends, me, previewByFriend, search, showArchived]);
 
   const visibleGroups = useMemo(
     () =>
@@ -323,11 +336,13 @@ export function Sidebar({
       const aPin = pinnedSet.has(a.threadKey) ? 0 : 1;
       const bPin = pinnedSet.has(b.threadKey) ? 0 : 1;
       if (aPin !== bPin) return aPin - bPin;
-      const aOrder = customIdx.get(a.threadKey);
-      const bOrder = customIdx.get(b.threadKey);
-      if (aOrder !== undefined && bOrder !== undefined) return aOrder - bOrder;
-      if (aOrder !== undefined) return -1;
-      if (bOrder !== undefined) return 1;
+      if (aPin === 0) {
+        const aOrder = customIdx.get(a.threadKey);
+        const bOrder = customIdx.get(b.threadKey);
+        if (aOrder !== undefined && bOrder !== undefined) return aOrder - bOrder;
+        if (aOrder !== undefined) return -1;
+        if (bOrder !== undefined) return 1;
+      }
       return b.ts - a.ts;
     });
   }, [activeFolder, chatOrg.customOrder, chatOrg.pinnedIds, previewByFriend, sortedFriends, visibleGroups]);
@@ -528,24 +543,6 @@ export function Sidebar({
           <span>JaText</span>
         </div>
         <div className="sidebar-header-actions">
-          {isIosChats && (tab === "chats" || tab === "groups") && (
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={() => {
-                if (iosSearchOpen) {
-                  setIosSearchOpen(false);
-                  setSearch("");
-                } else {
-                  setIosSearchOpen(true);
-                }
-              }}
-              title={t("search_chats")}
-              aria-label={t("search_chats")}
-            >
-              <SearchIcon size={17} />
-            </button>
-          )}
           {isIosChats && tab === "groups" && (
             <button
               type="button"
@@ -713,31 +710,30 @@ export function Sidebar({
 
       {(tab === "chats" || (isIosChats && tab === "groups")) && (
         <div className="sidebar-tab-pane" key={`pane-${tab}`}>
-          {(!isIosChats || iosSearchOpen) && (
-            <div className={isIosChats ? "ios-search-row" : undefined}>
-              <input
-                ref={isIosChats ? iosSearchInputRef : undefined}
-                className="search-input"
-                placeholder={
-                  isIosChats && tab === "groups" ? "Search groups…" : `${t("search_chats")}…`
-                }
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              {isIosChats && (
-                <button
-                  type="button"
-                  className="ios-search-cancel-btn"
-                  onClick={() => {
-                    setIosSearchOpen(false);
-                    setSearch("");
-                  }}
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          )}
+          <div className={isIosChats ? "ios-always-search-shell" : "desktop-always-search-shell"}>
+            <span className="always-search-icon" aria-hidden="true">
+              <SearchIcon size={15} />
+            </span>
+            <input
+              ref={isIosChats ? iosSearchInputRef : undefined}
+              className="search-input always-search-input"
+              placeholder={
+                isIosChats && tab === "groups" ? "Search groups…" : `${t("search_chats")}…`
+              }
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {search.length > 0 && (
+              <button
+                type="button"
+                className="always-search-clear-btn"
+                aria-label="Clear search"
+                onClick={() => setSearch("")}
+              >
+                ×
+              </button>
+            )}
+          </div>
           {!showArchived && (!isIosChats || tab === "chats") && (
             <div className="sidebar-folder-bar" role="tablist" aria-label={t("folders")}>
               <button
@@ -999,10 +995,11 @@ export function Sidebar({
               }
 
               const { friend } = entry;
+              const isSelfRow = friend.id === me.id;
               const preview = previewByFriend.get(friend.id);
               const dmDraft = draftsMap[`dm:${friend.id}`];
               const dmUnread =
-                activeChatId === friend.id ? 0 : (preview?.unreadCount ?? 0);
+                isSelfRow || activeChatId === friend.id ? 0 : (preview?.unreadCount ?? 0);
               return (
                 <div
                   key={entry.threadKey}
@@ -1010,15 +1007,18 @@ export function Sidebar({
                     dmUnread > 0 ? "has-unread" : ""
                   }`}
                   onClick={() => setActiveChatId(friend.id)}
-                  onContextMenu={(event) => openChatMenu(event, friend)}
-                  onPointerDown={(event) =>
+                  onContextMenu={(event) => {
+                    if (!isSelfRow) openChatMenu(event, friend);
+                  }}
+                  onPointerDown={(event) => {
+                    if (isSelfRow) return;
                     startRowHold(event, (x, y) => {
                       setChatActionError(null);
                       setGroupMenu(null);
                       setCommunityMenu(null);
                       setChatMenu({ x, y, friend });
-                    })
-                  }
+                    });
+                  }}
                   onPointerMove={moveRowHold}
                   onPointerUp={cancelRowHold}
                   onPointerCancel={cancelRowHold}
@@ -1026,7 +1026,7 @@ export function Sidebar({
                   <Avatar
                     user={friend}
                     size={48}
-                    status={activityByUserId.get(friend.id)?.status}
+                    status={isSelfRow ? "online" : activityByUserId.get(friend.id)?.status}
                     onClick={(e) => {
                       e.stopPropagation();
                       onOpenProfile(friend);
@@ -1035,7 +1035,7 @@ export function Sidebar({
                   <div className="friend-row-text">
                     <div className="friend-row-top">
                       <strong>
-                        {friend.displayName}
+                        {isSelfRow ? `${friend.displayName} (You)` : friend.displayName}
                         {isPinned && (
                           <span className="sidebar-pin-badge" title={t("pin_chat")}>
                             <PinIcon size={12} filled />
@@ -1087,7 +1087,7 @@ export function Sidebar({
                         if (dmPreviewText) {
                           return `${preview?.senderId === me.id ? "You: " : ""}${dmPreviewText}`;
                         }
-                        return `@${friend.username} · say hi!`;
+                        return isSelfRow ? "Message yourself" : `@${friend.username} · say hi!`;
                       })()}
                     </span>
                   </div>

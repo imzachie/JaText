@@ -181,7 +181,7 @@ export async function isChatActivelyVisibleToUser(): Promise<boolean> {
     return false;
   }
   if (!Capacitor.isNativePlatform()) {
-    return typeof document.hasFocus === "function" ? document.hasFocus() : true;
+    return true;
   }
   try {
     const res = await JaTextNative.getVisibilityState();

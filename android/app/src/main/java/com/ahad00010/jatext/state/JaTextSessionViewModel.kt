@@ -4,11 +4,13 @@ import android.app.Activity
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.provider.OpenableColumns
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ahad00010.jatext.BuildConfig
+import com.ahad00010.jatext.JaTextE2EEDecryptor
 import com.ahad00010.jatext.JaTextSoundManager
 import com.ahad00010.jatext.MainActivity
 import com.ahad00010.jatext.NativeRuntimeBridge
@@ -56,6 +58,7 @@ import com.ahad00010.jatext.data.ListSoundboardsResponse
 import com.ahad00010.jatext.data.LocalCacheStore
 import com.ahad00010.jatext.data.MessageReaction
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
+import com.ahad00010.jatext.data.OwnerOverviewResult
 import com.ahad00010.jatext.data.PollVoter
 import com.ahad00010.jatext.data.ReplySummary
 import com.ahad00010.jatext.data.ScheduleMessageResponse
@@ -492,9 +495,9 @@ class JaTextSessionViewModel(app: Application) :
                 isGroup = false,
                 token = token
             )
-            val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "Click to view." else rawDec
+            val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "View once" else rawDec
             p.copy(body = text)
-        }
+        }.sortedByDescending { it.createdAt }
         val hydratedGroups = rawGroups.map { g ->
             val rawDec = JaTextCryptoEngine.decryptPreviewText(
                 context = appCtx,
@@ -505,9 +508,18 @@ class JaTextSessionViewModel(app: Application) :
                 isGroup = true,
                 token = token
             )
-            val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "Click to view." else rawDec
+            val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "View once" else rawDec
             g.copy(lastMessage = text)
+        }.sortedByDescending { it.lastMessageAt }
+        lastNotifiedDmTsByFriend.clear()
+        for (p in hydratedPreviews) {
+            lastNotifiedDmTsByFriend[p.friendId] = p.createdAt
         }
+        lastNotifiedGroupTsById.clear()
+        for (g in hydratedGroups) {
+            lastNotifiedGroupTsById[g.id] = g.lastMessageAt
+        }
+        deltaNotifBaselineReady = true
         _state.update { it.copy(previews = hydratedPreviews, groups = hydratedGroups) }
 
         // If the app opened during an active/ringing incoming call (<60s old), immediately inspect recent signals!
@@ -900,24 +912,112 @@ class JaTextSessionViewModel(app: Application) :
                 emptyList()
             }
 
+            val activeOpenChatId = _state.value.activeChatId
+            val activeOpenGroupId = _state.value.activeGroupId
+            val isDndNow = myUser.statusPreference == "dnd"
+            val friendsLookup = (sync.social?.friends ?: _state.value.friends).associateBy { it.id }
+            var markReadOpenFriendId: String? = null
+
             val hydratedPreviews = sync.social?.previews?.map { p ->
                 val rawDec = JaTextCryptoEngine.decryptPreviewText(
                     appCtx, myUser.id, p.friendId, p.senderId, p.body, false, token
                 )
-                val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "Click to view." else rawDec
-                // If user already has this chat open, unread count is 0 and mark read!
-                val effectiveUnread = if (_state.value.activeChatId == p.friendId) 0 else p.unreadCount
+                val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "View once" else rawDec
+                val isSelf = p.friendId == myUser.id
+                val isOpen = activeOpenChatId == p.friendId
+                if (isOpen && !isSelf && (p.unreadCount > 0 || hydratedDmDelta.any { it.senderId == p.friendId && it.deliveryStatus != "read" })) {
+                    markReadOpenFriendId = p.friendId
+                }
+                val prevNotifTs = lastNotifiedDmTsByFriend[p.friendId] ?: 0L
+                if (p.createdAt > prevNotifTs) {
+                    lastNotifiedDmTsByFriend[p.friendId] = p.createdAt
+                    if (
+                        deltaNotifBaselineReady &&
+                        !isSelf &&
+                        !isOpen &&
+                        !isDndNow &&
+                        !p.isMuted &&
+                        !p.isArchived &&
+                        p.senderId != myUser.id &&
+                        !JaTextCryptoEngine.isSilentControlPayload(rawDec) &&
+                        text.isNotBlank() &&
+                        text != "No messages yet"
+                    ) {
+                        val senderUser = friendsLookup[p.friendId]
+                        val senderTitle = senderUser?.displayName?.ifBlank { senderUser.username }
+                            ?: "New message"
+                        val extras = Bundle().apply {
+                            putString("type", "dm_message")
+                            putString("senderId", p.friendId)
+                            putString("chatId", p.friendId)
+                        }
+                        JaTextE2EEDecryptor.postSystemMessageNotification(
+                            appCtx,
+                            "dm-${p.friendId}-${p.createdAt}",
+                            senderTitle,
+                            text,
+                            extras,
+                            true,
+                        )
+                    }
+                }
+                val effectiveUnread = if (isSelf || isOpen) 0 else p.unreadCount
                 p.copy(body = text, unreadCount = effectiveUnread)
+            }?.sortedByDescending { it.createdAt }
+
+            if (markReadOpenFriendId == null && activeOpenChatId != null && activeOpenChatId != OFFICIAL_COMMUNITY_ID && activeOpenChatId != myUser.id) {
+                if (hydratedDmDelta.any { it.senderId == activeOpenChatId && it.deliveryStatus != "read" }) {
+                    markReadOpenFriendId = activeOpenChatId
+                }
+            }
+            if (markReadOpenFriendId != null) {
+                val fid = markReadOpenFriendId
+                viewModelScope.launch {
+                    runCatching {
+                        TursoApiClient.rpcRaw("markMessagesRead", mapOf("friendId" to fid), token)
+                    }
+                }
             }
 
             val hydratedGroups = sync.groups?.map { g ->
                 val rawDec = JaTextCryptoEngine.decryptPreviewText(
                     appCtx, myUser.id, g.id, g.lastSenderId.orEmpty(), g.lastMessage, true, token
                 )
-                val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "Click to view." else rawDec
-                val effectiveUnread = if (_state.value.activeGroupId == g.id) 0 else g.unreadCount
+                val text = if (ViewOnceCodec.isViewOnceBody(rawDec)) "View once" else rawDec
+                val isOpen = activeOpenGroupId == g.id
+                val prevNotifTs = lastNotifiedGroupTsById[g.id] ?: 0L
+                if (g.lastMessageAt > prevNotifTs) {
+                    lastNotifiedGroupTsById[g.id] = g.lastMessageAt
+                    if (
+                        deltaNotifBaselineReady &&
+                        !isOpen &&
+                        !isDndNow &&
+                        !(g.isSilenced && !g.lastMentionedMe) &&
+                        !g.isArchived &&
+                        !g.lastSenderId.isNullOrBlank() &&
+                        g.lastSenderId != myUser.id &&
+                        !JaTextCryptoEngine.isSilentControlPayload(rawDec) &&
+                        text.isNotBlank() &&
+                        text != "No messages yet"
+                    ) {
+                        val senderPrefix = g.lastSenderName?.takeIf { it.isNotBlank() }?.let { "$it: " }.orEmpty()
+                        val extras = Bundle().apply {
+                            putString("type", "group_message")
+                            putString("groupId", g.id)
+                        }
+                        JaTextE2EEDecryptor.postSystemMessageNotification(
+                            appCtx,
+                            "grp-${g.id}-${g.lastMessageAt}",
+                            g.name.ifBlank { "Group" },
+                            "$senderPrefix$text",
+                            extras,
+                            true,
+                        )
+                    }
+                }
+                val effectiveUnread = if (isOpen) 0 else g.unreadCount
                 g.copy(lastMessage = text, unreadCount = effectiveUnread)
-            }
+            }?.sortedByDescending { it.lastMessageAt }
 
             val nowSyncMs = System.currentTimeMillis()
             _state.update { prev ->
@@ -966,12 +1066,20 @@ class JaTextSessionViewModel(app: Application) :
                     } else m
                 }
                 val rawComm = if (!sync.changedCommunityMessages.isNullOrEmpty()) {
+                    val hardDeletedIds = sync.changedCommunityMessages
+                        .filter { it.deleted || it.type == "deleted" }
+                        .map { it.id }
+                        .toSet()
                     mergeCommunityMessages(
-                        prev.communityMessages.filterNot { locallyDeletedIds.contains(it.id) },
+                        prev.communityMessages.filterNot {
+                            locallyDeletedIds.contains(it.id) ||
+                                locallyHardDeletedCommIds.contains(it.id) ||
+                                hardDeletedIds.contains(it.id)
+                        },
                         hydrateCommunityList(sync.changedCommunityMessages).filterNot { locallyDeletedIds.contains(it.id) },
                     )
                 } else {
-                    prev.communityMessages
+                    prev.communityMessages.filterNot { locallyHardDeletedCommIds.contains(it.id) }
                 }
                 val nextComm = rawComm.map { m ->
                     val localUnsent = locallyUnsentAtById[m.id]
@@ -1869,9 +1977,11 @@ class JaTextSessionViewModel(app: Application) :
         // Optimistic instant bubble (zero "Decrypting message" flash!)
         val tempId = "opt-${UUID.randomUUID()}"
         val now = System.currentTimeMillis()
+        val safeReplyTo = replyTo?.copy(body = ViewOnceCodec.sanitizePreview(replyTo.body))
 
         if (st.activeChatId != null && st.activeChatId != OFFICIAL_COMMUNITY_ID) {
             val receiverId = st.activeChatId
+            val isSelf = receiverId == me.id
             val optMsg = ChatMessage(
                 id = tempId,
                 renderKey = tempId,
@@ -1882,11 +1992,30 @@ class JaTextSessionViewModel(app: Application) :
                 attachmentUrl = localVoiceFile?.let { Uri.fromFile(it).toString() } ?: attachmentUri?.toString(),
                 attachmentName = localVoiceFile?.name ?: attachmentUri?.let { resolveDisplayName(it) },
                 attachmentType = if (localVoiceFile != null) "audio/mp4" else attachmentUri?.let { resolveMime(it) },
-                deliveryStatus = "sent",
+                deliveryStatus = if (isSelf) "read" else "sent",
                 createdAt = now,
-                replyTo = replyTo,
+                replyTo = safeReplyTo,
             )
-            _state.update { it.copy(dmMessages = it.dmMessages + optMsg) }
+            val previewSnippet = cleanText.ifBlank {
+                if (localVoiceFile != null) "Voice message" else "Attachment"
+            }
+            lastNotifiedDmTsByFriend[receiverId] = now
+            _state.update { cur ->
+                val existingPreview = cur.previews.firstOrNull { it.friendId == receiverId }
+                val updatedPreview = (existingPreview ?: ChatPreview(friendId = receiverId)).copy(
+                    friendId = receiverId,
+                    body = previewSnippet,
+                    createdAt = now,
+                    senderId = me.id,
+                    unreadCount = 0,
+                )
+                val nextPreviews = (listOf(updatedPreview) + cur.previews.filterNot { it.friendId == receiverId })
+                    .sortedByDescending { it.createdAt }
+                cur.copy(
+                    dmMessages = cur.dmMessages + optMsg,
+                    previews = nextPreviews,
+                )
+            }
 
             viewModelScope.launch {
                 try {
@@ -1969,9 +2098,29 @@ class JaTextSessionViewModel(app: Application) :
                 attachmentName = localVoiceFile?.name ?: attachmentUri?.let { resolveDisplayName(it) },
                 attachmentType = if (localVoiceFile != null) "audio/mp4" else attachmentUri?.let { resolveMime(it) },
                 createdAt = now,
-                replyTo = replyTo,
+                replyTo = safeReplyTo,
             )
-            _state.update { it.copy(groupMessages = it.groupMessages + optMsg) }
+            val grpSnippet = cleanText.ifBlank {
+                if (localVoiceFile != null) "Voice message" else "Attachment"
+            }
+            lastNotifiedGroupTsById[groupId] = now
+            _state.update { cur ->
+                val nextGroups = cur.groups.map { g ->
+                    if (g.id == groupId) {
+                        g.copy(
+                            lastMessage = grpSnippet,
+                            lastMessageAt = now,
+                            lastSenderId = me.id,
+                            lastSenderName = me.displayName.ifBlank { me.username },
+                            unreadCount = 0,
+                        )
+                    } else g
+                }.sortedByDescending { it.lastMessageAt }
+                cur.copy(
+                    groupMessages = cur.groupMessages + optMsg,
+                    groups = nextGroups,
+                )
+            }
 
             viewModelScope.launch {
                 try {
@@ -2461,6 +2610,34 @@ class JaTextSessionViewModel(app: Application) :
     }
 
     private val locallyUnsentAtById = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val locallyHardDeletedCommIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private val lastNotifiedDmTsByFriend = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val lastNotifiedGroupTsById = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    @Volatile
+    private var deltaNotifBaselineReady = false
+
+    fun deleteCommunityAnnouncement(messageId: String) {
+        val token = currentAuthToken() ?: return
+        val prevList = _state.value.communityMessages
+        locallyHardDeletedCommIds.add(messageId)
+        _state.update { cur ->
+            cur.copy(communityMessages = cur.communityMessages.filterNot { it.id == messageId })
+        }
+        viewModelScope.launch {
+            try {
+                TursoApiClient.rpcRaw(
+                    "mutateCommunityMessage",
+                    mapOf("messageId" to messageId, "action" to "delete"),
+                    token
+                )
+                triggerImmediateSync(true)
+            } catch (e: Throwable) {
+                locallyHardDeletedCommIds.remove(messageId)
+                _state.update { cur -> cur.copy(communityMessages = prevList) }
+                showToast(e.message ?: "Could not delete announcement")
+            }
+        }
+    }
 
     fun unsendMessage(messageId: String) {
         val st = _state.value
@@ -3807,33 +3984,36 @@ class JaTextSessionViewModel(app: Application) :
     }
 
     private fun hydrateCommunityList(list: List<CommunityMessage>): List<CommunityMessage> {
-        return list.map { m ->
-            if (m.unsentAt != null) {
-                m.copy(body = "")
-            } else {
-                val (clean, bubble) = JaTextCryptoEngine.extractMessageBubbleStyle(m.body, m.attachmentType)
-                val (fwd, stripped) = JaTextCryptoEngine.extractForwardedContext(clean)
-                val absAtt = m.attachmentUrl?.takeIf { it.isNotBlank() }?.let {
-                    TursoApiClient.resolveAbsoluteMediaUrl(it)
+        return list
+            .filterNot { it.deleted || it.type == "deleted" || locallyHardDeletedCommIds.contains(it.id) }
+            .map { m ->
+                if (m.unsentAt != null) {
+                    m.copy(body = "")
+                } else {
+                    val (clean, bubble) = JaTextCryptoEngine.extractMessageBubbleStyle(m.body, m.attachmentType)
+                    val (fwd, stripped) = JaTextCryptoEngine.extractForwardedContext(clean)
+                    val absAtt = m.attachmentUrl?.takeIf { it.isNotBlank() }?.let {
+                        TursoApiClient.resolveAbsoluteMediaUrl(it)
+                    }
+                    val absSticker = m.stickerUrl?.takeIf { it.isNotBlank() }?.let {
+                        TursoApiClient.resolveAbsoluteMediaUrl(it)
+                    }
+                    val cleanReply = m.replyTo?.let { r ->
+                        val (rClean, _) = JaTextCryptoEngine.extractMessageBubbleStyle(r.body, null)
+                        val (_, rNoFwd) = JaTextCryptoEngine.extractForwardedContext(rClean)
+                        val safeBody = ViewOnceCodec.sanitizePreview(rNoFwd.trim())
+                        r.copy(body = safeBody.ifBlank { r.attachmentName ?: "Announcement" })
+                    }
+                    m.copy(
+                        body = stripped,
+                        attachmentUrl = absAtt,
+                        stickerUrl = absSticker,
+                        bubbleStyle = m.bubbleStyle ?: bubble,
+                        forwardedContext = fwd ?: m.forwardedContext,
+                        replyTo = cleanReply,
+                    )
                 }
-                val absSticker = m.stickerUrl?.takeIf { it.isNotBlank() }?.let {
-                    TursoApiClient.resolveAbsoluteMediaUrl(it)
-                }
-                val cleanReply = m.replyTo?.let { r ->
-                    val (rClean, _) = JaTextCryptoEngine.extractMessageBubbleStyle(r.body, null)
-                    val (_, rNoFwd) = JaTextCryptoEngine.extractForwardedContext(rClean)
-                    r.copy(body = rNoFwd.trim().ifBlank { r.attachmentName ?: "Announcement" })
-                }
-                m.copy(
-                    body = stripped,
-                    attachmentUrl = absAtt,
-                    stickerUrl = absSticker,
-                    bubbleStyle = m.bubbleStyle ?: bubble,
-                    forwardedContext = fwd ?: m.forwardedContext,
-                    replyTo = cleanReply,
-                )
             }
-        }
     }
 
     private fun mergeDmMessages(existing: List<ChatMessage>, incoming: List<ChatMessage>): List<ChatMessage> {
@@ -3850,7 +4030,21 @@ class JaTextSessionViewModel(app: Application) :
                 }?.key
                 if (optKey != null) map.remove(optKey)
             }
-            map[m.id] = m
+            val prev = map[m.id]
+            val merged = if (prev != null && m.deliveryStatus != null && prev.deliveryStatus != null) {
+                val rankPrev = when (prev.deliveryStatus) {
+                    "read" -> 3
+                    "delivered" -> 2
+                    else -> 1
+                }
+                val rankNext = when (m.deliveryStatus) {
+                    "read" -> 3
+                    "delivered" -> 2
+                    else -> 1
+                }
+                if (rankPrev > rankNext) m.copy(deliveryStatus = prev.deliveryStatus) else m
+            } else m
+            map[m.id] = merged
         }
         return map.values.sortedBy { it.createdAt }
     }
@@ -4496,19 +4690,34 @@ class JaTextSessionViewModel(app: Application) :
             )
         )
 
+        val safeReplyTo = replyTo?.copy(body = ViewOnceCodec.sanitizePreview(replyTo.body))
         if (st.activeChatId != null) {
             val receiverId = st.activeChatId
+            val isSelf = receiverId == me.id
             val optMsg = ChatMessage(
                 id = tempId,
                 renderKey = tempId,
                 senderId = me.id,
                 receiverId = receiverId,
                 body = placeholderEnvelope,
-                deliveryStatus = "sent",
+                deliveryStatus = if (isSelf) "read" else "sent",
                 createdAt = now,
-                replyTo = replyTo,
+                replyTo = safeReplyTo,
             )
-            _state.update { it.copy(dmMessages = it.dmMessages + optMsg) }
+            lastNotifiedDmTsByFriend[receiverId] = now
+            _state.update { cur ->
+                val existingPreview = cur.previews.firstOrNull { it.friendId == receiverId }
+                val updatedPreview = (existingPreview ?: ChatPreview(friendId = receiverId)).copy(
+                    friendId = receiverId,
+                    body = "View once",
+                    createdAt = now,
+                    senderId = me.id,
+                    unreadCount = 0,
+                )
+                val nextPreviews = (listOf(updatedPreview) + cur.previews.filterNot { it.friendId == receiverId })
+                    .sortedByDescending { it.createdAt }
+                cur.copy(dmMessages = cur.dmMessages + optMsg, previews = nextPreviews)
+            }
 
             viewModelScope.launch {
                 try {
@@ -4582,9 +4791,23 @@ class JaTextSessionViewModel(app: Application) :
                 senderAvatarColor = me.avatarColor,
                 body = placeholderEnvelope,
                 createdAt = now,
-                replyTo = replyTo,
+                replyTo = safeReplyTo,
             )
-            _state.update { it.copy(groupMessages = it.groupMessages + optMsg) }
+            lastNotifiedGroupTsById[groupId] = now
+            _state.update { cur ->
+                val nextGroups = cur.groups.map { g ->
+                    if (g.id == groupId) {
+                        g.copy(
+                            lastMessage = "View once",
+                            lastMessageAt = now,
+                            lastSenderId = me.id,
+                            lastSenderName = me.displayName.ifBlank { me.username },
+                            unreadCount = 0,
+                        )
+                    } else g
+                }.sortedByDescending { it.lastMessageAt }
+                cur.copy(groupMessages = cur.groupMessages + optMsg, groups = nextGroups)
+            }
 
             viewModelScope.launch {
                 try {
@@ -4962,5 +5185,14 @@ class JaTextSessionViewModel(app: Application) :
                 refreshSecuritySettings()
             }
         }
+    }
+
+    suspend fun ownerAdminAction(args: Map<String, Any?>): OwnerOverviewResult {
+        val token = currentAuthToken() ?: throw IllegalStateException("Not signed in.")
+        return TursoApiClient.rpcTyped(
+            op = "ownerAdminAction",
+            args = args,
+            token = token,
+        )
     }
 }

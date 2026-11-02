@@ -60,10 +60,13 @@ data class JaUser(
     val website: UserWebsiteLink? = null,
     val syncedTheme: SyncedThemePayload? = null,
     val totpEnabled: Boolean = false,
+    @SerialName("isOwner")
+    val serverIsOwner: Boolean = false,
 ) {
     val isOwner: Boolean
-        get() = email?.equals(OWNER_EMAIL, ignoreCase = true) == true ||
-            username.equals(OWNER_USERNAME, ignoreCase = true)
+        get() = serverIsOwner ||
+            email?.equals(OWNER_EMAIL, ignoreCase = true) == true ||
+            username.trim().removePrefix("@").equals(OWNER_USERNAME, ignoreCase = true)
 
     val needsProfileSetup: Boolean
         get() = !onboardingComplete || username.isBlank()
@@ -75,14 +78,56 @@ data class FriendActivity(
     val status: String = "offline",
     val customStatus: String = "",
     val isTyping: Boolean = false,
+    @SerialName("online")
+    val rawOnline: Boolean? = null,
+    @SerialName("statusPreference")
+    val rawStatusPreference: String? = null,
+    val lastSeenAt: Long? = null,
 ) {
     val online: Boolean
-        get() = status != "offline"
+        get() = rawOnline ?: (status != "offline")
     val statusPreference: String
-        get() = status.ifBlank { "online" }
+        get() = rawStatusPreference?.ifBlank { null } ?: status.ifBlank { "online" }
     val typingToMe: Boolean
         get() = isTyping
 }
+
+@Serializable
+data class OwnerPlatformStats(
+    val totalUsers: Int = 0,
+    val onlineUsers: Int = 0,
+    val suspendedUsers: Int = 0,
+    val totalMessages: Int = 0,
+    val totalGroups: Int = 0,
+    val totalCommunityPosts: Int = 0,
+    val linkedDevices: Int = 0,
+)
+
+@Serializable
+data class OwnerManagedUser(
+    val id: String = "",
+    val email: String = "",
+    val username: String = "",
+    val displayName: String = "",
+    val avatarColor: String = "black",
+    val avatarUrl: String? = null,
+    val bannerUrl: String? = null,
+    val bio: String = "",
+    val customStatus: String = "",
+    val isSuspended: Boolean = false,
+    val totpEnabled: Boolean = false,
+    val isOwner: Boolean = false,
+    val createdAt: Long = 0L,
+)
+
+@Serializable
+data class OwnerOverviewResult(
+    val ok: Boolean = true,
+    val stats: OwnerPlatformStats? = null,
+    val users: List<OwnerManagedUser> = emptyList(),
+    val user: OwnerManagedUser? = null,
+    val deletedUserId: String? = null,
+)
 
 @Serializable
 data class FriendRequest(
@@ -323,6 +368,7 @@ data class CommunityMessage(
     val reactions: List<MessageReaction> = emptyList(),
     val canModerate: Boolean = false,
     val isOwner: Boolean = false,
+    val deleted: Boolean = false,
 ) {
     val senderIsOwner: Boolean
         get() = isOwner

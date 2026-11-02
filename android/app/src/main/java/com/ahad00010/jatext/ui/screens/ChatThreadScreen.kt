@@ -289,13 +289,15 @@ fun ChatThreadScreen(
     val callUiState by vm.callEngine.uiState.collectAsState()
 
     val isCommunity = state.activeChatId == OFFICIAL_COMMUNITY_ID
-    val activeFriend = remember(state.activeChatId, state.friends) {
+    val activeFriend = remember(state.activeChatId, state.friends, me) {
         if (!isCommunity && state.activeChatId != null) {
-            state.friends.firstOrNull { it.id == state.activeChatId }
+            if (state.activeChatId == me.id) me
+            else state.friends.firstOrNull { it.id == state.activeChatId }
         } else {
             null
         }
     }
+    val isSelfChat = activeFriend?.id == me.id
     val activeGroup = remember(state.activeGroupId, state.groups) {
         if (state.activeGroupId != null) state.groups.firstOrNull { it.id == state.activeGroupId } else null
     }
@@ -385,7 +387,7 @@ fun ChatThreadScreen(
                     encryptedAttachment = m.encryptedAttachment,
                     stickerUrl = m.explicitStickerUrl?.takeIf { it.isNotBlank() }?.let { TursoApiClient.resolveAbsoluteMediaUrl(it) },
                     poll = null,
-                    deliveryStatus = m.deliveryStatus,
+                    deliveryStatus = if (state.activeChatId == me.id) "read" else m.deliveryStatus,
                     readAt = m.readAt,
                     editedAt = m.editedAt,
                     unsentAt = m.unsentAt,
@@ -641,11 +643,8 @@ fun ChatThreadScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .imePadding()
         ) {
-            /* ==================== Contact / Group / Community Header Card (Frosted when Wallpaper is Active!) ==================== */
+            /* ==================== Contact / Group / Community Header Card (Seamless Edge-to-Edge Status Bar!) ==================== */
             val headerCardBg = if (hasWallpaper) Color(0x9C11131C) else palette.bgSecondary
             val headerCardBorder = if (hasWallpaper) Color(0x36FFFFFF) else palette.border
             val headerTitleColor = if (hasWallpaper) Color(0xFFF8FAFC) else palette.textPrimary
@@ -659,6 +658,7 @@ fun ChatThreadScreen(
                     .then(
                         if (hasWallpaper) {
                             Modifier
+                                .statusBarsPadding()
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
                                 .clip(RoundedCornerShape(20.dp))
                                 .background(headerCardBg)
@@ -667,6 +667,7 @@ fun ChatThreadScreen(
                         } else {
                             Modifier
                                 .background(headerCardBg)
+                                .statusBarsPadding()
                                 .padding(horizontal = 12.dp, vertical = 10.dp)
                         }
                     ),
@@ -717,6 +718,7 @@ fun ChatThreadScreen(
                         }
                         activeFriend != null -> {
                             val peerPresence = when {
+                                isSelfChat -> "online"
                                 friendActivity?.online == true -> {
                                     when (friendActivity.statusPreference) {
                                         "dnd" -> "dnd"
@@ -745,7 +747,10 @@ fun ChatThreadScreen(
                                 text = when {
                                     isCommunity -> "JaText Community"
                                     activeGroup != null -> activeGroup.name
-                                    activeFriend != null -> activeFriend.displayName.ifBlank { activeFriend.username }
+                                    activeFriend != null -> {
+                                        val base = activeFriend.displayName.ifBlank { activeFriend.username }
+                                        if (isSelfChat) "$base (You)" else base
+                                    }
                                     else -> "Chat"
                                 },
                                 color = headerTitleColor,
@@ -764,6 +769,7 @@ fun ChatThreadScreen(
                         }
                         val statusDotColor = when {
                             activeFriend == null -> null
+                            isSelfChat -> Color(0xFF22C55E)
                             friendActivity?.online == true -> when (friendActivity.statusPreference) {
                                 "dnd" -> Color(0xFFEF4444)
                                 "away", "idle" -> Color(0xFFF59E0B)
@@ -771,8 +777,10 @@ fun ChatThreadScreen(
                             }
                             else -> Color(0xFF626272)
                         }
-                        val isDmPeerTyping = friendActivity?.typingToMe == true ||
-                            (activeFriend != null && state.dmTypingUserIds.contains(activeFriend.id))
+                        val isDmPeerTyping = !isSelfChat && (
+                            friendActivity?.typingToMe == true ||
+                                (activeFriend != null && state.dmTypingUserIds.contains(activeFriend.id))
+                            )
                         val activeGroupTypers = if (activeGroup != null) {
                             state.typingByGroup[activeGroup.id]?.takeIf { it.isNotEmpty() } ?: state.groupTypingUsers
                         } else {
@@ -793,16 +801,20 @@ fun ChatThreadScreen(
                                     "${state.groupDetails?.members?.size ?: activeGroup.memberCount} members · End-to-End Encrypted"
                                 }
                             }
+                            isSelfChat -> "Message yourself · @${activeFriend?.username.orEmpty()}"
                             isDmPeerTyping -> "typing…"
                             friendActivity?.online == true -> {
                                 val statusLabel = when (friendActivity.statusPreference) {
                                     "dnd" -> "Do Not Disturb"
-                                    "away", "idle" -> "Away"
+                                    "away", "idle" -> "Idle"
                                     else -> "Online"
                                 }
-                                friendActivity.customStatus.ifBlank { "$statusLabel · @${activeFriend?.username.orEmpty()}" }
+                                "$statusLabel · @${activeFriend?.username.orEmpty()}"
                             }
-                            activeFriend != null -> "Offline · @${activeFriend.username}"
+                            activeFriend != null -> {
+                                val presenceLabel = formatLastSeenPresenceLabel(friendActivity?.lastSeenAt)
+                                "$presenceLabel · @${activeFriend.username}"
+                            }
                             else -> "End-to-End Encrypted"
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -826,7 +838,7 @@ fun ChatThreadScreen(
                     }
                 }
 
-                if (!isCommunity) {
+                if (!isCommunity && !isSelfChat) {
                     Spacer(Modifier.width(6.dp))
                     JaWebIconButton(
                         icon = Icons.Rounded.Call,
@@ -1300,7 +1312,7 @@ fun ChatThreadScreen(
                                             id = msg.id,
                                             senderId = msg.senderId,
                                             senderName = msg.senderName,
-                                            body = msg.body.ifBlank { "Attachment" },
+                                            body = ViewOnceCodec.sanitizePreview(msg.body).ifBlank { "Attachment" },
                                         )
                                     }
                                 },
@@ -1320,6 +1332,7 @@ fun ChatThreadScreen(
                                 onOpenFullscreenImage = { model -> fullscreenImageModel = model },
                                 showTranscript = shownTranscriptIds[msg.id] == true,
                                 onHideTranscript = { shownTranscriptIds[msg.id] = false },
+                                highlightQuery = if (showInChatSearch) inChatSearchQuery else "",
                             )
                         } else {
                             val isMine = msg.senderId == me.id
@@ -1366,7 +1379,7 @@ fun ChatThreadScreen(
                                                 id = msg.id,
                                                 senderId = msg.senderId,
                                                 senderName = msg.senderName,
-                                                body = msg.body.ifBlank { "Attachment" },
+                                                body = ViewOnceCodec.sanitizePreview(msg.body).ifBlank { "Attachment" },
                                             )
                                         }
                                     },
@@ -1396,6 +1409,7 @@ fun ChatThreadScreen(
                                     onBurnViewOnce = { burnedId -> vm.markViewOnceMessageOpened(burnedId) },
                                     showTranscript = shownTranscriptIds[msg.id] == true,
                                     onHideTranscript = { shownTranscriptIds[msg.id] = false },
+                                    highlightQuery = if (showInChatSearch) inChatSearchQuery else "",
                                 )
                             }
                         }
@@ -1458,7 +1472,8 @@ fun ChatThreadScreen(
                                     fontWeight = FontWeight.Bold,
                                 )
                                 Text(
-                                    text = editingTarget?.body ?: replyingTo?.body.orEmpty(),
+                                    text = editingTarget?.body
+                                        ?: ViewOnceCodec.sanitizePreview(replyingTo?.body),
                                     color = if (hasWallpaper) Color(0xFFE2E8F0) else palette.textSecondary,
                                     fontSize = 12.sp,
                                     maxLines = 1,
@@ -1635,6 +1650,8 @@ fun ChatThreadScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(palette.bgSecondary)
+                        .navigationBarsPadding()
+                        .imePadding()
                         .padding(horizontal = 16.dp, vertical = 15.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -1651,6 +1668,8 @@ fun ChatThreadScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(if (hasWallpaper) Color(0xBA11131C) else palette.bgSecondary)
+                        .navigationBarsPadding()
+                        .imePadding()
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1840,6 +1859,8 @@ fun ChatThreadScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(composerBarBg)
+                        .navigationBarsPadding()
+                        .imePadding()
                         .padding(horizontal = 10.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2210,22 +2231,25 @@ fun ChatThreadScreen(
                     }
                 }
 
+                val isViewOnceMsg = ViewOnceCodec.isViewOnceBody(msg.body)
                 if (!isCommunity || state.communityPermissions.canPost) {
                     MessageSheetAction(WebUiIconKind.Reply, "Reply") {
                         replyingTo = ReplySummary(
                             id = msg.id,
                             senderId = msg.senderId,
                             senderName = msg.senderName,
-                            body = msg.body.ifBlank { "Attachment" },
+                            body = ViewOnceCodec.sanitizePreview(msg.body).ifBlank { "Attachment" },
                         )
                         contextMenuMessage = null
                     }
                 }
-                MessageSheetAction(WebUiIconKind.Forward, "Forward") {
-                    forwardingItem = msg
-                    contextMenuMessage = null
+                if (!isViewOnceMsg) {
+                    MessageSheetAction(WebUiIconKind.Forward, "Forward") {
+                        forwardingItem = msg
+                        contextMenuMessage = null
+                    }
                 }
-                if (activeThreadDraftKey.isNotEmpty() && !ViewOnceCodec.isViewOnceBody(msg.body)) {
+                if (activeThreadDraftKey.isNotEmpty() && !isViewOnceMsg) {
                     val alreadyPinned = state.pinnedMessagesByThread[activeThreadDraftKey]
                         .orEmpty()
                         .any { it.id == msg.id }
@@ -2243,7 +2267,7 @@ fun ChatThreadScreen(
                         contextMenuMessage = null
                     }
                 }
-                if (msg.body.isNotBlank()) {
+                if (msg.body.isNotBlank() && !isViewOnceMsg) {
                     MessageSheetAction(WebUiIconKind.Copy, "Copy text") {
                         val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                         cb?.setPrimaryClip(ClipData.newPlainText("JaText message", msg.body))
@@ -2251,14 +2275,29 @@ fun ChatThreadScreen(
                         contextMenuMessage = null
                     }
                 }
-                if (isMine && msg.body.isNotBlank()) {
+                if (isMine && msg.body.isNotBlank() && !isViewOnceMsg) {
                     MessageSheetAction(WebUiIconKind.Edit, "Edit message") {
                         editingTarget = msg
                         draftText = msg.body
                         contextMenuMessage = null
                     }
                 }
-                if ((isMine && withinUnsendWindow) || canModerateCommunity) {
+                if (isCommunity && (state.communityPermissions.isOwner || state.communityPermissions.canModerate)) {
+                    MessageSheetAction(WebUiIconKind.Trash, "Delete announcement", tint = palette.danger) {
+                        val targetId = msg.id
+                        contextMenuMessage = null
+                        scope.launch {
+                            delay(90L)
+                            if (thanosSnapHost != null) {
+                                thanosSnapHost.snapMessageThen(targetId) {
+                                    vm.deleteCommunityAnnouncement(targetId)
+                                }
+                            } else {
+                                vm.deleteCommunityAnnouncement(targetId)
+                            }
+                        }
+                    }
+                } else if ((isMine && withinUnsendWindow) || canModerateCommunity) {
                     MessageSheetAction(WebUiIconKind.Undo, "Unsend for everyone", tint = palette.danger) {
                         val targetId = msg.id
                         contextMenuMessage = null
@@ -2707,7 +2746,7 @@ fun ChatThreadScreen(
         }
     }
 
-    /* ==================== 1:1 Web Bubble Style Modal (`BubbleStyleModal.tsx` — All 24 Mascot Artworks!) ==================== */
+     /* ==================== 1:1 Web Bubble Style Modal (`BubbleStyleModal.tsx` - All 24 Mascot Artworks!) ==================== */
     if (showBubbleStyleModal) {
         var draftStyleId by remember(state.outgoingBubbleStyle) { mutableStateOf(state.outgoingBubbleStyle) }
         Dialog(
@@ -2863,7 +2902,7 @@ fun ChatThreadScreen(
         }
     }
 
-    /* ==================== 1:1 Web Chat Wallpaper Modal (`WallpaperModal.tsx` — Real Presets + Photo Upload!) ==================== */
+     /* ==================== 1:1 Web Chat Wallpaper Modal (`WallpaperModal.tsx` - Real Presets + Photo Upload!) ==================== */
     if (showWallpaperModal && !isCommunity) {
         val customWpLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             if (uri != null) {
@@ -4425,6 +4464,7 @@ private fun CommunityAnnouncementPostCard(
     onOpenFullscreenImage: (Any) -> Unit,
     showTranscript: Boolean = false,
     onHideTranscript: (() -> Unit)? = null,
+    highlightQuery: String = "",
 ) {
     val palette = LocalJaTextPalette.current
     val thanosHost = LocalThanosSnapHost.current
@@ -4601,6 +4641,7 @@ private fun CommunityAnnouncementPostCard(
                                 text = msg.body,
                                 ink = styledInk,
                                 palette = palette,
+                                highlightQuery = highlightQuery,
                                 onLongPressMessage = onLongPress,
                             )
                         }
@@ -4609,6 +4650,7 @@ private fun CommunityAnnouncementPostCard(
                             text = msg.body,
                             ink = cardInk,
                             palette = palette,
+                            highlightQuery = highlightQuery,
                             onLongPressMessage = onLongPress,
                         )
                     }
@@ -4685,6 +4727,7 @@ private fun SwipeableMessageRow(
     onBurnViewOnce: (String) -> Unit = {},
     showTranscript: Boolean = false,
     onHideTranscript: (() -> Unit)? = null,
+    highlightQuery: String = "",
 ) {
     val palette = LocalJaTextPalette.current
     val thanosHost = LocalThanosSnapHost.current
@@ -4912,6 +4955,7 @@ private fun SwipeableMessageRow(
                                                 text = msg.body,
                                                 ink = ink,
                                                 palette = palette,
+                                                highlightQuery = highlightQuery,
                                                 onLongPressMessage = onLongPress,
                                             )
                                         }
@@ -4971,7 +5015,7 @@ private fun SwipeableMessageRow(
 }
 
 /**
- * 1:1 Web Read Receipt text (`Sent` / `Delivered` / `Read`) — ZERO double ticks!
+ * 1:1 Web Read Receipt text (`Sent` / `Delivered` / `Read`) - ZERO double ticks!
  */
 @Composable
 private fun MessageMetaTimestampAndReceiptRow(
@@ -5195,4 +5239,31 @@ private fun LiveTypingIndicatorRow(
         )
     }
 }
+
+private fun formatLastSeenPresenceLabel(lastSeenAt: Long?): String {
+    if (lastSeenAt == null || lastSeenAt <= 0L) return "Offline"
+    val diffMs = (System.currentTimeMillis() - lastSeenAt).coerceAtLeast(0L)
+    if (diffMs < 60_000L) return "Last seen just now"
+    if (diffMs < 3_600_000L) {
+        val mins = (diffMs / 60_000L).coerceAtLeast(1L)
+        return "Last seen ${mins}m ago"
+    }
+    val nowCal = java.util.Calendar.getInstance()
+    val seenCal = java.util.Calendar.getInstance().apply { timeInMillis = lastSeenAt }
+    val timeFmt = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(lastSeenAt))
+    if (nowCal.get(java.util.Calendar.YEAR) == seenCal.get(java.util.Calendar.YEAR) &&
+        nowCal.get(java.util.Calendar.DAY_OF_YEAR) == seenCal.get(java.util.Calendar.DAY_OF_YEAR)
+    ) {
+        return "Last seen today at $timeFmt"
+    }
+    val yestCal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.DAY_OF_YEAR, -1) }
+    if (yestCal.get(java.util.Calendar.YEAR) == seenCal.get(java.util.Calendar.YEAR) &&
+        yestCal.get(java.util.Calendar.DAY_OF_YEAR) == seenCal.get(java.util.Calendar.DAY_OF_YEAR)
+    ) {
+        return "Last seen yesterday at $timeFmt"
+    }
+    val dateFmt = SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(lastSeenAt))
+    return "Last seen $dateFmt"
+}
+
 
