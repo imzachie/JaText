@@ -1331,7 +1331,9 @@ fun PeerProfileBottomModal(
                             }
                         }
                         if (!isSelf) {
-                            val peerActivity = sessionState.friendActivity[peer.id]
+                            val peerActivity = remember(peer.id, sessionState.friendActivities) {
+                                sessionState.friendActivities.firstOrNull { it.userId == peer.id }
+                            }
                             val peerPresenceDotColor = when {
                                 peerActivity?.online == true -> when (peerActivity.statusPreference) {
                                     "dnd" -> Color(0xFFEF4444)
