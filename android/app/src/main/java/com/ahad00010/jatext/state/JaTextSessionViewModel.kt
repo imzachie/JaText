@@ -4003,7 +4003,7 @@ class JaTextSessionViewModel(app: Application) :
                 }
                 rehydrateActiveThreadAfterKeySync(me.id, token)
                 val boot = TursoApiClient.rpc<BootstrapResponse>(op = "bootstrap", token = token)
-                decryptSidebarPreviewsAsync(me.id, boot.previews, boot.groups, token)
+                decryptSidebarPreviewsAsync(_state.value.slotId, boot, token)
                 showToast("E2EE Vault unlocked & messages synced!")
                 onSuccess()
             } catch (e: Throwable) {
