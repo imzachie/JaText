@@ -14,6 +14,7 @@ export const MAX_LINKED_DEVICES = 5;
 export const LINK_SESSION_TTL_MS = 2 * 60 * 1000;
 export const USERNAME_REGEX = /^[a-z0-9._]{3,20}$/;
 export const OWNER_EMAIL = "aidilzafri2013@gmail.com";
+export const OWNER_USERNAME = "imzachie";
 
 export class TursoAppError extends Error {
   constructor(message, status = 400) {
@@ -466,6 +467,8 @@ async function initSchema(db) {
     `ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN totp_backup_codes_json TEXT`,
     `ALTER TABLE users ADD COLUMN chat_org_json TEXT`,
+    `ALTER TABLE users ADD COLUMN is_suspended INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN session_revoked_at INTEGER`,
     `ALTER TABLE oauth_mobile_handoffs ADD COLUMN challenge_token TEXT`,
   ];
   for (const sql of safeAlters) {
@@ -535,6 +538,7 @@ export function verifyAuthToken(token) {
     return {
       userId: String(parsed.sub),
       email: parsed.email ? String(parsed.email) : "",
+      iatMs: parsed.iat ? Number(parsed.iat) * 1000 : 0,
       expMs: Number(parsed.exp) * 1000,
       linkedDeviceId: parsed.linkedDeviceId ? String(parsed.linkedDeviceId) : null,
       client: parsed.client ? String(parsed.client) : null,
@@ -551,7 +555,11 @@ function sha256Base64Url(inputStr) {
 /* ==================== RFC 6238 TOTP & WebAuthn Passkey Helpers ==================== */
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-const ANDROID_PASSKEY_ORIGIN = "android:apk-key-hash:gsPZhijdPT8VSRd7F7oaSYMZORIgJyNKpslsyAPfNGU";
+const ANDROID_CERT_SHA256_HEX =
+  "82C3D98648DD3D3F1549177B17BA1A49831939122027234AA6C96CC803DF3465";
+const ANDROID_PASSKEY_ORIGIN = `android:apk-key-hash:${base64UrlEncode(
+  Buffer.from(ANDROID_CERT_SHA256_HEX, "hex"),
+)}`;
 
 function base32Encode(buf) {
   let bits = 0;
@@ -816,14 +824,26 @@ function extractSpkiFromAttestationOrAuthData(attestationB64, authDataB64) {
 function isAllowedWebAuthnOrigin(origin, rpId) {
   const cleanOrigin = String(origin || "").trim();
   if (!cleanOrigin) return false;
-  if (cleanOrigin === ANDROID_PASSKEY_ORIGIN || cleanOrigin.startsWith("android:apk-key-hash:")) {
-    return cleanOrigin === ANDROID_PASSKEY_ORIGIN;
+  if (cleanOrigin.startsWith("android:apk-key-hash:")) {
+    const normalized = cleanOrigin.replace(/=+$/, "");
+    const extraAndroid = String(process.env.WEBAUTHN_ANDROID_ORIGINS || "")
+      .split(",")
+      .map((s) => s.trim().replace(/=+$/, ""))
+      .filter(Boolean);
+    const allowedAndroid = new Set([ANDROID_PASSKEY_ORIGIN.replace(/=+$/, ""), ...extraAndroid]);
+    return allowedAndroid.has(normalized);
   }
   try {
     const parsed = new URL(cleanOrigin);
     if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") return true;
     if (parsed.protocol !== "https:") return false;
-    return parsed.hostname === rpId || parsed.hostname.endsWith(`.${rpId}`);
+    if (parsed.hostname === rpId || parsed.hostname.endsWith(`.${rpId}`)) return true;
+    if (rpId === "jatext.vercel.app" && parsed.hostname.endsWith(".vercel.app")) return true;
+    const extraWeb = String(process.env.WEBAUTHN_EXTRA_ORIGINS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return extraWeb.includes(parsed.origin);
   } catch {
     return false;
   }
@@ -973,7 +993,12 @@ export function mapUserRow(row, includePrivate = false) {
     socials: Array.isArray(socials) ? socials : [],
     ...(website ? { website } : {}),
     ...(syncedTheme ? { syncedTheme } : {}),
-    ...(includePrivate ? { totpEnabled: Boolean(Number(row.totp_enabled || 0)) } : {}),
+    ...(includePrivate
+      ? {
+          totpEnabled: Boolean(Number(row.totp_enabled || 0)),
+          isOwner: isJaTextOwnerRow(row),
+        }
+      : {}),
   };
 }
 
@@ -981,7 +1006,7 @@ function isJaTextOwnerRow(row) {
   if (!row) return false;
   const email = String(row.email || "").trim().toLowerCase();
   const username = String(row.username || "").trim().toLowerCase();
-  return email === OWNER_EMAIL || (email === OWNER_EMAIL && username === "imzachie");
+  return email === OWNER_EMAIL || username === OWNER_USERNAME;
 }
 
 function computeActivityStatus(pref, presenceRow) {
@@ -1243,6 +1268,14 @@ async function getUserFavoriteMediaKeys(db, userId) {
   return new Set(res.rows.map((r) => String(r.media_key)));
 }
 
+function sanitizeReplyBodyForWire(rawBody) {
+  const s = String(rawBody || "");
+  if (s.trimStart().startsWith("__JATEXT_VO_V1__:")) {
+    return "View once";
+  }
+  return s || "Attachment";
+}
+
 function hydrateDmMessages(rows, meId, replyLookupMap, favKeys) {
   const result = [];
   for (const r of rows) {
@@ -1255,16 +1288,20 @@ function hydrateDmMessages(rows, meId, replyLookupMap, favKeys) {
       : r.attachment_url
         ? `klipy:${r.attachment_url}`
         : undefined;
+    const senderIdStr = String(r.sender_id);
+    const receiverIdStr = String(r.receiver_id);
+    const effectiveDelivery =
+      senderIdStr === receiverIdStr ? "read" : String(r.delivery_status || "sent");
     result.push({
       id: String(r.id),
-      senderId: String(r.sender_id),
-      receiverId: String(r.receiver_id),
+      senderId: senderIdStr,
+      receiverId: receiverIdStr,
       body: unsentAt ? "" : String(r.body || ""),
       ...(unsentAt || !r.attachment_url ? {} : { attachmentUrl: String(r.attachment_url) }),
       ...(unsentAt || !r.attachment_name ? {} : { attachmentName: String(r.attachment_name) }),
       ...(unsentAt || !r.attachment_type ? {} : { attachmentType: String(r.attachment_type) }),
       ...(mediaKey ? { stickerKey: mediaKey, isStickerFavorite: favKeys.has(mediaKey) } : {}),
-      deliveryStatus: String(r.delivery_status || "sent"),
+      deliveryStatus: effectiveDelivery,
       ...(r.edited_at != null ? { editedAt: Number(r.edited_at) } : {}),
       createdAt: Number(r.created_at),
       ...(replyRow
@@ -1272,7 +1309,9 @@ function hydrateDmMessages(rows, meId, replyLookupMap, favKeys) {
             replyTo: {
               id: String(replyRow.id),
               senderId: String(replyRow.sender_id),
-              body: replyRow.unsent_at ? "Unsent message" : String(replyRow.body || "Attachment"),
+              body: replyRow.unsent_at
+                ? "Unsent message"
+                : sanitizeReplyBodyForWire(replyRow.body),
             },
           }
         : {}),
@@ -1369,7 +1408,7 @@ async function hydrateGroupMessages(db, rows, meId, clearedAt = 0) {
               id: String(rep.id),
               senderId: String(rep.sender_id),
               senderName: repSender?.displayName || repSender?.username || "JaText user",
-              body: rep.unsent_at ? "Unsent message" : String(rep.body || "Attachment"),
+              body: rep.unsent_at ? "Unsent message" : sanitizeReplyBodyForWire(rep.body),
             },
           }
         : {}),
@@ -1433,8 +1472,9 @@ async function hydrateCommunityMessages(db, rows, meRow, role) {
 
   return visible.map((r) => {
     const sender = mapUserRow(usersMap.get(String(r.sender_id)));
+    const isHardDeleted = String(r.type || "") === "deleted";
     const unsentAt = r.unsent_at != null ? Number(r.unsent_at) : undefined;
-    const votes = votesByPoll.get(String(r.id)) || [];
+    const votes = isHardDeleted ? [] : votesByPoll.get(String(r.id)) || [];
     const myVoteObj = votes.find((v) => v.userId === meId);
     const rep = r.reply_to_id ? replyMap.get(String(r.reply_to_id)) : null;
     const repSender = rep ? mapUserRow(usersMap.get(String(rep.sender_id))) : null;
@@ -1452,20 +1492,31 @@ async function hydrateCommunityMessages(db, rows, meRow, role) {
       senderUsername: sender?.username || "jatext",
       ...(sender?.avatarUrl ? { senderAvatarUrl: sender.avatarUrl } : {}),
       senderAvatarColor: sender?.avatarColor || "black",
-      body: unsentAt ? "" : String(r.body || ""),
+      body: isHardDeleted || unsentAt ? "" : String(r.body || ""),
       type: String(r.type || "text"),
-      pollOptions: safeJsonParse(r.poll_options_json, []),
+      ...(isHardDeleted ? { deleted: true } : {}),
+      pollOptions: isHardDeleted ? [] : safeJsonParse(r.poll_options_json, []),
       ...(r.poll_ended_at != null ? { pollEndedAt: Number(r.poll_ended_at) } : {}),
       votes,
       ...(myVoteObj ? { myVote: myVoteObj.optionIndex } : {}),
       createdAt: Number(r.created_at),
       ...(r.edited_at != null ? { editedAt: Number(r.edited_at) } : {}),
       ...(unsentAt ? { unsentAt } : {}),
-      ...(unsentAt || !r.attachment_url ? {} : { attachmentUrl: String(r.attachment_url) }),
-      ...(unsentAt || !r.attachment_name ? {} : { attachmentName: String(r.attachment_name) }),
-      ...(unsentAt || !r.attachment_type ? {} : { attachmentType: String(r.attachment_type) }),
-      ...(unsentAt || !r.sticker_url ? {} : { stickerUrl: String(r.sticker_url) }),
-      ...(unsentAt || !r.sticker_name ? {} : { stickerName: String(r.sticker_name) }),
+      ...(isHardDeleted || unsentAt || !r.attachment_url
+        ? {}
+        : { attachmentUrl: String(r.attachment_url) }),
+      ...(isHardDeleted || unsentAt || !r.attachment_name
+        ? {}
+        : { attachmentName: String(r.attachment_name) }),
+      ...(isHardDeleted || unsentAt || !r.attachment_type
+        ? {}
+        : { attachmentType: String(r.attachment_type) }),
+      ...(isHardDeleted || unsentAt || !r.sticker_url
+        ? {}
+        : { stickerUrl: String(r.sticker_url) }),
+      ...(isHardDeleted || unsentAt || !r.sticker_name
+        ? {}
+        : { stickerName: String(r.sticker_name) }),
       ...(mediaKey ? { stickerKey: mediaKey, isStickerFavorite: favKeys.has(mediaKey) } : {}),
       ...(r.forwarded_from_name ? { forwardedFromName: String(r.forwarded_from_name) } : {}),
       ...(rep
@@ -1474,11 +1525,14 @@ async function hydrateCommunityMessages(db, rows, meRow, role) {
               id: String(rep.id),
               senderId: String(rep.sender_id),
               senderName: repSender?.displayName || repSender?.username || "JaText Official",
-              body: rep.unsent_at ? "Unsent message" : String(rep.body || "Attachment"),
+              body:
+                rep.unsent_at || String(rep.type || "") === "deleted"
+                  ? "Deleted announcement"
+                  : sanitizeReplyBodyForWire(rep.body),
             },
           }
         : {}),
-      reactions: unsentAt ? [] : safeJsonParse(r.reactions_json, []),
+      reactions: isHardDeleted || unsentAt ? [] : safeJsonParse(r.reactions_json, []),
       canModerate: role.canModerate,
       isOwner: role.isOwner,
     };
@@ -1617,12 +1671,12 @@ async function buildSocialAndPreviews(db, meId) {
   }
 
   const friendIds = [...friendIdsSet];
-  const pairKeys = friendIds.map((fid) => pairKey(meId, fid));
+  const allPreviewTargetIds = [meId, ...friendIds];
+  const pairKeys = allPreviewTargetIds.map((fid) => pairKey(meId, fid));
   const friendPh = friendIds.map(() => "?").join(",");
-  const pairPh = pairKeys.map(() => "?").join(",");
 
-  const [usersMap, presRes, latestBatchRes] = await Promise.all([
-    getUsersMap(db, [...relatedUserIds]),
+  const [usersMap, presRes, latestBatchRes, unreadRes] = await Promise.all([
+    getUsersMap(db, [...relatedUserIds, meId]),
     friendIds.length
       ? db.execute({
           sql: `SELECT * FROM presence WHERE user_id IN (${friendPh})`,
@@ -1648,10 +1702,32 @@ async function buildSocialAndPreviews(db, meId) {
           })),
         )
       : Promise.resolve([]),
+    db.execute({
+      sql: `SELECT pair_key, COUNT(*) AS cnt
+            FROM messages
+            WHERE receiver_id = ?
+              AND sender_id != ?
+              AND unsent_at IS NULL
+              AND delivery_status != 'read'
+              AND body NOT LIKE '__JATEXT_SIG__:%'
+              AND body NOT LIKE '__JATEXT_CALL_SIG__:%'
+              AND body NOT LIKE '__JATEXT_REACT__:%'
+              AND body NOT LIKE '__JATEXT_SEEN__:%'
+              AND body NOT LIKE '__JATEXT_IK_V1__:%'
+              AND body NOT LIKE '__JATEXT_GK_V1__:%'
+              AND body NOT LIKE '__JATEXT_E2EE_IK__:%'
+              AND body NOT LIKE '__JATEXT_E2EE_GK__:%'
+            GROUP BY pair_key`,
+      args: [meId, meId],
+    }),
   ]);
   const latestRes = {
     rows: latestBatchRes.map((sub) => sub.rows[0]).filter(Boolean),
   };
+  const unreadByPair = new Map();
+  for (const u of unreadRes.rows) {
+    unreadByPair.set(String(u.pair_key), Number(u.cnt || 0));
+  }
 
   const incoming = [];
   const outgoing = [];
@@ -1691,24 +1767,33 @@ async function buildSocialAndPreviews(db, meId) {
       const p = presMap.get(f.id);
       const isTyping =
         Boolean(p && String(p.typing_to_id || "") === meId && now - Number(p.typing_at || 0) < 6_000);
+      const computedStatus = computeActivityStatus(f.statusPreference, p);
+      const lastSeenAt =
+        p?.last_seen_at != null && f.statusPreference !== "offline"
+          ? Number(p.last_seen_at)
+          : undefined;
       return {
         userId: f.id,
-        status: computeActivityStatus(f.statusPreference, p),
+        status: computedStatus,
+        online: computedStatus !== "offline",
+        statusPreference: f.statusPreference || "online",
         customStatus: f.customStatus || "",
         isTyping,
+        typingToMe: isTyping,
+        ...(lastSeenAt ? { lastSeenAt } : {}),
       };
     });
   }
 
-  // Previews per friend
+  // Previews per friend + self-chat
   let previews = [];
-  if (friendIds.length) {
+  if (allPreviewTargetIds.length) {
     const latestByPair = new Map();
     for (const m of latestRes.rows) {
       latestByPair.set(String(m.pair_key), m);
     }
 
-    previews = friendIds.map((fid) => {
+    previews = allPreviewTargetIds.map((fid) => {
       const pk = pairKey(meId, fid);
       const s = settingsByFriend.get(fid);
       const deletedAt = s?.deleted_at != null ? Number(s.deleted_at) : 0;
@@ -1737,6 +1822,7 @@ async function buildSocialAndPreviews(db, meId) {
         senderId: visible ? String(m.sender_id) : "",
         isArchived: Boolean(Number(s?.is_archived || 0)),
         isMuted: Boolean(Number(s?.is_muted || 0)),
+        unreadCount: fid === meId ? 0 : unreadByPair.get(pk) || 0,
       };
     });
     previews.sort((a, b) => b.createdAt - a.createdAt);
@@ -1812,7 +1898,18 @@ async function requireMeRow(db, auth) {
   if (!res.rows.length) {
     throw new TursoAppError("Session account was not found. Please sign in again.", 401);
   }
-  return res.rows[0];
+  const userRow = res.rows[0];
+  if (Number(userRow.is_suspended || 0) === 1 && !isJaTextOwnerRow(userRow)) {
+    throw new TursoAppError("This account has been suspended by the JaText Owner.", 403);
+  }
+  if (
+    userRow.session_revoked_at != null &&
+    auth.iatMs &&
+    auth.iatMs < Number(userRow.session_revoked_at) - 1500
+  ) {
+    throw new TursoAppError("Your session was signed out. Please sign in again.", 401);
+  }
+  return userRow;
 }
 
 /* ==================== Google OAuth Upsert ==================== */
@@ -1831,6 +1928,9 @@ export async function upsertGoogleOAuthAccount({ googleSub, email, name, picture
 
   if (existing.rows.length) {
     const user = existing.rows[0];
+    if (Number(user.is_suspended || 0) === 1 && !isJaTextOwnerRow(user)) {
+      throw new TursoAppError("This account has been suspended by the JaText Owner.", 403);
+    }
     const uid = String(user.id);
     const nextAvatar = user.avatar_url || picture || null;
     const nextName = user.display_name || name || cleanEmail.split("@")[0];
@@ -2006,6 +2106,9 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         throw new TursoAppError("No account found for that email. Switch to 'Sign up' to create one.");
       }
       const user = res.rows[0];
+      if (Number(user.is_suspended || 0) === 1 && !isJaTextOwnerRow(user)) {
+        throw new TursoAppError("This account has been suspended by the JaText Owner.", 403);
+      }
       if (!user.password_hash) {
         throw new TursoAppError(
           "This account signs in with Google. Tap 'Continue with Google' above.",
@@ -2094,13 +2197,24 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
 
-      // Update presence on bootstrap
-      await db.execute({
-        sql: `INSERT INTO presence (user_id, last_seen_at, last_active_at)
-              VALUES (?, ?, ?)
-              ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, last_active_at = excluded.last_active_at`,
-        args: [meId, now, now],
-      });
+      // Update presence & promote pending incoming 'sent' messages to 'delivered' on bootstrap
+      await db.batch(
+        [
+          {
+            sql: `INSERT INTO presence (user_id, last_seen_at, last_active_at)
+                  VALUES (?, ?, ?)
+                  ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, last_active_at = excluded.last_active_at`,
+            args: [meId, now, now],
+          },
+          {
+            sql: `UPDATE messages
+                  SET delivery_status = 'delivered', updated_at = ?
+                  WHERE receiver_id = ? AND sender_id != ? AND delivery_status = 'sent'`,
+            args: [now, meId, meId],
+          },
+        ],
+        "write",
+      );
 
       const [
         social,
@@ -2121,7 +2235,9 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           sql: `SELECT * FROM community_user_settings WHERE user_id = ? LIMIT 1`,
           args: [meId],
         }),
-        db.execute(`SELECT * FROM community_messages ORDER BY created_at DESC LIMIT 121`),
+        db.execute(
+          `SELECT * FROM community_messages WHERE type != 'deleted' ORDER BY created_at DESC LIMIT 121`,
+        ),
         listMyGroupsHydrated(db, meId),
         db.execute({
           sql: `SELECT key_id FROM e2ee_key_backups WHERE user_id = ? LIMIT 1`,
@@ -2288,12 +2404,23 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           args: [meId, sinceTs],
         }),
         args.touchPresence
-          ? db.execute({
-              sql: `INSERT INTO presence (user_id, last_seen_at, last_active_at)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, last_active_at = excluded.last_active_at`,
-              args: [meId, syncStartedAt, syncStartedAt],
-            })
+          ? db.batch(
+              [
+                {
+                  sql: `INSERT INTO presence (user_id, last_seen_at, last_active_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, last_active_at = excluded.last_active_at`,
+                  args: [meId, syncStartedAt, syncStartedAt],
+                },
+                {
+                  sql: `UPDATE messages
+                        SET delivery_status = 'delivered', updated_at = ?
+                        WHERE receiver_id = ? AND sender_id != ? AND delivery_status = 'sent'`,
+                  args: [syncStartedAt, meId, meId],
+                },
+              ],
+              "write",
+            )
           : Promise.resolve(null),
       ]);
 
@@ -2775,15 +2902,22 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         throw new TursoAppError("Cannot send an empty message.");
       }
 
+      const isSelfDm = receiverId === meId;
       const [blocked, friendsOk, recvPresRes, recvUserRes, recvSettingsRes] = await Promise.all([
-        isBlockedEitherWay(db, meId, receiverId),
-        areFriendsInDb(db, meId, receiverId),
-        db.execute({ sql: `SELECT * FROM presence WHERE user_id = ? LIMIT 1`, args: [receiverId] }),
-        db.execute({ sql: `SELECT * FROM users WHERE id = ? LIMIT 1`, args: [receiverId] }),
-        db.execute({
-          sql: `SELECT * FROM conversation_settings WHERE user_id = ? AND friend_id = ? LIMIT 1`,
-          args: [receiverId, meId],
-        }),
+        isSelfDm ? Promise.resolve(false) : isBlockedEitherWay(db, meId, receiverId),
+        isSelfDm ? Promise.resolve(true) : areFriendsInDb(db, meId, receiverId),
+        isSelfDm
+          ? Promise.resolve({ rows: [] })
+          : db.execute({ sql: `SELECT * FROM presence WHERE user_id = ? LIMIT 1`, args: [receiverId] }),
+        isSelfDm
+          ? Promise.resolve({ rows: [meRow] })
+          : db.execute({ sql: `SELECT * FROM users WHERE id = ? LIMIT 1`, args: [receiverId] }),
+        isSelfDm
+          ? Promise.resolve({ rows: [] })
+          : db.execute({
+              sql: `SELECT * FROM conversation_settings WHERE user_id = ? AND friend_id = ? LIMIT 1`,
+              args: [receiverId, meId],
+            }),
       ]);
       if (blocked) {
         throw new TursoAppError("Cannot message this user.");
@@ -2793,40 +2927,61 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       }
 
       const writeAt = Date.now();
+      const recvUser = recvUserRes.rows[0];
       const recvOnline =
-        recvPresRes.rows[0] && writeAt - Number(recvPresRes.rows[0].last_seen_at || 0) < 90_000;
-      const deliveryStatus = recvOnline ? "delivered" : "sent";
+        !isSelfDm &&
+        recvPresRes.rows[0] &&
+        String(recvUser?.status_preference || "online") !== "offline" &&
+        writeAt - Number(recvPresRes.rows[0].last_seen_at || 0) < 35_000;
+      const deliveryStatus = isSelfDm ? "read" : recvOnline ? "delivered" : "sent";
 
       const msgId = newId();
       const pk = pairKey(meId, receiverId);
-      await db.execute({
-        sql: `INSERT INTO messages (
-                id, sender_id, receiver_id, pair_key, body, attachment_url, attachment_name,
-                attachment_type, sticker_key, delivery_status, reply_to_id, forwarded_from_id,
-                created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        args: [
-          msgId,
-          meId,
-          receiverId,
-          pk,
-          body,
-          args.attachmentUrl ? String(args.attachmentUrl) : null,
-          args.attachmentName ? String(args.attachmentName) : null,
-          args.attachmentType ? String(args.attachmentType) : null,
-          args.stickerKey ? String(args.stickerKey) : null,
-          deliveryStatus,
-          args.replyToId ? String(args.replyToId) : null,
-          args.forwardedFromId ? String(args.forwardedFromId) : null,
-          writeAt,
-          writeAt,
-        ],
-      });
+      const isSilentSignal =
+        body.startsWith("__JATEXT_SIG__:") ||
+        body.startsWith("__JATEXT_CALL_SIG__:") ||
+        body.startsWith("__JATEXT_REACT__:") ||
+        body.startsWith("__JATEXT_SEEN__:");
+      const writeStmts = [
+        {
+          sql: `INSERT INTO messages (
+                  id, sender_id, receiver_id, pair_key, body, attachment_url, attachment_name,
+                  attachment_type, sticker_key, delivery_status, reply_to_id, forwarded_from_id,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            msgId,
+            meId,
+            receiverId,
+            pk,
+            body,
+            args.attachmentUrl ? String(args.attachmentUrl) : null,
+            args.attachmentName ? String(args.attachmentName) : null,
+            args.attachmentType ? String(args.attachmentType) : null,
+            args.stickerKey ? String(args.stickerKey) : null,
+            deliveryStatus,
+            args.replyToId ? String(args.replyToId) : null,
+            args.forwardedFromId ? String(args.forwardedFromId) : null,
+            writeAt,
+            writeAt,
+          ],
+        },
+      ];
+      if (!isSelfDm && !isSilentSignal) {
+        // Replying in a 1:1 conversation proves the sender actively read incoming messages in that pair
+        writeStmts.push({
+          sql: `UPDATE messages
+                SET delivery_status = 'read', updated_at = ?
+                WHERE pair_key = ? AND receiver_id = ? AND delivery_status != 'read'`,
+          args: [writeAt, pk, meId],
+        });
+      }
+      await db.batch(writeStmts, "write");
 
       // Quiet archive / mute / DND check before push
-      const recvUser = recvUserRes.rows[0];
       const recvSettings = recvSettingsRes.rows[0];
       const shouldPush =
+        !isSelfDm &&
         recvUser &&
         String(recvUser.status_preference || "online") !== "dnd" &&
         !Number(recvSettings?.is_muted || 0) &&
@@ -3174,11 +3329,11 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const msgsRes =
         beforeTs > 0
           ? await db.execute({
-              sql: `SELECT * FROM community_messages WHERE created_at < ? ORDER BY created_at DESC LIMIT ?`,
+              sql: `SELECT * FROM community_messages WHERE type != 'deleted' AND created_at < ? ORDER BY created_at DESC LIMIT ?`,
               args: [beforeTs, pageLimit + 1],
             })
           : await db.execute({
-              sql: `SELECT * FROM community_messages ORDER BY created_at DESC LIMIT ?`,
+              sql: `SELECT * FROM community_messages WHERE type != 'deleted' ORDER BY created_at DESC LIMIT ?`,
               args: [pageLimit + 1],
             });
       const hasMore = msgsRes.rows.length > pageLimit;
@@ -3374,7 +3529,39 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         return { ok: true };
       }
 
-      if (action === "unsend" || action === "delete") {
+      if (action === "delete") {
+        if (!role.isOwner && !role.canModerate) {
+          throw new TursoAppError("Only the JaText Community owner or moderators can delete announcements.", 403);
+        }
+        await db.batch(
+          [
+            {
+              sql: `DELETE FROM community_poll_votes WHERE poll_id = ?`,
+              args: [messageId],
+            },
+            {
+              sql: `UPDATE community_messages
+                    SET type = 'deleted',
+                        body = '',
+                        poll_options_json = '[]',
+                        attachment_url = NULL,
+                        attachment_name = NULL,
+                        attachment_type = NULL,
+                        sticker_url = NULL,
+                        sticker_name = NULL,
+                        reactions_json = '[]',
+                        unsent_at = ?,
+                        updated_at = ?
+                    WHERE id = ?`,
+              args: [now, now, messageId],
+            },
+          ],
+          "write",
+        );
+        return { ok: true, deleted: true };
+      }
+
+      if (action === "unsend") {
         await db.execute({
           sql: `UPDATE community_messages SET body = '', attachment_url = NULL, sticker_url = NULL, reactions_json = '[]', unsent_at = ?, updated_at = ? WHERE id = ?`,
           args: [now, now, messageId],
@@ -3382,6 +3569,41 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         return { showUnsendNotice: false };
       }
       return { ok: true };
+    }
+
+    case "deleteCommunityMessage": {
+      const meRow = await requireMeRow(db, auth);
+      const role = await getCommunityRole(db, meRow);
+      if (!role.isOwner && !role.canModerate) {
+        throw new TursoAppError("Only the JaText Community owner or moderators can delete announcements.", 403);
+      }
+      const messageId = String(args.messageId || "");
+      await db.batch(
+        [
+          {
+            sql: `DELETE FROM community_poll_votes WHERE poll_id = ?`,
+            args: [messageId],
+          },
+          {
+            sql: `UPDATE community_messages
+                  SET type = 'deleted',
+                      body = '',
+                      poll_options_json = '[]',
+                      attachment_url = NULL,
+                      attachment_name = NULL,
+                      attachment_type = NULL,
+                      sticker_url = NULL,
+                      sticker_name = NULL,
+                      reactions_json = '[]',
+                      unsent_at = ?,
+                      updated_at = ?
+                  WHERE id = ?`,
+            args: [now, now, messageId],
+          },
+        ],
+        "write",
+      );
+      return { ok: true, deleted: true };
     }
 
     case "setCommunityPrefs": {
@@ -5085,11 +5307,329 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         throw new TursoAppError("Account no longer exists.", 404);
       }
       const userRow = userRes.rows[0];
+      if (Number(userRow.is_suspended || 0) === 1 && !isJaTextOwnerRow(userRow)) {
+        throw new TursoAppError("This account has been suspended by the JaText Owner.", 403);
+      }
       return {
         requiresTwoFactor: false,
         token: createAuthToken(userId, String(userRow.email || "")),
         me: mapUserRow(userRow, true),
       };
+    }
+
+    case "ownerAdminAction": {
+      const meRow = await requireMeRow(db, auth);
+      if (!isJaTextOwnerRow(meRow)) {
+        throw new TursoAppError("Owner authorization required.", 403);
+      }
+      const rawOp = String(args.subOp || args.subAction || "overview").trim();
+      const subOp =
+        rawOp === "changeUsername"
+          ? "forceChangeUsername"
+          : rawOp === "changeDisplayName" || rawOp === "wipeProfile"
+            ? "forceUpdateProfile"
+            : rawOp === "suspendAccount"
+              ? "setSuspended"
+              : rawOp === "purgeUserMessages"
+                ? "purgeMessages"
+                : rawOp;
+
+      const mapOwnerUserRecord = (r) => ({
+        id: String(r.id),
+        email: String(r.email || ""),
+        username: String(r.username || ""),
+        displayName: String(r.display_name || ""),
+        avatarColor: String(r.avatar_color || "black"),
+        ...(r.avatar_url ? { avatarUrl: String(r.avatar_url) } : {}),
+        ...(r.banner_url ? { bannerUrl: String(r.banner_url) } : {}),
+        bio: String(r.bio || ""),
+        customStatus: String(r.custom_status || ""),
+        isSuspended: Boolean(Number(r.is_suspended || 0)),
+        suspendedReason: String(r.suspended_reason || ""),
+        totpEnabled: Boolean(Number(r.totp_enabled || 0)),
+        isOwner: isJaTextOwnerRow(r),
+        createdAt: Number(r.created_at || 0),
+      });
+
+      if (subOp === "broadcastCommunity") {
+        const body = String(args.body || "").trim();
+        if (!body) {
+          throw new TursoAppError("Announcement body cannot be empty.");
+        }
+        const msgId = `comm_${crypto.randomUUID().replace(/-/g, "").slice(0, 18)}`;
+        await db.execute({
+          sql: `INSERT INTO community_messages (id, sender_id, type, body, reactions_json, created_at, updated_at)
+                VALUES (?, ?, 'text', ?, '[]', ?, ?)`,
+          args: [msgId, String(meRow.id), body.slice(0, 6000), now, now],
+        });
+        return { ok: true, message: "Published announcement to JaText Community." };
+      }
+
+      if (subOp === "overview" || subOp === "searchUsers") {
+        const q = String(args.query || "").trim().toLowerCase();
+        const likePattern = `%${q}%`;
+        const [
+          usersCountRes,
+          onlineCountRes,
+          suspCountRes,
+          dmCountRes,
+          grpCountRes,
+          commCountRes,
+          linkedCountRes,
+          usersListRes,
+        ] = await Promise.all([
+          db.execute(`SELECT COUNT(*) AS cnt FROM users`),
+          db.execute({
+            sql: `SELECT COUNT(*) AS cnt FROM presence WHERE last_seen_at > ?`,
+            args: [now - 120_000],
+          }),
+          db.execute(`SELECT COUNT(*) AS cnt FROM users WHERE is_suspended = 1`),
+          db.execute(`SELECT COUNT(*) AS cnt FROM messages`),
+          db.execute(`SELECT COUNT(*) AS cnt FROM groups`),
+          db.execute(`SELECT COUNT(*) AS cnt FROM community_messages WHERE type != 'deleted'`),
+          db.execute(`SELECT COUNT(*) AS cnt FROM linked_devices`),
+          q
+            ? db.execute({
+                sql: `SELECT * FROM users
+                      WHERE LOWER(COALESCE(username, '')) LIKE ?
+                         OR LOWER(COALESCE(display_name, '')) LIKE ?
+                         OR LOWER(COALESCE(email, '')) LIKE ?
+                         OR LOWER(id) LIKE ?
+                      ORDER BY created_at DESC
+                      LIMIT 60`,
+                args: [likePattern, likePattern, likePattern, likePattern],
+              })
+            : db.execute(`SELECT * FROM users ORDER BY created_at DESC LIMIT 60`),
+        ]);
+        return {
+          stats: {
+            totalUsers: Number(usersCountRes.rows[0]?.cnt || 0),
+            onlineUsers: Number(onlineCountRes.rows[0]?.cnt || 0),
+            suspendedUsers: Number(suspCountRes.rows[0]?.cnt || 0),
+            totalMessages: Number(dmCountRes.rows[0]?.cnt || 0),
+            totalGroups: Number(grpCountRes.rows[0]?.cnt || 0),
+            totalCommunityPosts: Number(commCountRes.rows[0]?.cnt || 0),
+            linkedDevices: Number(linkedCountRes.rows[0]?.cnt || 0),
+          },
+          users: usersListRes.rows.map(mapOwnerUserRecord),
+        };
+      }
+
+      const targetUserId = String(args.targetUserId || "").trim();
+      if (!targetUserId) {
+        throw new TursoAppError("Target user ID is required.");
+      }
+      const targetRes = await db.execute({
+        sql: `SELECT * FROM users WHERE id = ? LIMIT 1`,
+        args: [targetUserId],
+      });
+      if (!targetRes.rows.length) {
+        throw new TursoAppError("Target user account was not found.", 404);
+      }
+      const targetRow = targetRes.rows[0];
+
+      if (subOp === "forceChangeUsername") {
+        const nextUsername = String(args.newUsername || "")
+          .trim()
+          .replace(/^@+/, "")
+          .toLowerCase();
+        if (!USERNAME_REGEX.test(nextUsername)) {
+          throw new TursoAppError(
+            "Username must be 3-20 characters using lowercase letters, numbers, dots, or underscores.",
+          );
+        }
+        const clash = await db.execute({
+          sql: `SELECT id FROM users WHERE LOWER(username) = ? AND id != ? LIMIT 1`,
+          args: [nextUsername, targetUserId],
+        });
+        if (clash.rows.length) {
+          throw new TursoAppError(`@${nextUsername} is already taken by another account.`);
+        }
+        await db.execute({
+          sql: `UPDATE users SET username = ?, username_changed_at = NULL, updated_at = ? WHERE id = ?`,
+          args: [nextUsername, now, targetUserId],
+        });
+        const refreshed = await db.execute({
+          sql: `SELECT * FROM users WHERE id = ? LIMIT 1`,
+          args: [targetUserId],
+        });
+        return { ok: true, user: mapOwnerUserRecord(refreshed.rows[0]) };
+      }
+
+      if (subOp === "forceUpdateProfile") {
+        const isWipeAll = rawOp === "wipeProfile";
+        const nextDisplayName =
+          args.displayName !== undefined
+            ? String(args.displayName || "").trim().slice(0, 50)
+            : args.newDisplayName !== undefined
+              ? String(args.newDisplayName || "").trim().slice(0, 50)
+              : String(targetRow.display_name || "");
+        const clearBio = isWipeAll || Boolean(args.clearBio);
+        const clearAvatar = isWipeAll || Boolean(args.clearAvatar);
+        const clearBanner = isWipeAll || Boolean(args.clearBanner);
+        const clearStatus = isWipeAll || Boolean(args.clearStatus);
+        await db.execute({
+          sql: `UPDATE users
+                SET display_name = ?,
+                    bio = CASE WHEN ? = 1 THEN '' ELSE bio END,
+                    avatar_url = CASE WHEN ? = 1 THEN NULL ELSE avatar_url END,
+                    banner_url = CASE WHEN ? = 1 THEN NULL ELSE banner_url END,
+                    custom_status = CASE WHEN ? = 1 THEN '' ELSE custom_status END,
+                    updated_at = ?
+                WHERE id = ?`,
+          args: [
+            nextDisplayName,
+            clearBio ? 1 : 0,
+            clearAvatar ? 1 : 0,
+            clearBanner ? 1 : 0,
+            clearStatus ? 1 : 0,
+            now,
+            targetUserId,
+          ],
+        });
+        const refreshed = await db.execute({
+          sql: `SELECT * FROM users WHERE id = ? LIMIT 1`,
+          args: [targetUserId],
+        });
+        return { ok: true, user: mapOwnerUserRecord(refreshed.rows[0]) };
+      }
+
+      if (subOp === "setSuspended") {
+        if (isJaTextOwnerRow(targetRow)) {
+          throw new TursoAppError("Cannot suspend the primary JaText Owner account.");
+        }
+        const suspended = Boolean(args.suspended);
+        const stmts = [
+          {
+            sql: `UPDATE users SET is_suspended = ?, session_revoked_at = ?, updated_at = ? WHERE id = ?`,
+            args: [suspended ? 1 : 0, now, now, targetUserId],
+          },
+        ];
+        if (suspended) {
+          stmts.push(
+            { sql: `DELETE FROM linked_devices WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM push_devices WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM presence WHERE user_id = ?`, args: [targetUserId] },
+          );
+        }
+        await db.batch(stmts, "write");
+        const refreshed = await db.execute({
+          sql: `SELECT * FROM users WHERE id = ? LIMIT 1`,
+          args: [targetUserId],
+        });
+        return { ok: true, user: mapOwnerUserRecord(refreshed.rows[0]) };
+      }
+
+      if (subOp === "revokeSessions") {
+        await db.batch(
+          [
+            {
+              sql: `UPDATE users SET session_revoked_at = ?, updated_at = ? WHERE id = ?`,
+              args: [now, now, targetUserId],
+            },
+            { sql: `DELETE FROM linked_devices WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM push_devices WHERE user_id = ?`, args: [targetUserId] },
+          ],
+          "write",
+        );
+        return { ok: true };
+      }
+
+      if (subOp === "resetSecurity") {
+        await db.batch(
+          [
+            {
+              sql: `UPDATE users
+                    SET totp_enabled = 0,
+                        totp_secret = NULL,
+                        totp_pending_secret = NULL,
+                        totp_backup_codes_json = NULL,
+                        updated_at = ?
+                    WHERE id = ?`,
+              args: [now, targetUserId],
+            },
+            { sql: `DELETE FROM user_passkeys WHERE user_id = ?`, args: [targetUserId] },
+          ],
+          "write",
+        );
+        const refreshed = await db.execute({
+          sql: `SELECT * FROM users WHERE id = ? LIMIT 1`,
+          args: [targetUserId],
+        });
+        return { ok: true, user: mapOwnerUserRecord(refreshed.rows[0]) };
+      }
+
+      if (subOp === "purgeMessages") {
+        await db.batch(
+          [
+            { sql: `DELETE FROM messages WHERE sender_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM group_messages WHERE sender_id = ?`, args: [targetUserId] },
+            {
+              sql: `UPDATE community_messages
+                    SET type = 'deleted', body = '', attachment_url = NULL, sticker_url = NULL, reactions_json = '[]', unsent_at = ?, updated_at = ?
+                    WHERE sender_id = ?`,
+              args: [now, now, targetUserId],
+            },
+            { sql: `DELETE FROM scheduled_messages WHERE sender_id = ?`, args: [targetUserId] },
+          ],
+          "write",
+        );
+        return { ok: true };
+      }
+
+      if (subOp === "deleteAccount") {
+        if (isJaTextOwnerRow(targetRow)) {
+          throw new TursoAppError("Protected: Cannot delete the JaText Owner account.");
+        }
+        await db.batch(
+          [
+            {
+              sql: `DELETE FROM friend_requests WHERE from_id = ? OR to_id = ?`,
+              args: [targetUserId, targetUserId],
+            },
+            {
+              sql: `DELETE FROM user_blocks WHERE blocker_id = ? OR blocked_id = ?`,
+              args: [targetUserId, targetUserId],
+            },
+            {
+              sql: `DELETE FROM messages WHERE sender_id = ? OR receiver_id = ?`,
+              args: [targetUserId, targetUserId],
+            },
+            {
+              sql: `DELETE FROM conversation_settings WHERE user_id = ? OR friend_id = ?`,
+              args: [targetUserId, targetUserId],
+            },
+            { sql: `DELETE FROM sticker_library WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM presence WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM chat_typing WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM push_devices WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM community_moderators WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM community_poll_votes WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM community_user_settings WHERE user_id = ?`, args: [targetUserId] },
+            {
+              sql: `UPDATE community_messages
+                    SET type = 'deleted', body = '', attachment_url = NULL, sticker_url = NULL, reactions_json = '[]', unsent_at = ?, updated_at = ?
+                    WHERE sender_id = ?`,
+              args: [now, now, targetUserId],
+            },
+            { sql: `DELETE FROM group_members WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM group_messages WHERE sender_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM group_user_settings WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM e2ee_user_keys WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM e2ee_key_backups WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM linked_devices WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM scheduled_messages WHERE sender_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM view_once_opens WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM user_soundboards WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM user_passkeys WHERE user_id = ?`, args: [targetUserId] },
+            { sql: `DELETE FROM users WHERE id = ?`, args: [targetUserId] },
+          ],
+          "write",
+        );
+        return { ok: true, deletedUserId: targetUserId };
+      }
+
+      throw new TursoAppError(`Unknown owner action: ${subOp}`);
     }
 
     default:

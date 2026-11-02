@@ -191,6 +191,25 @@ function CodeBlockView({ lang, code }: { lang: string; code: string }) {
   );
 }
 
+let currentHighlightNeedle = "";
+
+function renderHighlightedSegment(segment: string, keyPrefix: string): ReactNode {
+  if (!segment || !currentHighlightNeedle) return segment;
+  const escaped = currentHighlightNeedle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rx = new RegExp(`(${escaped})`, "gi");
+  const parts = segment.split(rx);
+  if (parts.length <= 1) return segment;
+  return parts.map((chunk, idx) =>
+    chunk.toLowerCase() === currentHighlightNeedle ? (
+      <mark key={`${keyPrefix}-hl-${idx}`} className="inchat-search-highlight">
+        {chunk}
+      </mark>
+    ) : (
+      chunk
+    ),
+  );
+}
+
 function renderTextWithMentionsAndLineBreaks(
   raw: string,
   mine: boolean,
@@ -205,7 +224,7 @@ function renderTextWithMentionsAndLineBreaks(
       out.push(<br key={`${keyPrefix}-br-${lineIdx}`} />);
     }
     if (!mentionContext) {
-      if (line) out.push(line);
+      if (line) out.push(renderHighlightedSegment(line, `${keyPrefix}-ln-${lineIdx}`));
       return;
     }
 
@@ -213,7 +232,7 @@ function renderTextWithMentionsAndLineBreaks(
     parts.forEach((part, partIdx) => {
       if (!part) return;
       if (!part.startsWith("@")) {
-        out.push(part);
+        out.push(renderHighlightedSegment(part, `${keyPrefix}-pt-${lineIdx}-${partIdx}`));
         return;
       }
       const handle = part.slice(1).toLowerCase();
@@ -754,11 +773,13 @@ export const MessageMarkdown = memo(function MessageMarkdown({
   mine = false,
   className,
   mentionContext,
+  highlightQuery,
 }: {
   text: string;
   mine?: boolean;
   className?: string;
   mentionContext?: MarkdownMentionContext;
+  highlightQuery?: string;
 }) {
   const safeText = (() => {
     const wp = parseWallpaperSignal(text, null);
@@ -772,7 +793,14 @@ export const MessageMarkdown = memo(function MessageMarkdown({
     }
     return text;
   })();
-  const blocks = parseBlocks(safeText, mine, mentionContext);
+  const prevNeedle = currentHighlightNeedle;
+  currentHighlightNeedle = (highlightQuery ?? "").trim().toLowerCase();
+  let blocks: ReactNode[];
+  try {
+    blocks = parseBlocks(safeText, mine, mentionContext);
+  } finally {
+    currentHighlightNeedle = prevNeedle;
+  }
   return (
     <div className={`md-body ${mine ? "mine" : "theirs"} ${className ?? ""}`}>
       {blocks}

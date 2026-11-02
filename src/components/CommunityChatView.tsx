@@ -964,11 +964,17 @@ export function CommunityChatView({
   }
 
   async function deleteAnnouncement(messageId: string) {
-    if (!window.confirm("Delete this community announcement?")) return;
+    closeMessageMenu();
+    const sweepDone = new Promise<void>((resolve) => {
+      const started = triggerMessageThanosSnapById(messageId, undefined, () => resolve());
+      if (!started) resolve();
+    });
     setError(null);
     try {
-      await store.deleteCommunityMessage(messageId);
+      const delReq = store.deleteCommunityMessage(messageId);
+      await Promise.all([sweepDone, delReq]);
     } catch (cause) {
+      restoreSnapTargetVisibilityById(messageId);
       setError(friendlyError(cause, "Could not delete the announcement."));
     }
   }
@@ -1861,8 +1867,18 @@ export function CommunityChatView({
               <button type="button" role="menuitem" onClick={() => void copyImageAddress(messageMenu.message)}><span><LinkIcon size={15} /></span> Copy image address</button>
             </>
           )}
-          {messageMenu.canUnsend && (
+          {messageMenu.canUnsend && !store.communityPermissions.isOwner && (
             <button type="button" role="menuitem" className="destructive-menu-item" onClick={() => void unsend(messageMenu.message)}><span><UndoIcon size={15} /></span> Unsend</button>
+          )}
+          {(store.communityPermissions.isOwner || store.communityPermissions.canModerate) && (
+            <button
+              type="button"
+              role="menuitem"
+              className="destructive-menu-item"
+              onClick={() => void deleteAnnouncement(messageMenu.message.id)}
+            >
+              <span><TrashIcon size={15} /></span> Delete announcement
+            </button>
           )}
         </ContextMenu>
       )}

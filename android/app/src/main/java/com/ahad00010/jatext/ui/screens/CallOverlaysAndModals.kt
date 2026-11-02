@@ -1201,21 +1201,93 @@ fun PeerProfileBottomModal(
                         }
                     }
 
-                    Box(
+                    val peerLiveActivity = remember(peer.id, sessionState.friendActivities) {
+                        sessionState.friendActivities.firstOrNull { it.userId == peer.id }
+                    }
+                    val peerCustomStatus = remember(isSelf, sessionState.me?.customStatus, peerLiveActivity?.customStatus, peer.customStatus) {
+                        val raw = if (isSelf) {
+                            sessionState.me?.customStatus
+                        } else {
+                            peerLiveActivity?.customStatus?.takeIf { it.isNotBlank() } ?: peer.customStatus
+                        }
+                        raw?.trim().orEmpty()
+                    }
+                    val peerPresenceDot = when {
+                        isSelf -> "online"
+                        peerLiveActivity?.online == true -> when (peerLiveActivity.statusPreference) {
+                            "dnd" -> "dnd"
+                            "away", "idle" -> "away"
+                            else -> "online"
+                        }
+                        else -> peerLiveActivity?.status ?: "offline"
+                    }
+
+                    Row(
                         modifier = Modifier
-                            .padding(start = 18.dp, top = 80.dp)
-                            .size(92.dp)
-                            .clip(CircleShape)
-                            .background(palette.bgSecondary),
-                        contentAlignment = Alignment.Center,
+                            .padding(start = 18.dp, end = 16.dp, top = 80.dp),
+                        verticalAlignment = Alignment.Bottom,
                     ) {
-                        JaAvatar(
-                            avatarUrl = peer.avatarUrl,
-                            displayName = peer.displayName.ifBlank { peer.username },
-                            avatarColor = peer.avatarColor,
-                            size = 84.dp,
-                            ringWidth = 3.5.dp,
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(92.dp)
+                                .clip(CircleShape)
+                                .background(palette.bgSecondary),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            JaAvatar(
+                                avatarUrl = peer.avatarUrl,
+                                displayName = peer.displayName.ifBlank { peer.username },
+                                avatarColor = peer.avatarColor,
+                                size = 84.dp,
+                                ringWidth = 3.5.dp,
+                                presenceStatus = peerPresenceDot,
+                                statusBorderColor = palette.bgSecondary,
+                            )
+                        }
+
+                        if (peerCustomStatus.isNotEmpty()) {
+                            Spacer(Modifier.width(8.dp))
+                            Row(
+                                modifier = Modifier.padding(bottom = 12.dp),
+                                verticalAlignment = Alignment.Bottom,
+                            ) {
+                                // Two thought-bubble tail dots leading from PFP to the status bubble!
+                                Box(
+                                    modifier = Modifier
+                                        .padding(bottom = 3.dp)
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.bgTertiary)
+                                        .border(1.dp, palette.borderStrong, CircleShape)
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .padding(bottom = 7.dp)
+                                        .size(9.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.bgTertiary)
+                                        .border(1.dp, palette.borderStrong, CircleShape)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(palette.bgTertiary)
+                                        .border(1.dp, palette.borderStrong, RoundedCornerShape(16.dp))
+                                        .padding(horizontal = 12.dp, vertical = 7.dp)
+                                ) {
+                                    Text(
+                                        text = peerCustomStatus,
+                                        color = palette.textPrimary,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1470,6 +1542,15 @@ fun PeerProfileBottomModal(
                                 maxLines = 1,
                             )
                         }
+                    } else {
+                        JaWebPrimaryButton(
+                            text = "Message yourself",
+                            onClick = {
+                                onDismiss()
+                                vm.openDmChat(peer.id)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
             }

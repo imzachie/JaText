@@ -99,14 +99,17 @@ export function ProfileCard({
   user,
   status,
   wallpaperUrl,
+  liveCustomStatus,
 }: {
   user: JaUser;
   status?: ActivityStatus;
   wallpaperUrl?: string | null;
+  liveCustomStatus?: string;
 }) {
   const unpacked = unpackAvatarColorWithMeta(user.avatarColor, user.socials, user.website);
   const color = colorById(unpacked.avatarColor);
   const bannerSrc = normalizeAvatarSrc(user.bannerUrl);
+  const effectiveCustomStatus = (liveCustomStatus ?? user.customStatus ?? "").trim();
   const effectiveWallpaper = wallpaperUrl?.trim() ? wallpaperUrl.trim() : null;
   const [copiedDiscordIdx, setCopiedDiscordIdx] = useState<number | null>(null);
   const socials = unpacked.socials ?? [];
@@ -137,8 +140,20 @@ export function ProfileCard({
         )}
       </div>
       <div className="profile-body">
-        <div className="profile-avatar-wrap">
+        <div className="profile-avatar-wrap profile-avatar-with-status">
           <Avatar user={user} size={86} ringWidth={3.5} status={status} />
+          {effectiveCustomStatus ? (
+            <div
+              className="profile-pfp-status-bubble"
+              role="status"
+              aria-label={`Custom status: ${effectiveCustomStatus}`}
+              title={effectiveCustomStatus}
+            >
+              <span className="profile-pfp-status-tail-sm" aria-hidden="true" />
+              <span className="profile-pfp-status-tail-lg" aria-hidden="true" />
+              <span className="profile-pfp-status-text">{effectiveCustomStatus}</span>
+            </div>
+          ) : null}
         </div>
         <div className="profile-names">
           <div className="profile-display">{user.displayName || "Unnamed"}</div>
@@ -407,8 +422,16 @@ export function ProfileModal({
               {(resolvedUser) => (
                 <ProfileCard
                   user={resolvedUser}
-                  status={status}
+                  status={
+                    status ??
+                    store.friendActivities.find((a) => a.userId === user.id)?.status
+                  }
                   wallpaperUrl={currentDmWallpaperUrl}
+                  liveCustomStatus={
+                    me?.id === user.id
+                      ? me.customStatus
+                      : store.friendActivities.find((a) => a.userId === user.id)?.customStatus
+                  }
                 />
               )}
             </LiveUserProfileHydrator>
@@ -419,8 +442,16 @@ export function ProfileModal({
                   ? me
                   : friends.find((f) => f.id === user.id) ?? user
               }
-              status={status}
+              status={
+                status ??
+                store.friendActivities.find((a) => a.userId === user.id)?.status
+              }
               wallpaperUrl={currentDmWallpaperUrl}
+              liveCustomStatus={
+                me?.id === user.id
+                  ? me.customStatus
+                  : store.friendActivities.find((a) => a.userId === user.id)?.customStatus
+              }
             />
           )}
 
@@ -591,6 +622,22 @@ export function ProfileModal({
               </p>
             )}
           </section>
+
+          {!isNotMe && me && (
+            <div className="profile-call-actions">
+              <button
+                type="button"
+                className="primary-btn profile-action-row"
+                onClick={() => {
+                  setActiveChatId(me.id);
+                  animateClose();
+                }}
+              >
+                <MessageCircleIcon size={16} />
+                <span>Message yourself</span>
+              </button>
+            </div>
+          )}
 
           {isNotMe && (
             <div className="profile-call-actions">

@@ -2,6 +2,10 @@ package com.ahad00010.jatext.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.drawable.ColorDrawable
+import android.os.Build
+import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,12 +23,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -111,6 +119,38 @@ fun QrScannerModal(
             decorFitsSystemWindows = false,
         ),
     ) {
+        val view = androidx.compose.ui.platform.LocalView.current
+        DisposableEffect(view) {
+            val dlgWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+            dlgWindow?.let { w ->
+                w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+                androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
+                w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                w.setBackgroundDrawable(ColorDrawable(android.graphics.Color.parseColor("#07070B")))
+                w.statusBarColor = android.graphics.Color.TRANSPARENT
+                w.navigationBarColor = android.graphics.Color.TRANSPARENT
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    w.attributes = w.attributes.apply {
+                        layoutInDisplayCutoutMode =
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                    }
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    w.attributes = w.attributes.apply {
+                        layoutInDisplayCutoutMode =
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    }
+                }
+                androidx.core.view.WindowCompat.getInsetsController(w, view).apply {
+                    isAppearanceLightStatusBars = false
+                    isAppearanceLightNavigationBars = false
+                }
+            }
+            onDispose {}
+        }
+
+        val topSafePad = WindowInsets.statusBars.asPaddingValues().calculateTopPadding().coerceAtLeast(36.dp)
+        val bottomSafePad = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().coerceAtLeast(24.dp)
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -217,8 +257,7 @@ fun QrScannerModal(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .padding(top = topSafePad + 10.dp, start = 16.dp, end = 16.dp, bottom = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 JaWebIconButton(
@@ -251,11 +290,10 @@ fun QrScannerModal(
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 28.dp)
+                    .padding(start = 24.dp, end = 24.dp, bottom = bottomSafePad + 24.dp)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Color.Black.copy(alpha = 0.65f))
-                    .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(999.dp))
+                    .background(Color.Black.copy(alpha = 0.68f))
+                    .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,

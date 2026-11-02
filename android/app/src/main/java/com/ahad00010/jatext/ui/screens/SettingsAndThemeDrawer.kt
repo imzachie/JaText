@@ -88,10 +88,12 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
@@ -140,6 +142,8 @@ import com.ahad00010.jatext.BuildConfig
 import com.ahad00010.jatext.JaTextSoundManager
 import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.data.LinkedWebDevice
+import com.ahad00010.jatext.data.OwnerManagedUser
+import com.ahad00010.jatext.data.OwnerPlatformStats
 import com.ahad00010.jatext.data.TursoApiClient
 import com.ahad00010.jatext.data.UserSocialLink
 import com.ahad00010.jatext.data.UserWebsiteLink
@@ -250,14 +254,19 @@ fun SettingsModalScreen(
         }
     }
 
+    val isOwnerAccount = remember(me.id, me.email, me.username, me.isOwner) {
+        isJaTextPlatformOwner(me)
+    }
+
     val subpageTitles = mapOf(
-        "devices" to com.ahad00010.jatext.data.jt("settings.devices"),
-        "profile" to com.ahad00010.jatext.data.jt("settings.profile"),
-        "encryption" to com.ahad00010.jatext.data.jt("settings.privacy"),
-        "appearance" to com.ahad00010.jatext.data.jt("settings.appearance"),
-        "audio" to com.ahad00010.jatext.data.jt("settings.alerts"),
-        "socials" to com.ahad00010.jatext.data.jt("settings.socials"),
-        "legal" to com.ahad00010.jatext.data.jt("settings.legal"),
+        "devices" to "Linked devices",
+        "profile" to "Account",
+        "encryption" to "Privacy",
+        "appearance" to "Chats",
+        "audio" to "Notifications",
+        "socials" to "Socials",
+        "legal" to "Legal",
+        "owner" to "Owner Settings",
     )
 
     val tintedActionColor = if (palette.isDark) palette.accent else IOS_LIQUID_BLUE
@@ -391,7 +400,7 @@ fun SettingsModalScreen(
 
                             Text(
                                 text = subpageTitle,
-                                color = palette.textPrimary,
+                                color = if (currentCat == "owner") Color(0xFFEF4444) else palette.textPrimary,
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = SfProDisplayFontFamily,
@@ -1889,6 +1898,17 @@ fun SettingsModalScreen(
                                     onOpenFullDocument = { tab -> legalDialogTab = tab },
                                 )
                             }
+
+                            "owner" -> {
+                                if (isOwnerAccount) {
+                                    OwnerSettingsMobileSection(
+                                        me = me,
+                                        vm = vm,
+                                        palette = palette,
+                                        backdrop = settingsBackdrop,
+                                    )
+                                }
+                            }
                         }
 
                         Spacer(
@@ -1956,8 +1976,15 @@ private data class YouSettingsMenuEntry(
     val label: String,
     val subtitleHint: String,
     val keywords: String,
+    val labelColor: Color? = null,
     val icon: @Composable (Color) -> Unit,
 )
+
+private fun isJaTextPlatformOwner(user: JaUser): Boolean {
+    return user.isOwner ||
+        user.email.orEmpty().trim().equals("aidilzafri2013@gmail.com", ignoreCase = true) ||
+        user.username.trim().removePrefix("@").equals("imzachie", ignoreCase = true)
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -2077,13 +2104,39 @@ private fun YouHubRootScreen(
         )
     }
 
+    val isOwnerAccount = remember(me.id, me.email, me.username, me.isOwner) {
+        isJaTextPlatformOwner(me)
+    }
+
+    val ownerCardEntry = remember(isOwnerAccount) {
+        if (!isOwnerAccount) null
+        else YouSettingsMenuEntry(
+            id = "owner",
+            label = "Owner Settings",
+            subtitleHint = "Platform administration, accounts & dangerous actions",
+            keywords = "owner admin console delete account change username ban suspend revoke broadcast moderation",
+            labelColor = Color(0xFFEF4444),
+            icon = { tint ->
+                SettingsPrivacyLockSvgIcon(
+                    tint = tint,
+                    modifier = Modifier.size(21.dp),
+                )
+            },
+        )
+    }
+
     val trimmedQuery = searchQuery.trim()
-    val filteredEntries = remember(trimmedQuery) {
+    val filteredEntries = remember(trimmedQuery, ownerCardEntry) {
         if (trimmedQuery.isBlank()) {
             emptyList()
         } else {
             val q = trimmedQuery.lowercase(Locale.ROOT)
-            (listOf(topCardEntry) + mainCardEntries).filter { entry ->
+            val allEntries = buildList {
+                add(topCardEntry)
+                addAll(mainCardEntries)
+                if (ownerCardEntry != null) add(ownerCardEntry)
+            }
+            allEntries.filter { entry ->
                 entry.label.lowercase(Locale.ROOT).contains(q) ||
                     entry.subtitleHint.lowercase(Locale.ROOT).contains(q) ||
                     entry.keywords.contains(q)
@@ -2511,6 +2564,22 @@ private fun YouHubRootScreen(
                         }
                     }
                 }
+
+                if (ownerCardEntry != null) {
+                    Spacer(Modifier.height(14.dp))
+                    YouSettingsCard(
+                        cardBgColor = cardBgColor,
+                        cardBorderColor = Color(0xFFEF4444).copy(alpha = if (palette.isDark) 0.42f else 0.30f),
+                    ) {
+                        YouSettingsRowItem(
+                            entry = ownerCardEntry,
+                            palette = palette,
+                            showSubtitle = false,
+                            trailingBadge = null,
+                            onClick = { onSelectSubpage(ownerCardEntry.id) },
+                        )
+                    }
+                }
             }
         }
 
@@ -2549,6 +2618,7 @@ private fun YouSettingsRowItem(
     trailingBadge: String?,
     onClick: () -> Unit,
 ) {
+    val resolvedRowColor = entry.labelColor ?: palette.textPrimary
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -2560,15 +2630,15 @@ private fun YouSettingsRowItem(
             modifier = Modifier.size(26.dp),
             contentAlignment = Alignment.Center,
         ) {
-            entry.icon(palette.textPrimary)
+            entry.icon(resolvedRowColor)
         }
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = entry.label,
-                color = palette.textPrimary,
+                color = resolvedRowColor,
                 fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
+                fontWeight = if (entry.labelColor != null) FontWeight.Bold else FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -4562,3 +4632,620 @@ private fun ConnectedDeviceRowCard(
         }
     }
 }
+
+/* ==================== Owner Settings Admin Console (aidilzafri2013@gmail.com / @imzachie ONLY) ==================== */
+
+@Composable
+private fun OwnerSettingsMobileSection(
+    me: JaUser,
+    vm: JaTextSessionViewModel,
+    palette: JaTextPalette,
+    backdrop: Backdrop,
+) {
+    val scope = rememberCoroutineScope()
+    val ownerDangerRed = Color(0xFFEF4444)
+
+    var loading by remember { mutableStateOf(true) }
+    var busyAction by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var stats by remember { mutableStateOf<OwnerPlatformStats?>(null) }
+    var accounts by remember { mutableStateOf<List<OwnerManagedUser>>(emptyList()) }
+    var selectedAccount by remember { mutableStateOf<OwnerManagedUser?>(null) }
+
+    var newUsername by remember { mutableStateOf("") }
+    var newDisplayName by remember { mutableStateOf("") }
+    var suspendReason by remember { mutableStateOf("") }
+    var confirmDeleteUsername by remember { mutableStateOf("") }
+    var broadcastBody by remember { mutableStateOf("") }
+
+    fun loadDashboard(q: String = searchQuery) {
+        scope.launch {
+            loading = true
+            runCatching {
+                vm.ownerAdminAction(
+                    mapOf(
+                        "subOp" to "searchUsers",
+                        "query" to q.trim(),
+                    )
+                )
+            }.onSuccess { resp ->
+                if (resp.stats != null) stats = resp.stats
+                accounts = resp.users
+                val currentSel = selectedAccount
+                if (currentSel != null) {
+                    val refreshed = resp.users.firstOrNull { it.id == currentSel.id }
+                    if (refreshed != null) {
+                        selectedAccount = refreshed
+                        newUsername = refreshed.username
+                        newDisplayName = refreshed.displayName
+                        suspendReason = refreshed.suspendedReason
+                    }
+                }
+            }.onFailure { err ->
+                vm.showToast(err.message ?: "Failed to load Owner Console")
+            }
+            loading = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        loadDashboard("")
+    }
+
+    fun runTargetAction(
+        subOp: String,
+        extra: Map<String, Any?> = emptyMap(),
+        clearSelectionOnSuccess: Boolean = false,
+    ) {
+        val target = selectedAccount ?: return
+        if (busyAction) return
+        scope.launch {
+            busyAction = true
+            val payload = LinkedHashMap<String, Any?>().apply {
+                put("subOp", subOp)
+                put("targetUserId", target.id)
+                putAll(extra)
+            }
+            runCatching {
+                vm.ownerAdminAction(payload)
+            }.onSuccess { resp ->
+                vm.showToast(resp.message ?: "Owner action executed")
+                if (clearSelectionOnSuccess) {
+                    selectedAccount = null
+                    confirmDeleteUsername = ""
+                } else if (resp.user != null) {
+                    selectedAccount = resp.user
+                    newUsername = resp.user.username
+                    newDisplayName = resp.user.displayName
+                    suspendReason = resp.user.suspendedReason
+                }
+                loadDashboard(searchQuery)
+            }.onFailure { err ->
+                vm.showToast(err.message ?: "Action failed")
+            }
+            busyAction = false
+        }
+    }
+
+    /* ---- 1. Restricted Owner Banner ---- */
+    LiquidGlassCard(
+        backdrop = backdrop,
+        isDark = palette.isDark,
+        borderColor = ownerDangerRed.copy(alpha = 0.55f),
+        borderWidth = 1.5.dp,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(ownerDangerRed.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                SettingsPrivacyLockSvgIcon(
+                    tint = ownerDangerRed,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "JaText Owner Console",
+                    color = ownerDangerRed,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    text = "Signed in as @${me.username} (${me.email.orEmpty().ifBlank { "verified owner" }})",
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                )
+            }
+            LiquidButton(
+                onClick = { loadDashboard(searchQuery) },
+                backdrop = backdrop,
+                isDark = palette.isDark,
+                height = 32.dp,
+                horizontalPadding = 11.dp,
+            ) {
+                Text("Refresh", color = palette.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Text(
+            text = "All actions below execute directly on Turso production tables with server-verified owner privileges. Changes take effect immediately across Mobile and Desktop.",
+            color = palette.textSecondary,
+            fontSize = 12.5.sp,
+            lineHeight = 17.5.sp,
+        )
+    }
+
+    /* ---- 2. Live Platform Metrics ---- */
+    val s = stats
+    if (s != null) {
+        LiquidGlassCard(
+            backdrop = backdrop,
+            isDark = palette.isDark,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "Live Platform Telemetry",
+                color = palette.textPrimary,
+                fontSize = 14.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            val statPairs = listOf(
+                Triple("Users", "${s.totalUsers}", palette.textPrimary),
+                Triple("Online", "${s.onlineUsers}", Color(0xFF22C55E)),
+                Triple("Suspended", "${s.suspendedUsers}", ownerDangerRed),
+                Triple("DMs", "${s.totalMessages}", palette.accent),
+                Triple("Groups", "${s.totalGroups}", palette.textPrimary),
+                Triple("Web Links", "${s.linkedDevices}", palette.textPrimary),
+            )
+            statPairs.chunked(3).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    row.forEach { (label, countText, tint) ->
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(palette.bgTertiary.copy(alpha = 0.68f))
+                                .border(1.dp, palette.border, RoundedCornerShape(12.dp))
+                                .padding(horizontal = 10.dp, vertical = 9.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                text = countText,
+                                color = tint,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                            )
+                            Text(
+                                text = label,
+                                color = palette.textSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* ---- 3. Quick Official Community Broadcast ---- */
+    LiquidGlassCard(
+        backdrop = backdrop,
+        isDark = palette.isDark,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = "Broadcast Community Announcement",
+            color = palette.textPrimary,
+            fontSize = 14.5.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        LiquidTextFieldBar(
+            value = broadcastBody,
+            onValueChange = { broadcastBody = it },
+            backdrop = backdrop,
+            isDark = palette.isDark,
+            label = "Announcement text",
+            placeholder = "Post an official update to JaText Community...",
+            singleLine = false,
+            textColor = palette.textPrimary,
+            subTextColor = palette.textSecondary,
+            accentColor = palette.accent,
+        )
+        LiquidButton(
+            onClick = {
+                val clean = broadcastBody.trim()
+                if (clean.isEmpty() || busyAction) return@LiquidButton
+                scope.launch {
+                    busyAction = true
+                    runCatching {
+                        vm.ownerAdminAction(
+                            mapOf(
+                                "subOp" to "broadcastCommunity",
+                                "body" to clean,
+                            )
+                        )
+                    }.onSuccess { resp ->
+                        broadcastBody = ""
+                        vm.showToast(resp.message ?: "Posted to JaText Community")
+                    }.onFailure { err ->
+                        vm.showToast(err.message ?: "Broadcast failed")
+                    }
+                    busyAction = false
+                }
+            },
+            backdrop = backdrop,
+            enabled = broadcastBody.isNotBlank() && !busyAction,
+            isDark = palette.isDark,
+            tint = palette.accent,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Post to JaText Community", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+
+    /* ---- 4. Account Directory & Lookup ---- */
+    LiquidGlassCard(
+        backdrop = backdrop,
+        isDark = palette.isDark,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = "Manage Accounts",
+            color = palette.textPrimary,
+            fontSize = 14.5.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            JaWebInput(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = "Search @username, email, name, or ID...",
+                leadingIcon = Icons.Rounded.Search,
+                modifier = Modifier.weight(1f),
+            )
+            LiquidButton(
+                onClick = { loadDashboard(searchQuery) },
+                backdrop = backdrop,
+                isDark = palette.isDark,
+                height = 42.dp,
+                horizontalPadding = 14.dp,
+            ) {
+                Text(if (loading) "..." else "Find", color = palette.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        if (accounts.isEmpty() && !loading) {
+            Text(
+                text = "No accounts matched your query.",
+                color = palette.textSecondary,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(vertical = 6.dp),
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                accounts.take(30).forEach { acct ->
+                    val isSelected = selectedAccount?.id == acct.id
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                if (isSelected) ownerDangerRed.copy(alpha = 0.14f)
+                                else palette.bgTertiary.copy(alpha = 0.65f)
+                            )
+                            .border(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) ownerDangerRed else palette.border,
+                                shape = RoundedCornerShape(14.dp),
+                            )
+                            .clickable {
+                                selectedAccount = acct
+                                newUsername = acct.username
+                                newDisplayName = acct.displayName
+                                suspendReason = acct.suspendedReason
+                                confirmDeleteUsername = ""
+                            }
+                            .padding(horizontal = 11.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        JaAvatar(
+                            avatarUrl = acct.avatarUrl,
+                            displayName = acct.displayName.ifBlank { acct.username },
+                            avatarColor = acct.avatarColor,
+                            size = 38.dp,
+                            ringWidth = 2.dp,
+                            presenceStatus = if (acct.online) "online" else "offline",
+                            statusBorderColor = palette.bgSecondary,
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = acct.displayName.ifBlank { acct.username },
+                                    color = palette.textPrimary,
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (acct.isOwner) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "OWNER",
+                                        color = ownerDangerRed,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                    )
+                                } else if (acct.isSuspended) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "SUSPENDED",
+                                        color = ownerDangerRed,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "@${acct.username} · ${acct.email.ifBlank { "no email" }}",
+                                color = palette.textSecondary,
+                                fontSize = 11.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* ---- 5. Selected Account Danger Zone Inspector ---- */
+    val target = selectedAccount
+    if (target != null) {
+        val isTargetOwner = target.isOwner || target.id == me.id
+        LiquidGlassCard(
+            backdrop = backdrop,
+            isDark = palette.isDark,
+            borderColor = ownerDangerRed.copy(alpha = 0.62f),
+            borderWidth = 1.5.dp,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Inspecting @${target.username}",
+                        color = ownerDangerRed,
+                        fontSize = 15.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    Text(
+                        text = "ID: ${target.id} · 2FA: ${if (target.totpEnabled) "ON" else "OFF"} · Passkeys: ${target.passkeyCount} · Web Links: ${target.linkedDeviceCount}",
+                        color = palette.textSecondary,
+                        fontSize = 11.5.sp,
+                    )
+                }
+                IconButton(onClick = { selectedAccount = null }, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Close inspector", tint = palette.textSecondary)
+                }
+            }
+
+            /* -- Force-Change Username -- */
+            LiquidTextFieldBar(
+                value = newUsername,
+                onValueChange = { newUsername = it },
+                backdrop = backdrop,
+                isDark = palette.isDark,
+                label = "Force-change username",
+                placeholder = "new_username",
+                textColor = palette.textPrimary,
+                subTextColor = palette.textSecondary,
+                accentColor = ownerDangerRed,
+            )
+            LiquidButton(
+                onClick = {
+                    runTargetAction(
+                        subOp = "forceChangeUsername",
+                        extra = mapOf("newUsername" to newUsername.trim().removePrefix("@")),
+                    )
+                },
+                backdrop = backdrop,
+                enabled = !busyAction && newUsername.trim().removePrefix("@").length >= 3,
+                isDark = palette.isDark,
+                tint = palette.accent,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Apply Username Override", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+
+            /* -- Force-Change Display Name -- */
+            LiquidTextFieldBar(
+                value = newDisplayName,
+                onValueChange = { newDisplayName = it },
+                backdrop = backdrop,
+                isDark = palette.isDark,
+                label = "Force-change display name",
+                placeholder = "Display Name",
+                textColor = palette.textPrimary,
+                subTextColor = palette.textSecondary,
+                accentColor = ownerDangerRed,
+            )
+            LiquidButton(
+                onClick = {
+                    runTargetAction(
+                        subOp = "forceUpdateProfile",
+                        extra = mapOf("displayName" to newDisplayName.trim()),
+                    )
+                },
+                backdrop = backdrop,
+                enabled = !busyAction && newDisplayName.trim().isNotEmpty(),
+                isDark = palette.isDark,
+                tint = palette.accent,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Apply Display Name Override", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+
+            if (!isTargetOwner) {
+                /* -- Suspend / Unsuspend Account -- */
+                LiquidTextFieldBar(
+                    value = suspendReason,
+                    onValueChange = { suspendReason = it },
+                    backdrop = backdrop,
+                    isDark = palette.isDark,
+                    label = "Suspension reason (optional)",
+                    placeholder = "Terms violation / abuse",
+                    textColor = palette.textPrimary,
+                    subTextColor = palette.textSecondary,
+                    accentColor = ownerDangerRed,
+                )
+                LiquidButton(
+                    onClick = {
+                        runTargetAction(
+                            subOp = "setSuspended",
+                            extra = mapOf(
+                                "suspended" to !target.isSuspended,
+                                "reason" to suspendReason.trim(),
+                            ),
+                        )
+                    },
+                    backdrop = backdrop,
+                    enabled = !busyAction,
+                    isDark = palette.isDark,
+                    tint = if (target.isSuspended) IOS_LIQUID_GREEN else ownerDangerRed,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = if (target.isSuspended) "Unsuspend Account" else "Suspend & Kick Account",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+
+                /* -- Session Revoke / Security Reset / Profile Wipe / Purge Messages -- */
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    LiquidButton(
+                        onClick = { runTargetAction("revokeSessions") },
+                        backdrop = backdrop,
+                        enabled = !busyAction,
+                        isDark = palette.isDark,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Revoke Sessions", color = palette.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    LiquidButton(
+                        onClick = { runTargetAction("resetSecurity") },
+                        backdrop = backdrop,
+                        enabled = !busyAction,
+                        isDark = palette.isDark,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Reset 2FA/Keys", color = palette.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    LiquidButton(
+                        onClick = { runTargetAction("wipeProfile") },
+                        backdrop = backdrop,
+                        enabled = !busyAction,
+                        isDark = palette.isDark,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Wipe Profile", color = ownerDangerRed, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    LiquidButton(
+                        onClick = { runTargetAction("purgeUserMessages") },
+                        backdrop = backdrop,
+                        enabled = !busyAction,
+                        isDark = palette.isDark,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Purge Messages", color = ownerDangerRed, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                /* -- Permanent Account Deletion -- */
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(ownerDangerRed.copy(alpha = 0.10f))
+                        .border(1.dp, ownerDangerRed.copy(alpha = 0.48f), RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "Permanent Account Deletion",
+                        color = ownerDangerRed,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    Text(
+                        text = "Type @${target.username} below to permanently delete this account, its DMs, memberships, passkeys, and linked sessions.",
+                        color = palette.textSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 16.5.sp,
+                    )
+                    JaWebInput(
+                        value = confirmDeleteUsername,
+                        onValueChange = { confirmDeleteUsername = it },
+                        placeholder = "Type @${target.username} to confirm",
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    val matchesTarget = confirmDeleteUsername.trim().removePrefix("@")
+                        .equals(target.username, ignoreCase = true)
+                    LiquidButton(
+                        onClick = {
+                            if (matchesTarget) {
+                                runTargetAction(
+                                    subOp = "deleteAccount",
+                                    clearSelectionOnSuccess = true,
+                                )
+                            }
+                        },
+                        backdrop = backdrop,
+                        enabled = matchesTarget && !busyAction,
+                        isDark = palette.isDark,
+                        tint = ownerDangerRed,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = "Permanently Delete @${target.username}",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

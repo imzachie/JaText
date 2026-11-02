@@ -348,7 +348,9 @@ export function formatPreviewMessageText(body: string): string {
     return labelPart || "New message";
   }
   const clean = stripBubbleStyleFromText(body).replace(/[\u200B\u200C\u2063]/g, "");
-  if (clean.startsWith("__JATEXT_VO_V1__:")) return "Click to view.";
+  if (clean.trim().startsWith("__JATEXT_VO_V1__:") || clean.includes("__JATEXT_VO_V1__:")) {
+    return "View once";
+  }
   if (isHiddenCallSignal(clean)) return "";
   if (clean.startsWith(GROUP_CALL_INVITE_PREFIX)) {
     try {

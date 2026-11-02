@@ -28,6 +28,7 @@ import com.ahad00010.jatext.data.SealedDeviceLinkBundle
 import com.ahad00010.jatext.data.SealedE2EEVault
 import com.ahad00010.jatext.data.StickerMedia
 import com.ahad00010.jatext.data.StoredIdentityRecord
+import com.ahad00010.jatext.data.ViewOnceCodec
 import com.ahad00010.jatext.data.TursoApiClient
 import java.io.File
 import java.math.BigInteger
@@ -720,7 +721,22 @@ object JaTextCryptoEngine {
         val myIdentity = ensureOrCreatePrimaryIdentity(context, myUserId)
         ensurePrimaryIdentityPublished(myIdentity, token)
         val peerMap = ensurePeerBundles(listOf(receiverId, myUserId), token)
-        val receiverBundles = peerMap[receiverId].orEmpty()
+        val receiverBundles = peerMap[receiverId].orEmpty().ifEmpty {
+            if (receiverId == myUserId) {
+                listOf(
+                    PublicIdentityBundle(
+                        userId = myUserId,
+                        keyId = myIdentity.keyId,
+                        dhPubB64 = myIdentity.dhPubB64,
+                        sigPubB64 = myIdentity.sigPubB64,
+                        selfSigB64 = myIdentity.selfSigB64,
+                        ts = myIdentity.createdAt,
+                    )
+                )
+            } else {
+                emptyList()
+            }
+        }
         if (receiverBundles.isEmpty()) {
             return@withContext null
         }
@@ -1786,6 +1802,9 @@ object JaTextCryptoEngine {
         val (noZw, _) = extractMessageBubbleStyle(body, attachmentType)
         val (_, noFwd) = extractForwardedContext(noZw)
         val trimmed = noFwd.trim()
+        if (ViewOnceCodec.isViewOnceBody(trimmed)) {
+            return "View once"
+        }
         if (trimmed.startsWith(CALL_INVITE_PREFIX)) {
             return if (trimmed.contains("\"video\"")) "Video call" else "Voice call"
         }

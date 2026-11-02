@@ -2,9 +2,13 @@ package com.ahad00010.jatext.ui.components
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.drawable.ColorDrawable
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
+import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.VideoView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -35,8 +39,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -516,8 +522,13 @@ fun ReplyQuoteBannerUi(
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
             )
+            val safeQuoteBody = remember(reply.body, reply.attachmentName) {
+                val sanitized = ViewOnceCodec.sanitizePreview(reply.body)
+                    .replace(Regex("""\|\|.+?\|\|"""), "▪▪▪▪▪")
+                sanitized.ifBlank { reply.attachmentName ?: "Attachment" }
+            }
             Text(
-                text = reply.body.ifBlank { reply.attachmentName ?: "Attachment" },
+                text = safeQuoteBody,
                 color = ink.subTextColor,
                 fontSize = 11.5.sp,
                 maxLines = 1,
@@ -1947,7 +1958,7 @@ fun MessageMediaAttachmentView(
 /* ==================== Rich Markdown Parser + OpenGraph Link Embed WITH Image (`LinkEmbeds.tsx`) ==================== */
 
 private val INLINE_TOKEN_RE = Regex(
-    """(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(\[([^\]]+)\]\((https?://[^\s)]+)\))|(https?://[^\s<>)\]]+)|(@[a-zA-Z0-9._]{2,24})"""
+    """(\|\|.+?\|\|)|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(\[([^\]]+)\]\((https?://[^\s)]+)\))|(https?://[^\s<>)\]]+)|(@[a-zA-Z0-9._]{2,24})"""
 )
 
 private fun buildMarkdownAnnotatedLine(
@@ -1955,8 +1966,16 @@ private fun buildMarkdownAnnotatedLine(
     textColor: Color,
     codeBgColor: Color,
     linkColor: Color,
+    isLightSurface: Boolean = false,
+    blockKey: String = "0",
+    revealedSpoilers: Set<String> = emptySet(),
+    highlightQuery: String = "",
 ): AnnotatedString = buildAnnotatedString {
     var cursor = 0
+    var spoilerCounter = 0
+    val spoilerMaskBg = if (isLightSurface) Color(0xFF334155) else Color(0xFF475569)
+    val unrevealedRanges = mutableListOf<IntRange>()
+
     for (m in INLINE_TOKEN_RE.findAll(raw)) {
         if (m.range.first < cursor) continue
         if (m.range.first > cursor) {
@@ -1965,6 +1984,28 @@ private fun buildMarkdownAnnotatedLine(
         val token = m.value
         when {
             m.groups[1] != null -> {
+                val spoilerId = "$blockKey:$spoilerCounter"
+                spoilerCounter++
+                val inner = token.substring(2, token.length - 2)
+                val revealed = revealedSpoilers.contains(spoilerId)
+                pushStringAnnotation(tag = "SPOILER", annotation = spoilerId)
+                val startIdx = length
+                withStyle(
+                    SpanStyle(
+                        background = if (revealed) textColor.copy(alpha = 0.16f) else spoilerMaskBg,
+                        color = if (revealed) textColor else Color.Transparent,
+                        fontWeight = if (revealed) FontWeight.Medium else FontWeight.Normal,
+                    )
+                ) {
+                    append(" $inner ")
+                }
+                val endIdx = length
+                if (!revealed) {
+                    unrevealedRanges.add(startIdx until endIdx)
+                }
+                pop()
+            }
+            m.groups[2] != null -> {
                 withStyle(
                     SpanStyle(
                         fontFamily = FontFamily.Monospace,
@@ -1976,24 +2017,24 @@ private fun buildMarkdownAnnotatedLine(
                     append(" ${token.substring(1, token.length - 1)} ")
                 }
             }
-            m.groups[2] != null || m.groups[3] != null -> {
+            m.groups[3] != null || m.groups[4] != null -> {
                 withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = textColor)) {
                     append(token.substring(2, token.length - 2))
                 }
             }
-            m.groups[4] != null -> {
+            m.groups[5] != null -> {
                 withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough, color = textColor.copy(alpha = 0.85f))) {
                     append(token.substring(2, token.length - 2))
                 }
             }
-            m.groups[5] != null -> {
+            m.groups[6] != null -> {
                 withStyle(SpanStyle(fontStyle = FontStyle.Italic, color = textColor)) {
                     append(token.substring(1, token.length - 1))
                 }
             }
-            m.groups[6] != null -> {
-                val label = m.groups[7]?.value.orEmpty()
-                val url = m.groups[8]?.value.orEmpty()
+            m.groups[7] != null -> {
+                val label = m.groups[8]?.value.orEmpty()
+                val url = m.groups[9]?.value.orEmpty()
                 pushStringAnnotation(tag = "URL", annotation = url)
                 withStyle(
                     SpanStyle(
@@ -2006,7 +2047,7 @@ private fun buildMarkdownAnnotatedLine(
                 }
                 pop()
             }
-            m.groups[9] != null -> {
+            m.groups[10] != null -> {
                 pushStringAnnotation(tag = "URL", annotation = token)
                 withStyle(
                     SpanStyle(
@@ -2019,7 +2060,7 @@ private fun buildMarkdownAnnotatedLine(
                 }
                 pop()
             }
-            m.groups[10] != null -> {
+            m.groups[11] != null -> {
                 withStyle(
                     SpanStyle(
                         color = textColor,
@@ -2035,6 +2076,32 @@ private fun buildMarkdownAnnotatedLine(
     }
     if (cursor < raw.length) {
         append(raw.substring(cursor))
+    }
+
+    val q = highlightQuery.trim()
+    if (q.isNotEmpty()) {
+        val fullText = toAnnotatedString().text
+        var searchIdx = 0
+        val hlBg = Color(0x8CFACC15)
+        val hlFg = if (isLightSurface) Color(0xFF111827) else Color(0xFFFFFFFF)
+        while (searchIdx < fullText.length) {
+            val found = fullText.indexOf(q, startIndex = searchIdx, ignoreCase = true)
+            if (found < 0) break
+            val end = found + q.length
+            val overlapsHiddenSpoiler = unrevealedRanges.any { r -> found <= r.last && end - 1 >= r.first }
+            if (!overlapsHiddenSpoiler) {
+                addStyle(
+                    SpanStyle(
+                        background = hlBg,
+                        color = hlFg,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    start = found,
+                    end = end,
+                )
+            }
+            searchIdx = end
+        }
     }
 }
 
@@ -2123,21 +2190,68 @@ fun RichMarkdownText(
     accentColor: Color,
     showLinkEmbeds: Boolean = true,
     fontSizeSp: Float = 14.5f,
+    highlightQuery: String = "",
     onNonLinkTap: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val safeText = remember(text) { sanitizeInternalTextBeforeMarkdown(text) }
     val blocks = remember(safeText) { parseMarkdownBlocks(safeText) }
+    var revealedSpoilers by remember(safeText) { mutableStateOf(emptySet<String>()) }
     val firstUrl = remember(safeText, showLinkEmbeds) {
-        if (showLinkEmbeds) URL_REGEX.find(safeText)?.value else null
+        if (showLinkEmbeds) URL_REGEX.find(safeText.replace(Regex("""\|\|.+?\|\|"""), ""))?.value else null
     }
     val codeBg = if (isLightSurface) Color(0x18000000) else Color(0x2E000000)
     val linkTint = if (isLightSurface) textColor else textColor
 
+    fun handleAnnotatedClick(ann: AnnotatedString, offset: Int) {
+        val spoilerAnn = ann.getStringAnnotations("SPOILER", offset, offset).firstOrNull()
+        if (spoilerAnn != null) {
+            val id = spoilerAnn.item
+            revealedSpoilers = if (revealedSpoilers.contains(id)) {
+                revealedSpoilers - id
+            } else {
+                revealedSpoilers + id
+            }
+            return
+        }
+        val urlAnn = ann.getStringAnnotations("URL", offset, offset).firstOrNull()
+        if (urlAnn != null) {
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(urlAnn.item)))
+            } catch (_: Throwable) {
+            }
+            return
+        }
+        onNonLinkTap?.invoke()
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        blocks.forEach { block ->
+        blocks.forEachIndexed { blockIdx, block ->
             when (block) {
                 is MarkdownBlockNode.CodeFence -> {
+                    val codeAnnotated = remember(block.code, textColor, highlightQuery, isLightSurface) {
+                        buildAnnotatedString {
+                            append(block.code)
+                            val q = highlightQuery.trim()
+                            if (q.isNotEmpty()) {
+                                var idx = 0
+                                while (idx < block.code.length) {
+                                    val found = block.code.indexOf(q, startIndex = idx, ignoreCase = true)
+                                    if (found < 0) break
+                                    addStyle(
+                                        SpanStyle(
+                                            background = Color(0x8CFACC15),
+                                            color = if (isLightSurface) Color(0xFF111827) else Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                        ),
+                                        start = found,
+                                        end = found + q.length,
+                                    )
+                                    idx = found + q.length
+                                }
+                            }
+                        }
+                    }
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2156,7 +2270,7 @@ fun RichMarkdownText(
                             Spacer(Modifier.height(2.dp))
                         }
                         Text(
-                            text = block.code,
+                            text = codeAnnotated,
                             color = textColor,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.5.sp,
@@ -2165,8 +2279,17 @@ fun RichMarkdownText(
                     }
                 }
                 is MarkdownBlockNode.Quote -> {
-                    val ann = remember(block.text, textColor, codeBg) {
-                        buildMarkdownAnnotatedLine(block.text, textColor, codeBg, linkTint)
+                    val ann = remember(block.text, textColor, codeBg, isLightSurface, blockIdx, revealedSpoilers, highlightQuery) {
+                        buildMarkdownAnnotatedLine(
+                            raw = block.text,
+                            textColor = textColor,
+                            codeBgColor = codeBg,
+                            linkColor = linkTint,
+                            isLightSurface = isLightSurface,
+                            blockKey = "q$blockIdx",
+                            revealedSpoilers = revealedSpoilers,
+                            highlightQuery = highlightQuery,
+                        )
                     }
                     Row(
                         modifier = Modifier
@@ -2192,23 +2315,22 @@ fun RichMarkdownText(
                                 fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
                                 lineHeight = (fontSizeSp + 5.5f).sp,
                             ),
-                            onClick = { offset ->
-                                val urlAnn = ann.getStringAnnotations("URL", offset, offset).firstOrNull()
-                                if (urlAnn != null) {
-                                    try {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(urlAnn.item)))
-                                    } catch (_: Throwable) {
-                                    }
-                                } else {
-                                    onNonLinkTap?.invoke()
-                                }
-                            }
+                            onClick = { offset -> handleAnnotatedClick(ann, offset) }
                         )
                     }
                 }
                 is MarkdownBlockNode.ListItem -> {
-                    val ann = remember(block.text, textColor, codeBg) {
-                        buildMarkdownAnnotatedLine(block.text, textColor, codeBg, linkTint)
+                    val ann = remember(block.text, textColor, codeBg, isLightSurface, blockIdx, revealedSpoilers, highlightQuery) {
+                        buildMarkdownAnnotatedLine(
+                            raw = block.text,
+                            textColor = textColor,
+                            codeBgColor = codeBg,
+                            linkColor = linkTint,
+                            isLightSurface = isLightSurface,
+                            blockKey = "l$blockIdx",
+                            revealedSpoilers = revealedSpoilers,
+                            highlightQuery = highlightQuery,
+                        )
                     }
                     Row(verticalAlignment = Alignment.Top) {
                         Text(
@@ -2227,17 +2349,7 @@ fun RichMarkdownText(
                                 lineHeight = (fontSizeSp + 5.5f).sp,
                             ),
                             modifier = Modifier.weight(1f),
-                            onClick = { offset ->
-                                val urlAnn = ann.getStringAnnotations("URL", offset, offset).firstOrNull()
-                                if (urlAnn != null) {
-                                    try {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(urlAnn.item)))
-                                    } catch (_: Throwable) {
-                                    }
-                                } else {
-                                    onNonLinkTap?.invoke()
-                                }
-                            }
+                            onClick = { offset -> handleAnnotatedClick(ann, offset) }
                         )
                     }
                 }
@@ -2245,8 +2357,17 @@ fun RichMarkdownText(
                     if (block.text.isEmpty()) {
                         Spacer(Modifier.height(4.dp))
                     } else {
-                        val ann = remember(block.text, textColor, codeBg) {
-                            buildMarkdownAnnotatedLine(block.text, textColor, codeBg, linkTint)
+                        val ann = remember(block.text, textColor, codeBg, isLightSurface, blockIdx, revealedSpoilers, highlightQuery) {
+                            buildMarkdownAnnotatedLine(
+                                raw = block.text,
+                                textColor = textColor,
+                                codeBgColor = codeBg,
+                                linkColor = linkTint,
+                                isLightSurface = isLightSurface,
+                                blockKey = "p$blockIdx",
+                                revealedSpoilers = revealedSpoilers,
+                                highlightQuery = highlightQuery,
+                            )
                         }
                         val sizeSp = when (block.headingLevel) {
                             1 -> fontSizeSp + 4f
@@ -2268,17 +2389,7 @@ fun RichMarkdownText(
                                 },
                                 lineHeight = (sizeSp + 5.5f).sp,
                             ),
-                            onClick = { offset ->
-                                val urlAnn = ann.getStringAnnotations("URL", offset, offset).firstOrNull()
-                                if (urlAnn != null) {
-                                    try {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(urlAnn.item)))
-                                    } catch (_: Throwable) {
-                                    }
-                                } else {
-                                    onNonLinkTap?.invoke()
-                                }
-                            }
+                            onClick = { offset -> handleAnnotatedClick(ann, offset) }
                         )
                     }
                 }
@@ -2379,6 +2490,7 @@ fun RichTextWithLinksAndMentions(
     text: String,
     ink: ResolvedBubbleColors,
     palette: JaTextPalette,
+    highlightQuery: String = "",
     onLongPressMessage: (() -> Unit)? = null,
 ) {
     RichMarkdownText(
@@ -2389,6 +2501,7 @@ fun RichTextWithLinksAndMentions(
         accentColor = palette.accent,
         showLinkEmbeds = true,
         fontSizeSp = 14.5f,
+        highlightQuery = highlightQuery,
         onNonLinkTap = onLongPressMessage,
     )
 }
@@ -2844,7 +2957,30 @@ fun ViewOnceMessageBubbleUi(
             val view = androidx.compose.ui.platform.LocalView.current
             DisposableEffect(view) {
                 val dlgWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
-                dlgWindow?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+                dlgWindow?.let { w ->
+                    w.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+                    androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
+                    w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    w.setBackgroundDrawable(ColorDrawable(android.graphics.Color.parseColor("#05070B")))
+                    w.statusBarColor = android.graphics.Color.TRANSPARENT
+                    w.navigationBarColor = android.graphics.Color.TRANSPARENT
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        w.attributes = w.attributes.apply {
+                            layoutInDisplayCutoutMode =
+                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                        }
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        w.attributes = w.attributes.apply {
+                            layoutInDisplayCutoutMode =
+                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                        }
+                    }
+                    androidx.core.view.WindowCompat.getInsetsController(w, view).apply {
+                        isAppearanceLightStatusBars = false
+                        isAppearanceLightNavigationBars = false
+                    }
+                }
                 onDispose {}
             }
 
@@ -2872,8 +3008,10 @@ fun ViewOnceMessageBubbleUi(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFA07080D))
-                    .padding(horizontal = 18.dp, vertical = 38.dp),
+                    .background(Color(0xFF05070B))
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 18.dp, vertical = 18.dp),
             ) {
                 // Top Bar with View Once pill + X Close button
                 Row(

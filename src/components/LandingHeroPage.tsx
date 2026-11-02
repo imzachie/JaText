@@ -130,10 +130,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.9.5",
+    date: "November 2, 2026",
+    headline: "Chat Yourself, Instant Recency Sorting, Accurate Receipts, Passkey Origin Fix, Spoilers & Edge-to-Edge Polish",
+    latest: true,
+    bullets: [
+      "Added Chat Yourself (self-DM with instant Read status), true message-recency sorting across Chats and Groups, always-visible smooth search bars under Chats and Groups headers, and real-time Sent / Delivered / Read delivery receipts.",
+      "Fixed Android Passkey origin verification, Mobile spoilers and View Once reply privacy, in-chat search text highlighting, custom notification sounds on Desktop and Mobile, status bubbles on PFP cards, Community owner hard-delete, and full edge-to-edge screen insets.",
+    ],
+  },
+  {
     version: "v3.9.4",
     date: "November 2, 2026",
     headline: "5-Tab Mobile Navigation (Updates, Calls, Groups, Chats, You), Live Mobile Typing Indicators & Friend Request Fix",
-    latest: true,
     bullets: [
       "Redesigned mobile navigation into a 5-tab capsule (Updates, Calls, Groups, Chats defaulting on the 4th tab for 1:1 P2P chats, and You with your profile avatar opening Settings) with 1:1 SVG icons and no separated search button.",
       "Fixed real-time typing indicators across mobile 1:1 DMs, Groups, and Community (both sending and sub-second sync receiving), and fixed outgoing friend requests showing the recipient profile instead of your own.",
@@ -476,7 +485,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.9.4 · Live
+                v3.9.5 · Live
               </span>
             </span>
           </a>
@@ -615,7 +624,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.9.4 (Build 61)</strong>
+                    <strong>v3.9.5 (Build 62)</strong>
                     <span>{isIosVisitor ? "iOS Web & Liquid Glass PWA" : "Web & Signed APK"}</span>
                   </div>
                 </div>
@@ -997,7 +1006,7 @@ export function LandingHeroPage() {
                   <>
                     Launch the full JaText web app at{" "}
                     <strong>jatext.vercel.app/chats</strong> or grab the latest signed Android
-                    Release APK (v3.9.4).
+                    Release APK (v3.9.5).
                   </>
                 )}
               </p>
@@ -1027,7 +1036,7 @@ export function LandingHeroPage() {
                   href="/downloads/JaText-release.apk"
                   className="jt-btn-secondary jt-btn-lg"
                 >
-                  Get Android APK (v3.9.4)
+                  Get Android APK (v3.9.5)
                 </a>
               )}
             </div>
@@ -1040,7 +1049,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.9.4</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.9.5</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

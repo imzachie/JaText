@@ -144,6 +144,24 @@ async function putCustomSoundBlob(key: string, blob: Blob): Promise<string> {
   }
   const objUrl = URL.createObjectURL(blob);
   customObjectUrlCache.set(key, objUrl);
+  // Persist compact base64 DataURL backup in localStorage for Desktop reliability across private/storage resets
+  if (blob.size <= 3.5 * 1024 * 1024 && typeof localStorage !== "undefined") {
+    void new Promise<void>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          if (typeof reader.result === "string" && reader.result.startsWith("data:")) {
+            localStorage.setItem(`jatext-custom-sound-dataurl-${key}`, reader.result);
+          }
+        } catch {
+          // Quota full; IndexedDB still stores the full blob
+        }
+        resolve();
+      };
+      reader.onerror = () => resolve();
+      reader.readAsDataURL(blob);
+    });
+  }
   try {
     const db = await openCustomSoundDb();
     await new Promise<void>((resolve, reject) => {
@@ -154,7 +172,7 @@ async function putCustomSoundBlob(key: string, blob: Blob): Promise<string> {
     });
     db.close();
   } catch {
-    // Keep in-memory URL even if IndexedDB fails in private mode
+    // Keep in-memory + DataURL fallback if IndexedDB fails in private mode
   }
   return objUrl;
 }
@@ -171,13 +189,24 @@ async function getCustomSoundObjectUrl(key: string): Promise<string | null> {
       req.onerror = () => resolve(null);
     });
     db.close();
-    if (!blob) return null;
-    const url = URL.createObjectURL(blob);
-    customObjectUrlCache.set(key, url);
-    return url;
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      customObjectUrlCache.set(key, url);
+      return url;
+    }
   } catch {
-    return null;
+    // Fall back to DataURL backup below
   }
+  try {
+    const dataUrl = localStorage.getItem(`jatext-custom-sound-dataurl-${key}`);
+    if (dataUrl && dataUrl.startsWith("data:")) {
+      customObjectUrlCache.set(key, dataUrl);
+      return dataUrl;
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -243,6 +272,8 @@ export async function fetchDeviceSystemSounds(
 
 let audioContext: AudioContext | null = null;
 let defaultNotifAudio: HTMLAudioElement | null = null;
+let customNotifAudio: HTMLAudioElement | null = null;
+let customNotifAudioSrc = "";
 let defaultRingtoneAudio: HTMLAudioElement | null = null;
 let activeWebRingtoneAudio: HTMLAudioElement | null = null;
 let activeWebPreviewAudio: HTMLAudioElement | null = null;
@@ -263,6 +294,16 @@ if (typeof window !== "undefined" && !Capacitor.isNativePlatform()) {
       if (!defaultRingtoneAudio) {
         defaultRingtoneAudio = new Audio(DEFAULT_CALL_RINGTONE_URL);
         defaultRingtoneAudio.preload = "auto";
+      }
+      const prefs = loadNotificationPreferences();
+      if (prefs.notificationSound.mode === "custom") {
+        void getCustomSoundObjectUrl("custom_notification").then((u) => {
+          if (u && customNotifAudioSrc !== u) {
+            customNotifAudioSrc = u;
+            customNotifAudio = new Audio(u);
+            customNotifAudio.preload = "auto";
+          }
+        });
       }
     } catch {
       // Ignore
@@ -378,9 +419,14 @@ export function playMessageSound(direction: "sent" | "received") {
         defaultNotifAudio.volume = 1.0;
         await defaultNotifAudio.play();
       } else {
-        const audio = new Audio(url);
-        audio.volume = 1.0;
-        await audio.play();
+        if (!customNotifAudio || customNotifAudioSrc !== url) {
+          customNotifAudioSrc = url;
+          customNotifAudio = new Audio(url);
+          customNotifAudio.preload = "auto";
+        }
+        customNotifAudio.currentTime = 0;
+        customNotifAudio.volume = 1.0;
+        await customNotifAudio.play();
       }
     } catch {
       if (Capacitor.isNativePlatform()) {
@@ -390,6 +436,9 @@ export function playMessageSound(direction: "sent" | "received") {
           uri: sel.uri,
           loop: false,
         }).catch(() => undefined);
+      } else {
+        // Fallback WebAudio chime if browser autoplay blocked HTMLAudioElement before first click
+        playSynthRingtonePulse();
       }
     }
   })();

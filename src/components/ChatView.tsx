@@ -264,6 +264,7 @@ const ChatHistory = memo(function ChatHistory({
   onOpenMessageMenuAt,
   onOpenImage,
   activeSearchMatchId,
+  highlightQuery,
   onReactToMessage,
   onOpenReactionPicker,
   onSwipeReply,
@@ -284,6 +285,7 @@ const ChatHistory = memo(function ChatHistory({
   onOpenMessageMenuAt: (x: number, y: number, message: ChatMessage) => void;
   onOpenImage: (url: string) => void;
   activeSearchMatchId?: string | null;
+  highlightQuery?: string;
   onReactToMessage: (message: ChatMessage, emoji: string) => void;
   onOpenReactionPicker: (x: number, y: number, message: ChatMessage) => void;
   onSwipeReply: (message: ChatMessage) => void;
@@ -767,7 +769,11 @@ const ChatHistory = memo(function ChatHistory({
                         ))}
                       {message.body && (
                         <>
-                          <MessageMarkdown text={message.body} mine={mine} />
+                          <MessageMarkdown
+                            text={message.body}
+                            mine={mine}
+                            highlightQuery={highlightQuery}
+                          />
                           <MessageLinkEmbeds text={message.body} />
                         </>
                       )}
@@ -818,13 +824,15 @@ const ChatHistory = memo(function ChatHistory({
                   {fmtTime(message.createdAt)}
                   {!callInvite && message.editedAt ? " · Edited" : ""}
                 </span>
-                {mine && !message.unsentAt && message.deliveryStatus && (
+                {mine && !message.unsentAt && (friend.id === me.id || message.deliveryStatus) && (
                   <span className="message-delivery-status">
-                    {message.deliveryStatus === "delivered"
-                      ? "Delivered"
-                      : message.deliveryStatus === "sent"
-                        ? "Sent"
-                        : "Read"}
+                    {friend.id === me.id
+                      ? "Read"
+                      : message.deliveryStatus === "delivered"
+                        ? "Delivered"
+                        : message.deliveryStatus === "sent"
+                          ? "Sent"
+                          : "Read"}
                   </span>
                 )}
               </div>
@@ -1372,10 +1380,33 @@ export function ChatView({
   const scrollToBottom = useCallback(() => {
     pinToBottomBurst();
   }, [pinToBottomBurst]);
-  const friendStatusLabel =
-    friendActivity?.status === "dnd"
-      ? "Do Not Disturb"
-      : friendActivity?.status ?? "offline";
+  const isSelfChat = Boolean(me && friend.id === me.id);
+  const friendStatusLabel = useMemo(() => {
+    if (isSelfChat) return "Message yourself";
+    const st = String(friendActivity?.status ?? "");
+    if (st === "online") return "Online";
+    if (st === "idle" || st === "away") return "Idle";
+    if (st === "dnd") return "Do Not Disturb";
+    const lastSeen = friendActivity?.lastSeenAt;
+    if (typeof lastSeen === "number" && lastSeen > 0) {
+      const diffMs = Math.max(0, Date.now() - lastSeen);
+      if (diffMs < 60_000) return "Last seen just now";
+      if (diffMs < 3_600_000) return `Last seen ${Math.max(1, Math.floor(diffMs / 60_000))}m ago`;
+      const d = new Date(lastSeen);
+      const now = new Date();
+      const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      if (d.toDateString() === now.toDateString()) {
+        return `Last seen today at ${timeStr}`;
+      }
+      const yest = new Date(now);
+      yest.setDate(now.getDate() - 1);
+      if (d.toDateString() === yest.toDateString()) {
+        return `Last seen yesterday at ${timeStr}`;
+      }
+      return `Last seen ${d.toLocaleDateString([], { month: "short", day: "numeric" })}`;
+    }
+    return "Offline";
+  }, [friendActivity?.lastSeenAt, friendActivity?.status, isSelfChat]);
   const conversationReady =
     activeMessagesReady && store.activeChatId === friend.id;
 
@@ -1595,13 +1626,17 @@ export function ChatView({
     [],
   );
 
+  const serverPreviewUnread = useMemo(
+    () => store.previews.find((p) => p.friendId === friend.id)?.unreadCount ?? 0,
+    [friend.id, store.previews],
+  );
   useEffect(() => {
     if (chatClosing || !me?.id || store.activeChatId !== friend.id) {
       return;
     }
     const dmPrefs = getUserChatPrefs(me.id).dms[friend.id];
     const hasLocalUnread = (dmPrefs?.unreadTimestamps.length ?? 0) > 0;
-    if (!unreadIncomingSignature && !hasLocalUnread) {
+    if (!unreadIncomingSignature && !hasLocalUnread && serverPreviewUnread <= 0) {
       return;
     }
     let cancelled = false;
@@ -1609,7 +1644,7 @@ export function ChatView({
       if (cancelled || chatClosing || store.activeChatId !== friend.id) return;
       const activelyViewing = await isChatActivelyVisibleToUser();
       if (!cancelled && activelyViewing) {
-        if (!store.activeMessagesReady && !hasLocalUnread) return;
+        if (!store.activeMessagesReady && !hasLocalUnread && serverPreviewUnread <= 0) return;
         void markMessagesRead(friend.id).catch((cause: unknown) => {
           setError(friendlyError(cause, "Couldn't update read status."));
         });
@@ -1638,7 +1673,7 @@ export function ChatView({
         void nativeSub.then((h) => h.remove());
       }
     };
-  }, [chatClosing, friend.id, markMessagesRead, me?.id, store.activeChatId, store.activeMessagesReady, unreadIncomingSignature]);
+  }, [chatClosing, friend.id, markMessagesRead, me?.id, serverPreviewUnread, store.activeChatId, store.activeMessagesReady, unreadIncomingSignature]);
 
   useEffect(
     () => () => {
@@ -2166,15 +2201,14 @@ export function ChatView({
         <Avatar
           user={friend}
           size={44}
-          status={friendActivity?.status ?? "offline"}
+          status={isSelfChat ? "online" : (friendActivity?.status ?? "offline")}
           onClick={() => onOpenProfile(friend)}
         />
         <button className="chat-title" onClick={() => onOpenProfile(friend)}>
-          <strong>{friend.displayName}</strong>
+          <strong>{isSelfChat ? `${friend.displayName} (You)` : friend.displayName}</strong>
           <span className="muted small chat-presence">
             @{friend.username} · {friendStatusLabel}
-            {friendActivity?.customStatus ? ` · ${friendActivity.customStatus}` : ""}
-            {peerE2EE ? (
+            {!isSelfChat && peerE2EE ? (
               peerE2EE.verifiedKeyId === peerE2EE.bundle.keyId ? (
                 <>
                   {" · "}
@@ -2207,26 +2241,30 @@ export function ChatView({
           >
             <SearchIcon size={18} />
           </button>
-          <button
-            type="button"
-            className="icon-btn chat-call-btn"
-            title={`Voice call ${friend.displayName}`}
-            aria-label={`Voice call ${friend.displayName}`}
-            disabled={isFriendBlocked}
-            onClick={() => void startCall(friend, "voice")}
-          >
-            <Phone size={18} />
-          </button>
-          <button
-            type="button"
-            className="icon-btn chat-call-btn"
-            title={`Video call ${friend.displayName}`}
-            aria-label={`Video call ${friend.displayName}`}
-            disabled={isFriendBlocked}
-            onClick={() => void startCall(friend, "video")}
-          >
-            <Video size={18} />
-          </button>
+          {!isSelfChat && (
+            <>
+              <button
+                type="button"
+                className="icon-btn chat-call-btn"
+                title={`Voice call ${friend.displayName}`}
+                aria-label={`Voice call ${friend.displayName}`}
+                disabled={isFriendBlocked}
+                onClick={() => void startCall(friend, "voice")}
+              >
+                <Phone size={18} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn chat-call-btn"
+                title={`Video call ${friend.displayName}`}
+                aria-label={`Video call ${friend.displayName}`}
+                disabled={isFriendBlocked}
+                onClick={() => void startCall(friend, "video")}
+              >
+                <Video size={18} />
+              </button>
+            </>
+          )}
           <button
             type="button"
             className={`icon-btn chat-more-btn ${headerMoreMenu ? "menu-open" : ""}`}
@@ -2399,6 +2437,7 @@ export function ChatView({
         onOpenMessageMenuAt={openMessageMenuAt}
         onOpenImage={openImagePreview}
         activeSearchMatchId={activeSearchMatchId}
+        highlightQuery={searchOpen ? searchQuery : undefined}
         onReactToMessage={reactToMessage}
         onOpenReactionPicker={handleOpenReactionPicker}
         onSwipeReply={handleSwipeReply}
@@ -2441,7 +2480,13 @@ export function ChatView({
         <div className="reply-composer-preview">
           <div>
             <strong>Replying to {replyTo.senderId === me.id ? "yourself" : friend.displayName}</strong>
-            <span>{replyTo.unsentAt ? "This message was unsent" : replyTo.body || replyTo.attachmentName || "Attachment"}</span>
+            <span>
+              {replyTo.unsentAt
+                ? "This message was unsent"
+                : isViewOnceBody(replyTo.body)
+                  ? "View once"
+                  : formatPreviewMessageText(replyTo.body) || replyTo.attachmentName || "Attachment"}
+            </span>
           </div>
           <button type="button" className="mini-btn" aria-label="Cancel reply" onClick={() => setReplyTo(null)}>
             <CloseIcon size={13} />
@@ -2573,7 +2618,7 @@ export function ChatView({
             )}
           {!messageMenu.message.unsentAt && (
             <>
-              {messageMenu.canEdit && (
+              {messageMenu.canEdit && !isViewOnceBody(messageMenu.message.body) && (
                 <button
                   type="button"
                   role="menuitem"
@@ -2585,24 +2630,26 @@ export function ChatView({
                   Edit message
                 </button>
               )}
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  if (forwardCloseTimerRef.current !== null) {
-                    window.clearTimeout(forwardCloseTimerRef.current);
-                    forwardCloseTimerRef.current = null;
-                  }
-                  setForwardClosing(false);
-                  setForwardMessage(messageMenu.message);
-                  closeMessageMenu();
-                }}
-              >
-                <span>
-                  <ForwardIcon size={15} />
-                </span>{" "}
-                Forward
-              </button>
+              {!isViewOnceBody(messageMenu.message.body) && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    if (forwardCloseTimerRef.current !== null) {
+                      window.clearTimeout(forwardCloseTimerRef.current);
+                      forwardCloseTimerRef.current = null;
+                    }
+                    setForwardClosing(false);
+                    setForwardMessage(messageMenu.message);
+                    closeMessageMenu();
+                  }}
+                >
+                  <span>
+                    <ForwardIcon size={15} />
+                  </span>{" "}
+                  Forward
+                </button>
+              )}
               <button
                 type="button"
                 role="menuitem"
@@ -2623,12 +2670,14 @@ export function ChatView({
               </button>
             </>
           )}
-          <button type="button" role="menuitem" onClick={() => void copyMessage(messageMenu.message)}>
-            <span>
-              <CopyIcon size={15} />
-            </span>{" "}
-            Copy text
-          </button>
+          {!isViewOnceBody(messageMenu.message.body) && (
+            <button type="button" role="menuitem" onClick={() => void copyMessage(messageMenu.message)}>
+              <span>
+                <CopyIcon size={15} />
+              </span>{" "}
+              Copy text
+            </button>
+          )}
           <button type="button" role="menuitem" onClick={() => void deleteForMe(messageMenu.message)}>
             <span>
               <TrashIcon size={15} />

@@ -308,7 +308,9 @@ export function useTursoReactiveSession(
     setCommunityPermissions(boot.communityPermissions);
     setCommunityDirectory(boot.communityDirectory);
     setCommunityMessagesQuery(
-      (boot.communityMessages ?? []).filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+      (boot.communityMessages ?? []).filter(
+        (m) => !deletedForMeIdsRef.current.has(m.id) && !m.deleted && m.type !== "deleted",
+      ),
     );
     setHasMoreOlderCommunityMessages(Boolean(boot.communityHasMore));
     setGroupsQuery(boot.groups);
@@ -751,13 +753,24 @@ export function useTursoReactiveSession(
         }
       }
       if (res.changedCommunityMessages?.length) {
-        const visibleComm = res.changedCommunityMessages.filter(
-          (m) => !deletedForMeIdsRef.current.has(m.id),
+        const hardDeletedIds = new Set(
+          res.changedCommunityMessages
+            .filter((m) => m.deleted || m.type === "deleted")
+            .map((m) => m.id),
         );
-        if (visibleComm.length) {
+        const visibleComm = res.changedCommunityMessages.filter(
+          (m) => !deletedForMeIdsRef.current.has(m.id) && !m.deleted && m.type !== "deleted",
+        );
+        if (hardDeletedIds.size > 0 || visibleComm.length > 0) {
           setCommunityMessagesQuery((prev) =>
             mergeMessagesById(
-              prev?.filter((m) => !deletedForMeIdsRef.current.has(m.id)),
+              prev?.filter(
+                (m) =>
+                  !deletedForMeIdsRef.current.has(m.id) &&
+                  !hardDeletedIds.has(m.id) &&
+                  !m.deleted &&
+                  m.type !== "deleted",
+              ),
               visibleComm,
             ),
           );
@@ -1052,6 +1065,43 @@ export function useTursoReactiveSession(
         if (res.message && activeChatRef.current === args.receiverId) {
           setActiveMessagesQuery((prev) => mergeMessagesById(prev, [res.message]));
         }
+        if (
+          res.message &&
+          !args.body.startsWith("__JATEXT_SIG__:") &&
+          !args.body.startsWith("__JATEXT_CALL_SIG__:") &&
+          !args.body.startsWith("__JATEXT_REACT__:") &&
+          !args.body.startsWith("__JATEXT_SEEN__:")
+        ) {
+          setPreviewsQuery((prev) => {
+            const list = prev ? [...prev] : [];
+            const idx = list.findIndex((p) => p.friendId === args.receiverId);
+            const nextBody =
+              res.message.body ||
+              (res.message.attachmentType?.startsWith("audio/")
+                ? "Voice note"
+                : res.message.attachmentName
+                  ? `Attachment: ${res.message.attachmentName}`
+                  : "");
+            if (idx >= 0) {
+              list[idx] = {
+                ...list[idx],
+                body: nextBody,
+                createdAt: res.message.createdAt,
+                senderId: res.message.senderId,
+              };
+            } else {
+              list.unshift({
+                friendId: args.receiverId,
+                body: nextBody,
+                createdAt: res.message.createdAt,
+                senderId: res.message.senderId,
+                unreadCount: 0,
+              });
+            }
+            list.sort((a, b) => b.createdAt - a.createdAt);
+            return list;
+          });
+        }
         return res.message;
       },
 
@@ -1184,6 +1234,16 @@ export function useTursoReactiveSession(
       },
 
       markReadMut: async (args: { otherId: string }) => {
+        setPreviewsQuery((prev) =>
+          prev?.map((p) => (p.friendId === args.otherId ? { ...p, unreadCount: 0 } : p)),
+        );
+        setActiveMessagesQuery((prev) =>
+          prev?.map((m) =>
+            m.senderId === args.otherId && m.deliveryStatus !== "read"
+              ? { ...m, deliveryStatus: "read" }
+              : m,
+          ),
+        );
         await tursoRpc("markMessagesRead", { friendId: args.otherId }, { slotId });
       },
 
@@ -1501,6 +1561,7 @@ export function useTursoReactiveSession(
       },
 
       deleteCommunityMessageMut: async (args: { messageId: string }) => {
+        setCommunityMessagesQuery((prev) => prev?.filter((m) => m.id !== args.messageId));
         await tursoRpc(
           "mutateCommunityMessage",
           { messageId: args.messageId, action: "delete" },
@@ -1703,6 +1764,31 @@ export function useTursoReactiveSession(
         );
         if (res.message && activeGroupRef.current === args.groupId) {
           setGroupMessagesQuery((prev) => mergeMessagesById(prev, [res.message]));
+        }
+        if (
+          res.message &&
+          !args.body.startsWith("__JATEXT_SIG__:") &&
+          !args.body.startsWith("__JATEXT_CALL_SIG__:") &&
+          !args.body.startsWith("__JATEXT_REACT__:") &&
+          !args.body.startsWith("__JATEXT_SEEN__:") &&
+          !args.body.startsWith("__JATEXT_GROUP_SEEN_V1__:")
+        ) {
+          setGroupsQuery((prev) => {
+            if (!prev) return prev;
+            const next = prev.map((g) =>
+              g.id === args.groupId
+                ? {
+                    ...g,
+                    lastMessage: res.message.body || g.lastMessage,
+                    lastMessageAt: res.message.createdAt,
+                    lastSenderId: res.message.senderId,
+                    lastSenderName: res.message.senderName,
+                  }
+                : g,
+            );
+            next.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+            return next;
+          });
         }
         return res.message;
       },
