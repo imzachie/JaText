@@ -373,7 +373,15 @@ object TursoApiClient {
 
     fun resolveAbsoluteMediaUrl(rawUrl: String): String {
         val trimmed = rawUrl.trim()
-        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
+        if (
+            trimmed.startsWith("http://") ||
+            trimmed.startsWith("https://") ||
+            trimmed.startsWith("data:") ||
+            trimmed.startsWith("content:") ||
+            trimmed.startsWith("file:")
+        ) {
+            return trimmed
+        }
         if (trimmed.startsWith("/")) return "$apiOrigin$trimmed"
         return "$apiOrigin/$trimmed"
     }

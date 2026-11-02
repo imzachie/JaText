@@ -4,6 +4,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 
 const val VIEW_ONCE_WIRE_PREFIX = "__JATEXT_VO_V1__:"
+const val SPOILER_PREVIEW_MASK = "▪▪▪▪▪"
+
+private val SPOILER_SPAN_REGEX = Regex("\\|\\|[\\s\\S]+?\\|\\|")
+private val MD_CODE_FENCE_REGEX = Regex("```[\\s\\S]*?```")
+private val MD_INLINE_CODE_REGEX = Regex("`([^`\\n]+)`")
+private val MD_LINK_REGEX = Regex("\\[([^\\]]+)]\\((https?://[^\\s)]+)\\)")
+private val MD_TRIPLE_EMPH_REGEX = Regex("(\\*\\*\\*|___)(.+?)\\1")
+private val MD_DOUBLE_EMPH_REGEX = Regex("(\\*\\*|__)(.+?)\\1")
+private val MD_STRIKE_HIGHLIGHT_REGEX = Regex("(~~|==)(.+?)\\1")
 
 @Serializable
 data class ViewOnceMediaPayload(
@@ -28,9 +37,31 @@ object ViewOnceCodec {
         return trimmed.startsWith(VIEW_ONCE_WIRE_PREFIX) || trimmed.contains(VIEW_ONCE_WIRE_PREFIX)
     }
 
+    fun maskSpoilersAndMarkdownForPreview(body: String?): String {
+        if (body.isNullOrBlank()) return ""
+        if (isViewOnceBody(body)) return "View once"
+        return body
+            .replace(SPOILER_SPAN_REGEX, SPOILER_PREVIEW_MASK)
+            .replace("||", "")
+            .replace(MD_CODE_FENCE_REGEX) { m ->
+                val inner = m.value
+                    .replace(Regex("^```[a-zA-Z0-9_+-]*\\n?"), "")
+                    .removeSuffix("```")
+                    .trim()
+                inner.lineSequence().firstOrNull()?.takeIf { it.isNotBlank() } ?: "Code snippet"
+            }
+            .replace(MD_LINK_REGEX, "$1")
+            .replace(MD_INLINE_CODE_REGEX, "$1")
+            .replace(MD_TRIPLE_EMPH_REGEX, "$2")
+            .replace(MD_DOUBLE_EMPH_REGEX, "$2")
+            .replace(MD_STRIKE_HIGHLIGHT_REGEX, "$2")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
     fun sanitizePreview(body: String?): String {
         if (body.isNullOrBlank()) return ""
-        return if (isViewOnceBody(body)) "View once" else body
+        return maskSpoilersAndMarkdownForPreview(body)
     }
 
     fun encode(envelope: ViewOnceEnvelopePayload): String {

@@ -3344,41 +3344,31 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
         type: "application/json",
       });
       const storageId = await upload(keyringFile);
-      const oldItems = (stickerFavoritesRef.current ?? []).filter(
-        (s) => s.name === E2EE_AUTOSYNC_STICKER_NAME,
-      );
       await saveStickerMut({
         storageId,
         name: E2EE_AUTOSYNC_STICKER_NAME,
         mediaType: "sticker",
       });
       lastPushedAutoSyncSigRef.current = sig;
-      await Promise.all(
-        oldItems.map((old) =>
-          setStickerFavoriteMut({
-            mediaKey: old.key,
-            name: old.name,
-            mediaType: old.mediaType,
-            source: old.source,
-            isFavorite: false,
-          }).catch(() => undefined),
-        ),
-      );
     } catch {
       // Ignore transient upload errors
     } finally {
       autoSyncPushInFlightRef.current = false;
     }
-  }, [isAuthenticated, me?.id, saveStickerMut, setStickerFavoriteMut, upload]);
+  }, [isAuthenticated, me?.id, saveStickerMut, upload]);
 
   useEffect(() => {
     if (!isAuthenticated || !me?.id || !e2eeSnapshot.ready || !stickerLibrary) return;
     let cancelled = false;
     const runAutoSync = async () => {
       const allItems = [...stickerLibrary.favorites, ...stickerLibrary.recent];
-      const syncItems = allItems.filter(
-        (item) => item.name === E2EE_AUTOSYNC_STICKER_NAME && item.url,
-      );
+      const syncItems = allItems
+        .filter((item) => item.name === E2EE_AUTOSYNC_STICKER_NAME && item.url)
+        .sort(
+          (a, b) =>
+            Math.max(b.updatedAt ?? 0, b.lastUsedAt ?? 0) -
+            Math.max(a.updatedAt ?? 0, a.lastUsedAt ?? 0),
+        );
       if (syncItems.length === 0) {
         if (!cancelled) {
           setAutoSyncSettled(true);
@@ -3388,7 +3378,10 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       }
 
       let anyNeedsPush = false;
-      for (const item of syncItems.slice(0, 3)) {
+      const seenUrls = new Set<string>();
+      for (const item of syncItems) {
+        if (seenUrls.has(item.url) || seenUrls.size >= 6) continue;
+        seenUrls.add(item.url);
         try {
           const resp = await fetch(item.url);
           if (!resp.ok) continue;

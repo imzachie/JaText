@@ -489,6 +489,41 @@ fun ForwardedContextCardUi(
     }
 }
 
+fun buildPreviewAnnotatedWithSpoilers(
+    rawText: String,
+    isDark: Boolean,
+): AnnotatedString {
+    val sanitized = ViewOnceCodec.maskSpoilersAndMarkdownForPreview(rawText)
+        .replace("▒▒▒", com.ahad00010.jatext.data.SPOILER_PREVIEW_MASK)
+    val mask = com.ahad00010.jatext.data.SPOILER_PREVIEW_MASK
+    if (!sanitized.contains(mask)) {
+        return AnnotatedString(sanitized)
+    }
+    val pillBg = if (isDark) Color(0xFF475569) else Color(0xFF94A3B8)
+    return buildAnnotatedString {
+        var idx = 0
+        while (idx < sanitized.length) {
+            val found = sanitized.indexOf(mask, idx)
+            if (found < 0) {
+                append(sanitized.substring(idx))
+                break
+            }
+            if (found > idx) {
+                append(sanitized.substring(idx, found))
+            }
+            pushStyle(
+                SpanStyle(
+                    color = Color.Transparent,
+                    background = pillBg,
+                )
+            )
+            append("  •••••  ")
+            pop()
+            idx = found + mask.length
+        }
+    }
+}
+
 @Composable
 fun ReplyQuoteBannerUi(
     reply: ReplySummary,
@@ -522,13 +557,13 @@ fun ReplyQuoteBannerUi(
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
             )
-            val safeQuoteBody = remember(reply.body, reply.attachmentName) {
-                val sanitized = ViewOnceCodec.sanitizePreview(reply.body)
-                    .replace(Regex("""\|\|.+?\|\|"""), "▪▪▪▪▪")
-                sanitized.ifBlank { reply.attachmentName ?: "Attachment" }
+            val safeQuoteAnnotated = remember(reply.body, reply.attachmentName, ink.isLightSurface) {
+                val base = ViewOnceCodec.sanitizePreview(reply.body)
+                    .ifBlank { reply.attachmentName ?: "Attachment" }
+                buildPreviewAnnotatedWithSpoilers(base, isDark = !ink.isLightSurface)
             }
             Text(
-                text = safeQuoteBody,
+                text = safeQuoteAnnotated,
                 color = ink.subTextColor,
                 fontSize = 11.5.sp,
                 maxLines = 1,
@@ -2945,68 +2980,33 @@ fun ViewOnceMessageBubbleUi(
     }
 
     if (viewerOpen) {
-        Dialog(
-            onDismissRequest = closeAndBurn,
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                dismissOnBackPress = true,
-                dismissOnClickOutside = false,
-                decorFitsSystemWindows = false,
-            ),
+        val photoItem = envelope.photo
+        val audioItem = envelope.audio
+        val textBody = envelope.text?.trim().orEmpty()
+
+        val photoModel by produceState<Any?>(
+            initialValue = null,
+            photoItem?.url,
+            photoItem?.att?.h,
         ) {
-            val view = androidx.compose.ui.platform.LocalView.current
-            DisposableEffect(view) {
-                runCatching {
-                    val dlgWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
-                    dlgWindow?.let { w ->
-                        w.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                        w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-                        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
-                        w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                        w.setBackgroundDrawable(ColorDrawable(android.graphics.Color.parseColor("#05070B")))
-                        w.statusBarColor = android.graphics.Color.TRANSPARENT
-                        w.navigationBarColor = android.graphics.Color.TRANSPARENT
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                            w.attributes = w.attributes.apply {
-                                layoutInDisplayCutoutMode =
-                                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-                            }
-                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                            w.attributes = w.attributes.apply {
-                                layoutInDisplayCutoutMode =
-                                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                            }
-                        }
-                        androidx.core.view.WindowCompat.getInsetsController(w, view).apply {
-                            isAppearanceLightStatusBars = false
-                            isAppearanceLightNavigationBars = false
-                        }
-                    }
-                }
-                onDispose {}
-            }
-
-            val photoItem = envelope.photo
-            val audioItem = envelope.audio
-            val textBody = envelope.text?.trim().orEmpty()
-
-            val photoModel by produceState<Any?>(
-                initialValue = null,
-                photoItem?.url,
-                photoItem?.att?.h,
-            ) {
-                if (photoItem == null || photoItem.url.isBlank()) {
-                    value = null
+            if (photoItem == null || photoItem.url.isBlank()) {
+                value = null
+            } else {
+                val abs = TursoApiClient.resolveAbsoluteMediaUrl(photoItem.url)
+                value = if (photoItem.att != null) {
+                    JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(context, abs, photoItem.att)
                 } else {
-                    val abs = TursoApiClient.resolveAbsoluteMediaUrl(photoItem.url)
-                    value = if (photoItem.att != null) {
-                        JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(context, abs, photoItem.att)
-                    } else {
-                        abs
-                    }
+                    abs
                 }
             }
+        }
 
+        FullscreenOverlaySlot(
+            id = "view_once_$messageId",
+            secureScreen = true,
+            backgroundColor = Color(0xFF05070B),
+            onBack = closeAndBurn,
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()

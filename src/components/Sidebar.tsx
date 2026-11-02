@@ -15,6 +15,7 @@ import {
   formatCallDuration,
   formatPreviewMessageText,
   parseCallInvite,
+  renderPreviewWithSpoilerMasks,
   useCall,
 } from "../lib/calling";
 import { useCallHistoryEntries, type CallHistoryEntry } from "../lib/callHistory";
@@ -387,6 +388,23 @@ export function Sidebar({
   ]);
 
   const totalUnreadCount = totalDmUnreadCount + totalGroupUnreadCount;
+  const isIosChats = isAuthorizedIosChatsRuntime();
+
+  useEffect(() => {
+    if (isIosChats && iosSearchOpen && (tab === "chats" || tab === "groups")) {
+      const id = window.setTimeout(() => {
+        iosSearchInputRef.current?.focus();
+      }, 60);
+      return () => window.clearTimeout(id);
+    }
+  }, [isIosChats, iosSearchOpen, tab]);
+
+  const displayedThreads = useMemo(() => {
+    if (!isIosChats) return orderedThreads;
+    if (tab === "groups") return orderedThreads.filter((item) => item.kind === "group");
+    if (tab === "chats") return orderedThreads.filter((item) => item.kind === "dm");
+    return orderedThreads;
+  }, [isIosChats, orderedThreads, tab]);
 
   if (!me) return null;
 
@@ -516,24 +534,6 @@ export function Sidebar({
       import.meta.env.VITE_CONVEX_URL as string | undefined,
     );
   }
-
-  const isIosChats = isAuthorizedIosChatsRuntime();
-
-  useEffect(() => {
-    if (isIosChats && iosSearchOpen && (tab === "chats" || tab === "groups")) {
-      const id = window.setTimeout(() => {
-        iosSearchInputRef.current?.focus();
-      }, 60);
-      return () => window.clearTimeout(id);
-    }
-  }, [isIosChats, iosSearchOpen, tab]);
-
-  const displayedThreads = useMemo(() => {
-    if (!isIosChats) return orderedThreads;
-    if (tab === "groups") return orderedThreads.filter((item) => item.kind === "group");
-    if (tab === "chats") return orderedThreads.filter((item) => item.kind === "dm");
-    return orderedThreads;
-  }, [isIosChats, orderedThreads, tab]);
 
   return (
     <aside className={`sidebar ${isIosChats ? "ios-bottom-nav-layout" : ""}`}>
@@ -875,7 +875,8 @@ export function Sidebar({
                   <span className="muted small friend-preview">
                     {communityDraft ? (
                       <>
-                        <span className="draft-pill">Draft:</span> {communityDraft}
+                        <span className="draft-pill">Draft:</span>{" "}
+                        {renderPreviewWithSpoilerMasks(formatPreviewMessageText(communityDraft))}
                       </>
                     ) : (
                       "Official JaText announcements"
@@ -970,7 +971,8 @@ export function Sidebar({
                           if (groupDraft) {
                             return (
                               <>
-                                <span className="draft-pill">{t("draft")}:</span> {groupDraft}
+                                <span className="draft-pill">{t("draft")}:</span>{" "}
+                                {renderPreviewWithSpoilerMasks(formatPreviewMessageText(groupDraft))}
                               </>
                             );
                           }
@@ -984,7 +986,7 @@ export function Sidebar({
                                 : group.lastSenderName
                                   ? `${group.lastSenderName}: `
                                   : "";
-                            return `${prefix}${groupPreviewText}`;
+                            return renderPreviewWithSpoilerMasks(`${prefix}${groupPreviewText}`);
                           }
                           return `${group.memberCount} members`;
                         })()}
@@ -1076,7 +1078,8 @@ export function Sidebar({
                         if (dmDraft) {
                           return (
                             <>
-                              <span className="draft-pill">{t("draft")}:</span> {dmDraft}
+                              <span className="draft-pill">{t("draft")}:</span>{" "}
+                              {renderPreviewWithSpoilerMasks(formatPreviewMessageText(dmDraft))}
                             </>
                           );
                         }
@@ -1085,7 +1088,9 @@ export function Sidebar({
                             ? formatPreviewMessageText(preview.body)
                             : "";
                         if (dmPreviewText) {
-                          return `${preview?.senderId === me.id ? "You: " : ""}${dmPreviewText}`;
+                          return renderPreviewWithSpoilerMasks(
+                            `${preview?.senderId === me.id ? "You: " : ""}${dmPreviewText}`,
+                          );
                         }
                         return isSelfRow ? "Message yourself" : `@${friend.username} · say hi!`;
                       })()}

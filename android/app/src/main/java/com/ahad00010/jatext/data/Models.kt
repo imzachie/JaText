@@ -290,6 +290,7 @@ data class StickerMedia(
     val isFavorite: Boolean = false,
     val useCount: Int = 0,
     val lastUsedAt: Long? = null,
+    val updatedAt: Long = 0L,
 )
 
 @Serializable

@@ -11996,4 +11996,18 @@ label,
   border: 1px solid rgba(239, 68, 68, 0.35);
 }
 
+.preview-spoiler-mask {
+  display: inline-block;
+  padding: 0 5px;
+  margin: 0 2px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.36);
+  color: transparent;
+  user-select: none;
+  font-size: 0.85em;
+  line-height: 1.15;
+  vertical-align: baseline;
+}
+
+
 

@@ -122,6 +122,7 @@ import com.ahad00010.jatext.data.GroupSummary
 import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
 import com.ahad00010.jatext.state.JaTextSessionViewModel
+import com.ahad00010.jatext.ui.components.buildPreviewAnnotatedWithSpoilers
 import com.ahad00010.jatext.state.SessionUiState
 import com.ahad00010.jatext.ui.components.JaAvatar
 import com.ahad00010.jatext.ui.components.JaGroupAvatar
@@ -609,12 +610,16 @@ fun SidebarScreen(
                                         }
                                     }
                                     Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = when {
+                                    val commPreviewAnnotated = remember(commTypingText, commDraft, palette.isDark) {
+                                        val rawCommSub = when {
                                             !commTypingText.isNullOrBlank() -> commTypingText
                                             commDraft.isNotEmpty() -> "${com.ahad00010.jatext.data.jt("sidebar.draft")}: $commDraft"
                                             else -> "Official JaText announcements"
-                                        },
+                                        }
+                                        buildPreviewAnnotatedWithSpoilers(rawCommSub, isDark = palette.isDark)
+                                    }
+                                    Text(
+                                        text = commPreviewAnnotated,
                                         color = if (!commTypingText.isNullOrBlank() || commDraft.isNotEmpty()) palette.accent else palette.textSecondary,
                                         fontSize = 13.sp,
                                         fontWeight = if (!commTypingText.isNullOrBlank() || commDraft.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal,
@@ -2281,8 +2286,11 @@ private fun DmSidebarRow(
                 isSelf -> "Message yourself"
                 else -> "@${friend.username}"
             }
+            val previewAnnotated = remember(previewCopy, palette.isDark) {
+                buildPreviewAnnotatedWithSpoilers(previewCopy, isDark = palette.isDark)
+            }
             Text(
-                text = previewCopy,
+                text = previewAnnotated,
                 color = when {
                     typingToMe || hasDraft -> palette.accent
                     unread > 0 -> palette.textPrimary
@@ -2410,8 +2418,11 @@ private fun GroupSidebarRow(
                 }
                 else -> "${group.memberCount} members"
             }
+            val subAnnotated = remember(subText, palette.isDark) {
+                buildPreviewAnnotatedWithSpoilers(subText, isDark = palette.isDark)
+            }
             Text(
-                text = subText,
+                text = subAnnotated,
                 color = when {
                     hasTyping || hasDraft -> palette.accent
                     unread > 0 -> palette.textPrimary

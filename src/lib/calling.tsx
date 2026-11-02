@@ -324,7 +324,8 @@ function stripMarkdownForPreview(text: string): string {
       const inner = block.replace(/^```[a-z0-9_+-]*\n?/i, "").replace(/```$/, "").trim();
       return inner ? inner.split("\n")[0] : "Code snippet";
     })
-    .replace(/\|\|([\s\S]+?)\|\|/g, "▒▒▒")
+    .replace(/\|\|([\s\S]+?)\|\|/g, "▪▪▪▪▪")
+    .replace(/\|\|/g, "")
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, "$1")
     .replace(/`([^`\n]+)`/g, "$1")
     .replace(/^#{1,6}\s+/gm, "")
@@ -337,6 +338,22 @@ function stripMarkdownForPreview(text: string): string {
     .replace(/==(.+?)==/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function renderPreviewWithSpoilerMasks(text: string): ReactNode {
+  const normalized = text.replace(/▒▒▒/g, "▪▪▪▪▪");
+  if (!normalized.includes("▪▪▪▪▪")) return normalized;
+  const parts = normalized.split("▪▪▪▪▪");
+  return parts.map((part, idx) => (
+    <span key={idx}>
+      {part}
+      {idx < parts.length - 1 && (
+        <span className="preview-spoiler-mask" aria-label="Spoiler">
+          •••••
+        </span>
+      )}
+    </span>
+  ));
 }
 
 export function formatPreviewMessageText(body: string): string {

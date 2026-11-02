@@ -88,6 +88,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.ResponseBody.Companion.toResponseBody
 import com.ahad00010.jatext.state.JaTextSessionViewModel
+import com.ahad00010.jatext.ui.components.FullscreenOverlayHostState
+import com.ahad00010.jatext.ui.components.FullscreenOverlayStage
+import com.ahad00010.jatext.ui.components.LocalFullscreenOverlayHost
 import com.ahad00010.jatext.ui.effects.LocalThanosSnapHost
 import com.ahad00010.jatext.ui.effects.ThanosSnapHostState
 import com.ahad00010.jatext.ui.effects.ThanosSnapOverlayHost
@@ -340,15 +343,21 @@ class MainActivity : ComponentActivity() {
         setContent {
             val uiState by sessionViewModel.state.collectAsState()
             val thanosSnapHost = remember { ThanosSnapHostState() }
+            val fullscreenOverlayHost = remember { FullscreenOverlayHostState() }
             JaTextTheme(config = uiState.themeConfig) {
                 CompositionLocalProvider(
                     LocalThanosSnapHost provides thanosSnapHost,
+                    LocalFullscreenOverlayHost provides fullscreenOverlayHost,
                     LocalJaTextLanguage provides uiState.languageCode,
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         JaTextRootHost(
                             activity = this@MainActivity,
                             vm = sessionViewModel,
+                        )
+                        FullscreenOverlayStage(
+                            activity = this@MainActivity,
+                            hostState = fullscreenOverlayHost,
                         )
                         ThanosSnapOverlayHost(hostState = thanosSnapHost)
                     }

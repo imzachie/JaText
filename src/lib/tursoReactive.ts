@@ -1279,8 +1279,9 @@ export function useTursoReactiveSession(
         name: string;
         mediaType: StickerMedia["mediaType"];
       }) => {
+        const isInternalAutoSync = args.name === "__jatext_e2ee_autosync_v1__";
         const item: StickerMedia = {
-          key: `upload:${args.storageId}`,
+          key: isInternalAutoSync ? "system:e2ee_autosync_v1" : `upload:${args.storageId}`,
           url: args.storageId,
           storageId: args.storageId,
           name: args.name,
@@ -1292,7 +1293,11 @@ export function useTursoReactiveSession(
         const lib = await tursoRpc<{
           stickerFavorites: StickerMedia[];
           recentStickers: StickerMedia[];
-        }>("upsertSticker", { sticker: item, isFavorite: true }, { slotId });
+        }>(
+          "upsertSticker",
+          { sticker: item, isFavorite: true, ...(isInternalAutoSync ? { incrementUse: true } : {}) },
+          { slotId },
+        );
         setStickerLibrary({ favorites: lib.stickerFavorites, recent: lib.recentStickers });
         return item;
       },
