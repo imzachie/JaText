@@ -1330,6 +1330,44 @@ fun PeerProfileBottomModal(
                                 }
                             }
                         }
+                        if (!isSelf) {
+                            val peerActivity = sessionState.friendActivity[peer.id]
+                            val peerPresenceDotColor = when {
+                                peerActivity?.online == true -> when (peerActivity.statusPreference) {
+                                    "dnd" -> Color(0xFFEF4444)
+                                    "away", "idle" -> Color(0xFFF59E0B)
+                                    else -> Color(0xFF22C55E)
+                                }
+                                else -> Color(0xFF626272)
+                            }
+                            val peerPresenceText = when {
+                                peerActivity?.online == true -> when (peerActivity.statusPreference) {
+                                    "dnd" -> "Do Not Disturb"
+                                    "away", "idle" -> "Idle"
+                                    else -> "Online"
+                                }
+                                else -> formatLastSeenPresenceLabel(peerActivity?.lastSeenAt)
+                            }
+                            Row(
+                                modifier = Modifier.padding(top = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(peerPresenceDotColor)
+                                )
+                                Text(
+                                    text = peerPresenceText,
+                                    color = palette.textSecondary,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    softWrap = true,
+                                )
+                            }
+                        }
                     }
 
                     /* ---- Rich Markdown Bio (1:1 with `ProfileCard.tsx`) ---- */
