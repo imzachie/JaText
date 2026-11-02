@@ -205,7 +205,9 @@ import com.ahad00010.jatext.ui.components.BubblePreviewThumbUi
 import com.ahad00010.jatext.ui.components.CallMessageCardUi
 import com.ahad00010.jatext.ui.components.CommunityPollCardUi
 import com.ahad00010.jatext.ui.components.ForwardedContextCardUi
+import com.ahad00010.jatext.ui.components.FullscreenOverlaySlot
 import com.ahad00010.jatext.ui.components.GroupCallMessageCardUi
+import com.ahad00010.jatext.ui.components.buildPreviewAnnotatedWithSpoilers
 import com.ahad00010.jatext.ui.components.GroupSeenAvatarsRowUi
 import com.ahad00010.jatext.ui.components.JaAvatar
 import com.ahad00010.jatext.ui.components.JaGroupAvatar
@@ -869,7 +871,7 @@ fun ChatThreadScreen(
                             else if (activeGroup != null) vm.callEngine.startGroupCall(me, activeGroup, "video")
                         },
                     )
-                } else if (state.communityPermissions.isOwner) {
+                } else if (isCommunity && state.communityPermissions.isOwner) {
                     Spacer(Modifier.width(6.dp))
                     JaWebIconButton(
                         icon = Icons.Rounded.HowToReg,
@@ -981,15 +983,17 @@ fun ChatThreadScreen(
                         if (activeFriend != null) {
                             val isMuted = activePreview?.isMuted == true
                             val isArchived = activePreview?.isArchived == true
-                            ChatOverflowSvgItem(
-                                icon = if (isMuted) WebUiIconKind.Bell else WebUiIconKind.BellOff,
-                                label = if (isMuted) "Unmute chat" else "Mute chat",
-                                iconTint = palette.textSecondary,
-                                onClick = {
-                                    showOverflowMenu = false
-                                    vm.setDmConversationPrefs(activeFriend.id, muted = !isMuted)
-                                },
-                            )
+                            if (!isSelfChat) {
+                                ChatOverflowSvgItem(
+                                    icon = if (isMuted) WebUiIconKind.Bell else WebUiIconKind.BellOff,
+                                    label = if (isMuted) "Unmute chat" else "Mute chat",
+                                    iconTint = palette.textSecondary,
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        vm.setDmConversationPrefs(activeFriend.id, muted = !isMuted)
+                                    },
+                                )
+                            }
                             ChatOverflowSvgItem(
                                 icon = WebUiIconKind.Archive,
                                 label = if (isArchived) "Unarchive chat" else "Archive chat",
@@ -1013,26 +1017,28 @@ fun ChatThreadScreen(
                                     vm.setDmConversationPrefs(activeFriend.id, removeChatHistory = true)
                                 },
                             )
-                            ChatOverflowSvgItem(
-                                icon = WebUiIconKind.UserMinus,
-                                label = "Unfriend",
-                                textTint = palette.danger,
-                                iconTint = palette.danger,
-                                onClick = {
-                                    showOverflowMenu = false
-                                    confirmUnfriendTarget = activeFriend
-                                },
-                            )
-                            ChatOverflowSvgItem(
-                                icon = if (isFriendBlocked) WebUiIconKind.Unlock else WebUiIconKind.Ban,
-                                label = if (isFriendBlocked) "Unblock" else "Block",
-                                textTint = if (isFriendBlocked) palette.textPrimary else palette.danger,
-                                iconTint = if (isFriendBlocked) palette.success else palette.danger,
-                                onClick = {
-                                    showOverflowMenu = false
-                                    vm.setBlockedUser(activeFriend.id, !isFriendBlocked)
-                                },
-                            )
+                            if (!isSelfChat) {
+                                ChatOverflowSvgItem(
+                                    icon = WebUiIconKind.UserMinus,
+                                    label = "Unfriend",
+                                    textTint = palette.danger,
+                                    iconTint = palette.danger,
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        confirmUnfriendTarget = activeFriend
+                                    },
+                                )
+                                ChatOverflowSvgItem(
+                                    icon = if (isFriendBlocked) WebUiIconKind.Unlock else WebUiIconKind.Ban,
+                                    label = if (isFriendBlocked) "Unblock" else "Block",
+                                    textTint = if (isFriendBlocked) palette.textPrimary else palette.danger,
+                                    iconTint = if (isFriendBlocked) palette.success else palette.danger,
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        vm.setBlockedUser(activeFriend.id, !isFriendBlocked)
+                                    },
+                                )
+                            }
                         }
                         if (activeGroup != null) {
                             ChatOverflowSvgItem(
@@ -1239,8 +1245,11 @@ fun ChatThreadScreen(
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                         )
+                        val pinnedAnnotated = remember(activePin.preview, palette.isDark, hasWallpaper) {
+                            buildPreviewAnnotatedWithSpoilers(activePin.preview, isDark = hasWallpaper || palette.isDark)
+                        }
                         Text(
-                            text = activePin.preview,
+                            text = pinnedAnnotated,
                             color = if (hasWallpaper) Color.White else palette.textPrimary,
                             fontSize = 12.5.sp,
                             maxLines = 1,
@@ -1471,9 +1480,17 @@ fun ChatThreadScreen(
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                 )
+                                val bannerAnnotated = remember(editingTarget?.body, replyingTo?.body, palette.isDark, hasWallpaper) {
+                                    val rawBanner = editingTarget?.body
+                                        ?: ViewOnceCodec.sanitizePreview(replyingTo?.body)
+                                    if (editingTarget != null) {
+                                        androidx.compose.ui.text.AnnotatedString(rawBanner)
+                                    } else {
+                                        buildPreviewAnnotatedWithSpoilers(rawBanner, isDark = hasWallpaper || palette.isDark)
+                                    }
+                                }
                                 Text(
-                                    text = editingTarget?.body
-                                        ?: ViewOnceCodec.sanitizePreview(replyingTo?.body),
+                                    text = bannerAnnotated,
                                     color = if (hasWallpaper) Color(0xFFE2E8F0) else palette.textSecondary,
                                     fontSize = 12.sp,
                                     maxLines = 1,
@@ -2262,7 +2279,7 @@ fun ChatThreadScreen(
                             threadKey = activeThreadDraftKey,
                             messageId = msg.id,
                             senderName = msg.senderName.ifBlank { if (isMine) "You" else "Message" },
-                            preview = msg.body.ifBlank { msg.attachmentName ?: "Attachment" },
+                            preview = ViewOnceCodec.sanitizePreview(msg.body).ifBlank { msg.attachmentName ?: "Attachment" },
                         )
                         contextMenuMessage = null
                     }
@@ -3186,7 +3203,7 @@ fun ChatThreadScreen(
     }
 
     /* ==================== Community Elect Moderators Modal (Owner Only) ==================== */
-    if (showModeratorsModal && state.communityPermissions.isOwner) {
+    if (isCommunity && showModeratorsModal && state.communityPermissions.isOwner) {
         val directory: List<CommunityUser> = state.communityDirectory
         var search by remember { mutableStateOf("") }
         val selectedModIds = remember(state.communityPermissions.moderatorIds) {
@@ -4177,14 +4194,16 @@ private fun ZoomableFullscreenImageDialog(
         return rawX.coerceIn(-maxX, maxX) to rawY.coerceIn(-maxY, maxY)
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    FullscreenOverlaySlot(
+        id = "zoomable_fullscreen_image",
+        secureScreen = false,
+        backgroundColor = Color(0xFF05070B),
+        onBack = onDismiss,
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xF2000000))
+                .background(Color(0xFF05070B))
                 .onSizeChanged { containerSize = it }
                 .pointerInput(model) {
                     detectTapGestures(

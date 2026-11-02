@@ -96,6 +96,7 @@ export interface StickerMedia {
   isFavorite: boolean;
   useCount: number;
   lastUsedAt?: number;
+  updatedAt?: number;
 }
 
 export interface MessageReaction {

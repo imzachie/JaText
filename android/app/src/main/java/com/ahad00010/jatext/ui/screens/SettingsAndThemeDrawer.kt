@@ -4636,6 +4636,26 @@ private fun ConnectedDeviceRowCard(
 /* ==================== Owner Settings Admin Console (aidilzafri2013@gmail.com / @imzachie ONLY) ==================== */
 
 @Composable
+private fun OwnerFastSectionCard(
+    palette: JaTextPalette,
+    borderColor: Color = palette.border,
+    borderWidth: androidx.compose.ui.unit.Dp = 1.dp,
+    verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(10.dp),
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(palette.bgSecondary)
+            .border(borderWidth, borderColor, RoundedCornerShape(22.dp))
+            .padding(16.dp),
+        verticalArrangement = verticalArrangement,
+        content = content,
+    )
+}
+
+@Composable
 private fun OwnerSettingsMobileSection(
     me: JaUser,
     vm: JaTextSessionViewModel,
@@ -4644,12 +4664,14 @@ private fun OwnerSettingsMobileSection(
 ) {
     val scope = rememberCoroutineScope()
     val ownerDangerRed = Color(0xFFEF4444)
+    val cachedInitial = remember { vm.cachedOwnerOverview }
 
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(cachedInitial == null) }
     var busyAction by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    var stats by remember { mutableStateOf<OwnerPlatformStats?>(null) }
-    var accounts by remember { mutableStateOf<List<OwnerManagedUser>>(emptyList()) }
+    var visibleLimit by remember { mutableIntStateOf(12) }
+    var stats by remember { mutableStateOf<OwnerPlatformStats?>(cachedInitial?.stats) }
+    var accounts by remember { mutableStateOf<List<OwnerManagedUser>>(cachedInitial?.users.orEmpty()) }
     var selectedAccount by remember { mutableStateOf<OwnerManagedUser?>(null) }
 
     var newUsername by remember { mutableStateOf("") }
@@ -4664,7 +4686,7 @@ private fun OwnerSettingsMobileSection(
             runCatching {
                 vm.ownerAdminAction(
                     mapOf(
-                        "subOp" to "searchUsers",
+                        "subOp" to if (q.trim().isEmpty()) "overview" else "searchUsers",
                         "query" to q.trim(),
                     )
                 )
@@ -4689,6 +4711,7 @@ private fun OwnerSettingsMobileSection(
     }
 
     LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(250L)
         loadDashboard("")
     }
 
@@ -4728,9 +4751,8 @@ private fun OwnerSettingsMobileSection(
     }
 
     /* ---- 1. Restricted Owner Banner ---- */
-    LiquidGlassCard(
-        backdrop = backdrop,
-        isDark = palette.isDark,
+    OwnerFastSectionCard(
+        palette = palette,
         borderColor = ownerDangerRed.copy(alpha = 0.55f),
         borderWidth = 1.5.dp,
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -4785,9 +4807,8 @@ private fun OwnerSettingsMobileSection(
     /* ---- 2. Live Platform Metrics ---- */
     val s = stats
     if (s != null) {
-        LiquidGlassCard(
-            backdrop = backdrop,
-            isDark = palette.isDark,
+        OwnerFastSectionCard(
+            palette = palette,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
@@ -4839,9 +4860,8 @@ private fun OwnerSettingsMobileSection(
     }
 
     /* ---- 3. Quick Official Community Broadcast ---- */
-    LiquidGlassCard(
-        backdrop = backdrop,
-        isDark = palette.isDark,
+    OwnerFastSectionCard(
+        palette = palette,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
@@ -4850,17 +4870,12 @@ private fun OwnerSettingsMobileSection(
             fontSize = 14.5.sp,
             fontWeight = FontWeight.ExtraBold,
         )
-        LiquidTextFieldBar(
+        JaWebInput(
             value = broadcastBody,
             onValueChange = { broadcastBody = it },
-            backdrop = backdrop,
-            isDark = palette.isDark,
-            label = "Announcement text",
             placeholder = "Post an official update to JaText Community...",
             singleLine = false,
-            textColor = palette.textPrimary,
-            subTextColor = palette.textSecondary,
-            accentColor = palette.accent,
+            modifier = Modifier.fillMaxWidth(),
         )
         LiquidButton(
             onClick = {
@@ -4895,9 +4910,8 @@ private fun OwnerSettingsMobileSection(
     }
 
     /* ---- 4. Account Directory & Lookup ---- */
-    LiquidGlassCard(
-        backdrop = backdrop,
-        isDark = palette.isDark,
+    OwnerFastSectionCard(
+        palette = palette,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
@@ -4913,13 +4927,19 @@ private fun OwnerSettingsMobileSection(
         ) {
             JaWebInput(
                 value = searchQuery,
-                onValueChange = { searchQuery = it },
+                onValueChange = {
+                    searchQuery = it
+                    visibleLimit = 12
+                },
                 placeholder = "Search @username, email, name, or ID...",
                 leadingIcon = Icons.Rounded.Search,
                 modifier = Modifier.weight(1f),
             )
             LiquidButton(
-                onClick = { loadDashboard(searchQuery) },
+                onClick = {
+                    visibleLimit = 12
+                    loadDashboard(searchQuery)
+                },
                 backdrop = backdrop,
                 isDark = palette.isDark,
                 height = 42.dp,
@@ -4938,77 +4958,98 @@ private fun OwnerSettingsMobileSection(
             )
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                accounts.take(30).forEach { acct ->
-                    val isSelected = selectedAccount?.id == acct.id
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(
-                                if (isSelected) ownerDangerRed.copy(alpha = 0.14f)
-                                else palette.bgTertiary.copy(alpha = 0.65f)
+                accounts.take(visibleLimit).forEach { acct ->
+                    androidx.compose.runtime.key(acct.id) {
+                        val isSelected = selectedAccount?.id == acct.id
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (isSelected) ownerDangerRed.copy(alpha = 0.14f)
+                                    else palette.bgTertiary.copy(alpha = 0.65f)
+                                )
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) ownerDangerRed else palette.border,
+                                    shape = RoundedCornerShape(14.dp),
+                                )
+                                .clickable {
+                                    selectedAccount = acct
+                                    newUsername = acct.username
+                                    newDisplayName = acct.displayName
+                                    suspendReason = acct.suspendedReason
+                                    confirmDeleteUsername = ""
+                                }
+                                .padding(horizontal = 11.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            JaAvatar(
+                                avatarUrl = acct.avatarUrl,
+                                displayName = acct.displayName.ifBlank { acct.username },
+                                avatarColor = acct.avatarColor,
+                                size = 38.dp,
+                                ringWidth = 2.dp,
+                                presenceStatus = if (acct.online) "online" else "offline",
+                                statusBorderColor = palette.bgSecondary,
                             )
-                            .border(
-                                width = if (isSelected) 1.5.dp else 1.dp,
-                                color = if (isSelected) ownerDangerRed else palette.border,
-                                shape = RoundedCornerShape(14.dp),
-                            )
-                            .clickable {
-                                selectedAccount = acct
-                                newUsername = acct.username
-                                newDisplayName = acct.displayName
-                                suspendReason = acct.suspendedReason
-                                confirmDeleteUsername = ""
-                            }
-                            .padding(horizontal = 11.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        JaAvatar(
-                            avatarUrl = acct.avatarUrl,
-                            displayName = acct.displayName.ifBlank { acct.username },
-                            avatarColor = acct.avatarColor,
-                            size = 38.dp,
-                            ringWidth = 2.dp,
-                            presenceStatus = if (acct.online) "online" else "offline",
-                            statusBorderColor = palette.bgSecondary,
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = acct.displayName.ifBlank { acct.username },
+                                        color = palette.textPrimary,
+                                        fontSize = 13.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (acct.isOwner) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = "OWNER",
+                                            color = ownerDangerRed,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                        )
+                                    } else if (acct.isSuspended) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = "SUSPENDED",
+                                            color = ownerDangerRed,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                        )
+                                    }
+                                }
                                 Text(
-                                    text = acct.displayName.ifBlank { acct.username },
-                                    color = palette.textPrimary,
-                                    fontSize = 13.5.sp,
-                                    fontWeight = FontWeight.Bold,
+                                    text = "@${acct.username} · ${acct.email.ifBlank { "no email" }}",
+                                    color = palette.textSecondary,
+                                    fontSize = 11.5.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                if (acct.isOwner) {
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        text = "OWNER",
-                                        color = ownerDangerRed,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                    )
-                                } else if (acct.isSuspended) {
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        text = "SUSPENDED",
-                                        color = ownerDangerRed,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                    )
-                                }
                             }
-                            Text(
-                                text = "@${acct.username} · ${acct.email.ifBlank { "no email" }}",
-                                color = palette.textSecondary,
-                                fontSize = 11.5.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
                         }
+                    }
+                }
+                if (accounts.size > visibleLimit) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(palette.bgTertiary.copy(alpha = 0.65f))
+                            .border(1.dp, palette.border, RoundedCornerShape(12.dp))
+                            .clickable { visibleLimit += 18 }
+                            .padding(vertical = 9.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Show more (${accounts.size - visibleLimit} remaining)",
+                            color = palette.accent,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                 }
             }
@@ -5019,9 +5060,8 @@ private fun OwnerSettingsMobileSection(
     val target = selectedAccount
     if (target != null) {
         val isTargetOwner = target.isOwner || target.id == me.id
-        LiquidGlassCard(
-            backdrop = backdrop,
-            isDark = palette.isDark,
+        OwnerFastSectionCard(
+            palette = palette,
             borderColor = ownerDangerRed.copy(alpha = 0.62f),
             borderWidth = 1.5.dp,
             verticalArrangement = Arrangement.spacedBy(12.dp),

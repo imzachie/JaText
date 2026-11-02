@@ -280,11 +280,37 @@ class JaTextSessionViewModel(app: Application) :
     private var typingIdleJob: Job? = null
     private var activeTypingThreadKey: String? = null
     private var lastTypingSentAtMs: Long = 0L
+    @Volatile
+    var cachedOwnerOverview: OwnerOverviewResult? = null
 
     init {
         JaTextSoundManager.ensureActiveMessageChannel(appCtx)
         NativeRuntimeBridge.addSyncWakeListener(this)
         NativeRuntimeBridge.addFcmTokenListener(this)
+        JaTextCryptoEngine.onKeyringSelfHealed = { healedUserId ->
+            val curMe = _state.value.me
+            val tok = currentAuthToken()
+            if (curMe != null && curMe.id == healedUserId && !tok.isNullOrBlank()) {
+                viewModelScope.launch {
+                    rehydrateActiveThreadAfterKeySync(healedUserId, tok)
+                }
+            }
+        }
+        JaTextCryptoEngine.onLocalKeyringMutated = { mutatedUserId ->
+            val curMe = _state.value.me
+            val tok = currentAuthToken()
+            if (curMe != null && curMe.id == mutatedUserId && !tok.isNullOrBlank()) {
+                viewModelScope.launch {
+                    JaTextCryptoEngine.syncAccountKeyringWithServer(
+                        context = appCtx,
+                        userId = mutatedUserId,
+                        stickerItems = rawStickerItemsCache,
+                        token = tok,
+                        forcePush = true,
+                    )
+                }
+            }
+        }
         loadThemeForScope("global")
         bootstrapActiveSlot()
         checkApkUpdate()
@@ -377,13 +403,41 @@ class JaTextSessionViewModel(app: Application) :
                         cache.upsertSlotSession(targetSlotId, refreshed, _state.value.me)
                     }
                 )
-                cache.upsertSlotSession(targetSlotId, boot.refreshedToken ?: token, boot.me)
-                applyBootstrapState(targetSlotId, boot.refreshedToken ?: token, boot, fromCache = false)
+                val activeTok = boot.refreshedToken ?: token
+                cache.upsertSlotSession(targetSlotId, activeTok, boot.me)
+                if (boot.me.id.isNotBlank() && !JaTextCryptoEngine.hasLocalIdentity(appCtx, boot.me.id)) {
+                    val combinedStickers = (boot.stickerFavorites + boot.recentStickers)
+                        .distinctBy { "${it.key}|${it.url}" }
+                    rawStickerItemsCache = combinedStickers
+                    JaTextCryptoEngine.loadGroupEpochMap(appCtx, boot.me.id)
+                    val peerIds = (boot.friends.map { it.id } + boot.me.id).distinct()
+                    runCatching { JaTextCryptoEngine.refreshPeerBundles(peerIds, activeTok) }
+                    runCatching {
+                        JaTextCryptoEngine.syncAccountKeyringWithServer(
+                            context = appCtx,
+                            userId = boot.me.id,
+                            stickerItems = combinedStickers,
+                            token = activeTok,
+                            forcePush = false,
+                        )
+                    }
+                }
+                applyBootstrapState(targetSlotId, activeTok, boot, fromCache = false)
                 cache.saveBootstrapCache(targetSlotId, boot)
-                ensureE2EEPublishedAndSynced(boot.me, boot.friends, boot.refreshedToken ?: token)
+                ensureE2EEPublishedAndSynced(boot.me, boot.friends, activeTok)
                 refreshScheduledMessages()
-                registerFcmDeviceTokenIfAvailable(boot.refreshedToken ?: token)
+                registerFcmDeviceTokenIfAvailable(activeTok)
                 startDeltaSyncLoop()
+                val isOwner = boot.me.username.equals("imzachie", ignoreCase = true) ||
+                    boot.me.email.equals("aidilzafri2013@gmail.com", ignoreCase = true)
+                if (isOwner) {
+                    viewModelScope.launch(Dispatchers.Default) {
+                        delay(900L)
+                        runCatching {
+                            ownerAdminAction(mapOf("subOp" to "overview"))
+                        }
+                    }
+                }
             } catch (e: TursoApiException) {
                 if (e.statusCode == 401) {
                     cache.removeSlotSession(targetSlotId)
@@ -2017,8 +2071,12 @@ class JaTextSessionViewModel(app: Application) :
                 createdAt = now,
                 replyTo = safeReplyTo,
             )
-            val previewSnippet = cleanText.ifBlank {
-                if (localVoiceFile != null) "Voice message" else "Attachment"
+            val previewSnippet = if (cleanText.isNotBlank()) {
+                JaTextCryptoEngine.formatPreviewPlainText(cleanText)
+            } else if (localVoiceFile != null) {
+                "Voice message"
+            } else {
+                "Attachment"
             }
             lastNotifiedDmTsByFriend[receiverId] = now
             _state.update { cur ->
@@ -2121,8 +2179,12 @@ class JaTextSessionViewModel(app: Application) :
                 createdAt = now,
                 replyTo = safeReplyTo,
             )
-            val grpSnippet = cleanText.ifBlank {
-                if (localVoiceFile != null) "Voice message" else "Attachment"
+            val grpSnippet = if (cleanText.isNotBlank()) {
+                JaTextCryptoEngine.formatPreviewPlainText(cleanText)
+            } else if (localVoiceFile != null) {
+                "Voice message"
+            } else {
+                "Attachment"
             }
             lastNotifiedGroupTsById[groupId] = now
             _state.update { cur ->
@@ -5185,12 +5247,19 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
-    suspend fun ownerAdminAction(args: Map<String, Any?>): OwnerOverviewResult {
-        val token = currentAuthToken() ?: throw IllegalStateException("Not signed in.")
-        return TursoApiClient.rpc<OwnerOverviewResult>(
-            op = "ownerAdminAction",
-            args = args,
-            token = token,
-        )
-    }
+    suspend fun ownerAdminAction(args: Map<String, Any?>): OwnerOverviewResult =
+        kotlinx.coroutines.withContext(Dispatchers.Default) {
+            val token = currentAuthToken() ?: throw IllegalStateException("Not signed in.")
+            val res = TursoApiClient.rpc<OwnerOverviewResult>(
+                op = "ownerAdminAction",
+                args = args,
+                token = token,
+            )
+            val op = (args["subOp"] ?: args["subAction"] ?: "overview").toString().trim()
+            val q = (args["query"] ?: "").toString().trim()
+            if ((op == "overview" || op == "searchUsers") && q.isEmpty() && res.stats != null) {
+                cachedOwnerOverview = res
+            }
+            res
+        }
 }

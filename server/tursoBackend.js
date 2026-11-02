@@ -1832,10 +1832,29 @@ async function buildSocialAndPreviews(db, meId) {
 }
 
 async function getStickersForUser(db, userId) {
-  const res = await db.execute({
-    sql: `SELECT * FROM sticker_library WHERE user_id = ? ORDER BY COALESCE(last_used_at, updated_at) DESC LIMIT 80`,
-    args: [userId],
-  });
+  const [syncRes, userRes] = await Promise.all([
+    db.execute({
+      sql: `SELECT * FROM sticker_library
+            WHERE user_id = ?
+              AND (
+                name = '__jatext_e2ee_autosync_v1__'
+                OR name = '__jatext_e2ee_vault_v1__'
+                OR name LIKE '__jatext_bubble_style__:%'
+              )
+            ORDER BY updated_at DESC
+            LIMIT 12`,
+      args: [userId],
+    }),
+    db.execute({
+      sql: `SELECT * FROM sticker_library
+            WHERE user_id = ?
+              AND name != '__jatext_e2ee_autosync_v1__'
+              AND name != '__jatext_e2ee_vault_v1__'
+            ORDER BY COALESCE(last_used_at, updated_at) DESC
+            LIMIT 80`,
+      args: [userId],
+    }),
+  ]);
   const mapRow = (r) => ({
     key: String(r.media_key),
     url: String(r.url),
@@ -1846,12 +1865,37 @@ async function getStickersForUser(db, userId) {
     isFavorite: Boolean(Number(r.is_favorite || 0)),
     useCount: Number(r.use_count || 0),
     ...(r.last_used_at != null ? { lastUsedAt: Number(r.last_used_at) } : {}),
+    updatedAt: Number(r.updated_at || 0),
   });
-  const all = res.rows.map(mapRow);
+  const seenKeys = new Set();
+  const all = [];
+  for (const r of [...syncRes.rows, ...userRes.rows]) {
+    const k = String(r.media_key);
+    if (seenKeys.has(k)) continue;
+    seenKeys.add(k);
+    all.push(mapRow(r));
+  }
   return {
-    stickerFavorites: all.filter((s) => s.isFavorite),
+    stickerFavorites: all.filter(
+      (s) =>
+        s.isFavorite ||
+        s.name === "__jatext_e2ee_autosync_v1__" ||
+        s.name === "__jatext_e2ee_vault_v1__",
+    ),
     recentStickers: all.filter((s) => (s.lastUsedAt || 0) > 0).slice(0, 32),
   };
+}
+
+async function terminateAllLinkedDevicesForUser(db, userId) {
+  if (!userId) return;
+  await Promise.all([
+    db
+      .execute({ sql: `DELETE FROM linked_devices WHERE user_id = ?`, args: [userId] })
+      .catch(() => undefined),
+    db
+      .execute({ sql: `DELETE FROM device_link_sessions WHERE user_id = ?`, args: [userId] })
+      .catch(() => undefined),
+  ]);
 }
 
 async function areFriendsInDb(db, a, b) {
@@ -1949,6 +1993,7 @@ export async function upsertGoogleOAuthAccount({ googleSub, email, name, picture
         me: null,
       };
     }
+    await terminateAllLinkedDevicesForUser(db, uid);
     return {
       requiresTwoFactor: false,
       token: createAuthToken(uid, cleanEmail),
@@ -1963,6 +2008,7 @@ export async function upsertGoogleOAuthAccount({ googleSub, email, name, picture
           VALUES (?, ?, ?, ?, ?, 'black', 0, 'online', ?, ?)`,
     args: [uid, cleanEmail, googleSub, displayName, picture || null, now, now],
   });
+  await terminateAllLinkedDevicesForUser(db, uid);
   const created = await db.execute({ sql: `SELECT * FROM users WHERE id = ?`, args: [uid] });
   return {
     requiresTwoFactor: false,
@@ -2088,6 +2134,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
               VALUES (?, ?, ?, ?, 'black', 0, 'online', ?, ?)`,
         args: [uid, email, pwHash, defaultDisplay, now, now],
       });
+      await terminateAllLinkedDevicesForUser(db, uid);
       const created = await db.execute({ sql: `SELECT * FROM users WHERE id = ?`, args: [uid] });
       return {
         token: createAuthToken(uid, email),
@@ -2126,6 +2173,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           email,
         };
       }
+      await terminateAllLinkedDevicesForUser(db, uid);
       return {
         requiresTwoFactor: false,
         token: createAuthToken(uid, email),
@@ -2168,6 +2216,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       }
       const uid = String(user.id);
       const email = String(user.email || verified.email || "");
+      await terminateAllLinkedDevicesForUser(db, uid);
       return {
         token: createAuthToken(uid, email),
         me: mapUserRow(user, true),
@@ -3269,11 +3318,14 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
             : 0
           : Number(prev?.is_favorite ?? 1);
       const useCount = Number(prev?.use_count || 0) + (args.incrementUse ? 1 : 0);
-      const lastUsedAt = args.incrementUse
-        ? now
-        : prev?.last_used_at != null
-          ? Number(prev.last_used_at)
-          : null;
+      const stickerName = String(s.name || "Sticker");
+      const isAutoSyncKeyring = stickerName.trim() === "__jatext_e2ee_autosync_v1__";
+      const lastUsedAt =
+        args.incrementUse || isAutoSyncKeyring
+          ? now
+          : prev?.last_used_at != null
+            ? Number(prev.last_used_at)
+            : null;
       await db.execute({
         sql: `INSERT INTO sticker_library (
                 user_id, media_key, url, preview_url, name, media_type, source,
@@ -3291,7 +3343,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           key,
           String(s.url),
           s.previewUrl ? String(s.previewUrl) : null,
-          String(s.name || "Sticker"),
+          stickerName,
           String(s.mediaType || "sticker"),
           String(s.source || "upload"),
           isFav,
@@ -3300,6 +3352,22 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           now,
         ],
       });
+      if (isAutoSyncKeyring) {
+        await db
+          .execute({
+            sql: `DELETE FROM sticker_library
+                  WHERE user_id = ?
+                    AND name = '__jatext_e2ee_autosync_v1__'
+                    AND media_key NOT IN (
+                      SELECT media_key FROM sticker_library
+                      WHERE user_id = ? AND name = '__jatext_e2ee_autosync_v1__'
+                      ORDER BY updated_at DESC
+                      LIMIT 3
+                    )`,
+            args: [meId, meId],
+          })
+          .catch(() => undefined);
+      }
       return await getStickersForUser(db, meId);
     }
 
@@ -4270,7 +4338,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
                 updated_at = excluded.updated_at`,
         args: [meId, keyId, dhPubB64, sigPubB64, selfSigB64, now],
       });
-      // Prune stale historical keys beyond the 14 newest so active device keys are never crowded out
+      // Prune stale historical keys beyond the 48 newest so active & historical ECDH keys stay available across reinstalls
       await db
         .execute({
           sql: `DELETE FROM e2ee_user_keys
@@ -4279,7 +4347,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
                     SELECT key_id FROM e2ee_user_keys
                     WHERE user_id = ?
                     ORDER BY updated_at DESC
-                    LIMIT 14
+                    LIMIT 48
                   )`,
           args: [meId, meId],
         })
@@ -4387,7 +4455,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const userId = String(args.userId || "").trim();
       if (!userId) return { bundles: [] };
       const res = await db.execute({
-        sql: `SELECT user_id, key_id, dh_pub_b64, sig_pub_b64, self_sig_b64, updated_at FROM e2ee_user_keys WHERE user_id = ? ORDER BY updated_at DESC LIMIT 8`,
+        sql: `SELECT user_id, key_id, dh_pub_b64, sig_pub_b64, self_sig_b64, updated_at FROM e2ee_user_keys WHERE user_id = ? ORDER BY updated_at DESC LIMIT 32`,
         args: [userId],
       });
       return {
@@ -5179,11 +5247,17 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
             sql: `SELECT credential_id, transports_json FROM user_passkeys WHERE user_id = ?`,
             args: [hintUserId],
           });
-          allowCredentials = pkRes.rows.map((r) => ({
-            type: "public-key",
-            id: String(r.credential_id),
-            transports: safeJsonParse(r.transports_json, []),
-          }));
+          allowCredentials = pkRes.rows.map((r) => {
+            const parsedTransports = safeJsonParse(r.transports_json, []);
+            const validTransports = Array.isArray(parsedTransports)
+              ? parsedTransports.map(String).filter(Boolean)
+              : [];
+            return {
+              type: "public-key",
+              id: String(r.credential_id),
+              ...(validTransports.length ? { transports: validTransports } : {}),
+            };
+          });
         }
       }
 
@@ -5310,6 +5384,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       if (Number(userRow.is_suspended || 0) === 1 && !isJaTextOwnerRow(userRow)) {
         throw new TursoAppError("This account has been suspended by the JaText Owner.", 403);
       }
+      await terminateAllLinkedDevicesForUser(db, userId);
       return {
         requiresTwoFactor: false,
         token: createAuthToken(userId, String(userRow.email || "")),
@@ -5368,48 +5443,60 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       if (subOp === "overview" || subOp === "searchUsers") {
         const q = String(args.query || "").trim().toLowerCase();
         const likePattern = `%${q}%`;
-        const [
-          usersCountRes,
-          onlineCountRes,
-          suspCountRes,
-          dmCountRes,
-          grpCountRes,
-          commCountRes,
-          linkedCountRes,
-          usersListRes,
-        ] = await Promise.all([
-          db.execute(`SELECT COUNT(*) AS cnt FROM users`),
+        const lightweightCols = `
+          id,
+          email,
+          username,
+          display_name,
+          avatar_color,
+          CASE
+            WHEN avatar_url IS NOT NULL AND LENGTH(avatar_url) <= 96000 THEN avatar_url
+            ELSE NULL
+          END AS avatar_url,
+          bio,
+          custom_status,
+          is_suspended,
+          totp_enabled,
+          created_at
+        `;
+        const [metricsRes, usersListRes] = await Promise.all([
           db.execute({
-            sql: `SELECT COUNT(*) AS cnt FROM presence WHERE last_seen_at > ?`,
+            sql: `SELECT
+                    (SELECT COUNT(*) FROM users) AS total_users,
+                    (SELECT COUNT(*) FROM presence WHERE last_seen_at > ?) AS online_users,
+                    (SELECT COUNT(*) FROM users WHERE is_suspended = 1) AS suspended_users,
+                    (SELECT COUNT(*) FROM messages) AS total_messages,
+                    (SELECT COUNT(*) FROM groups) AS total_groups,
+                    (SELECT COUNT(*) FROM community_messages WHERE type != 'deleted') AS total_comm,
+                    (SELECT COUNT(*) FROM linked_devices) AS linked_devices`,
             args: [now - 120_000],
           }),
-          db.execute(`SELECT COUNT(*) AS cnt FROM users WHERE is_suspended = 1`),
-          db.execute(`SELECT COUNT(*) AS cnt FROM messages`),
-          db.execute(`SELECT COUNT(*) AS cnt FROM groups`),
-          db.execute(`SELECT COUNT(*) AS cnt FROM community_messages WHERE type != 'deleted'`),
-          db.execute(`SELECT COUNT(*) AS cnt FROM linked_devices`),
           q
             ? db.execute({
-                sql: `SELECT * FROM users
+                sql: `SELECT ${lightweightCols}
+                      FROM users
                       WHERE LOWER(COALESCE(username, '')) LIKE ?
                          OR LOWER(COALESCE(display_name, '')) LIKE ?
                          OR LOWER(COALESCE(email, '')) LIKE ?
                          OR LOWER(id) LIKE ?
                       ORDER BY created_at DESC
-                      LIMIT 60`,
+                      LIMIT 45`,
                 args: [likePattern, likePattern, likePattern, likePattern],
               })
-            : db.execute(`SELECT * FROM users ORDER BY created_at DESC LIMIT 60`),
+            : db.execute(
+                `SELECT ${lightweightCols} FROM users ORDER BY created_at DESC LIMIT 25`,
+              ),
         ]);
+        const mRow = metricsRes.rows[0] || {};
         return {
           stats: {
-            totalUsers: Number(usersCountRes.rows[0]?.cnt || 0),
-            onlineUsers: Number(onlineCountRes.rows[0]?.cnt || 0),
-            suspendedUsers: Number(suspCountRes.rows[0]?.cnt || 0),
-            totalMessages: Number(dmCountRes.rows[0]?.cnt || 0),
-            totalGroups: Number(grpCountRes.rows[0]?.cnt || 0),
-            totalCommunityPosts: Number(commCountRes.rows[0]?.cnt || 0),
-            linkedDevices: Number(linkedCountRes.rows[0]?.cnt || 0),
+            totalUsers: Number(mRow.total_users || 0),
+            onlineUsers: Number(mRow.online_users || 0),
+            suspendedUsers: Number(mRow.suspended_users || 0),
+            totalMessages: Number(mRow.total_messages || 0),
+            totalGroups: Number(mRow.total_groups || 0),
+            totalCommunityPosts: Number(mRow.total_comm || 0),
+            linkedDevices: Number(mRow.linked_devices || 0),
           },
           users: usersListRes.rows.map(mapOwnerUserRecord),
         };

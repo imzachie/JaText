@@ -69,6 +69,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.ahad00010.jatext.ui.components.FullscreenOverlaySlot
 import com.ahad00010.jatext.ui.components.JaWebIconButton
 import com.ahad00010.jatext.ui.components.JaWebPrimaryButton
 import com.ahad00010.jatext.ui.theme.LocalJaTextPalette
@@ -110,46 +111,12 @@ fun QrScannerModal(
         }
     }
 
-    BackHandler { onDismiss() }
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-        ),
+    FullscreenOverlaySlot(
+        id = "qr_scanner_modal",
+        secureScreen = false,
+        backgroundColor = Color(0xFF07070B),
+        onBack = onDismiss,
     ) {
-        val view = androidx.compose.ui.platform.LocalView.current
-        DisposableEffect(view) {
-            runCatching {
-                val dlgWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
-                dlgWindow?.let { w ->
-                    w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-                    androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
-                    w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    w.setBackgroundDrawable(ColorDrawable(android.graphics.Color.parseColor("#07070B")))
-                    w.statusBarColor = android.graphics.Color.TRANSPARENT
-                    w.navigationBarColor = android.graphics.Color.TRANSPARENT
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        w.attributes = w.attributes.apply {
-                            layoutInDisplayCutoutMode =
-                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-                        }
-                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        w.attributes = w.attributes.apply {
-                            layoutInDisplayCutoutMode =
-                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                        }
-                    }
-                    androidx.core.view.WindowCompat.getInsetsController(w, view).apply {
-                        isAppearanceLightStatusBars = false
-                        isAppearanceLightNavigationBars = false
-                    }
-                }
-            }
-            onDispose {}
-        }
-
         val topSafePad = WindowInsets.statusBars.asPaddingValues().calculateTopPadding().coerceAtLeast(36.dp)
         val bottomSafePad = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().coerceAtLeast(24.dp)
 
