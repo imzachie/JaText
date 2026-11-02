@@ -121,28 +121,30 @@ fun QrScannerModal(
     ) {
         val view = androidx.compose.ui.platform.LocalView.current
         DisposableEffect(view) {
-            val dlgWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
-            dlgWindow?.let { w ->
-                w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-                androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
-                w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                w.setBackgroundDrawable(ColorDrawable(android.graphics.Color.parseColor("#07070B")))
-                w.statusBarColor = android.graphics.Color.TRANSPARENT
-                w.navigationBarColor = android.graphics.Color.TRANSPARENT
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    w.attributes = w.attributes.apply {
-                        layoutInDisplayCutoutMode =
-                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            runCatching {
+                val dlgWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+                dlgWindow?.let { w ->
+                    w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+                    androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
+                    w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    w.setBackgroundDrawable(ColorDrawable(android.graphics.Color.parseColor("#07070B")))
+                    w.statusBarColor = android.graphics.Color.TRANSPARENT
+                    w.navigationBarColor = android.graphics.Color.TRANSPARENT
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        w.attributes = w.attributes.apply {
+                            layoutInDisplayCutoutMode =
+                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                        }
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        w.attributes = w.attributes.apply {
+                            layoutInDisplayCutoutMode =
+                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                        }
                     }
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    w.attributes = w.attributes.apply {
-                        layoutInDisplayCutoutMode =
-                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    androidx.core.view.WindowCompat.getInsetsController(w, view).apply {
+                        isAppearanceLightStatusBars = false
+                        isAppearanceLightNavigationBars = false
                     }
-                }
-                androidx.core.view.WindowCompat.getInsetsController(w, view).apply {
-                    isAppearanceLightStatusBars = false
-                    isAppearanceLightNavigationBars = false
                 }
             }
             onDispose {}

@@ -261,19 +261,24 @@ fun SidebarScreen(
 
     val visibleGroups = remember(state.groups, showArchivedGroups, searchQuery) {
         val q = searchQuery.trim().lowercase()
-        state.groups.filter { grp ->
-            grp.isArchived == showArchivedGroups && (q.isEmpty() || grp.name.lowercase().contains(q))
-        }
+        state.groups
+            .filter { grp ->
+                grp.id.isNotBlank() &&
+                    grp.isArchived == showArchivedGroups &&
+                    (q.isEmpty() || grp.name.lowercase().contains(q))
+            }
+            .distinctBy { it.id }
     }
 
     val sortedFriends = remember(me, state.friends, previewByFriend, showArchivedDms, searchQuery, activeFolder) {
         val q = searchQuery.trim().lowercase()
-        val candidates = if (me != null) {
-            listOf(me) + state.friends.filter { it.id != me.id }
+        val candidates = if (me != null && me.id.isNotBlank()) {
+            listOf(me) + state.friends.filter { it.id.isNotBlank() && it.id != me.id }
         } else {
-            state.friends
+            state.friends.filter { it.id.isNotBlank() }
         }
         candidates
+            .distinctBy { it.id }
             .filter { f ->
                 val isSelf = me != null && f.id == me.id
                 val inFolder = activeFolder == null || activeFolder.threadIds.contains("dm:${f.id}")
