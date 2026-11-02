@@ -61,13 +61,19 @@ function formatRelativeTime(ts: number): string {
   return `Active ${days}d ago`;
 }
 
-export function IosDevicesSection() {
+export function IosDevicesSection({
+  autoStartScanner = false,
+  onAutoStartConsumed,
+}: {
+  autoStartScanner?: boolean;
+  onAutoStartConsumed?: () => void;
+} = {}) {
   const { me } = useJaText();
   const [devices, setDevices] = useState<LinkedWebDeviceInfo[]>([]);
   const [maxDevices, setMaxDevices] = useState(5);
   const [loading, setLoading] = useState(true);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
-  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(autoStartScanner);
   const [pairingBusy, setPairingBusy] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [manualPayload, setManualPayload] = useState("");
@@ -101,6 +107,13 @@ export function IosDevicesSection() {
   useEffect(() => {
     void refreshDevices();
   }, [refreshDevices]);
+
+  useEffect(() => {
+    if (autoStartScanner) {
+      setScannerOpen(true);
+      onAutoStartConsumed?.();
+    }
+  }, [autoStartScanner, onAutoStartConsumed]);
 
   const stopCamera = useCallback(() => {
     if (scanLoopRef.current !== null) {
