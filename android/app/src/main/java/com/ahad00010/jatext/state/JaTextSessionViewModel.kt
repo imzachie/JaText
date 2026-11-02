@@ -897,7 +897,7 @@ class JaTextSessionViewModel(app: Application) :
             rehydrateActiveThreadAfterKeySync(me.id, token)
             try {
                 val boot = TursoApiClient.rpc<BootstrapResponse>(op = "bootstrap", token = token)
-                decryptSidebarPreviewsAsync(me.id, boot.previews, boot.groups, token)
+                decryptSidebarPreviewsAsync(_state.value.slotId, boot, token)
             } catch (_: Throwable) {
             }
         }
