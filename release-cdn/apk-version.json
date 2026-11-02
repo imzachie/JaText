@@ -1,7 +1,7 @@
 {
-  "versionName": "3.9.6",
-  "versionCode": 63,
+  "versionName": "3.9.7",
+  "versionCode": 64,
   "downloadUrl": "https://jatext.vercel.app/downloads/JaText-release.apk",
-  "commitSha": "cfa68486f3f52d3b3bf3348d354a9c648ae4e30d",
-  "publishedAt": "2026-11-02T14:18:46Z"
+  "commitSha": "016d3db8d1107dbb7ad7cb8de9941b3f5c25d3e7",
+  "publishedAt": "2026-11-02T15:49:35Z"
 }
