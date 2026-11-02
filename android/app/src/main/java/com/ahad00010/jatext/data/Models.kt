@@ -115,14 +115,19 @@ data class OwnerManagedUser(
     val bio: String = "",
     val customStatus: String = "",
     val isSuspended: Boolean = false,
+    val suspendedReason: String = "",
     val totpEnabled: Boolean = false,
     val isOwner: Boolean = false,
+    val online: Boolean = false,
+    val passkeyCount: Int = 0,
+    val linkedDeviceCount: Int = 0,
     val createdAt: Long = 0L,
 )
 
 @Serializable
 data class OwnerOverviewResult(
     val ok: Boolean = true,
+    val message: String? = null,
     val stats: OwnerPlatformStats? = null,
     val users: List<OwnerManagedUser> = emptyList(),
     val user: OwnerManagedUser? = null,

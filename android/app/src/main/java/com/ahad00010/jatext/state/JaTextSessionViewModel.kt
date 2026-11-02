@@ -5189,7 +5189,7 @@ class JaTextSessionViewModel(app: Application) :
 
     suspend fun ownerAdminAction(args: Map<String, Any?>): OwnerOverviewResult {
         val token = currentAuthToken() ?: throw IllegalStateException("Not signed in.")
-        return TursoApiClient.rpcTyped(
+        return TursoApiClient.rpc<OwnerOverviewResult>(
             op = "ownerAdminAction",
             args = args,
             token = token,

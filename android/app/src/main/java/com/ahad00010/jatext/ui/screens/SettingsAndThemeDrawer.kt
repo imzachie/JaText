@@ -88,10 +88,12 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
@@ -140,13 +142,11 @@ import com.ahad00010.jatext.BuildConfig
 import com.ahad00010.jatext.JaTextSoundManager
 import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.data.LinkedWebDevice
-import com.ahad00010.jatext.data.OwnerAccountRow
+import com.ahad00010.jatext.data.OwnerManagedUser
 import com.ahad00010.jatext.data.OwnerPlatformStats
 import com.ahad00010.jatext.data.TursoApiClient
 import com.ahad00010.jatext.data.UserSocialLink
 import com.ahad00010.jatext.data.UserWebsiteLink
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.state.SessionUiState
 import com.ahad00010.jatext.ui.components.JaAvatar
@@ -1982,7 +1982,7 @@ private data class YouSettingsMenuEntry(
 
 private fun isJaTextPlatformOwner(user: JaUser): Boolean {
     return user.isOwner ||
-        user.email.trim().equals("aidilzafri2013@gmail.com", ignoreCase = true) ||
+        user.email.orEmpty().trim().equals("aidilzafri2013@gmail.com", ignoreCase = true) ||
         user.username.trim().removePrefix("@").equals("imzachie", ignoreCase = true)
 }
 
@@ -2117,8 +2117,7 @@ private fun YouHubRootScreen(
             keywords = "owner admin console delete account change username ban suspend revoke broadcast moderation",
             labelColor = Color(0xFFEF4444),
             icon = { tint ->
-                WebUiSvgIcon(
-                    kind = WebUiIconKind.Shield,
+                SettingsPrivacyLockSvgIcon(
                     tint = tint,
                     modifier = Modifier.size(21.dp),
                 )
@@ -4650,8 +4649,8 @@ private fun OwnerSettingsMobileSection(
     var busyAction by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var stats by remember { mutableStateOf<OwnerPlatformStats?>(null) }
-    var accounts by remember { mutableStateOf<List<OwnerAccountRow>>(emptyList()) }
-    var selectedAccount by remember { mutableStateOf<OwnerAccountRow?>(null) }
+    var accounts by remember { mutableStateOf<List<OwnerManagedUser>>(emptyList()) }
+    var selectedAccount by remember { mutableStateOf<OwnerManagedUser?>(null) }
 
     var newUsername by remember { mutableStateOf("") }
     var newDisplayName by remember { mutableStateOf("") }
@@ -4662,12 +4661,14 @@ private fun OwnerSettingsMobileSection(
     fun loadDashboard(q: String = searchQuery) {
         scope.launch {
             loading = true
-            vm.ownerAdminAction(
-                buildJsonObject {
-                    put("subAction", "searchUsers")
-                    put("query", q.trim())
-                }
-            ).onSuccess { resp ->
+            runCatching {
+                vm.ownerAdminAction(
+                    mapOf(
+                        "subOp" to "searchUsers",
+                        "query" to q.trim(),
+                    )
+                )
+            }.onSuccess { resp ->
                 if (resp.stats != null) stats = resp.stats
                 accounts = resp.users
                 val currentSel = selectedAccount
@@ -4692,21 +4693,22 @@ private fun OwnerSettingsMobileSection(
     }
 
     fun runTargetAction(
-        subAction: String,
-        extra: (kotlinx.serialization.json.JsonObjectBuilder.() -> Unit)? = null,
+        subOp: String,
+        extra: Map<String, Any?> = emptyMap(),
         clearSelectionOnSuccess: Boolean = false,
     ) {
         val target = selectedAccount ?: return
         if (busyAction) return
         scope.launch {
             busyAction = true
-            vm.ownerAdminAction(
-                buildJsonObject {
-                    put("subAction", subAction)
-                    put("targetUserId", target.id)
-                    extra?.invoke(this)
-                }
-            ).onSuccess { resp ->
+            val payload = LinkedHashMap<String, Any?>().apply {
+                put("subOp", subOp)
+                put("targetUserId", target.id)
+                putAll(extra)
+            }
+            runCatching {
+                vm.ownerAdminAction(payload)
+            }.onSuccess { resp ->
                 vm.showToast(resp.message ?: "Owner action executed")
                 if (clearSelectionOnSuccess) {
                     selectedAccount = null
@@ -4744,8 +4746,7 @@ private fun OwnerSettingsMobileSection(
                     .background(ownerDangerRed.copy(alpha = 0.16f)),
                 contentAlignment = Alignment.Center,
             ) {
-                WebUiSvgIcon(
-                    kind = WebUiIconKind.Shield,
+                SettingsPrivacyLockSvgIcon(
                     tint = ownerDangerRed,
                     modifier = Modifier.size(20.dp),
                 )
@@ -4758,7 +4759,7 @@ private fun OwnerSettingsMobileSection(
                     fontWeight = FontWeight.ExtraBold,
                 )
                 Text(
-                    text = "Signed in as @${me.username} (${me.email.ifBlank { "verified owner" }})",
+                    text = "Signed in as @${me.username} (${me.email.orEmpty().ifBlank { "verified owner" }})",
                     color = palette.textSecondary,
                     fontSize = 12.sp,
                 )
@@ -4867,12 +4868,14 @@ private fun OwnerSettingsMobileSection(
                 if (clean.isEmpty() || busyAction) return@LiquidButton
                 scope.launch {
                     busyAction = true
-                    vm.ownerAdminAction(
-                        buildJsonObject {
-                            put("subAction", "broadcastCommunity")
-                            put("body", clean)
-                        }
-                    ).onSuccess { resp ->
+                    runCatching {
+                        vm.ownerAdminAction(
+                            mapOf(
+                                "subOp" to "broadcastCommunity",
+                                "body" to clean,
+                            )
+                        )
+                    }.onSuccess { resp ->
                         broadcastBody = ""
                         vm.showToast(resp.message ?: "Posted to JaText Community")
                     }.onFailure { err ->
@@ -5061,8 +5064,8 @@ private fun OwnerSettingsMobileSection(
             LiquidButton(
                 onClick = {
                     runTargetAction(
-                        subAction = "changeUsername",
-                        extra = { put("newUsername", newUsername.trim().removePrefix("@")) },
+                        subOp = "forceChangeUsername",
+                        extra = mapOf("newUsername" to newUsername.trim().removePrefix("@")),
                     )
                 },
                 backdrop = backdrop,
@@ -5089,8 +5092,8 @@ private fun OwnerSettingsMobileSection(
             LiquidButton(
                 onClick = {
                     runTargetAction(
-                        subAction = "changeDisplayName",
-                        extra = { put("newDisplayName", newDisplayName.trim()) },
+                        subOp = "forceUpdateProfile",
+                        extra = mapOf("displayName" to newDisplayName.trim()),
                     )
                 },
                 backdrop = backdrop,
@@ -5118,11 +5121,11 @@ private fun OwnerSettingsMobileSection(
                 LiquidButton(
                     onClick = {
                         runTargetAction(
-                            subAction = "suspendAccount",
-                            extra = {
-                                put("suspended", !target.isSuspended)
-                                put("reason", suspendReason.trim())
-                            },
+                            subOp = "setSuspended",
+                            extra = mapOf(
+                                "suspended" to !target.isSuspended,
+                                "reason" to suspendReason.trim(),
+                            ),
                         )
                     },
                     backdrop = backdrop,
@@ -5222,7 +5225,7 @@ private fun OwnerSettingsMobileSection(
                         onClick = {
                             if (matchesTarget) {
                                 runTargetAction(
-                                    subAction = "deleteAccount",
+                                    subOp = "deleteAccount",
                                     clearSelectionOnSuccess = true,
                                 )
                             }

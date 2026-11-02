@@ -28,6 +28,7 @@ import com.ahad00010.jatext.data.SealedDeviceLinkBundle
 import com.ahad00010.jatext.data.SealedE2EEVault
 import com.ahad00010.jatext.data.StickerMedia
 import com.ahad00010.jatext.data.StoredIdentityRecord
+import com.ahad00010.jatext.data.ViewOnceCodec
 import com.ahad00010.jatext.data.TursoApiClient
 import java.io.File
 import java.math.BigInteger
