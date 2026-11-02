@@ -7,8 +7,6 @@ package com.kyant.backdrop.navigation
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,10 +15,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.unit.Dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -71,13 +66,13 @@ fun LiquidBottomTabs(
     tabsCount: Int,
     modifier: Modifier = Modifier,
     isLightTheme: Boolean = !isSystemInDarkTheme(),
-    accentColor: Color = if (isLightTheme) Color(0xFF0088FF) else Color(0xFF0091FF),
-    inactiveColor: Color = if (isLightTheme) Color(0xFF1C1C1E).copy(alpha = 0.82f) else Color(0xFFF2F2F7).copy(alpha = 0.85f),
+    accentColor: Color = if (isLightTheme) Color(0xFF1C1C1E) else Color(0xFFFFFFFF),
+    inactiveColor: Color = if (isLightTheme) Color(0xFF2C2C2E).copy(alpha = 0.88f) else Color(0xFFF2F2F7).copy(alpha = 0.86f),
     content: @Composable RowScope.() -> Unit
 ) {
     val containerColor =
-        if (isLightTheme) Color(0xFFFAFAFC).copy(alpha = 0.72f)
-        else Color(0xFF14141C).copy(alpha = 0.76f)
+        if (isLightTheme) Color(0xFFFFFFFF).copy(alpha = 0.88f)
+        else Color(0xFF16161E).copy(alpha = 0.84f)
 
     val tabsBackdrop = rememberLayerBackdrop()
 
@@ -192,7 +187,7 @@ fun LiquidBottomTabs(
                         onDrawSurface = { drawRect(containerColor) }
                     )
                     .then(interactiveHighlight.modifier)
-                    .height(60f.dp)
+                    .height(64f.dp)
                     .fillMaxWidth()
                     .padding(4f.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -203,7 +198,7 @@ fun LiquidBottomTabs(
         CompositionLocalProvider(
             LocalLiquidBottomTabContentColor provides accentColor,
             LocalLiquidBottomTabScale provides {
-                lerp(1f, 1.16f, dampedDragAnimation.pressProgress.coerceIn(0f, 1f))
+                lerp(1f, 1.12f, dampedDragAnimation.pressProgress.coerceIn(0f, 1f))
             }
         ) {
             Row(
@@ -235,7 +230,7 @@ fun LiquidBottomTabs(
                         onDrawSurface = { drawRect(containerColor) }
                     )
                     .then(interactiveHighlight.modifier)
-                    .height(52f.dp)
+                    .height(56f.dp)
                     .fillMaxWidth()
                     .padding(horizontal = 4f.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -267,7 +262,7 @@ fun LiquidBottomTabs(
                     },
                     highlight = {
                         val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
-                        Highlight.Default.copy(alpha = progress.coerceAtLeast(0.35f))
+                        Highlight.Default.copy(alpha = progress.coerceAtLeast(0.32f))
                     },
                     shadow = {
                         val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
@@ -290,94 +285,15 @@ fun LiquidBottomTabs(
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress.coerceIn(0f, 1f)
                         drawRect(
-                            if (isLightTheme) Color.Black.copy(alpha = 0.09f)
-                            else Color.White.copy(alpha = 0.13f),
+                            if (isLightTheme) Color.Black.copy(alpha = 0.08f)
+                            else Color.White.copy(alpha = 0.14f),
                             alpha = (1f - progress).coerceIn(0f, 1f)
                         )
                         drawRect(Color.Black.copy(alpha = (0.03f * progress).coerceIn(0f, 1f)))
                     }
                 )
-                .height(52f.dp)
+                .height(56f.dp)
                 .fillMaxWidth(1f / tabsCount.coerceAtLeast(1))
-        )
-    }
-}
-
-/**
- * iOS 26.3 separated circular Liquid Glass Search button (no label, icon-only circle)
- * positioned at the trailing end of the bottom navigation dock.
- */
-@Composable
-fun LiquidSeparatedSearchButton(
-    active: Boolean,
-    onClick: () -> Unit,
-    backdrop: Backdrop,
-    modifier: Modifier = Modifier,
-    size: Dp = 60.dp,
-    isLightTheme: Boolean = !isSystemInDarkTheme(),
-    accentColor: Color = if (isLightTheme) Color(0xFF0088FF) else Color(0xFF0091FF),
-    inactiveColor: Color = if (isLightTheme) Color(0xFF1C1C1E).copy(alpha = 0.86f) else Color(0xFFF2F2F7).copy(alpha = 0.90f),
-) {
-    val containerColor =
-        if (isLightTheme) Color(0xFFFAFAFC).copy(alpha = 0.72f)
-        else Color(0xFF14141C).copy(alpha = 0.76f)
-    val animationScope = rememberCoroutineScope()
-    val interactiveHighlight = remember(animationScope) {
-        InteractiveHighlight(
-            animationScope = animationScope,
-            position = { drawSize, _ ->
-                val w = if (drawSize.isSpecified) drawSize.width else 0f
-                val h = if (drawSize.isSpecified) drawSize.height else 0f
-                Offset(w / 2f, h / 2f)
-            }
-        )
-    }
-    val clickInteraction = remember { MutableInteractionSource() }
-
-    Box(
-        modifier = modifier
-            .size(size)
-            .then(interactiveHighlight.gestureModifier)
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { CircleShape },
-                effects = {
-                    vibrancy()
-                    blur(14f.dp.toPx())
-                    lens(12f.dp.toPx(), 14f.dp.toPx(), chromaticAberration = active)
-                },
-                highlight = {
-                    Highlight.Default.copy(alpha = if (active) 0.90f else 0.55f)
-                },
-                shadow = {
-                    if (active) Shadow(alpha = 0.65f) else null
-                },
-                innerShadow = {
-                    if (active) InnerShadow(radius = 8.dp, alpha = 0.75f) else null
-                },
-                onDrawSurface = {
-                    drawRect(containerColor)
-                    if (active) {
-                        drawRect(
-                            if (isLightTheme) Color.Black.copy(alpha = 0.08f)
-                            else Color.White.copy(alpha = 0.15f)
-                        )
-                    }
-                }
-            )
-            .then(interactiveHighlight.modifier)
-            .clickable(
-                interactionSource = clickInteraction,
-                indication = null,
-                role = Role.Button,
-                onClickLabel = "Search chats",
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        IosSearchNavIcon(
-            tint = if (active) accentColor else inactiveColor,
-            size = 23.dp,
         )
     }
 }

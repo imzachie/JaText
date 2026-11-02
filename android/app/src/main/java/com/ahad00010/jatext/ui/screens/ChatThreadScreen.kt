@@ -14,8 +14,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -767,22 +771,29 @@ fun ChatThreadScreen(
                             }
                             else -> Color(0xFF626272)
                         }
+                        val isDmPeerTyping = friendActivity?.typingToMe == true ||
+                            (activeFriend != null && state.dmTypingUserIds.contains(activeFriend.id))
+                        val activeGroupTypers = if (activeGroup != null) {
+                            state.typingByGroup[activeGroup.id]?.takeIf { it.isNotEmpty() } ?: state.groupTypingUsers
+                        } else {
+                            emptyList()
+                        }
                         val subtitle = when {
                             isCommunity -> {
                                 if (state.communityTypingUsers.isNotEmpty()) {
-                                    "${state.communityTypingUsers.first().displayName} is typing…"
+                                    formatTypingUsersLabel(state.communityTypingUsers)
                                 } else {
                                     "Official JaText announcements"
                                 }
                             }
                             activeGroup != null -> {
-                                if (state.groupTypingUsers.isNotEmpty()) {
-                                    "${state.groupTypingUsers.first().displayName} is typing…"
+                                if (activeGroupTypers.isNotEmpty()) {
+                                    formatTypingUsersLabel(activeGroupTypers)
                                 } else {
                                     "${state.groupDetails?.members?.size ?: activeGroup.memberCount} members · End-to-End Encrypted"
                                 }
                             }
-                            friendActivity?.typingToMe == true -> "typing…"
+                            isDmPeerTyping -> "typing…"
                             friendActivity?.online == true -> {
                                 val statusLabel = when (friendActivity.statusPreference) {
                                     "dnd" -> "Do Not Disturb"
@@ -1803,6 +1814,28 @@ fun ChatThreadScreen(
                     }
                 }
 
+                val liveTypingBarLabel = when {
+                    isCommunity && state.communityTypingUsers.isNotEmpty() ->
+                        formatTypingUsersLabel(state.communityTypingUsers)
+                    activeGroup != null -> {
+                        val grpTypers = state.typingByGroup[activeGroup.id]?.takeIf { it.isNotEmpty() } ?: state.groupTypingUsers
+                        if (grpTypers.isNotEmpty()) formatTypingUsersLabel(grpTypers) else null
+                    }
+                    activeFriend != null && (friendActivity?.typingToMe == true || state.dmTypingUserIds.contains(activeFriend.id)) ->
+                        "${activeFriend.displayName.ifBlank { activeFriend.username }} is typing…"
+                    else -> null
+                }
+                AnimatedVisibility(
+                    visible = liveTypingBarLabel != null,
+                    enter = fadeIn(tween(140)) + expandVertically(tween(160)),
+                    exit = fadeOut(tween(120)) + shrinkVertically(tween(140)),
+                ) {
+                    LiveTypingIndicatorRow(
+                        label = liveTypingBarLabel.orEmpty(),
+                        containerColor = composerBarBg,
+                    )
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1966,6 +1999,7 @@ fun ChatThreadScreen(
                                 .jaBouncyClick(pressedScale = 0.90f) {
                                     val textToSend = draftText
                                     draftText = ""
+                                    vm.clearActiveTypingSignal()
                                     val editTarget = editingTarget
                                     if (editTarget != null) {
                                         editingTarget = null
@@ -5084,3 +5118,81 @@ private fun MessageSheetAction(
         Text(label, color = c, fontSize = 15.sp, fontWeight = FontWeight.Medium)
     }
 }
+
+internal fun formatTypingUsersLabel(users: List<com.ahad00010.jatext.data.ChatTypingUser>): String {
+    if (users.isEmpty()) return ""
+    val names = users.map { it.displayName.ifBlank { it.username }.ifBlank { "Someone" } }
+    return when {
+        names.size == 1 -> "${names[0]} is typing…"
+        names.size == 2 -> "${names[0]} and ${names[1]} are typing…"
+        else -> "${names[0]}, ${names[1]} and ${names.size - 2} more are typing…"
+    }
+}
+
+@Composable
+private fun LiveTypingIndicatorRow(
+    label: String,
+    containerColor: Color,
+) {
+    val palette = LocalJaTextPalette.current
+    val infinite = rememberInfiniteTransition(label = "typingDots")
+    val dot1 by infinite.animateFloat(
+        initialValue = 0.30f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 520),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "dot1",
+    )
+    val dot2 by infinite.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 520, delayMillis = 150),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "dot2",
+    )
+    val dot3 by infinite.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 520, delayMillis = 300),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "dot3",
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(containerColor)
+            .padding(horizontal = 16.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(3.5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            listOf(dot1, dot2, dot3).forEach { alphaVal ->
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(palette.accent.copy(alpha = alphaVal.coerceIn(0.25f, 1f)))
+                )
+            }
+        }
+        Text(
+            text = label,
+            color = palette.accent,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = com.ahad00010.jatext.ui.theme.SfProTextFontFamily,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+

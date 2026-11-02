@@ -49,8 +49,10 @@ import {
   EditIcon,
   FlaskIcon,
   FolderIcon,
-  IosPlusCircleIcon,
-  IosSettingsGearIcon,
+  IosCallsHandsetIcon,
+  IosDualChatsBubbleIcon,
+  IosGroupsPeopleIcon,
+  IosUpdatesStatusIcon,
   MessageCircleIcon,
   PinIcon,
   PlusIcon,
@@ -120,7 +122,7 @@ export function Sidebar({
   const draftsMap = useDraftsMap();
   const storedCallHistory = useCallHistoryEntries();
   const { me, friends, incoming, outgoing, previews, activeChatId, setActiveChatId } = store;
-  const [tab, setTab] = useState<"chats" | "calls" | "add">("chats");
+  const [tab, setTab] = useState<"updates" | "calls" | "groups" | "chats" | "add">("chats");
   const [search, setSearch] = useState("");
   const [iosSearchOpen, setIosSearchOpen] = useState(false);
   const iosSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -339,7 +341,18 @@ export function Sidebar({
     friends.filter((friend) => previewByFriend.get(friend.id)?.isArchived).length +
     store.groups.filter((group) => group.isArchived).length;
 
-  const totalUnreadCount = useMemo(() => {
+  const totalDmUnreadCount = useMemo(() => {
+    let total = 0;
+    for (const friend of friends) {
+      const prev = previewByFriend.get(friend.id);
+      if (prev && !prev.isArchived && !prev.isMuted && activeChatId !== friend.id) {
+        total += prev.unreadCount ?? 0;
+      }
+    }
+    return total;
+  }, [activeChatId, friends, previewByFriend]);
+
+  const totalGroupUnreadCount = useMemo(() => {
     let total = 0;
     if (!store.communityMuted && activeChatId !== OFFICIAL_COMMUNITY_ID) {
       total += store.communityUnreadCount;
@@ -349,22 +362,16 @@ export function Sidebar({
         total += grp.unreadCount ?? 0;
       }
     }
-    for (const friend of friends) {
-      const prev = previewByFriend.get(friend.id);
-      if (prev && !prev.isArchived && !prev.isMuted && activeChatId !== friend.id) {
-        total += prev.unreadCount ?? 0;
-      }
-    }
     return total;
   }, [
     activeChatId,
-    friends,
-    previewByFriend,
     store.activeGroupId,
     store.communityMuted,
     store.communityUnreadCount,
     store.groups,
   ]);
+
+  const totalUnreadCount = totalDmUnreadCount + totalGroupUnreadCount;
 
   if (!me) return null;
 
@@ -498,13 +505,20 @@ export function Sidebar({
   const isIosChats = isAuthorizedIosChatsRuntime();
 
   useEffect(() => {
-    if (isIosChats && iosSearchOpen && tab === "chats") {
+    if (isIosChats && iosSearchOpen && (tab === "chats" || tab === "groups")) {
       const id = window.setTimeout(() => {
         iosSearchInputRef.current?.focus();
       }, 60);
       return () => window.clearTimeout(id);
     }
   }, [isIosChats, iosSearchOpen, tab]);
+
+  const displayedThreads = useMemo(() => {
+    if (!isIosChats) return orderedThreads;
+    if (tab === "groups") return orderedThreads.filter((item) => item.kind === "group");
+    if (tab === "chats") return orderedThreads.filter((item) => item.kind === "dm");
+    return orderedThreads;
+  }, [isIosChats, orderedThreads, tab]);
 
   return (
     <aside className={`sidebar ${isIosChats ? "ios-bottom-nav-layout" : ""}`}>
@@ -514,6 +528,55 @@ export function Sidebar({
           <span>JaText</span>
         </div>
         <div className="sidebar-header-actions">
+          {isIosChats && (tab === "chats" || tab === "groups") && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => {
+                if (iosSearchOpen) {
+                  setIosSearchOpen(false);
+                  setSearch("");
+                } else {
+                  setIosSearchOpen(true);
+                }
+              }}
+              title={t("search_chats")}
+              aria-label={t("search_chats")}
+            >
+              <SearchIcon size={17} />
+            </button>
+          )}
+          {isIosChats && tab === "groups" && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setShowGroupDialog(true)}
+              title="New group"
+              aria-label="New group"
+            >
+              <PlusIcon size={17} />
+            </button>
+          )}
+          {isIosChats && (
+            <button
+              type="button"
+              className="icon-btn account-switch-header-btn"
+              onClick={() => {
+                setIosSearchOpen(false);
+                setSearch("");
+                setTab(tab === "add" ? "chats" : "add");
+              }}
+              title="Add friends"
+              aria-label="Add friends"
+            >
+              <UserPlusIcon size={17} />
+              {incoming.length > 0 && (
+                <span className="account-count-badge" aria-hidden="true">
+                  {incoming.length}
+                </span>
+              )}
+            </button>
+          )}
           {onOpenAccountSwitcher && (
             <button
               type="button"
@@ -540,7 +603,15 @@ export function Sidebar({
 
       {isIosChats ? (
         <h1 className="ios-page-large-title">
-          {tab === "calls" ? t("calls") : tab === "add" ? t("add") : t("chats")}
+          {tab === "updates"
+            ? "Updates"
+            : tab === "calls"
+              ? t("calls")
+              : tab === "groups"
+                ? "Groups"
+                : tab === "add"
+                  ? "Add Friends"
+                  : t("chats")}
         </h1>
       ) : (
         <div className="greeting">
@@ -627,14 +698,29 @@ export function Sidebar({
         </div>
       )}
 
-      {tab === "chats" && (
-        <div className="sidebar-tab-pane" key="pane-chats">
+      {tab === "updates" && (
+        <div className="sidebar-tab-pane" key="pane-updates">
+          <div className="empty-box" style={{ marginTop: 18 }}>
+            <p>
+              <IosUpdatesStatusIcon size={28} />
+            </p>
+            <p>
+              <strong>Feature is under maintenance!</strong>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {(tab === "chats" || (isIosChats && tab === "groups")) && (
+        <div className="sidebar-tab-pane" key={`pane-${tab}`}>
           {(!isIosChats || iosSearchOpen) && (
             <div className={isIosChats ? "ios-search-row" : undefined}>
               <input
                 ref={isIosChats ? iosSearchInputRef : undefined}
                 className="search-input"
-                placeholder={`${t("search_chats")}…`}
+                placeholder={
+                  isIosChats && tab === "groups" ? "Search groups…" : `${t("search_chats")}…`
+                }
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -652,7 +738,7 @@ export function Sidebar({
               )}
             </div>
           )}
-          {!showArchived && (
+          {!showArchived && (!isIosChats || tab === "chats") && (
             <div className="sidebar-folder-bar" role="tablist" aria-label={t("folders")}>
               <button
                 type="button"
@@ -739,7 +825,7 @@ export function Sidebar({
             </div>
           )}
           <div className="friend-list">
-            {!showArchived && (
+            {!showArchived && (!isIosChats || tab === "groups") && (
               <div
                 className={`friend-row official-community-row ${
                   activeChatId === OFFICIAL_COMMUNITY_ID ? "active" : ""
@@ -802,7 +888,7 @@ export function Sidebar({
                 </div>
               </div>
             )}
-            {orderedThreads.map((entry) => {
+            {displayedThreads.map((entry) => {
               const isPinned = chatOrg.pinnedIds.includes(entry.threadKey);
               if (entry.kind === "group") {
                 const { group } = entry;
@@ -984,6 +1070,9 @@ export function Sidebar({
                     </div>
                     <span className="muted small friend-preview">
                       {(() => {
+                        if (activityByUserId.get(friend.id)?.isTyping) {
+                          return <span className="draft-pill">typing…</span>;
+                        }
                         if (dmDraft) {
                           return (
                             <>
@@ -1005,7 +1094,7 @@ export function Sidebar({
                 </div>
               );
             })}
-            {orderedThreads.length === 0 &&
+            {displayedThreads.length === 0 &&
               (friends.length > 0 || store.groups.length > 0) && (
                 <div className="empty-box">
                   <p>
@@ -1931,97 +2020,103 @@ export function Sidebar({
       )}
 
       {isIosChats && (
-        <div className="ios-liquid-bottom-dock">
-          <nav className="ios-liquid-bottom-nav" aria-label="Primary navigation">
-            <div
-              className="ios-liquid-bottom-pill"
-              style={{
-                transform: `translateX(${
-                  (tab === "chats" ? 0 : tab === "calls" ? 1 : 2) * 100
-                }%)`,
-              }}
-              aria-hidden="true"
-            />
-            <button
-              type="button"
-              className={`ios-liquid-bottom-tab ${tab === "chats" ? "active" : ""}`}
-              onClick={() => setTab("chats")}
-            >
-              <span className="ios-liquid-bottom-icon-wrap">
-                <MessageCircleIcon size={21} />
-                {totalUnreadCount > 0 && (
-                  <span className="ios-liquid-bottom-badge">
-                    {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
-                  </span>
-                )}
-              </span>
-              <span>{t("chats")}</span>
-            </button>
-            <button
-              type="button"
-              className={`ios-liquid-bottom-tab ${tab === "calls" ? "active" : ""}`}
-              onClick={() => {
-                setIosSearchOpen(false);
-                setSearch("");
-                setTab("calls");
-              }}
-            >
-              <span className="ios-liquid-bottom-icon-wrap">
-                <Phone size={21} />
-              </span>
-              <span>{t("calls")}</span>
-            </button>
-            <button
-              type="button"
-              className={`ios-liquid-bottom-tab ${tab === "add" ? "active" : ""}`}
-              onClick={() => {
-                setIosSearchOpen(false);
-                setSearch("");
-                setTab("add");
-              }}
-            >
-              <span className="ios-liquid-bottom-icon-wrap">
-                <IosPlusCircleIcon size={21} />
-                {incoming.length > 0 && (
-                  <span className="ios-liquid-bottom-badge">{incoming.length}</span>
-                )}
-              </span>
-              <span>{t("add")}</span>
-            </button>
-            <button
-              type="button"
-              className="ios-liquid-bottom-tab"
-              onClick={() => {
-                setIosSearchOpen(false);
-                setSearch("");
-                onOpenSettings();
-              }}
-            >
-              <span className="ios-liquid-bottom-icon-wrap">
-                <IosSettingsGearIcon size={21} />
-              </span>
-              <span>{t("settings")}</span>
-            </button>
-          </nav>
+        <nav className="ios-liquid-bottom-nav" aria-label="Primary navigation">
+          <div
+            className="ios-liquid-bottom-pill"
+            style={{
+              transform: `translateX(${
+                (tab === "updates"
+                  ? 0
+                  : tab === "calls"
+                    ? 1
+                    : tab === "groups"
+                      ? 2
+                      : 3) * 100
+              }%)`,
+            }}
+            aria-hidden="true"
+          />
           <button
             type="button"
-            className={`ios-liquid-search-btn ${iosSearchOpen ? "active" : ""}`}
-            aria-label={t("search_chats")}
+            className={`ios-liquid-bottom-tab ${tab === "updates" ? "active" : ""}`}
             onClick={() => {
-              if (tab !== "chats") {
-                setTab("chats");
-                setIosSearchOpen(true);
-              } else if (iosSearchOpen) {
-                setIosSearchOpen(false);
-                setSearch("");
-              } else {
-                setIosSearchOpen(true);
-              }
+              setIosSearchOpen(false);
+              setSearch("");
+              setTab("updates");
             }}
           >
-            <SearchIcon size={22} />
+            <span className="ios-liquid-bottom-icon-wrap">
+              <IosUpdatesStatusIcon size={23} selected={tab === "updates"} />
+            </span>
+            <span>Updates</span>
           </button>
-        </div>
+          <button
+            type="button"
+            className={`ios-liquid-bottom-tab ${tab === "calls" ? "active" : ""}`}
+            onClick={() => {
+              setIosSearchOpen(false);
+              setSearch("");
+              setTab("calls");
+            }}
+          >
+            <span className="ios-liquid-bottom-icon-wrap">
+              <IosCallsHandsetIcon size={22} selected={tab === "calls"} />
+            </span>
+            <span>{t("calls")}</span>
+          </button>
+          <button
+            type="button"
+            className={`ios-liquid-bottom-tab ${tab === "groups" ? "active" : ""}`}
+            onClick={() => {
+              setIosSearchOpen(false);
+              setSearch("");
+              setTab("groups");
+            }}
+          >
+            <span className="ios-liquid-bottom-icon-wrap">
+              <IosGroupsPeopleIcon size={24} selected={tab === "groups"} />
+              {totalGroupUnreadCount > 0 && (
+                <span className="ios-liquid-bottom-badge">
+                  {totalGroupUnreadCount > 99 ? "99+" : totalGroupUnreadCount}
+                </span>
+              )}
+            </span>
+            <span>Groups</span>
+          </button>
+          <button
+            type="button"
+            className={`ios-liquid-bottom-tab ${tab === "chats" ? "active" : ""}`}
+            onClick={() => {
+              setIosSearchOpen(false);
+              setSearch("");
+              setTab("chats");
+            }}
+          >
+            <span className="ios-liquid-bottom-icon-wrap">
+              <IosDualChatsBubbleIcon size={24} selected={tab === "chats"} />
+              {totalDmUnreadCount > 0 && (
+                <span className="ios-liquid-bottom-badge">
+                  {totalDmUnreadCount > 99 ? "99+" : totalDmUnreadCount}
+                </span>
+              )}
+            </span>
+            <span>{t("chats")}</span>
+          </button>
+          <button
+            type="button"
+            className="ios-liquid-bottom-tab"
+            onClick={() => {
+              setIosSearchOpen(false);
+              setSearch("");
+              onOpenSettings();
+            }}
+          >
+            <span className="ios-liquid-bottom-icon-wrap ios-you-avatar-ring">
+              <Avatar user={me} size={22} />
+            </span>
+            <span>You</span>
+          </button>
+        </nav>
       )}
     </aside>
   );

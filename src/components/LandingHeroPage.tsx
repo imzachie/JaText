@@ -130,10 +130,19 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v3.9.3",
+    date: "November 2, 2026",
+    headline: "5-Tab Mobile Navigation (Updates, Calls, Groups, Chats, You), Live Mobile Typing Indicators & Friend Request Fix",
+    latest: true,
+    bullets: [
+      "Redesigned mobile navigation into a 5-tab capsule (Updates, Calls, Groups, Chats defaulting on the 4th tab for 1:1 P2P chats, and You with your profile avatar opening Settings) with 1:1 SVG icons and no separated search button.",
+      "Fixed real-time typing indicators across mobile 1:1 DMs, Groups, and Community (both sending and sub-second sync receiving), and fixed outgoing friend requests showing the recipient profile instead of your own.",
+    ],
+  },
+  {
     version: "v3.9.2",
     date: "November 1, 2026",
     headline: "iOS 26.3 Chats Header & Separated Liquid Glass Search Bar",
-    latest: true,
     bullets: [
       "Replaced the mobile greeting banner with a clean SF Pro Bold Chats title (pure White on dark themes and pure Black on light themes) and removed the permanent top search bar.",
       "Updated the bottom Liquid Glass navigation bar to the iOS 26.3 layout with Chats, Calls, Add, and Settings in the primary capsule plus a separated circular icon-only Search button on the right end.",
@@ -467,7 +476,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v3.9.2 · Live
+                v3.9.3 · Live
               </span>
             </span>
           </a>
@@ -606,7 +615,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v3.9.2 (Build 59)</strong>
+                    <strong>v3.9.3 (Build 60)</strong>
                     <span>{isIosVisitor ? "iOS Web & Liquid Glass PWA" : "Web & Signed APK"}</span>
                   </div>
                 </div>
@@ -988,7 +997,7 @@ export function LandingHeroPage() {
                   <>
                     Launch the full JaText web app at{" "}
                     <strong>jatext.vercel.app/chats</strong> or grab the latest signed Android
-                    Release APK (v3.9.2).
+                    Release APK (v3.9.3).
                   </>
                 )}
               </p>
@@ -1018,7 +1027,7 @@ export function LandingHeroPage() {
                   href="/downloads/JaText-release.apk"
                   className="jt-btn-secondary jt-btn-lg"
                 >
-                  Get Android APK (v3.9.2)
+                  Get Android APK (v3.9.3)
                 </a>
               )}
             </div>
@@ -1031,7 +1040,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v3.9.2</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v3.9.3</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

@@ -125,6 +125,8 @@ data class SessionUiState(
     val groupSeenByMessageId: Map<String, List<GroupSeenReader>> = emptyMap(),
     val groupHasMore: Boolean = false,
     val groupLoadingOlder: Boolean = false,
+    val dmTypingUserIds: List<String> = emptyList(),
+    val typingByGroup: Map<String, List<ChatTypingUser>> = emptyMap(),
     val groupTypingUsers: List<ChatTypingUser> = emptyList(),
     val communityMessages: List<CommunityMessage> = emptyList(),
     val communityHasMore: Boolean = false,
@@ -789,7 +791,7 @@ class JaTextSessionViewModel(app: Application) :
                     "sinceTs" to sinceTs,
                     "activeFriendId" to syncFriend,
                     "activeGroupId" to syncGroup,
-                    "includeCommunity" to (st.activeChatId == OFFICIAL_COMMUNITY_ID),
+                    "includeCommunity" to true,
                     "touchPresence" to shouldBeat,
                     "includePresence" to shouldBeat,
                 ),
@@ -985,6 +987,18 @@ class JaTextSessionViewModel(app: Application) :
                     } else m
                 }
 
+                val dmTypingSet = sync.dmTypingUserIds.toSet()
+                val baseActivities = sync.social?.friendActivities ?: prev.friendActivities
+                val nextActivities = baseActivities.map { act ->
+                    val liveTyping = dmTypingSet.contains(act.userId)
+                    if (act.isTyping != liveTyping) act.copy(isTyping = liveTyping) else act
+                }
+                val activeGrpTyping = if (syncGroup != null) {
+                    sync.typingByGroup[syncGroup] ?: sync.groupTypingUsers
+                } else {
+                    sync.groupTypingUsers
+                }
+
                 prev.copy(
                     me = sync.me ?: prev.me,
                     friends = sync.social?.friends ?: prev.friends,
@@ -992,13 +1006,15 @@ class JaTextSessionViewModel(app: Application) :
                     outgoing = sync.social?.outgoing ?: prev.outgoing,
                     blockedUserIds = sync.social?.blockedUserIds ?: prev.blockedUserIds,
                     previews = hydratedPreviews ?: prev.previews,
-                    friendActivities = sync.social?.friendActivities ?: prev.friendActivities,
+                    friendActivities = nextActivities,
                     groups = hydratedGroups ?: prev.groups,
                     dmMessages = nextDms,
                     groupMessages = nextGrps,
                     groupSeenByMessageId = deltaGroupSeen ?: prev.groupSeenByMessageId,
                     communityMessages = nextComm,
-                    groupTypingUsers = sync.groupTypingUsers,
+                    dmTypingUserIds = sync.dmTypingUserIds,
+                    typingByGroup = sync.typingByGroup,
+                    groupTypingUsers = activeGrpTyping,
                     communityTypingUsers = sync.communityTypingUsers,
                 )
             }
@@ -1518,6 +1534,7 @@ class JaTextSessionViewModel(app: Application) :
     /* ==================== Navigation & Opening Threads (Never Marks Read Until Opened!) ==================== */
 
     fun openDmChat(friendId: String, highlightMessageId: String? = null) {
+        clearActiveTypingSignal()
         val slot = _state.value.slotId
         val cached = cache.loadDmMessagesCache(slot, friendId).orEmpty()
         _state.update { prev ->
@@ -1618,6 +1635,7 @@ class JaTextSessionViewModel(app: Application) :
     }
 
     fun openGroupChat(groupId: String, highlightMessageId: String? = null) {
+        clearActiveTypingSignal()
         val slot = _state.value.slotId
         val cachedMsgs = cache.loadGroupMessagesCache(slot, groupId).orEmpty()
         val cachedDet = cache.loadGroupDetailsCache(slot, groupId)
@@ -1705,6 +1723,7 @@ class JaTextSessionViewModel(app: Application) :
     }
 
     fun openCommunityChat(highlightMessageId: String? = null) {
+        clearActiveTypingSignal()
         _state.update {
             it.copy(
                 activeChatId = OFFICIAL_COMMUNITY_ID,
@@ -1723,6 +1742,7 @@ class JaTextSessionViewModel(app: Application) :
     }
 
     fun closeActiveChat() {
+        clearActiveTypingSignal()
         _state.update {
             it.copy(
                 activeChatId = null,
@@ -2983,6 +3003,7 @@ class JaTextSessionViewModel(app: Application) :
         viewModelScope.launch {
             try {
                 TursoApiClient.rpcRaw("sendFriendRequest", mapOf("username" to clean), token)
+                lastPresenceBeatAt = 0L
                 triggerImmediateSync(true)
                 showToast("Friend request sent to @$clean!")
             } catch (e: Throwable) {
@@ -2996,6 +3017,7 @@ class JaTextSessionViewModel(app: Application) :
         viewModelScope.launch {
             try {
                 TursoApiClient.rpcRaw("respondFriendRequest", mapOf("requestId" to requestId, "accept" to accept), token)
+                lastPresenceBeatAt = 0L
                 triggerImmediateSync(true)
             } catch (e: Throwable) {
                 showToast(e.message ?: "Failed to respond to request")
@@ -3008,6 +3030,7 @@ class JaTextSessionViewModel(app: Application) :
         viewModelScope.launch {
             try {
                 TursoApiClient.rpcRaw("removeFriend", mapOf("friendId" to friendId), token)
+                lastPresenceBeatAt = 0L
                 triggerImmediateSync(true)
             } catch (_: Throwable) {
             }
@@ -4310,6 +4333,94 @@ class JaTextSessionViewModel(app: Application) :
         _state.update { it.copy(languageCode = clean) }
     }
 
+    private var typingIdleJob: Job? = null
+    private var activeTypingThreadKey: String? = null
+    private var lastTypingSentAtMs: Long = 0L
+
+    private fun dispatchTypingRpc(threadKey: String, isTyping: Boolean) {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                when {
+                    threadKey.startsWith("dm:") -> {
+                        val peerId = threadKey.removePrefix("dm:").trim()
+                        if (peerId.isNotEmpty()) {
+                            TursoApiClient.rpcRaw(
+                                "setTyping",
+                                mapOf("receiverId" to peerId, "isTyping" to isTyping),
+                                token,
+                            )
+                        }
+                    }
+                    threadKey.startsWith("group:") -> {
+                        val grpId = threadKey.removePrefix("group:").trim()
+                        if (grpId.isNotEmpty()) {
+                            TursoApiClient.rpcRaw(
+                                "setChannelTyping",
+                                mapOf("channelId" to "group:$grpId", "isTyping" to isTyping),
+                                token,
+                            )
+                        }
+                    }
+                    threadKey == "community" -> {
+                        TursoApiClient.rpcRaw(
+                            "setChannelTyping",
+                            mapOf("channelId" to "community", "isTyping" to isTyping),
+                            token,
+                        )
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    fun clearActiveTypingSignal() {
+        typingIdleJob?.cancel()
+        typingIdleJob = null
+        val prevKey = activeTypingThreadKey
+        activeTypingThreadKey = null
+        lastTypingSentAtMs = 0L
+        if (!prevKey.isNullOrBlank()) {
+            dispatchTypingRpc(prevKey, false)
+        }
+    }
+
+    fun notifyThreadTyping(threadKey: String, isTyping: Boolean) {
+        if (threadKey.isBlank()) return
+        val prevKey = activeTypingThreadKey
+        if (prevKey != null && prevKey != threadKey) {
+            dispatchTypingRpc(prevKey, false)
+            activeTypingThreadKey = null
+            lastTypingSentAtMs = 0L
+        }
+        if (!isTyping) {
+            typingIdleJob?.cancel()
+            typingIdleJob = null
+            if (activeTypingThreadKey == threadKey) {
+                activeTypingThreadKey = null
+                lastTypingSentAtMs = 0L
+                dispatchTypingRpc(threadKey, false)
+            }
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (activeTypingThreadKey != threadKey || now - lastTypingSentAtMs >= 2_700L) {
+            activeTypingThreadKey = threadKey
+            lastTypingSentAtMs = now
+            dispatchTypingRpc(threadKey, true)
+        }
+        typingIdleJob?.cancel()
+        typingIdleJob = viewModelScope.launch {
+            delay(4_500L)
+            if (activeTypingThreadKey == threadKey) {
+                activeTypingThreadKey = null
+                lastTypingSentAtMs = 0L
+                dispatchTypingRpc(threadKey, false)
+            }
+        }
+    }
+
     fun updateChatDraft(threadKey: String, text: String) {
         val slot = _state.value.slotId
         val next = _state.value.drafts.toMutableMap()
@@ -4320,6 +4431,7 @@ class JaTextSessionViewModel(app: Application) :
         }
         cache.saveDrafts(slot, next)
         _state.update { it.copy(drafts = next) }
+        notifyThreadTyping(threadKey, text.isNotBlank())
     }
 
     fun markViewOnceMessageOpened(messageId: String) {
