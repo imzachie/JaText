@@ -252,6 +252,35 @@ class JaTextSessionViewModel(app: Application) :
     @Volatile
     private var pendingWake = false
 
+    private var mobileOAuthPollJob: Job? = null
+    private var activeMobileOAuthSessionId: String? = null
+    private var mobileOAuthLaunchedAtMs: Long = 0L
+    private var lastCompletedAuthToken: String? = null
+
+    private val groupCursorRowByGroupId = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val groupSeenPublishedTsByGroupId = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private val locallyUnsentAtById = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val locallyHardDeletedCommIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private val lastNotifiedDmTsByFriend = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val lastNotifiedGroupTsById = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    @Volatile
+    private var deltaNotifBaselineReady = false
+
+    private val locallyDeletedIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private var deletedDmSnapshot: ChatMessage? = null
+    private var deletedGroupSnapshot: GroupMessage? = null
+    private var deletedCommunitySnapshot: CommunityMessage? = null
+    private var deletedUndoThreadKind: String = ""
+    private var deleteUndoJob: Job? = null
+
+    private var lastUpdateCheckAtMs: Long = 0L
+    private var pendingReadyApkFile: File? = null
+    private var scheduledFlushJob: Job? = null
+    private var typingIdleJob: Job? = null
+    private var activeTypingThreadKey: String? = null
+    private var lastTypingSentAtMs: Long = 0L
+
     init {
         JaTextSoundManager.ensureActiveMessageChannel(appCtx)
         NativeRuntimeBridge.addSyncWakeListener(this)
@@ -295,11 +324,6 @@ class JaTextSessionViewModel(app: Application) :
     private fun currentAuthToken(): String? = cache.getTokenForSlot(_state.value.slotId)
 
     /* ==================== Startup, Offline Cache & Bootstrap ==================== */
-
-    private var mobileOAuthPollJob: Job? = null
-    private var activeMobileOAuthSessionId: String? = null
-    private var mobileOAuthLaunchedAtMs: Long = 0L
-    private var lastCompletedAuthToken: String? = null
 
     private fun bootstrapActiveSlot(
         targetSlotId: String = cache.getActiveSlotId(),
@@ -1687,9 +1711,6 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
-    private val groupCursorRowByGroupId = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val groupSeenPublishedTsByGroupId = java.util.concurrent.ConcurrentHashMap<String, Long>()
-
     private fun publishGroupSeenCursorAsync(
         groupId: String,
         latestMsgId: String,
@@ -2609,13 +2630,6 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
-    private val locallyUnsentAtById = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    private val locallyHardDeletedCommIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
-    private val lastNotifiedDmTsByFriend = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    private val lastNotifiedGroupTsById = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    @Volatile
-    private var deltaNotifBaselineReady = false
-
     fun deleteCommunityAnnouncement(messageId: String) {
         val token = currentAuthToken() ?: return
         val prevList = _state.value.communityMessages
@@ -2731,13 +2745,6 @@ class JaTextSessionViewModel(app: Application) :
             }
         }
     }
-
-    private val locallyDeletedIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-    private var deletedDmSnapshot: ChatMessage? = null
-    private var deletedGroupSnapshot: GroupMessage? = null
-    private var deletedCommunitySnapshot: CommunityMessage? = null
-    private var deletedUndoThreadKind: String = ""
-    private var deleteUndoJob: Job? = null
 
     fun deleteMessageForMe(messageId: String) {
         val st = _state.value
@@ -3866,9 +3873,6 @@ class JaTextSessionViewModel(app: Application) :
 
     /* ==================== Native OTA APK Update Check & Installer ==================== */
 
-    private var lastUpdateCheckAtMs: Long = 0L
-    private var pendingReadyApkFile: File? = null
-
     fun checkApkUpdate(manual: Boolean = false) {
         val now = System.currentTimeMillis()
         if (!manual && now - lastUpdateCheckAtMs < 15_000L) return
@@ -4316,8 +4320,6 @@ class JaTextSessionViewModel(app: Application) :
 
     /* ==================== Scheduled Messages (v3.8.7) ==================== */
 
-    private var scheduledFlushJob: Job? = null
-
     private suspend fun hydrateScheduledItems(
         meId: String,
         rawItems: List<ScheduledMessageItem>,
@@ -4526,10 +4528,6 @@ class JaTextSessionViewModel(app: Application) :
         com.ahad00010.jatext.data.JaTextI18n.setLanguage(appCtx, clean)
         _state.update { it.copy(languageCode = clean) }
     }
-
-    private var typingIdleJob: Job? = null
-    private var activeTypingThreadKey: String? = null
-    private var lastTypingSentAtMs: Long = 0L
 
     private fun dispatchTypingRpc(threadKey: String, isTyping: Boolean) {
         val token = currentAuthToken() ?: return
