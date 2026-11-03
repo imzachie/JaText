@@ -11,6 +11,7 @@ import {
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { startIncomingCallRingtone, stopIncomingCallRingtone } from "./alerts";
+import { renderTextWithIosEmojis } from "../components/IosEmoji";
 import { updateCallHistoryStatus, upsertCallHistoryEntry } from "./callHistory";
 import { parseWallpaperSignal, stripBubbleStyleFromText } from "./chatCustomization";
 import { JaTextNative, configureNativeCallAudio, ensureNativeMediaPermissions } from "./nativeBridge";
@@ -342,11 +343,13 @@ function stripMarkdownForPreview(text: string): string {
 
 export function renderPreviewWithSpoilerMasks(text: string): ReactNode {
   const normalized = text.replace(/▒▒▒/g, "▪▪▪▪▪");
-  if (!normalized.includes("▪▪▪▪▪")) return normalized;
+  if (!normalized.includes("▪▪▪▪▪")) {
+    return renderTextWithIosEmojis(normalized, "pv");
+  }
   const parts = normalized.split("▪▪▪▪▪");
   return parts.map((part, idx) => (
     <span key={idx}>
-      {part}
+      {renderTextWithIosEmojis(part, `pv-${idx}`)}
       {idx < parts.length - 1 && (
         <span className="preview-spoiler-mask" aria-label="Spoiler">
           •••••

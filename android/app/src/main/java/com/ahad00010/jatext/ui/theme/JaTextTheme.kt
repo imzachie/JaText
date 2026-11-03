@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalContext
 import com.ahad00010.jatext.data.SyncedCustomGradient
 import com.ahad00010.jatext.data.SyncedThemePayload
 import kotlin.math.PI
@@ -210,11 +211,32 @@ object JaTextThemeManager {
 
     private const val META_DELIMITER = "|__JT_META__:"
 
+    val COMMUNITY_AVATAR_COLOR_IDS: List<String> = listOf(
+        "purple",
+        "blue",
+        "teal",
+        "green",
+        "yellow",
+        "orange",
+        "red",
+        "pink",
+    )
+
+    private val LEGACY_AVATAR_COLOR_ALIASES: Map<String, String> = mapOf(
+        "cyan" to "teal",
+        "emerald" to "green",
+        "rose" to "pink",
+        "amber" to "yellow",
+        "indigo" to "purple",
+        "violet" to "purple",
+    )
+
     fun stripProfileMetaFromColorId(rawColor: String?): String {
         if (rawColor.isNullOrBlank()) return "black"
         val idx = rawColor.indexOf(META_DELIMITER)
         val clean = (if (idx >= 0) rawColor.substring(0, idx) else rawColor).trim().lowercase()
-        return clean.ifBlank { "black" }
+        if (clean.isBlank()) return "black"
+        return LEGACY_AVATAR_COLOR_ALIASES[clean] ?: clean
     }
 
     fun avatarColorSpec(rawColor: String?): AvatarColorSpec {
@@ -567,6 +589,11 @@ fun JaTextTheme(
     config: JaTextThemeConfig,
     content: @Composable () -> Unit,
 ) {
+    val context = LocalContext.current
+    remember(context) {
+        ensureSfProWithIosEmojiInitialized(context)
+        true
+    }
     val systemDark = isSystemInDarkTheme()
     val palette = remember(config, systemDark) {
         JaTextThemeManager.buildPalette(config, systemDark)

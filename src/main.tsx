@@ -17,11 +17,13 @@ import { PUBLIC_TURSO_API_ORIGIN } from "./lib/tursoClient";
 import { TursoStoreProvider } from "./lib/tursoStore";
 import { I18nProvider } from "./lib/i18n";
 import { setThemeUserScope } from "./lib/themeEngine";
+import { installIosEmojiWebFont } from "./components/IosEmoji";
 import "./index.css";
 import "./iosLiquidGlass.css";
 
-// Initialize saved device theme before first React paint
+// Initialize saved device theme & universal iOS 26.4 Unicode 17.0 emoji engine before first React paint
 setThemeUserScope(null);
+installIosEmojiWebFont();
 
 const forceDemoMode = import.meta.env.VITE_DEMO_MODE === "1";
 

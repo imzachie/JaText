@@ -5,6 +5,7 @@ import { ChatView } from "./components/ChatView";
 import { CallOverlay } from "./components/CallOverlay";
 import { GroupCallOverlay } from "./components/GroupCallOverlay";
 import { CommunityChatView } from "./components/CommunityChatView";
+import { ExploreCommunitiesView } from "./components/ExploreCommunitiesView";
 import { GroupChatView } from "./components/GroupChatView";
 import { IosMobileLoginPage } from "./components/IosMobileLoginPage";
 import { LoginPage } from "./components/LoginPage";
@@ -18,7 +19,7 @@ import { CustomThemeDrawer } from "./components/CustomThemeDrawer";
 import { AccountSwitcherModal } from "./components/AccountSwitcherModal";
 import { closeTopmostAnimatedModal } from "./components/AnimatedModal";
 import { LockIcon } from "./components/E2EEModals";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, type SidebarTab } from "./components/Sidebar";
 import { BellIcon, CloseIcon, MessageCircleIcon } from "./components/UiIcons";
 import {
   CallProvider,
@@ -129,6 +130,9 @@ function AppContent() {
   const [settingsDirectMobile, setSettingsDirectMobile] = useState(false);
   const [customThemeDrawerOpen, setCustomThemeDrawerOpen] = useState(false);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("chats");
+  const [exploreCommunitiesOpen, setExploreCommunitiesOpen] = useState(false);
+  const [createCommunityRequestNonce, setCreateCommunityRequestNonce] = useState(0);
 
   useLayoutEffect(() => {
     setThemeUserScope(me?.id);
@@ -249,13 +253,31 @@ function AppContent() {
   }, [store.activeChatId, store.friends, store.me]);
   const activeCommunity = activeChatId === OFFICIAL_COMMUNITY_ID;
   const activeGroup = !!store.activeGroupId;
-  const hasActivePane = Boolean(activeFriend || activeCommunity || activeGroup);
+  const activeGroupIsCommunity = useMemo(() => {
+    if (!activeGroupId) return false;
+    if (store.groupDetails?.id === activeGroupId && store.groupDetails.isCommunity !== undefined) {
+      return Boolean(store.groupDetails.isCommunity);
+    }
+    return Boolean(groups.find((g) => g.id === activeGroupId)?.isCommunity);
+  }, [activeGroupId, groups, store.groupDetails]);
+
+  useEffect(() => {
+    if (activeGroupId || activeChatId) {
+      setExploreCommunitiesOpen(false);
+    }
+  }, [activeChatId, activeGroupId]);
+
+  const hasActivePane = Boolean(
+    activeFriend || activeCommunity || activeGroup || exploreCommunitiesOpen,
+  );
 
   const activePaneKey = activeGroupId
     ? `grp:${activeGroupId}`
     : activeChatId
       ? `chat:${activeChatId}`
-      : "";
+      : exploreCommunitiesOpen
+        ? "explore:communities"
+        : "";
 
   // If user taps a different chat in Sidebar while a back slide-out was mid-flight, cancel close timer
   useEffect(() => {
@@ -279,15 +301,23 @@ function AppContent() {
 
   const handleMobileAnimatedBack = useCallback(() => {
     flushPendingDrafts();
+    const returnToCommunities = activeGroupIsCommunity || exploreCommunitiesOpen;
     const isMobileViewport = typeof window !== "undefined" && window.innerWidth <= 820;
-    if (!isMobileViewport || (!activeGroupId && !activeChatId)) {
+    if (!isMobileViewport || (!activeGroupId && !activeChatId && !exploreCommunitiesOpen)) {
+      if (returnToCommunities) setSidebarTab("communities");
+      if (exploreCommunitiesOpen) setExploreCommunitiesOpen(false);
       if (activeGroupId) setActiveGroupId(null);
       if (activeChatId) setActiveChatId(null);
       return;
     }
 
     if (isMobileClosing) return;
-    closingTargetKeyRef.current = activeGroupId ? `grp:${activeGroupId}` : `chat:${activeChatId}`;
+    if (returnToCommunities) setSidebarTab("communities");
+    closingTargetKeyRef.current = activeGroupId
+      ? `grp:${activeGroupId}`
+      : activeChatId
+        ? `chat:${activeChatId}`
+        : "explore:communities";
     setIsMobileClosing(true);
 
     if (mobileCloseTimerRef.current !== null) {
@@ -296,15 +326,25 @@ function AppContent() {
     mobileCloseTimerRef.current = window.setTimeout(() => {
       mobileCloseTimerRef.current = null;
       closingTargetKeyRef.current = "";
+      setExploreCommunitiesOpen(false);
       setActiveGroupId(null);
       setActiveChatId(null);
       setIsMobileClosing(false);
     }, MOBILE_SLIDE_MS);
-  }, [activeChatId, activeGroupId, isMobileClosing, setActiveChatId, setActiveGroupId]);
+  }, [
+    activeChatId,
+    activeGroupId,
+    activeGroupIsCommunity,
+    exploreCommunitiesOpen,
+    isMobileClosing,
+    setActiveChatId,
+    setActiveGroupId,
+  ]);
 
   const navigationStateRef = useRef({
     activeChatId,
     activeGroupId,
+    exploreCommunitiesOpen,
     hasProfile: Boolean(profileUser),
     settingsOpen,
     customThemeDrawerOpen,
@@ -741,6 +781,7 @@ function AppContent() {
     navigationStateRef.current = {
       activeChatId,
       activeGroupId,
+      exploreCommunitiesOpen,
       hasProfile: Boolean(profileUser),
       settingsOpen,
       customThemeDrawerOpen,
@@ -765,6 +806,7 @@ function AppContent() {
     callMinimized,
     callSession,
     customThemeDrawerOpen,
+    exploreCommunitiesOpen,
     groupCallMinimized,
     groupCallSession,
     profileUser,
@@ -792,7 +834,11 @@ function AppContent() {
         setSettingsOpen(false);
       } else if (navigation.hasProfile) {
         setProfileUser(null);
-      } else if (navigation.activeGroupId || navigation.activeChatId) {
+      } else if (
+        navigation.activeGroupId ||
+        navigation.activeChatId ||
+        navigation.exploreCommunitiesOpen
+      ) {
         handleMobileAnimatedBack();
       } else if (canGoBack) {
         window.history.back();
@@ -845,6 +891,20 @@ function AppContent() {
   if (!store.me.onboardingComplete) return <Onboarding />;
 
   const renderMainPaneContent = () => {
+    if (exploreCommunitiesOpen) {
+      return (
+        <ExploreCommunitiesView
+          onBack={handleMobileAnimatedBack}
+          onSelectCommunity={(cid) => {
+            setExploreCommunitiesOpen(false);
+            setSidebarTab("communities");
+            setActiveChatId(null);
+            setActiveGroupId(cid);
+          }}
+          onOpenCreateCommunity={() => setCreateCommunityRequestNonce((n) => n + 1)}
+        />
+      );
+    }
     if (activeCommunity) {
       return (
         <CommunityChatView
@@ -897,6 +957,21 @@ function AppContent() {
       }`}
     >
       <Sidebar
+        activeTab={sidebarTab}
+        onTabChange={(nextTab) => {
+          setSidebarTab(nextTab);
+          if (nextTab !== "communities" && exploreCommunitiesOpen) {
+            setExploreCommunitiesOpen(false);
+          }
+        }}
+        exploreCommunitiesOpen={exploreCommunitiesOpen}
+        onOpenExploreCommunities={() => {
+          setActiveGroupId(null);
+          setActiveChatId(null);
+          setExploreCommunitiesOpen(true);
+        }}
+        onCloseExploreCommunities={() => setExploreCommunitiesOpen(false)}
+        createCommunityRequestNonce={createCommunityRequestNonce}
         onOpenProfile={setProfileUser}
         onOpenSettings={() => {
           setSettingsInitialCategory("profile");

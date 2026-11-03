@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { IosDownloadIcon, IosLaptopIcon, IosRefreshIcon } from "./IosVectorIcons";
+import { IosEmojiText } from "./IosEmoji";
 import { useMultiAccountState } from "../lib/accountManager";
 import {
   isAuthorizedIosChatsRuntime,
@@ -729,7 +730,7 @@ export function SettingsModal({
                         }}
                       >
                         <span className="you-roadmap-status-bubble-pill">
-                          {currentUser.customStatus}
+                          <IosEmojiText text={currentUser.customStatus} />
                         </span>
                         <span className="you-roadmap-status-dot-lg" aria-hidden="true" />
                         <span className="you-roadmap-status-dot-sm" aria-hidden="true" />
@@ -753,7 +754,7 @@ export function SettingsModal({
                     }}
                   >
                     <span className="you-roadmap-display-name">
-                      {currentUser.displayName || currentUser.username}
+                      <IosEmojiText text={currentUser.displayName || currentUser.username} />
                     </span>
                     <YouAddStatusPlusSvg size={20} />
                   </button>

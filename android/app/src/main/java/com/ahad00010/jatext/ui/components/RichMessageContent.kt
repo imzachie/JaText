@@ -11,11 +11,14 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.VideoView
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -77,9 +80,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,8 +95,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -135,6 +142,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val URL_REGEX = Regex("""https?://[^\s<>)\]]+""")
@@ -2004,11 +2012,13 @@ private fun buildMarkdownAnnotatedLine(
     isLightSurface: Boolean = false,
     blockKey: String = "0",
     revealedSpoilers: Set<String> = emptySet(),
+    spoilerProgress: Map<String, Float> = emptyMap(),
     highlightQuery: String = "",
 ): AnnotatedString = buildAnnotatedString {
     var cursor = 0
     var spoilerCounter = 0
     val spoilerMaskBg = if (isLightSurface) Color(0xFF334155) else Color(0xFF475569)
+    val revealedBg = textColor.copy(alpha = 0.16f)
     val unrevealedRanges = mutableListOf<IntRange>()
 
     for (m in INLINE_TOKEN_RE.findAll(raw)) {
@@ -2023,19 +2033,34 @@ private fun buildMarkdownAnnotatedLine(
                 spoilerCounter++
                 val inner = token.substring(2, token.length - 2)
                 val revealed = revealedSpoilers.contains(spoilerId)
+                val p = (spoilerProgress[spoilerId] ?: if (revealed) 1f else 0f).coerceIn(0f, 1f)
+                val easedP = FastOutSlowInEasing.transform(p)
+                val spanBg = lerp(spoilerMaskBg, revealedBg, easedP)
+                val spanFg = textColor.copy(alpha = easedP)
+                val blurAmount = (1f - easedP) * 14f
+                val glowAlpha = ((1f - easedP) * easedP * 2.2f).coerceIn(0f, 0.7f)
                 pushStringAnnotation(tag = "SPOILER", annotation = spoilerId)
                 val startIdx = length
                 withStyle(
                     SpanStyle(
-                        background = if (revealed) textColor.copy(alpha = 0.16f) else spoilerMaskBg,
-                        color = if (revealed) textColor else Color.Transparent,
-                        fontWeight = if (revealed) FontWeight.Medium else FontWeight.Normal,
+                        background = spanBg,
+                        color = spanFg,
+                        fontWeight = if (easedP > 0.35f) FontWeight.Medium else FontWeight.Normal,
+                        shadow = if (glowAlpha > 0.01f && blurAmount > 0.2f) {
+                            Shadow(
+                                color = textColor.copy(alpha = glowAlpha),
+                                offset = Offset.Zero,
+                                blurRadius = blurAmount,
+                            )
+                        } else {
+                            null
+                        },
                     )
                 ) {
                     append(" $inner ")
                 }
                 val endIdx = length
-                if (!revealed) {
+                if (easedP < 0.85f) {
                     unrevealedRanges.add(startIdx until endIdx)
                 }
                 pop()
@@ -2229,9 +2254,13 @@ fun RichMarkdownText(
     onNonLinkTap: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
+    val animScope = rememberCoroutineScope()
     val safeText = remember(text) { sanitizeInternalTextBeforeMarkdown(text) }
     val blocks = remember(safeText) { parseMarkdownBlocks(safeText) }
     var revealedSpoilers by remember(safeText) { mutableStateOf(emptySet<String>()) }
+    val spoilerProgressMap = remember(safeText) { mutableStateMapOf<String, Float>() }
+    val spoilerAnimJobs = remember(safeText) { HashMap<String, kotlinx.coroutines.Job>() }
+    val blockPopScale = remember(safeText) { mutableStateMapOf<String, Float>() }
     val firstUrl = remember(safeText, showLinkEmbeds) {
         if (showLinkEmbeds) URL_REGEX.find(safeText.replace(Regex("""\|\|.+?\|\|"""), ""))?.value else null
     }
@@ -2242,10 +2271,32 @@ fun RichMarkdownText(
         val spoilerAnn = ann.getStringAnnotations("SPOILER", offset, offset).firstOrNull()
         if (spoilerAnn != null) {
             val id = spoilerAnn.item
-            revealedSpoilers = if (revealedSpoilers.contains(id)) {
-                revealedSpoilers - id
-            } else {
-                revealedSpoilers + id
+            val nextRevealed = !revealedSpoilers.contains(id)
+            revealedSpoilers = if (nextRevealed) revealedSpoilers + id else revealedSpoilers - id
+            val blockPrefix = id.substringBefore(':')
+            val startP = spoilerProgressMap[id] ?: if (nextRevealed) 0f else 1f
+            val targetP = if (nextRevealed) 1f else 0f
+            spoilerAnimJobs[id]?.cancel()
+            spoilerAnimJobs[id] = animScope.launch {
+                launch {
+                    val pop = Animatable(1f)
+                    pop.animateTo(if (nextRevealed) 0.965f else 0.98f, tween(70))
+                    pop.animateTo(
+                        1f,
+                        spring(dampingRatio = 0.56f, stiffness = Spring.StiffnessMediumLow),
+                    ) {
+                        blockPopScale[blockPrefix] = value
+                    }
+                    blockPopScale.remove(blockPrefix)
+                }
+                val anim = Animatable(startP)
+                anim.animateTo(
+                    targetValue = targetP,
+                    animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+                ) {
+                    spoilerProgressMap[id] = value
+                }
+                spoilerProgressMap[id] = targetP
             }
             return
         }
@@ -2314,22 +2365,30 @@ fun RichMarkdownText(
                     }
                 }
                 is MarkdownBlockNode.Quote -> {
-                    val ann = remember(block.text, textColor, codeBg, isLightSurface, blockIdx, revealedSpoilers, highlightQuery) {
+                    val qKey = "q$blockIdx"
+                    val qScale = blockPopScale[qKey] ?: 1f
+                    val progressSnapshot = spoilerProgressMap.toMap()
+                    val ann = remember(block.text, textColor, codeBg, isLightSurface, blockIdx, revealedSpoilers, progressSnapshot, highlightQuery) {
                         buildMarkdownAnnotatedLine(
                             raw = block.text,
                             textColor = textColor,
                             codeBgColor = codeBg,
                             linkColor = linkTint,
                             isLightSurface = isLightSurface,
-                            blockKey = "q$blockIdx",
+                            blockKey = qKey,
                             revealedSpoilers = revealedSpoilers,
+                            spoilerProgress = progressSnapshot,
                             highlightQuery = highlightQuery,
                         )
                     }
                     Row(
                         modifier = Modifier
                             .height(IntrinsicSize.Min)
-                            .padding(vertical = 1.dp),
+                            .padding(vertical = 1.dp)
+                            .graphicsLayer {
+                                scaleX = qScale
+                                scaleY = qScale
+                            },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(
@@ -2355,19 +2414,29 @@ fun RichMarkdownText(
                     }
                 }
                 is MarkdownBlockNode.ListItem -> {
-                    val ann = remember(block.text, textColor, codeBg, isLightSurface, blockIdx, revealedSpoilers, highlightQuery) {
+                    val lKey = "l$blockIdx"
+                    val lScale = blockPopScale[lKey] ?: 1f
+                    val progressSnapshot = spoilerProgressMap.toMap()
+                    val ann = remember(block.text, textColor, codeBg, isLightSurface, blockIdx, revealedSpoilers, progressSnapshot, highlightQuery) {
                         buildMarkdownAnnotatedLine(
                             raw = block.text,
                             textColor = textColor,
                             codeBgColor = codeBg,
                             linkColor = linkTint,
                             isLightSurface = isLightSurface,
-                            blockKey = "l$blockIdx",
+                            blockKey = lKey,
                             revealedSpoilers = revealedSpoilers,
+                            spoilerProgress = progressSnapshot,
                             highlightQuery = highlightQuery,
                         )
                     }
-                    Row(verticalAlignment = Alignment.Top) {
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = lScale
+                            scaleY = lScale
+                        },
+                    ) {
                         Text(
                             text = "${block.bullet} ",
                             color = textColor,
@@ -2392,15 +2461,19 @@ fun RichMarkdownText(
                     if (block.text.isEmpty()) {
                         Spacer(Modifier.height(4.dp))
                     } else {
-                        val ann = remember(block.text, textColor, codeBg, isLightSurface, blockIdx, revealedSpoilers, highlightQuery) {
+                        val pKey = "p$blockIdx"
+                        val pScale = blockPopScale[pKey] ?: 1f
+                        val progressSnapshot = spoilerProgressMap.toMap()
+                        val ann = remember(block.text, textColor, codeBg, isLightSurface, blockIdx, revealedSpoilers, progressSnapshot, highlightQuery) {
                             buildMarkdownAnnotatedLine(
                                 raw = block.text,
                                 textColor = textColor,
                                 codeBgColor = codeBg,
                                 linkColor = linkTint,
                                 isLightSurface = isLightSurface,
-                                blockKey = "p$blockIdx",
+                                blockKey = pKey,
                                 revealedSpoilers = revealedSpoilers,
+                                spoilerProgress = progressSnapshot,
                                 highlightQuery = highlightQuery,
                             )
                         }
@@ -2413,6 +2486,10 @@ fun RichMarkdownText(
                         @Suppress("DEPRECATION")
                         ClickableText(
                             text = ann,
+                            modifier = Modifier.graphicsLayer {
+                                scaleX = pScale
+                                scaleY = pScale
+                            },
                             style = TextStyle(
                                 color = textColor,
                                 fontSize = sizeSp.sp,
@@ -2717,7 +2794,11 @@ fun MessageReactionPillsRow(
                     .padding(horizontal = 8.dp, vertical = 3.5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = emoji, fontSize = 13.sp)
+                Text(
+                    text = emoji,
+                    fontSize = 13.sp,
+                    fontFamily = com.ahad00010.jatext.ui.theme.IosEmojiOnlyFontFamily,
+                )
                 Spacer(Modifier.width(4.dp))
                 Text(
                     text = list.size.toString(),

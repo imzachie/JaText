@@ -37,6 +37,7 @@ import {
 } from "../lib/useChatAutoScrollAndKeyboard";
 import { upsertCallHistoryEntry } from "../lib/callHistory";
 import { colorById } from "../lib/colors";
+import { IosEmojiGlyph, IosEmojiText } from "./IosEmoji";
 import { formatCallDuration, formatPreviewMessageText, isHiddenCallSignal } from "../lib/calling";
 import {
   copyImageUrlToClipboard,
@@ -222,6 +223,8 @@ function detectMentionQuery(text: string, cursor: number): { start: number; quer
   };
 }
 
+const stableRenderKeyByGroupMsgId = new Map<string, string>();
+
 function getConversationMessages(
   pendingMessages: GroupMessage[],
   activeMessages: GroupMessage[],
@@ -254,11 +257,15 @@ function getConversationMessages(
       ) {
         continue;
       }
-      confirmedMessages.push(message);
+      const prevStableKey = stableRenderKeyByGroupMsgId.get(message.id);
+      confirmedMessages.push(
+        prevStableKey ? { ...message, renderKey: prevStableKey } : message,
+      );
       continue;
     }
     const [pendingMessage] = conversationPendingMessages.splice(pendingIndex, 1);
     matchedPendingIds.add(pendingMessage.id);
+    stableRenderKeyByGroupMsgId.set(message.id, pendingMessage.id);
     confirmedMessages.push(
       isUndecryptedEcho
         ? {
@@ -313,6 +320,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
   seenByMessageId,
   groupId,
   firstUnreadMessageId,
+  isCommunity = false,
 }: {
   messages: GroupMessage[];
   messagesReady: boolean;
@@ -342,7 +350,10 @@ const GroupChatHistory = memo(function GroupChatHistory({
   seenByMessageId: Map<string, GroupSeenReader[]>;
   groupId: string;
   firstUnreadMessageId: string | null;
+  isCommunity?: boolean;
 }) {
+  const entityTitle = isCommunity ? "Community" : "Group";
+  const entityLower = isCommunity ? "community" : "group";
   const memberById = useMemo(
     () => new Map(members.map((member) => [member.id, member])),
     [members],
@@ -555,13 +566,13 @@ const GroupChatHistory = memo(function GroupChatHistory({
       {!messagesReady && windowedMessages.length === 0 && (
         <div className="empty-box center">
           <div className="spinner" style={{ width: 28, height: 28 }} />
-          <span className="muted small">Loading group messages…</span>
+          <span className="muted small">Loading {entityLower} messages…</span>
         </div>
       )}
       {messagesReady && windowedMessages.length === 0 && (
         <div className="empty-box center">
           <strong>
-            This is the beginning of the group{" "}
+            This is the beginning of the {entityLower}{" "}
             <SparklesIcon size={16} style={{ color: "var(--accent)" }} />
           </strong>
           <span className="muted small">
@@ -584,10 +595,10 @@ const GroupChatHistory = memo(function GroupChatHistory({
             <Fragment key={message.renderKey ?? message.id}>
               {showDay && <div className="day-divider">{day}</div>}
               <div className="wallpaper-event-pill" id={`group-message-${message.id}`}>
-                <ImageIcon size={13} /> {actor}{" "}
+                <ImageIcon size={13} /> <IosEmojiText text={actor} />{" "}
                 {wpSignal.kind === "none"
-                  ? "reset the group wallpaper"
-                  : "changed the group wallpaper"}
+                  ? `reset the ${entityLower} wallpaper`
+                  : `changed the ${entityLower} wallpaper`}
               </div>
             </Fragment>
           );
@@ -760,10 +771,10 @@ const GroupChatHistory = memo(function GroupChatHistory({
                               <div className="call-msg-info">
                                 <div className="call-msg-title">
                                   {isCallEnded
-                                    ? "GC VC Ended"
+                                    ? `${entityTitle} Call Ended`
                                     : isVideoCall
-                                      ? "Group Video Call"
-                                      : "Group Voice Call"}
+                                      ? `${entityTitle} Video Call`
+                                      : `${entityTitle} Voice Call`}
                                 </div>
                                 <div className="call-msg-sub">
                                   {isCallEnded
@@ -897,7 +908,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                             className={`reaction-chip ${mineReacted ? "selected" : ""}`}
                             onClick={() => onReactToMessage(message, emoji)}
                           >
-                            {emoji} <span>{users.length}</span>
+                            <IosEmojiGlyph emoji={emoji} size={16} /> <span>{users.length}</span>
                           </button>
                         );
                       })}
@@ -1003,6 +1014,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
   onMobileActivate,
   onTypingSignal,
   onSubmitDraft,
+  isCommunity = false,
 }: {
   groupId: string;
   initialDraft: string;
@@ -1029,7 +1041,10 @@ const GroupChatComposer = memo(function GroupChatComposer({
   onMobileActivate: () => void;
   onTypingSignal: (hasText: boolean) => void;
   onSubmitDraft: (body: string) => void;
+  isCommunity?: boolean;
 }) {
+  const entityTitle = isCommunity ? "Community" : "Group";
+  const entityLower = isCommunity ? "community" : "group";
   const draftKey = `group:${groupId}`;
   const startText = isEditing ? initialDraft : initialDraft || getDraft(draftKey);
   const [draft, setDraft] = useState(startText);
@@ -1074,7 +1089,10 @@ const GroupChatComposer = memo(function GroupChatComposer({
         kind: "everyone",
         handle: "everyone",
         displayName: "@everyone",
-        subtitle: count > 0 ? `Notify all ${count} members in this group` : "Notify everyone in this group",
+        subtitle:
+          count > 0
+            ? `Notify all ${count} members in this ${entityLower}`
+            : `Notify everyone in this ${entityLower}`,
       });
     }
     const matchingMembers = members
@@ -1260,7 +1278,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
           <ComposerPlusMenu
             targetKind="group"
             targetId={groupId}
-            targetLabel="Group chat"
+            targetLabel={`${entityTitle} chat`}
             disabled={busy || isEditing}
             currentDraft={draft}
             onConsumeDraft={() => handleDraftChange("", 0)}
@@ -1318,7 +1336,7 @@ const GroupChatComposer = memo(function GroupChatComposer({
                     ? "View once message…"
                     : "Message…"
               }
-              aria-label="Group message"
+              aria-label={`${entityTitle} message`}
               onKeyDown={(event) => {
                 if (mentionCandidates.length > 0) {
                   if (event.key === "ArrowDown") {
@@ -1395,6 +1413,9 @@ export function GroupChatView({
   const groupCall = useGroupCall();
   const summary = store.groups.find((entry) => entry.id === groupId);
   const group = store.groupDetails?.id === groupId ? store.groupDetails : null;
+  const isCommunity = Boolean(group?.isCommunity ?? summary?.isCommunity);
+  const entityTitle = isCommunity ? "Community" : "Group";
+  const entityLower = isCommunity ? "community" : "group";
 
   const [composerSeed, setComposerSeed] = useState({ nonce: 0, text: "" });
   const [bubbleStyleOpen, setBubbleStyleOpen] = useState(false);
@@ -1750,7 +1771,7 @@ export function GroupChatView({
   // Hydrate group call history entries cleanly into Calls tab (normalized to ended when nobody is in the call)
   useEffect(() => {
     if (!groupId || !store.me || conversationMessages.length === 0) return;
-    const grpName = group?.name ?? summary?.name ?? "Group chat";
+    const grpName = group?.name ?? summary?.name ?? `${entityTitle} chat`;
     const grpAvatar = group?.avatarUrl ?? summary?.avatarUrl;
     const memberCount = group?.members.length ?? summary?.memberCount ?? 2;
     for (const msg of conversationMessages) {
@@ -2235,7 +2256,7 @@ export function GroupChatView({
     const iCanMentionEveryone = myGroupRole === "owner" || myGroupRole === "moderator";
     if (/(?:^|[\s(])@everyone\b/i.test(submittedBody) && !iCanMentionEveryone) {
       setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: submittedBody }));
-      setError("Only the group owner or moderators can mention @everyone.");
+      setError(`Only the ${entityLower} owner or moderators can mention @everyone.`);
       return;
     }
     if (editingMessage) {
@@ -2388,7 +2409,7 @@ export function GroupChatView({
         setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: sentBody }));
       }
       if (queuedFiles.length > 0) setFiles((c) => (c.length > 0 ? c : queuedFiles));
-      setError(friendlyError(err, "Couldn't send the group message."));
+      setError(friendlyError(err, `Couldn't send the ${entityLower} message.`));
     }
   }
 
@@ -2717,7 +2738,7 @@ export function GroupChatView({
       await action();
       success?.();
     } catch (cause) {
-      setManageError(friendlyError(cause, "Could not update this group."));
+      setManageError(friendlyError(cause, `Could not update this ${entityLower}.`));
     } finally {
       setBusy(false);
     }
@@ -2730,7 +2751,7 @@ export function GroupChatView({
       ? await ensureInfiniteLoopGifFile(rawPicked)
       : await ensureValidFileMime(rawPicked);
     if (!picked.type.startsWith("image/")) {
-      setManageError("Please choose an image or GIF file for the group picture.");
+      setManageError(`Please choose an image or GIF file for the ${entityLower} picture.`);
       return;
     }
     if (groupAvatarState.kind === "new") URL.revokeObjectURL(groupAvatarState.preview);
@@ -2748,7 +2769,7 @@ export function GroupChatView({
     if (!group) return;
     const trimmedName = renameDraft.trim();
     if (!trimmedName) {
-      setManageError("Group name cannot be empty.");
+      setManageError(`${entityTitle} name cannot be empty.`);
       return;
     }
     await runManageAction(
@@ -2839,7 +2860,9 @@ export function GroupChatView({
 
   async function handleApplyGroupWallpaper(choice: WallpaperChoice) {
     if (!groupId || !canManageGroup) {
-      throw new Error("Only the group owner or a moderator can change the group wallpaper.");
+      throw new Error(
+        `Only the ${entityLower} owner or a moderator can change the ${entityLower} wallpaper.`,
+      );
     }
     const scopeKey = `group:${groupId}`;
     if (choice.kind === "none") {
@@ -2907,7 +2930,7 @@ export function GroupChatView({
               : undefined
           }
           onClick={openManageModal}
-          aria-label="Open group settings"
+          aria-label={`Open ${entityLower} settings`}
         >
           {(group?.avatarUrl ?? summary?.avatarUrl) ? (
             <AnimatedMediaImg
@@ -2921,9 +2944,11 @@ export function GroupChatView({
           )}
         </button>
         <button type="button" className="chat-title" onClick={openManageModal}>
-          <strong>{group?.name ?? summary?.name ?? "Group chat"}</strong>
+          <strong>
+            <IosEmojiText text={group?.name ?? summary?.name ?? `${entityTitle} chat`} />
+          </strong>
           <span className="muted small">
-            {(group?.isCommunity ?? summary?.isCommunity) ? "Community · " : ""}
+            {isCommunity ? "Community · " : ""}
             {group?.members.length ?? summary?.memberCount ?? 0} members
             {latestGroupEpoch ? (
               <>
@@ -2931,8 +2956,8 @@ export function GroupChatView({
                 <LockClosedIcon size={12} /> Encrypted (Epoch #{latestGroupEpoch.epoch})
               </>
             ) : null}
-            {(group?.isCommunity ?? summary?.isCommunity)
-              ? " · Tap for community info"
+            {isCommunity
+              ? " · Tap for community settings"
               : " · Tap for group settings"}
           </span>
         </button>
@@ -2940,8 +2965,8 @@ export function GroupChatView({
           <button
             type="button"
             className={`icon-btn chat-header-search-btn ${searchOpen ? "menu-open" : ""}`}
-            title="Search in group"
-            aria-label="Search in group"
+            title={`Search in ${entityLower}`}
+            aria-label={`Search in ${entityLower}`}
             onClick={() => {
               setSearchOpen((open) => {
                 if (open) {
@@ -2957,15 +2982,15 @@ export function GroupChatView({
           <button
             type="button"
             className="icon-btn call-header-btn"
-            title="Start group voice call"
-            aria-label="Start group voice call"
+            title={`Start ${entityLower} voice call`}
+            aria-label={`Start ${entityLower} voice call`}
             disabled={Boolean(groupCall.groupSession)}
             onClick={() => {
               if (!groupId) return;
               const groupSummary =
                 summary ?? {
                   id: groupId,
-                  name: group?.name ?? "Group chat",
+                  name: group?.name ?? `${entityTitle} chat`,
                   avatarUrl: group?.avatarUrl,
                   ownerId: group?.ownerId ?? store.me?.id ?? "",
                   role: "member" as const,
@@ -2981,15 +3006,15 @@ export function GroupChatView({
           <button
             type="button"
             className="icon-btn call-header-btn"
-            title="Start group video call"
-            aria-label="Start group video call"
+            title={`Start ${entityLower} video call`}
+            aria-label={`Start ${entityLower} video call`}
             disabled={Boolean(groupCall.groupSession)}
             onClick={() => {
               if (!groupId) return;
               const groupSummary =
                 summary ?? {
                   id: groupId,
-                  name: group?.name ?? "Group chat",
+                  name: group?.name ?? `${entityTitle} chat`,
                   avatarUrl: group?.avatarUrl,
                   ownerId: group?.ownerId ?? store.me?.id ?? "",
                   role: "member" as const,
@@ -3008,8 +3033,8 @@ export function GroupChatView({
           <button
             type="button"
             className={`icon-btn chat-more-btn ${headerMoreMenu ? "menu-open" : ""}`}
-            title="Group options"
-            aria-label="Group options"
+            title={`${entityTitle} options`}
+            aria-label={`${entityTitle} options`}
             aria-expanded={Boolean(headerMoreMenu)}
             onClick={(event) => {
               if (headerMoreMenu) {
@@ -3032,7 +3057,7 @@ export function GroupChatView({
             type="search"
             value={searchQuery}
             autoFocus
-            placeholder={`Search in ${group?.name ?? summary?.name ?? "group"}…`}
+            placeholder={`Search in ${group?.name ?? summary?.name ?? entityLower}…`}
             onChange={(e) => {
               setSearchQuery(e.target.value);
               setSearchMatchIdx(0);
@@ -3139,13 +3164,13 @@ export function GroupChatView({
 
       {activeGroupCallMessage &&
         groupCall.groupSession?.callId !== activeGroupCallMessage.invite.callId && (
-          <div className="group-call-active-banner" role="region" aria-label="Active group call">
+          <div className="group-call-active-banner" role="region" aria-label={`Active ${entityLower} call`}>
             <div className="group-call-active-banner-info">
               <span className="group-call-live-dot" aria-hidden="true" />
               <strong>
                 {activeGroupCallMessage.invite.mode === "video"
-                  ? "Group Video Call"
-                  : "Group Voice Call"}{" "}
+                  ? `${entityTitle} Video Call`
+                  : `${entityTitle} Voice Call`}{" "}
                 in progress
               </strong>
               <span className="muted small">
@@ -3215,6 +3240,7 @@ export function GroupChatView({
         seenByMessageId={groupSeenData.seenByMessageId}
         groupId={groupId ?? ""}
         firstUnreadMessageId={firstUnreadGroupMsgId}
+        isCommunity={isCommunity}
       />
 
       {error && (
@@ -3309,7 +3335,7 @@ export function GroupChatView({
       )}
 
       {isMuted ? (
-        <div className="community-readonly">You are muted in this group.</div>
+        <div className="community-readonly">You are muted in this {entityLower}.</div>
       ) : (
         <GroupChatComposer
           key={`${groupId}:${editingMessage?.id ?? "new"}:${composerSeed.nonce}`}
@@ -3341,6 +3367,7 @@ export function GroupChatView({
           onMobileActivate={handleMobileComposerActivate}
           onTypingSignal={handleTypingSignal}
           onSubmitDraft={(body) => void handleSubmitDraft(body)}
+          isCommunity={isCommunity}
         />
       )}
 
@@ -3675,6 +3702,7 @@ export function GroupChatView({
       {wallpaperOpen && canManageGroup && (
         <WallpaperModal
           isGroup
+          isCommunity={isCommunity}
           currentWallpaperUrl={activeWallpaperUrl}
           onApply={handleApplyGroupWallpaper}
           onClose={() => setWallpaperOpen(false)}
@@ -3738,13 +3766,13 @@ export function GroupChatView({
             >
               <CloseIcon size={17} />
             </button>
-            <h2>Group settings</h2>
+            <h2>{entityTitle} settings</h2>
 
             <div className="profile-e2ee-section group-e2ee-card">
               <div className="profile-e2ee-header">
                 <span className="profile-e2ee-title">
                   <LockIcon size={15} />
-                  <strong>Group End-to-End Encryption</strong>
+                  <strong>{entityTitle} End-to-End Encryption</strong>
                 </span>
                 <span className={`e2ee-pill ${latestGroupEpoch ? "active" : "pending"}`}>
                   {latestGroupEpoch
@@ -3755,7 +3783,7 @@ export function GroupChatView({
               {latestGroupEpoch ? (
                 <>
                   <div className="profile-e2ee-sub">
-                    Group Key SHA-256 Fingerprint (rotates automatically when members are removed):
+                    {entityTitle} Key SHA-256 Fingerprint (rotates automatically when members are removed):
                   </div>
                   <code className="e2ee-fingerprint-code">
                     {latestGroupEpoch.fingerprint}
@@ -3766,7 +3794,7 @@ export function GroupChatView({
                       className="mini-btn"
                       onClick={() => {
                         void navigator.clipboard.writeText(
-                          `JaText Group E2EE (${group.name})\nEpoch: #${latestGroupEpoch.epoch}\nFingerprint: ${latestGroupEpoch.fingerprint}`,
+                          `JaText ${entityTitle} E2EE (${group.name})\nEpoch: #${latestGroupEpoch.epoch}\nFingerprint: ${latestGroupEpoch.fingerprint}`,
                         );
                         setCopiedGroupKey(true);
                         window.setTimeout(() => setCopiedGroupKey(false), 1800);
@@ -3778,7 +3806,7 @@ export function GroupChatView({
                         </>
                       ) : (
                         <>
-                          <CopyIcon size={12} /> Copy group E2EE key
+                          <CopyIcon size={12} /> Copy {entityLower} E2EE key
                         </>
                       )}
                     </button>
@@ -3786,7 +3814,7 @@ export function GroupChatView({
                 </>
               ) : (
                 <p className="muted small profile-e2ee-wait">
-                  A shared AES-256-GCM group epoch key is generated and wrapped via ECDH P-256 for
+                  A shared AES-256-GCM {entityLower} epoch key is generated and wrapped via ECDH P-256 for
                   each member automatically when you send a message.
                 </p>
               )}
@@ -3799,7 +3827,7 @@ export function GroupChatView({
                     type="button"
                     className="group-pfp-circle-btn"
                     onClick={() => groupPfpInput.current?.click()}
-                    title="Click to change group picture"
+                    title={`Click to change ${entityLower} picture`}
                   >
                     {groupAvatarPreview ? (
                       <AnimatedMediaImg
@@ -3829,9 +3857,9 @@ export function GroupChatView({
                     }}
                   />
                   <div className="group-pfp-hero-info">
-                    <strong>{renameDraft.trim() || group.name}</strong>
+                    <strong><IosEmojiText text={renameDraft.trim() || group.name} /></strong>
                     <span className="muted small">
-                      {group.members.length} member{group.members.length === 1 ? "" : "s"} · Click the circle to upload a group photo
+                      {group.members.length} member{group.members.length === 1 ? "" : "s"} · Click the circle to upload a {entityLower} photo
                     </span>
                     <div className="group-pfp-hero-actions">
                       <button
@@ -3873,7 +3901,7 @@ export function GroupChatView({
                 </div>
 
                 <label className="group-name-field">
-                  Group name
+                  {entityTitle} name
                   <input
                     value={renameDraft}
                     maxLength={60}
@@ -3881,8 +3909,8 @@ export function GroupChatView({
                       setRenameDraft(event.target.value);
                       setManageSaved(false);
                     }}
-                    placeholder="Enter group name…"
-                    aria-label="Group name"
+                    placeholder={`Enter ${entityLower} name…`}
+                    aria-label={`${entityTitle} name`}
                   />
                 </label>
 
@@ -3893,7 +3921,7 @@ export function GroupChatView({
                     </span>
                   ) : (
                     <span className="muted small">
-                      {hasGroupProfileChanges ? "Unsaved changes" : "Group profile is up to date"}
+                      {hasGroupProfileChanges ? "Unsaved changes" : `${entityTitle} profile is up to date`}
                     </span>
                   )}
                   <button
@@ -3917,7 +3945,7 @@ export function GroupChatView({
                         openImagePreview(group.avatarUrl);
                       }
                     }}
-                    title={group.avatarUrl ? "View group photo" : group.name}
+                    title={group.avatarUrl ? `View ${entityLower} photo` : group.name}
                   >
                     {group.avatarUrl ? (
                       <AnimatedMediaImg
@@ -3931,7 +3959,7 @@ export function GroupChatView({
                     )}
                   </button>
                   <div className="group-pfp-hero-info">
-                    <strong>{group.name}</strong>
+                    <strong><IosEmojiText text={group.name} /></strong>
                     <span className="muted small">
                       {group.members.length} member{group.members.length === 1 ? "" : "s"} · You are a member
                     </span>
@@ -3967,7 +3995,7 @@ export function GroupChatView({
 
             {showAddMembers && canManageGroup && (
               <div className="group-invite-box">
-                <span className="muted small">Invite accepted friends to join this group:</span>
+                <span className="muted small">Invite accepted friends to join this {entityLower}:</span>
                 <div className="group-invite-list">
                   {invitableFriends.map((friend) => (
                     <label className="community-directory-person" key={friend.id}>
@@ -3984,7 +4012,7 @@ export function GroupChatView({
                       />
                       <Avatar user={friend} size={32} />
                       <span>
-                        <strong>{friend.displayName}</strong>{" "}
+                        <strong><IosEmojiText text={friend.displayName} /></strong>{" "}
                         <span className="muted small">@{friend.username}</span>
                       </span>
                     </label>
@@ -4004,7 +4032,7 @@ export function GroupChatView({
                     )
                   }
                 >
-                  Add {addMemberIds.length > 0 ? `${addMemberIds.length} ` : ""}to group
+                  Add {addMemberIds.length > 0 ? `${addMemberIds.length} ` : ""}to {entityLower}
                 </button>
               </div>
             )}
@@ -4015,7 +4043,7 @@ export function GroupChatView({
                 value={memberSearch}
                 onChange={(event) => setMemberSearch(event.target.value)}
                 placeholder="Search members…"
-                aria-label="Search group members"
+                aria-label={`Search ${entityLower} members`}
               />
             )}
 
@@ -4055,7 +4083,7 @@ export function GroupChatView({
                       }}
                     >
                       <span className="group-member-top">
-                        <strong>{member.displayName}</strong>
+                        <strong><IosEmojiText text={member.displayName} /></strong>
                         {isSelf && <span className="role-pill you">You</span>}
                         {member.role === "owner" && (
                           <span className="role-pill owner">
@@ -4075,7 +4103,12 @@ export function GroupChatView({
                       </span>
                       <span className="muted small">
                         @{member.username}
-                        {member.bio ? ` · ${member.bio}` : ""}
+                        {member.bio ? (
+                          <>
+                            {" · "}
+                            <IosEmojiText text={member.bio} />
+                          </>
+                        ) : null}
                       </span>
                     </button>
                     <div className="group-member-actions">
@@ -4139,7 +4172,7 @@ export function GroupChatView({
                   disabled={busy}
                   onClick={() => setConfirmDeleteOpen(true)}
                 >
-                  Delete group
+                  Delete {entityLower}
                 </button>
               ) : (
                 <button
@@ -4156,7 +4189,7 @@ export function GroupChatView({
                     )
                   }
                 >
-                  Leave group
+                  Leave {entityLower}
                 </button>
               )}
               <button type="button" className="ghost-btn" onClick={closeManageModal}>
@@ -4172,7 +4205,7 @@ export function GroupChatView({
           y={headerMoreMenu.y}
           variant="dropdown"
           externalClosing={Boolean(headerMoreMenu.closing)}
-          label={`Options for ${group?.name ?? summary?.name ?? "Group"}`}
+          label={`Options for ${group?.name ?? summary?.name ?? entityTitle}`}
           className="message-context-menu conversation-context-menu"
           onClose={() => setHeaderMoreMenu(null)}
         >
@@ -4197,7 +4230,7 @@ export function GroupChatView({
                 <span>
                   <SearchIcon size={15} />
                 </span>{" "}
-                {searchOpen ? "Close search" : "Search in group"}
+                {searchOpen ? "Close search" : `Search in ${entityLower}`}
               </button>
               <button
                 type="button"
@@ -4207,7 +4240,7 @@ export function GroupChatView({
                 <span>
                   <SettingsIcon size={15} />
                 </span>{" "}
-                Group settings
+                {entityTitle} settings
               </button>
               <button
                 type="button"
@@ -4228,7 +4261,7 @@ export function GroupChatView({
                   <span>
                     <ImageIcon size={15} />
                   </span>{" "}
-                  Group wallpaper
+                  {entityTitle} wallpaper
                 </button>
               )}
               <button
@@ -4244,7 +4277,7 @@ export function GroupChatView({
                 <span>
                   {summary?.isSilenced ? <BellIcon size={15} /> : <BellOffIcon size={15} />}
                 </span>{" "}
-                {summary?.isSilenced ? "Unsilence group" : "Silence group"}
+                {summary?.isSilenced ? `Unsilence ${entityLower}` : `Silence ${entityLower}`}
               </button>
               <button
                 type="button"
@@ -4259,7 +4292,7 @@ export function GroupChatView({
                 <span>
                   <ArchiveIcon size={15} />
                 </span>{" "}
-                {summary?.isArchived ? "Unarchive group" : "Archive group"}
+                {summary?.isArchived ? `Unarchive ${entityLower}` : `Archive ${entityLower}`}
               </button>
               <button
                 type="button"
@@ -4282,7 +4315,7 @@ export function GroupChatView({
                   <span>
                     <TrashIcon size={15} />
                   </span>{" "}
-                  Delete group
+                  Delete {entityLower}
                 </button>
               )}
             </>
@@ -4293,8 +4326,10 @@ export function GroupChatView({
         <RemoveGroupChatModal
           group={{
             id: groupId,
-            name: group?.name ?? summary?.name ?? "Group chat",
+            name: group?.name ?? summary?.name ?? `${entityTitle} chat`,
+            isCommunity,
           }}
+          isCommunity={isCommunity}
           onCancel={() => setConfirmRemoveChatOpen(false)}
           onConfirmRemoveChat={async () => {
             await store.clearGroupChatForMe(groupId);
@@ -4305,9 +4340,11 @@ export function GroupChatView({
         <DeleteGroupConfirmModal
           group={{
             id: groupId,
-            name: group?.name ?? summary?.name ?? "Group chat",
+            name: group?.name ?? summary?.name ?? `${entityTitle} chat`,
             role: "owner",
+            isCommunity,
           }}
+          isCommunity={isCommunity}
           onCancel={() => setConfirmDeleteOpen(false)}
           onConfirmDelete={async () => {
             await store.deleteGroup(groupId);
@@ -4323,7 +4360,7 @@ export function GroupChatView({
               encrypted: false,
               decrypted: true,
               signatureVerified: false,
-              algorithm: "Legacy Plaintext Group Message (sent before v2.5 E2EE)",
+              algorithm: `Legacy Plaintext ${entityTitle} Message (sent before v2.5 E2EE)`,
               channel: "plain",
               rawWireBody: inspectingMessage.body,
             }

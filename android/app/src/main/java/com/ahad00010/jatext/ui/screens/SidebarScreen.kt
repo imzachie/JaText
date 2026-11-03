@@ -181,8 +181,8 @@ fun SidebarScreen(
     val focusManager = LocalFocusManager.current
     val searchFocusRequester = remember { FocusRequester() }
 
-    // Always default to opening "chats" on the 4th tab (index 3)
-    var activeTab by remember { mutableStateOf("chats") } // "updates" | "calls" | "communities" | "chats" | "you"
+    // Persisted in JaTextSessionViewModel so backing out of a Community stays on "communities"
+    val activeTab = state.sidebarTab.ifBlank { "chats" } // "updates" | "calls" | "communities" | "chats" | "you"
     var showAddFriendsView by remember { mutableStateOf(false) }
     var settingsSubOverlayOpen by remember { mutableStateOf(false) }
     var isSearchOpen by remember { mutableStateOf(false) }
@@ -214,7 +214,7 @@ fun SidebarScreen(
                 showAddFriendsView = false
             }
             else -> {
-                activeTab = "chats"
+                vm.setSidebarTab("chats")
             }
         }
     }
@@ -398,7 +398,7 @@ fun SidebarScreen(
                     SettingsModalScreen(
                         state = state,
                         vm = vm,
-                        onClose = { activeTab = "chats" },
+                        onClose = { vm.setSidebarTab("chats") },
                         embeddedInBottomBar = true,
                         onOpenAccountSwitcher = { showAccountSwitcher = true },
                         onFullScreenOverlayChange = { settingsSubOverlayOpen = it },
@@ -723,75 +723,34 @@ fun SidebarScreen(
                     }
 
                     if (!showArchivedGroups) {
-                        item(key = "explore-communities-header") {
+                        item(key = "explore-communities-cta-card") {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(top = 12.dp, bottom = 4.dp),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    .padding(top = 12.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(palette.bgTertiary)
+                                    .border(1.dp, palette.border, RoundedCornerShape(18.dp))
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
-                                Text(
-                                    text = "Explore Communities",
-                                    color = palette.textPrimary,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                )
-                                Text(
-                                    text = "Join and find communities to hang out with.",
-                                    color = palette.textSecondary,
-                                    fontSize = 13.sp,
-                                )
-                            }
-                        }
-
-                        if (visibleExploreCommunities.isEmpty()) {
-                            item(key = "explore-communities-empty") {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(palette.bgTertiary)
-                                        .border(1.dp, palette.border, RoundedCornerShape(16.dp))
-                                        .padding(18.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                     Text(
-                                        text = if (searchQuery.isBlank()) "No communities yet" else "No communities match your search.",
+                                        text = "Explore Communities",
                                         color = palette.textPrimary,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 17.sp,
+                                        fontWeight = FontWeight.ExtraBold,
                                     )
-                                    if (searchQuery.isBlank()) {
-                                        Text(
-                                            text = "Be the first to create an end-to-end encrypted community for everyone to join!",
-                                            color = palette.textSecondary,
-                                            fontSize = 13.sp,
-                                            textAlign = TextAlign.Center,
-                                        )
-                                        JaWebPrimaryButton(
-                                            text = "Add Communities",
-                                            leadingIcon = Icons.Rounded.Add,
-                                            onClick = { showCreateCommunityDialog = true },
-                                        )
-                                    }
+                                    Text(
+                                        text = "Join and find communities to hang out with.",
+                                        color = palette.textSecondary,
+                                        fontSize = 13.sp,
+                                    )
                                 }
-                            }
-                        } else {
-                            items(visibleExploreCommunities, key = { "explore:${it.id}" }) { comm ->
-                                val alreadyJoined = comm.isJoined || joinedCommunities.any { it.id == comm.id }
-                                val joining = state.joiningCommunityId == comm.id
-                                ExploreCommunityRow(
-                                    community = comm,
-                                    isJoined = alreadyJoined,
-                                    isJoining = joining,
-                                    onAction = {
-                                        if (alreadyJoined) {
-                                            vm.openGroupChat(comm.id)
-                                        } else {
-                                            vm.joinCommunity(comm.id)
-                                        }
-                                    },
+                                JaWebPrimaryButton(
+                                    text = "Find communities now!",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = { vm.openExploreCommunities() },
                                 )
                             }
                         }
@@ -1395,6 +1354,7 @@ fun SidebarScreen(
             val selectedNavIndex = BOTTOM_NAV_TAB_IDS.indexOf(activeTab).let { if (it >= 0) it else 3 }
             val activeNavTint = if (palette.isDark) Color.White else Color(0xFF1C1C1E)
             val inactiveNavTint = if (palette.isDark) Color(0xFFE5E5EA).copy(alpha = 0.86f) else Color(0xFF2C2C2E).copy(alpha = 0.88f)
+            val bottomNavWeights = remember { listOf(0.94f, 0.86f, 1.46f, 0.94f, 0.80f) }
             LiquidBottomTabs(
                 selectedTabIndex = { selectedNavIndex },
                 onTabSelected = { idx ->
@@ -1405,23 +1365,27 @@ fun SidebarScreen(
                         searchQuery = ""
                     }
                     if (activeTab != nextTab) {
-                        activeTab = nextTab
+                        vm.setSidebarTab(nextTab)
                     }
                 },
                 backdrop = contentBackdrop,
                 tabsCount = BOTTOM_NAV_TAB_IDS.size,
+                tabWeights = bottomNavWeights,
                 modifier = Modifier.fillMaxWidth(),
                 isLightTheme = !palette.isDark,
                 accentColor = activeNavTint,
                 inactiveColor = inactiveNavTint,
             ) {
                 /* 1. Updates */
-                LiquidBottomTab(onClick = {
-                    showAddFriendsView = false
-                    isSearchOpen = false
-                    searchQuery = ""
-                    activeTab = "updates"
-                }) {
+                LiquidBottomTab(
+                    weight = bottomNavWeights[0],
+                    onClick = {
+                        showAddFriendsView = false
+                        isSearchOpen = false
+                        searchQuery = ""
+                        vm.setSidebarTab("updates")
+                    },
+                ) {
                     val tabTint = LocalLiquidBottomTabContentColor.current
                     val isSel = activeTab == "updates"
                     IosUpdatesNavIcon(tint = tabTint, selected = isSel, size = 23.dp)
@@ -1432,17 +1396,20 @@ fun SidebarScreen(
                         fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                         softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Clip,
                     )
                 }
 
                 /* 2. Calls */
-                LiquidBottomTab(onClick = {
-                    showAddFriendsView = false
-                    isSearchOpen = false
-                    searchQuery = ""
-                    activeTab = "calls"
-                }) {
+                LiquidBottomTab(
+                    weight = bottomNavWeights[1],
+                    onClick = {
+                        showAddFriendsView = false
+                        isSearchOpen = false
+                        searchQuery = ""
+                        vm.setSidebarTab("calls")
+                    },
+                ) {
                     val tabTint = LocalLiquidBottomTabContentColor.current
                     val isSel = activeTab == "calls"
                     IosCallsNavIcon(tint = tabTint, selected = isSel, size = 22.dp)
@@ -1453,19 +1420,22 @@ fun SidebarScreen(
                         fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                         softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Clip,
                     )
                 }
 
-                /* 3. Communities (1:1 Communities 3-person icon with "Communities" label) */
-                LiquidBottomTab(onClick = {
-                    showAddFriendsView = false
-                    if (activeTab != "communities") {
-                        isSearchOpen = false
-                        searchQuery = ""
-                    }
-                    activeTab = "communities"
-                }) {
+                /* 3. Communities (1:1 Communities 3-person icon with full unclipped "Communities" label) */
+                LiquidBottomTab(
+                    weight = bottomNavWeights[2],
+                    onClick = {
+                        showAddFriendsView = false
+                        if (activeTab != "communities") {
+                            isSearchOpen = false
+                            searchQuery = ""
+                        }
+                        vm.setSidebarTab("communities")
+                    },
+                ) {
                     val tabTint = LocalLiquidBottomTabContentColor.current
                     val isSel = activeTab == "communities"
                     Box(contentAlignment = Alignment.Center) {
@@ -1486,19 +1456,22 @@ fun SidebarScreen(
                         fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                         softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Clip,
                     )
                 }
 
                 /* 4. Chats (Default 4th tab, P2P chats only, 1:1 dual speech bubbles) */
-                LiquidBottomTab(onClick = {
-                    showAddFriendsView = false
-                    if (activeTab != "chats") {
-                        isSearchOpen = false
-                        searchQuery = ""
-                    }
-                    activeTab = "chats"
-                }) {
+                LiquidBottomTab(
+                    weight = bottomNavWeights[3],
+                    onClick = {
+                        showAddFriendsView = false
+                        if (activeTab != "chats") {
+                            isSearchOpen = false
+                            searchQuery = ""
+                        }
+                        vm.setSidebarTab("chats")
+                    },
+                ) {
                     val tabTint = LocalLiquidBottomTabContentColor.current
                     val isSel = activeTab == "chats" && !showAddFriendsView
                     Box(contentAlignment = Alignment.Center) {
@@ -1519,17 +1492,20 @@ fun SidebarScreen(
                         fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                         softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Clip,
                     )
                 }
 
                 /* 5. You (Shows user's circular PFP + "You", opens Settings) */
-                LiquidBottomTab(onClick = {
-                    showAddFriendsView = false
-                    isSearchOpen = false
-                    searchQuery = ""
-                    activeTab = "you"
-                }) {
+                LiquidBottomTab(
+                    weight = bottomNavWeights[4],
+                    onClick = {
+                        showAddFriendsView = false
+                        isSearchOpen = false
+                        searchQuery = ""
+                        vm.setSidebarTab("you")
+                    },
+                ) {
                     val tabTint = LocalLiquidBottomTabContentColor.current
                     val isSel = activeTab == "you"
                     val ringColor = if (isSel) {
@@ -1748,7 +1724,7 @@ fun SidebarScreen(
                         if (!isOwner) {
                             ContextActionItem(
                                 icon = Icons.Rounded.ExitToApp,
-                                label = "Leave group",
+                                label = if (grp.isCommunity) "Leave community" else "Leave group",
                                 tint = palette.danger,
                                 onClick = {
                                     vm.leaveGroup(grp.id)
@@ -1756,10 +1732,10 @@ fun SidebarScreen(
                                 }
                             )
                         } else {
-                            // ONLY the group owner gets "Delete group" (2-step + exact group name!)
+                            // ONLY the owner gets "Delete community/group" (2-step + exact name!)
                             ContextActionItem(
                                 icon = Icons.Rounded.DeleteForever,
-                                label = "Delete group",
+                                label = if (grp.isCommunity) "Delete community" else "Delete group",
                                 tint = palette.danger,
                                 onClick = {
                                     holdTarget = null
@@ -1776,8 +1752,9 @@ fun SidebarScreen(
         }
     }
 
-    /* ==================== Owner-Only 2-Step Exact-Name Group Deletion Modal ==================== */
+    /* ==================== Owner-Only 2-Step Exact-Name Deletion Modal ==================== */
     ownerDeleteTarget?.let { grp ->
+        val delEntityLower = if (grp.isCommunity) "community" else "group"
         Dialog(onDismissRequest = { ownerDeleteTarget = null }) {
             Column(
                 modifier = Modifier
@@ -1789,7 +1766,7 @@ fun SidebarScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Text(
-                    text = if (ownerDeleteStep == 1) "Delete \"${grp.name}\"?" else "Confirm exact group name",
+                    text = if (ownerDeleteStep == 1) "Delete \"${grp.name}\"?" else "Confirm exact $delEntityLower name",
                     color = palette.textPrimary,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.ExtraBold,
@@ -1803,7 +1780,7 @@ fun SidebarScreen(
                     )
                 } else {
                     Text(
-                        text = "Type \"${grp.name}\" below to permanently delete this group for everyone:",
+                        text = "Type \"${grp.name}\" below to permanently delete this $delEntityLower for everyone:",
                         color = palette.textSecondary,
                         fontSize = 13.5.sp,
                     )
@@ -2080,7 +2057,7 @@ fun SidebarScreen(
             if (uri != null) commAvatarUri = uri
         }
         val colorChoices = remember {
-            listOf("purple", "cyan", "emerald", "rose", "amber", "indigo", "blue", "pink")
+            JaTextThemeManager.COMMUNITY_AVATAR_COLOR_IDS
         }
 
         Dialog(onDismissRequest = { showCreateCommunityDialog = false }) {
@@ -2182,9 +2159,9 @@ fun SidebarScreen(
                                 val selected = commColor == cKey
                                 Box(
                                     modifier = Modifier
-                                        .size(22.dp)
+                                        .size(24.dp)
                                         .clip(CircleShape)
-                                        .background(cSpec.ringColor)
+                                        .background(Brush.linearGradient(cSpec.gradientStops))
                                         .border(
                                             width = if (selected) 2.5.dp else 1.dp,
                                             color = if (selected) Color.White else Color.Transparent,
@@ -2311,7 +2288,11 @@ fun SidebarScreen(
                             Spacer(Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(grp.name, color = palette.textPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
-                                Text("Group", color = palette.textSecondary, fontSize = 11.5.sp)
+                                Text(
+                                    if (grp.isCommunity) "Community" else "Group",
+                                    color = palette.textSecondary,
+                                    fontSize = 11.5.sp,
+                                )
                             }
                             Checkbox(
                                 checked = checked,
@@ -3032,4 +3013,300 @@ private fun LiquidTabBadgePill(
         )
     }
 }
+
+@Composable
+fun ExploreCommunitiesScreen(
+    state: SessionUiState,
+    vm: JaTextSessionViewModel,
+) {
+    val palette = LocalJaTextPalette.current
+    val focusManager = LocalFocusManager.current
+    var query by remember { mutableStateOf("") }
+    var showCreateDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        vm.refreshExploreCommunities()
+    }
+
+    BackHandler {
+        if (query.isNotEmpty()) {
+            query = ""
+            focusManager.clearFocus()
+        } else {
+            vm.closeExploreCommunities()
+        }
+    }
+
+    val joinedCommunityIds = remember(state.groups) {
+        state.groups.filter { it.isCommunity }.map { it.id }.toSet()
+    }
+    val visibleCommunities = remember(state.exploreCommunities, query) {
+        val q = query.trim().lowercase()
+        state.exploreCommunities.filter { comm ->
+            q.isEmpty() ||
+                comm.name.lowercase().contains(q) ||
+                comm.description.lowercase().contains(q)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(palette.bgPrimary)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(palette.bgSecondary)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            JaWebIconButton(
+                icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                contentDescription = "Back to Communities",
+                size = 36.dp,
+                iconSize = 18.dp,
+                onClick = { vm.closeExploreCommunities() },
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Explore Communities",
+                    color = palette.textPrimary,
+                    fontSize = 17.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "Join and find communities to hang out with.",
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            JaWebGhostButton(
+                text = "Create",
+                leadingIcon = Icons.Rounded.Add,
+                onClick = { showCreateDialog = true },
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SidebarAlwaysSearchBar(
+                query = query,
+                onQueryChange = { query = it },
+                placeholder = "Search public communities...",
+                onClear = {
+                    query = ""
+                    focusManager.clearFocus()
+                },
+            )
+
+            if (visibleCommunities.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 18.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(palette.bgSecondary)
+                        .border(1.dp, palette.border, RoundedCornerShape(18.dp))
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = if (query.isBlank()) "No public communities yet" else "No matching communities found",
+                        color = palette.textPrimary,
+                        fontSize = 15.5.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = if (query.isBlank()) {
+                            "Be the first to launch an end-to-end encrypted community for everyone to join!"
+                        } else {
+                            "Try a different keyword or create your own community."
+                        },
+                        color = palette.textSecondary,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp),
+                ) {
+                    items(visibleCommunities, key = { "explore-page:${it.id}" }) { comm ->
+                        val alreadyJoined = comm.isJoined || joinedCommunityIds.contains(comm.id)
+                        val joining = state.joiningCommunityId == comm.id
+                        ExploreCommunityRow(
+                            community = comm,
+                            isJoined = alreadyJoined,
+                            isJoining = joining,
+                            onAction = {
+                                if (alreadyJoined) {
+                                    vm.openGroupChat(comm.id)
+                                } else {
+                                    vm.joinCommunity(comm.id)
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showCreateDialog) {
+        var commName by remember { mutableStateOf("") }
+        var commDescription by remember { mutableStateOf("") }
+        var commColor by remember { mutableStateOf("purple") }
+        var commAvatarUri by remember { mutableStateOf<Uri?>(null) }
+        val commImagePicker = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.GetContent()
+        ) { uri ->
+            if (uri != null) commAvatarUri = uri
+        }
+        Dialog(onDismissRequest = { showCreateDialog = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(palette.bgSecondary)
+                    .border(1.dp, palette.border, RoundedCornerShape(22.dp))
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Add Communities",
+                        color = palette.textPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    JaWebIconButton(
+                        icon = Icons.Rounded.Close,
+                        contentDescription = "Close",
+                        size = 34.dp,
+                        iconSize = 16.dp,
+                        onClick = { showCreateDialog = false },
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    val chosenSpec = remember(commColor) { JaTextThemeManager.avatarColorSpec(commColor) }
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(CircleShape)
+                            .background(Brush.linearGradient(colors = chosenSpec.gradientStops))
+                            .border(3.dp, chosenSpec.ringColor, CircleShape)
+                            .clickable { commImagePicker.launch("image/*") },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (commAvatarUri != null) {
+                            AsyncImage(
+                                model = commAvatarUri,
+                                contentDescription = "Community PFP",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape),
+                            )
+                        } else {
+                            Text(
+                                text = commName.trim().take(1).uppercase().ifBlank { "#" },
+                                color = Color.White,
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Black,
+                            )
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        JaWebGhostButton(
+                            text = if (commAvatarUri != null) "Change PFP" else "Upload PFP",
+                            onClick = { commImagePicker.launch("image/*") },
+                        )
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            JaTextThemeManager.COMMUNITY_AVATAR_COLOR_IDS.forEach { cKey ->
+                                val cSpec = JaTextThemeManager.avatarColorSpec(cKey)
+                                val selected = commColor == cKey
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(Brush.linearGradient(cSpec.gradientStops))
+                                        .border(
+                                            width = if (selected) 2.5.dp else 1.dp,
+                                            color = if (selected) Color.White else Color.Transparent,
+                                            shape = CircleShape,
+                                        )
+                                        .clickable { commColor = cKey }
+                                )
+                            }
+                        }
+                    }
+                }
+                JaWebInput(
+                    value = commName,
+                    onValueChange = { if (it.length <= 60) commName = it },
+                    label = "Community name",
+                    placeholder = "Anime Lounge, Indie Builders...",
+                )
+                JaWebInput(
+                    value = commDescription,
+                    onValueChange = { if (it.length <= 240) commDescription = it },
+                    label = "Description (optional)",
+                    placeholder = "What is your community about?",
+                    singleLine = false,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                ) {
+                    JaWebGhostButton(
+                        text = "Cancel",
+                        onClick = { showCreateDialog = false },
+                    )
+                    JaWebPrimaryButton(
+                        text = "Create Community",
+                        enabled = commName.trim().isNotEmpty(),
+                        onClick = {
+                            val n = commName.trim()
+                            val d = commDescription.trim()
+                            val c = commColor
+                            val u = commAvatarUri
+                            showCreateDialog = false
+                            vm.createCommunity(n, d, c, u)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
 

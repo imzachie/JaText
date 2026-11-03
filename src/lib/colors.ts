@@ -78,7 +78,28 @@ export const AVATAR_COLORS: AvatarColor[] = [
   },
 ];
 
+export const COMMUNITY_AVATAR_COLOR_IDS = [
+  "purple",
+  "blue",
+  "teal",
+  "green",
+  "yellow",
+  "orange",
+  "red",
+  "pink",
+] as const;
+
+const LEGACY_COLOR_ALIASES: Readonly<Record<string, string>> = {
+  cyan: "teal",
+  emerald: "green",
+  rose: "red",
+  amber: "yellow",
+  indigo: "purple",
+  violet: "purple",
+};
+
 export function colorById(id: string | undefined): AvatarColor {
-  const cleanId = stripProfileMetaFromColorId(id);
+  const rawClean = stripProfileMetaFromColorId(id);
+  const cleanId = LEGACY_COLOR_ALIASES[rawClean] ?? rawClean;
   return AVATAR_COLORS.find((c) => c.id === cleanId) ?? AVATAR_COLORS[0];
 }

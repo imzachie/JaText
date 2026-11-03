@@ -183,6 +183,8 @@ data class SessionUiState(
     val blockedUsersList: List<JaUser> = emptyList(),
     val exploreCommunities: List<ExploreCommunitySummary> = emptyList(),
     val joiningCommunityId: String? = null,
+    val sidebarTab: String = "chats",
+    val exploreCommunitiesOpen: Boolean = false,
 )
 
 class JaTextSessionViewModel(app: Application) :
@@ -1924,6 +1926,34 @@ class JaTextSessionViewModel(app: Application) :
 
     /* ==================== Navigation & Opening Threads (Never Marks Read Until Opened!) ==================== */
 
+    fun setSidebarTab(tab: String) {
+        _state.update { prev ->
+            prev.copy(
+                sidebarTab = tab,
+                exploreCommunitiesOpen = if (tab != "communities") false else prev.exploreCommunitiesOpen,
+            )
+        }
+    }
+
+    fun openExploreCommunities() {
+        _state.update { prev ->
+            prev.copy(
+                sidebarTab = "communities",
+                exploreCommunitiesOpen = true,
+            )
+        }
+        refreshExploreCommunities()
+    }
+
+    fun closeExploreCommunities() {
+        _state.update { prev ->
+            prev.copy(
+                sidebarTab = "communities",
+                exploreCommunitiesOpen = false,
+            )
+        }
+    }
+
     fun openDmChat(friendId: String, highlightMessageId: String? = null) {
         clearActiveTypingSignal()
         val slot = _state.value.slotId
@@ -1934,6 +1964,7 @@ class JaTextSessionViewModel(app: Application) :
             prev.copy(
                 activeChatId = friendId,
                 activeGroupId = null,
+                exploreCommunitiesOpen = false,
                 dmMessages = cached,
                 dmHasMore = false,
                 highlightedMessageId = highlightMessageId,
@@ -2032,10 +2063,26 @@ class JaTextSessionViewModel(app: Application) :
             .filterNot { JaTextCryptoEngine.isRawWireOrCorruptedPreview(it.body) }
         val cachedDet = cache.loadGroupDetailsCache(slot, groupId)
         _state.update { prev ->
+            val groupSummary = prev.groups.firstOrNull { it.id == groupId }
+            val synthesizedDetails = cachedDet ?: groupSummary?.let { gs ->
+                GroupDetails(
+                    id = gs.id,
+                    name = gs.name,
+                    avatarUrl = gs.avatarUrl,
+                    avatarColor = gs.avatarColor,
+                    isCommunity = gs.isCommunity,
+                    description = gs.description,
+                    communityKeySeed = gs.communityKeySeed,
+                    ownerId = gs.ownerId,
+                    createdAt = gs.createdAt,
+                )
+            }
             prev.copy(
                 activeGroupId = groupId,
                 activeChatId = null,
-                groupDetails = cachedDet,
+                exploreCommunitiesOpen = false,
+                sidebarTab = if (gsIsCommunity(groupSummary, cachedDet)) "communities" else prev.sidebarTab,
+                groupDetails = synthesizedDetails,
                 groupMessages = cachedMsgs,
                 groupSeenByMessageId = emptyMap(),
                 groupHasMore = false,
@@ -2132,12 +2179,16 @@ class JaTextSessionViewModel(app: Application) :
         }
     }
 
+    private fun gsIsCommunity(gs: GroupSummary?, det: GroupDetails?): Boolean =
+        det?.isCommunity == true || gs?.isCommunity == true
+
     fun openCommunityChat(highlightMessageId: String? = null) {
         clearActiveTypingSignal()
         _state.update {
             it.copy(
                 activeChatId = OFFICIAL_COMMUNITY_ID,
                 activeGroupId = null,
+                exploreCommunitiesOpen = false,
                 communityUnreadCount = 0,
                 highlightedMessageId = highlightMessageId,
             )
@@ -2153,11 +2204,16 @@ class JaTextSessionViewModel(app: Application) :
 
     fun closeActiveChat() {
         clearActiveTypingSignal()
-        _state.update {
-            it.copy(
+        _state.update { prev ->
+            val wasCommunityGroup = prev.activeGroupId != null && (
+                prev.groupDetails?.isCommunity == true ||
+                    prev.groups.any { g -> g.id == prev.activeGroupId && g.isCommunity }
+                )
+            prev.copy(
                 activeChatId = null,
                 activeGroupId = null,
                 highlightedMessageId = null,
+                sidebarTab = if (wasCommunityGroup) "communities" else prev.sidebarTab,
             )
         }
     }
@@ -2470,6 +2526,7 @@ class JaTextSessionViewModel(app: Application) :
                     }
                     if (serverMsg != null) {
                         val hydrated = JaTextCryptoEngine.hydrateGroupMessages(appCtx, me.id, groupId, listOf(serverMsg))
+                            .map { m -> if (m.id == serverMsg.id) m.copy(renderKey = tempId) else m }
                         _state.update { cur ->
                             val withoutOpt = cur.groupMessages.filterNot { m -> m.id == tempId }
                             cur.copy(groupMessages = mergeGroupMessages(withoutOpt, hydrated))
@@ -2478,7 +2535,7 @@ class JaTextSessionViewModel(app: Application) :
                     triggerImmediateSync(true)
                 } catch (e: Throwable) {
                     _state.update { cur -> cur.copy(groupMessages = cur.groupMessages.filterNot { m -> m.id == tempId }) }
-                    showToast(e.message ?: "Failed to send group message")
+                    showToast(e.message ?: "Failed to send message")
                 }
             }
         } else if (st.activeChatId == OFFICIAL_COMMUNITY_ID) {
@@ -2526,9 +2583,11 @@ class JaTextSessionViewModel(app: Application) :
                         JaTextJson.decodeFromJsonElement(CommunityMessage.serializer(), it)
                     }
                     if (serverMsg != null) {
+                        val hydrated = hydrateCommunityList(listOf(serverMsg))
+                            .map { m -> if (m.id == serverMsg.id) m.copy(renderKey = tempId) else m }
                         _state.update { cur ->
                             val withoutOpt = cur.communityMessages.filterNot { m -> m.id == tempId }
-                            cur.copy(communityMessages = mergeCommunityMessages(withoutOpt, hydrateCommunityList(listOf(serverMsg))))
+                            cur.copy(communityMessages = mergeCommunityMessages(withoutOpt, hydrated))
                         }
                     }
                     triggerImmediateSync(true)
@@ -3728,10 +3787,17 @@ class JaTextSessionViewModel(app: Application) :
         newName: String? = null,
         newAvatarUri: Uri? = null,
         removeAvatar: Boolean = false,
+        newAvatarColor: String? = null,
     ) {
         val token = currentAuthToken() ?: return
         val cleanName = newName?.trim()?.takeIf { it.isNotEmpty() }
-        if (cleanName == null && newAvatarUri == null && !removeAvatar) return
+        val cleanColor = newAvatarColor?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanName == null && newAvatarUri == null && !removeAvatar && cleanColor == null) return
+        val isComm = _state.value.groupDetails?.takeIf { it.id == groupId }?.isCommunity
+            ?: _state.value.groups.firstOrNull { it.id == groupId }?.isCommunity
+            ?: false
+        val entityCap = if (isComm) "Community" else "Group"
+        val entityLow = if (isComm) "community" else "group"
         viewModelScope.launch {
             try {
                 var finalAvatarUrl: String? = _state.value.groupDetails?.avatarUrl
@@ -3743,7 +3809,7 @@ class JaTextSessionViewModel(app: Application) :
                     avatarChanged = true
                 } else if (newAvatarUri != null) {
                     val (b, n, m, _) = readAttachmentBytes(newAvatarUri, null)
-                        ?: throw IllegalStateException("Could not read group photo")
+                        ?: throw IllegalStateException("Could not read $entityLow photo")
                     finalAvatarUrl = TursoApiClient.uploadMediaBytes(b, n, m, token)
                     avatarChanged = true
                 }
@@ -3762,9 +3828,22 @@ class JaTextSessionViewModel(app: Application) :
                         token
                     )
                 }
+                if (cleanColor != null) {
+                    TursoApiClient.rpcRaw(
+                        "manageGroup",
+                        mapOf("groupId" to groupId, "subOp" to "setAvatarColor", "avatarColor" to cleanColor),
+                        token
+                    )
+                }
                 _state.update { cur ->
                     val nextDetails = cur.groupDetails?.let {
-                        if (it.id == groupId) it.copy(name = cleanName ?: it.name, avatarUrl = finalAvatarUrl) else it
+                        if (it.id == groupId) {
+                            it.copy(
+                                name = cleanName ?: it.name,
+                                avatarUrl = finalAvatarUrl,
+                                avatarColor = cleanColor ?: it.avatarColor,
+                            )
+                        } else it
                     }
                     if (nextDetails != null) {
                         cache.saveGroupDetailsCache(cur.slotId, groupId, nextDetails)
@@ -3772,13 +3851,19 @@ class JaTextSessionViewModel(app: Application) :
                     cur.copy(
                         groupDetails = nextDetails,
                         groups = cur.groups.map {
-                            if (it.id == groupId) it.copy(name = cleanName ?: it.name, avatarUrl = finalAvatarUrl) else it
+                            if (it.id == groupId) {
+                                it.copy(
+                                    name = cleanName ?: it.name,
+                                    avatarUrl = finalAvatarUrl,
+                                    avatarColor = cleanColor ?: it.avatarColor,
+                                )
+                            } else it
                         },
                     )
                 }
-                showToast("Group profile saved!")
+                showToast("$entityCap profile saved!")
             } catch (e: Throwable) {
-                showToast(e.message ?: "Failed to update group profile")
+                showToast(e.message ?: "Failed to update $entityLow profile")
             }
         }
     }
@@ -4471,18 +4556,23 @@ class JaTextSessionViewModel(app: Application) :
         val map = LinkedHashMap<String, ChatMessage>()
         for (m in existing) map[m.id] = m
         for (m in incoming) {
+            var inheritedKey: String? = m.renderKey?.takeIf { it.isNotBlank() }
             // Deduplicate any optimistic bubble from me within 60s skew window
             if (!m.id.startsWith("opt-")) {
-                val optKey = map.entries.firstOrNull { (k, v) ->
+                val optEntry = map.entries.firstOrNull { (k, v) ->
                     k.startsWith("opt-") &&
                         v.senderId == m.senderId &&
                         v.body == m.body &&
                         kotlin.math.abs(v.createdAt - m.createdAt) < 60_000L
-                }?.key
-                if (optKey != null) map.remove(optKey)
+                }
+                if (optEntry != null) {
+                    if (inheritedKey == null) inheritedKey = optEntry.value.renderKey?.takeIf { it.isNotBlank() } ?: optEntry.key
+                    map.remove(optEntry.key)
+                }
             }
             val prev = map[m.id]
-            val merged = if (prev != null && m.deliveryStatus != null && prev.deliveryStatus != null) {
+            if (inheritedKey == null) inheritedKey = prev?.renderKey?.takeIf { it.isNotBlank() }
+            val mergedStatus = if (prev != null && m.deliveryStatus != null && prev.deliveryStatus != null) {
                 val rankPrev = when (prev.deliveryStatus) {
                     "read" -> 3
                     "delivered" -> 2
@@ -4493,9 +4583,14 @@ class JaTextSessionViewModel(app: Application) :
                     "delivered" -> 2
                     else -> 1
                 }
-                if (rankPrev > rankNext) m.copy(deliveryStatus = prev.deliveryStatus) else m
-            } else m
-            map[m.id] = merged
+                if (rankPrev > rankNext) prev.deliveryStatus else m.deliveryStatus
+            } else {
+                m.deliveryStatus ?: prev?.deliveryStatus
+            }
+            map[m.id] = m.copy(
+                deliveryStatus = mergedStatus,
+                renderKey = inheritedKey ?: m.renderKey,
+            )
         }
         return map.values.sortedBy { it.createdAt }
     }
@@ -4504,16 +4599,22 @@ class JaTextSessionViewModel(app: Application) :
         val map = LinkedHashMap<String, GroupMessage>()
         for (m in existing) map[m.id] = m
         for (m in incoming) {
+            var inheritedKey: String? = m.renderKey?.takeIf { it.isNotBlank() }
             if (!m.id.startsWith("opt-")) {
-                val optKey = map.entries.firstOrNull { (k, v) ->
+                val optEntry = map.entries.firstOrNull { (k, v) ->
                     k.startsWith("opt-") &&
                         v.senderId == m.senderId &&
                         v.body == m.body &&
                         kotlin.math.abs(v.createdAt - m.createdAt) < 60_000L
-                }?.key
-                if (optKey != null) map.remove(optKey)
+                }
+                if (optEntry != null) {
+                    if (inheritedKey == null) inheritedKey = optEntry.value.renderKey?.takeIf { it.isNotBlank() } ?: optEntry.key
+                    map.remove(optEntry.key)
+                }
             }
-            map[m.id] = m
+            val prev = map[m.id]
+            if (inheritedKey == null) inheritedKey = prev?.renderKey?.takeIf { it.isNotBlank() }
+            map[m.id] = if (inheritedKey != null) m.copy(renderKey = inheritedKey) else m
         }
         return map.values.sortedBy { it.createdAt }
     }
@@ -4522,16 +4623,22 @@ class JaTextSessionViewModel(app: Application) :
         val map = LinkedHashMap<String, CommunityMessage>()
         for (m in existing) map[m.id] = m
         for (m in incoming) {
+            var inheritedKey: String? = m.renderKey?.takeIf { it.isNotBlank() }
             if (!m.id.startsWith("opt-")) {
-                val optKey = map.entries.firstOrNull { (k, v) ->
+                val optEntry = map.entries.firstOrNull { (k, v) ->
                     k.startsWith("opt-") &&
                         v.senderId == m.senderId &&
                         v.body == m.body &&
                         kotlin.math.abs(v.createdAt - m.createdAt) < 60_000L
-                }?.key
-                if (optKey != null) map.remove(optKey)
+                }
+                if (optEntry != null) {
+                    if (inheritedKey == null) inheritedKey = optEntry.value.renderKey?.takeIf { it.isNotBlank() } ?: optEntry.key
+                    map.remove(optEntry.key)
+                }
             }
-            map[m.id] = m
+            val prev = map[m.id]
+            if (inheritedKey == null) inheritedKey = prev?.renderKey?.takeIf { it.isNotBlank() }
+            map[m.id] = if (inheritedKey != null) m.copy(renderKey = inheritedKey) else m
         }
         return map.values.sortedBy { it.createdAt }
     }

@@ -78,11 +78,13 @@ export interface WallpaperChoice {
 export function WallpaperModal({
   currentWallpaperUrl,
   isGroup,
+  isCommunity,
   onApply,
   onClose,
 }: {
   currentWallpaperUrl: string | null;
   isGroup?: boolean;
+  isCommunity?: boolean;
   onApply: (choice: WallpaperChoice) => Promise<void>;
   onClose: () => void;
 }) {
@@ -168,9 +170,11 @@ export function WallpaperModal({
           <div>
             <h3 className="bubble-style-title">Chat wallpaper</h3>
             <p className="bubble-style-subtitle">
-              {isGroup
-                ? "Shared wallpaper for everyone in this group."
-                : "Shared wallpaper: both of you will see this background."}
+              {isCommunity
+                ? "Shared wallpaper for everyone in this community."
+                : isGroup
+                  ? "Shared wallpaper for everyone in this group."
+                  : "Shared wallpaper: both of you will see this background."}
             </p>
           </div>
           {currentWallpaperUrl || selectedKind !== "none" ? (

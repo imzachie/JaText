@@ -516,12 +516,20 @@ export function useTursoReactiveSession(
         .then(async ([detRes, msgRes]) => {
           if (cancelled) return;
           if (detRes.details?.communityKeySeed) {
-            await registerCommunitySeedEpoch(activeGroupId, detRes.details.communityKeySeed);
+            try {
+              await registerCommunitySeedEpoch(activeGroupId, detRes.details.communityKeySeed);
+            } catch {
+              // Never block loading community details/messages if WebCrypto seed registration fails
+            }
           }
           const visible = (msgRes.messages ?? []).filter(
             (m) => !deletedForMeIdsRef.current.has(m.id),
           );
-          await prewarmDecryptedGroupBatch(visible, activeGroupId);
+          try {
+            await prewarmDecryptedGroupBatch(visible, activeGroupId);
+          } catch {
+            // Render messages even if batch prewarm encounters a malformed wire payload
+          }
           if (cancelled) return;
           const hydratedDetails = detRes.details
             ? {

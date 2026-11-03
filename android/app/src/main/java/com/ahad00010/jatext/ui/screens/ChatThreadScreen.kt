@@ -248,10 +248,13 @@ private val ALL_REACTION_EMOJIS = listOf(
     "💙", "💚", "🧡", "🤍", "🖤", "💔", "⚡", "🌟",
     "🚀", "🎵", "🎮", "☕", "🍕", "🏆", "✅", "❌",
     "😤", "😡", "🤯", "😴", "🤗", "😇", "🤩", "🫠",
+    "🩷", "🩵", "🩶", "🥹", "🫶", "🫰", "🫩", "🫨",
+    "🫪", "🪾", "🫆", "🫟", "🐦‍🔥", "🍋‍🟩", "🍄‍🟫", "⛓️‍💥",
 )
 
 private data class UnifiedThreadItem(
     val id: String,
+    val renderKey: String = id,
     val senderId: String,
     val senderName: String,
     val senderUsername: String,
@@ -303,6 +306,10 @@ fun ChatThreadScreen(
     val activeGroup = remember(state.activeGroupId, state.groups) {
         if (state.activeGroupId != null) state.groups.firstOrNull { it.id == state.activeGroupId } else null
     }
+    val activeGroupIsCommunity = activeGroup?.isCommunity == true ||
+        state.groupDetails?.takeIf { it.id == state.activeGroupId }?.isCommunity == true
+    val grpWordLower = if (activeGroupIsCommunity) "community" else "group"
+    val grpWordCap = if (activeGroupIsCommunity) "Community" else "Group"
     val friendActivity = remember(activeFriend?.id, state.friendActivities) {
         activeFriend?.let { f -> state.friendActivities.firstOrNull { it.userId == f.id } }
     }
@@ -323,6 +330,7 @@ fun ChatThreadScreen(
             isCommunity -> state.communityMessages.map { m ->
                 UnifiedThreadItem(
                     id = m.id,
+                    renderKey = m.renderKey?.takeIf { it.isNotBlank() } ?: m.id,
                     senderId = m.senderId,
                     senderName = m.senderName,
                     senderUsername = m.senderUsername,
@@ -349,6 +357,7 @@ fun ChatThreadScreen(
             state.activeGroupId != null -> state.groupMessages.map { m ->
                 UnifiedThreadItem(
                     id = m.id,
+                    renderKey = m.renderKey?.takeIf { it.isNotBlank() } ?: m.id,
                     senderId = m.senderId,
                     senderName = m.senderName,
                     senderUsername = m.senderUsername,
@@ -376,6 +385,7 @@ fun ChatThreadScreen(
                 val mine = m.senderId == me.id
                 UnifiedThreadItem(
                     id = m.id,
+                    renderKey = m.renderKey?.takeIf { it.isNotBlank() } ?: m.id,
                     senderId = m.senderId,
                     senderName = if (mine) me.displayName else (activeFriend?.displayName ?: "Contact"),
                     senderUsername = if (mine) me.username else (activeFriend?.username ?: ""),
@@ -952,7 +962,7 @@ fun ChatThreadScreen(
                         if (activeGroup != null) {
                             ChatOverflowSvgItem(
                                 icon = WebUiIconKind.Settings,
-                                label = "Group settings & members",
+                                label = "$grpWordCap settings & members",
                                 iconTint = palette.textSecondary,
                                 onClick = {
                                     showOverflowMenu = false
@@ -972,7 +982,7 @@ fun ChatThreadScreen(
                         if (!isCommunity) {
                             ChatOverflowSvgItem(
                                 icon = WebUiIconKind.Image,
-                                label = if (activeGroup != null) "Group wallpaper" else "Chat wallpaper",
+                                label = if (activeGroup != null) "$grpWordCap wallpaper" else "Chat wallpaper",
                                 iconTint = palette.accent,
                                 onClick = {
                                     showOverflowMenu = false
@@ -1043,7 +1053,7 @@ fun ChatThreadScreen(
                         if (activeGroup != null) {
                             ChatOverflowSvgItem(
                                 icon = if (activeGroup.isSilenced) WebUiIconKind.Bell else WebUiIconKind.BellOff,
-                                label = if (activeGroup.isSilenced) "Unsilence group" else "Silence group",
+                                label = if (activeGroup.isSilenced) "Unsilence $grpWordLower" else "Silence $grpWordLower",
                                 iconTint = palette.textSecondary,
                                 onClick = {
                                     showOverflowMenu = false
@@ -1052,7 +1062,7 @@ fun ChatThreadScreen(
                             )
                             ChatOverflowSvgItem(
                                 icon = WebUiIconKind.Archive,
-                                label = if (activeGroup.isArchived) "Unarchive group" else "Archive group",
+                                label = if (activeGroup.isArchived) "Unarchive $grpWordLower" else "Archive $grpWordLower",
                                 iconTint = palette.textSecondary,
                                 onClick = {
                                     showOverflowMenu = false
@@ -1076,7 +1086,7 @@ fun ChatThreadScreen(
                             if (activeGroup.myRole == "owner") {
                                 ChatOverflowSvgItem(
                                     icon = WebUiIconKind.Trash,
-                                    label = "Delete group",
+                                    label = "Delete $grpWordLower",
                                     textTint = palette.danger,
                                     iconTint = palette.danger,
                                     onClick = {
@@ -1279,6 +1289,7 @@ fun ChatThreadScreen(
             }
 
             /* ==================== Message Thread ==================== */
+            val animatedSendKeys = remember(threadScopeKey) { HashSet<String>() }
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -1293,8 +1304,47 @@ fun ChatThreadScreen(
                 ) {
                     items(
                         items = reversedItems,
-                        key = { it.id },
+                        key = { it.renderKey.ifBlank { it.id } },
                     ) { msg ->
+                        val stableKey = msg.renderKey.ifBlank { msg.id }
+                        val isMineMsg = msg.senderId == me.id
+                        val shouldAnimateEntrance = remember(stableKey) {
+                            val freshOutgoing = isMineMsg && (
+                                stableKey.startsWith("opt-") ||
+                                    msg.id.startsWith("opt-") ||
+                                    kotlin.math.abs(System.currentTimeMillis() - msg.createdAt) < 2200L
+                                )
+                            if (freshOutgoing && animatedSendKeys.add(stableKey)) true else false
+                        }
+                        val sendProgress = remember(stableKey) {
+                            Animatable(if (shouldAnimateEntrance) 0f else 1f)
+                        }
+                        LaunchedEffect(stableKey, shouldAnimateEntrance) {
+                            if (shouldAnimateEntrance && sendProgress.value < 1f) {
+                                sendProgress.animateTo(
+                                    targetValue = 1f,
+                                    animationSpec = spring(
+                                        dampingRatio = 0.72f,
+                                        stiffness = 460f,
+                                    ),
+                                )
+                            }
+                        }
+                        val rowEntranceMod = if (sendProgress.value < 0.999f) {
+                            Modifier.graphicsLayer {
+                                val p = sendProgress.value.coerceIn(0f, 1.08f)
+                                alpha = (0.15f + 0.85f * p).coerceIn(0f, 1f)
+                                val sc = 0.88f + 0.12f * p
+                                scaleX = sc
+                                scaleY = sc
+                                translationY = (1f - p) * 20.dp.toPx()
+                                translationX = (1f - p) * 8.dp.toPx()
+                                transformOrigin = TransformOrigin(0.95f, 1f)
+                            }
+                        } else {
+                            Modifier
+                        }
+                        Box(modifier = rowEntranceMod) {
                         if (isCommunity) {
                             CommunityAnnouncementPostCard(
                                 msg = msg,
@@ -1429,6 +1479,7 @@ fun ChatThreadScreen(
                                     highlightQuery = if (showInChatSearch) inChatSearchQuery else "",
                                 )
                             }
+                        }
                         }
                     }
 
@@ -2178,7 +2229,11 @@ fun ChatThreadScreen(
                                 .background(if (active) palette.accentSoft else Color.Transparent),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text(text = emoji, fontSize = 20.sp)
+                            Text(
+                                text = emoji,
+                                fontSize = 20.sp,
+                                fontFamily = com.ahad00010.jatext.ui.theme.IosEmojiOnlyFontFamily,
+                            )
                         }
                     }
                     Box(
@@ -2403,7 +2458,11 @@ fun ChatThreadScreen(
                                 .border(1.dp, palette.border, RoundedCornerShape(12.dp)),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text(text = emoji, fontSize = 22.sp)
+                            Text(
+                                text = emoji,
+                                fontSize = 22.sp,
+                                fontFamily = com.ahad00010.jatext.ui.theme.IosEmojiOnlyFontFamily,
+                            )
                         }
                     }
                 }
@@ -2554,12 +2613,13 @@ fun ChatThreadScreen(
     confirmDeleteGroupTarget?.let { grp ->
         var typedName by remember(grp.id) { mutableStateOf("") }
         val exactMatch = typedName.trim() == grp.name.trim()
+        val delWordLower = if (grp.isCommunity) "community" else "group"
         AlertDialog(
             onDismissRequest = { confirmDeleteGroupTarget = null },
             containerColor = palette.bgSecondary,
             title = {
                 Text(
-                    text = "Delete group permanently?",
+                    text = "Delete $delWordLower permanently?",
                     color = palette.textPrimary,
                     fontWeight = FontWeight.Bold,
                 )
@@ -2567,7 +2627,7 @@ fun ChatThreadScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "This permanently deletes \"${grp.name}\" and all messages for every member. Type the exact group name below to confirm:",
+                        text = "This permanently deletes \"${grp.name}\" and all messages for every member. Type the exact $delWordLower name below to confirm:",
                         color = palette.textSecondary,
                         fontSize = 13.5.sp,
                     )
@@ -2594,7 +2654,7 @@ fun ChatThreadScreen(
                     enabled = exactMatch,
                     colors = ButtonDefaults.buttonColors(containerColor = palette.danger),
                 ) {
-                    Text("Delete group", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("Delete $delWordLower", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -3491,7 +3551,10 @@ private fun ScheduleMessageBottomSheet(
     fun resolveTargetChip(item: ScheduledMessageItem): String {
         return when (item.targetKind) {
             "community" -> "Official Community"
-            "group" -> state.groups.firstOrNull { it.id == item.targetId }?.name ?: "Group chat"
+            "group" -> {
+                val grp = state.groups.firstOrNull { it.id == item.targetId }
+                grp?.name ?: if (grp?.isCommunity == true) "Community" else "Group chat"
+            }
             else -> state.friends.firstOrNull { it.id == item.targetId }?.let { "@${it.username}" } ?: "Direct chat"
         }
     }

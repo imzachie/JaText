@@ -13,6 +13,7 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Phone, Video } from "./CallIcons";
+import { IosEmojiGlyph, IosEmojiText } from "./IosEmoji";
 import { ComposerPlusMenu, ViewOnceRingIcon } from "./ComposerPlusMenu";
 import { ViewOnceMessageBubble } from "./ViewOnceViewerModal";
 import {
@@ -795,7 +796,7 @@ const ChatHistory = memo(function ChatHistory({
                             onClick={() => onReactToMessage(message, emoji)}
                             aria-label={`${emoji} reaction, ${users.length} people`}
                           >
-                            {emoji} <span>{users.length}</span>
+                            <IosEmojiGlyph emoji={emoji} size={16} /> <span>{users.length}</span>
                           </button>
                         );
                       },
@@ -2205,10 +2206,12 @@ export function ChatView({
           onClick={() => onOpenProfile(friend)}
         />
         <button className="chat-title" onClick={() => onOpenProfile(friend)}>
-          <strong>{isSelfChat ? `${friend.displayName} (You)` : friend.displayName}</strong>
+          <strong>
+            <IosEmojiText text={isSelfChat ? `${friend.displayName} (You)` : friend.displayName} />
+          </strong>
           <span className="muted small chat-presence">
             <span className="chat-presence-desktop-extra">@{friend.username} · </span>
-            {friendStatusLabel}
+            <IosEmojiText text={friendStatusLabel} />
             {!isSelfChat && peerE2EE ? (
               peerE2EE.verifiedKeyId === peerE2EE.bundle.keyId ? (
                 <span className="chat-presence-desktop-extra">

@@ -17,6 +17,7 @@ import { clearDraft, getDraft, setDraft as saveStoredDraft } from "../lib/drafts
 import { decodeVoiceNoteMime, isVoiceNoteOrAudio, saveCachedVoiceTranscript } from "../lib/voiceNotes";
 import { friendlyError } from "../lib/errors";
 import { AnimatedModal } from "./AnimatedModal";
+import { IosEmojiGlyph, IosEmojiText } from "./IosEmoji";
 import { AnimatedMediaImg, Avatar } from "./Avatar";
 import { BubbleStyleModal } from "./BubbleStyleModal";
 import { DecoratedMessageBubble } from "./BubbleStyleArtwork";
@@ -1410,6 +1411,8 @@ export function CommunityChatView({
             >
               <article
                 className={`community-post ${
+                  message.senderId === store.me?.id ? "mine" : "theirs"
+                } ${
                   isJustArrived ? "msg-just-arrived" : ""
                 } ${
                   highlightedCommunityJumpId === message.id ? "jump-highlight-pulse" : ""
@@ -1446,7 +1449,7 @@ export function CommunityChatView({
                       : undefined
                   }
                 />
-                <strong>{message.senderName || "JaText"}</strong>
+                <strong><IosEmojiText text={message.senderName || "JaText"} /></strong>
                 <span className="verified-badge" title="Verified">
                   <CheckIcon size={11} strokeWidth={3} />
                 </span>
@@ -1588,7 +1591,7 @@ export function CommunityChatView({
                         const mineReacted = users.some((r) => r.userId === store.me?.id);
                         return (
                           <button type="button" key={emoji} className={`reaction-chip ${mineReacted ? "selected" : ""}`} onClick={() => void reactToMessage(message, emoji)}>
-                            {emoji} <span>{users.length}</span>
+                            <IosEmojiGlyph emoji={emoji} size={16} /> <span>{users.length}</span>
                           </button>
                         );
                       })}

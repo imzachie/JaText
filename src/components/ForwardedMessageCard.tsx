@@ -7,6 +7,7 @@ import {
 } from "../lib/forwardedContext";
 import { useJaText } from "../lib/store";
 import { Avatar } from "./Avatar";
+import { IosEmojiText } from "./IosEmoji";
 import { ArrowRightIcon, ClockIcon, ForwardIcon } from "./UiIcons";
 
 interface ForwardedMessageCardProps {
@@ -45,9 +46,12 @@ export const ForwardedMessageCard = memo(function ForwardedMessageCard({
       sourceBadgeText = "JaText Community";
     } else if (context.sourceKind === "group") {
       const liveGroup = store.groups.find((g) => g.id === context.groupId);
+      const isComm = Boolean(liveGroup?.isCommunity);
       sourceBadgeText = canAccess
-        ? liveGroup?.name || context.groupName || "Group chat"
-        : "Private group";
+        ? liveGroup?.name || context.groupName || (isComm ? "Community" : "Group chat")
+        : isComm
+          ? "Community"
+          : "Private group";
     } else if (context.sourceKind === "dm") {
       sourceBadgeText = "Direct message";
     }
@@ -79,9 +83,13 @@ export const ForwardedMessageCard = memo(function ForwardedMessageCard({
         />
         <div className="forwarded-card-author-meta">
           <div className="forwarded-card-author-line">
-            <strong className="forwarded-card-author-name">{authorName}</strong>
+            <strong className="forwarded-card-author-name">
+              <IosEmojiText text={authorName} />
+            </strong>
             {sourceBadgeText ? (
-              <span className="forwarded-card-source-tag">· {sourceBadgeText}</span>
+              <span className="forwarded-card-source-tag">
+                · <IosEmojiText text={sourceBadgeText} />
+              </span>
             ) : null}
           </div>
           {formattedDate ? (
