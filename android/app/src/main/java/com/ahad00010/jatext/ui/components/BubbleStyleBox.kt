@@ -934,18 +934,35 @@ fun JaGroupAvatar(
     name: String,
     size: Dp = 44.dp,
     ringWidth: Dp = 2.dp,
+    avatarColor: String? = null,
     palette: JaTextPalette = LocalJaTextPalette.current,
     modifier: Modifier = Modifier,
 ) {
     val resolvedUrl = remember(avatarUrl) {
         avatarUrl?.takeIf { it.isNotBlank() }?.let { TursoApiClient.resolveAbsoluteMediaUrl(it) }
     }
+    val customSpec = avatarColor?.takeIf { it.isNotBlank() }?.let { JaTextThemeManager.avatarColorSpec(it) }
+    val ringTint = customSpec?.ringColor ?: palette.accent.copy(alpha = 0.55f)
+    val initial = name.trim().take(1).uppercase().ifBlank { "#" }
+
     Box(
         modifier = modifier
             .size(size)
             .clip(CircleShape)
-            .background(palette.accentSoft)
-            .border(ringWidth, palette.accent.copy(alpha = 0.55f), CircleShape),
+            .then(
+                if (customSpec != null) {
+                    Modifier.background(
+                        Brush.linearGradient(
+                            colors = customSpec.gradientStops,
+                            start = Offset.Zero,
+                            end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
+                        )
+                    )
+                } else {
+                    Modifier.background(palette.accentSoft)
+                }
+            )
+            .border(ringWidth, ringTint, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         if (!resolvedUrl.isNullOrBlank()) {
@@ -956,6 +973,14 @@ fun JaGroupAvatar(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(CircleShape),
+            )
+        } else if (customSpec != null) {
+            Text(
+                text = initial,
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontFamily = com.ahad00010.jatext.ui.theme.SfProRoundedFontFamily,
+                fontSize = (size.value * 0.42f).sp,
             )
         } else {
             Icon(

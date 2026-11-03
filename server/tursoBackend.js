@@ -470,6 +470,10 @@ async function initSchema(db) {
     `ALTER TABLE users ADD COLUMN is_suspended INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN session_revoked_at INTEGER`,
     `ALTER TABLE oauth_mobile_handoffs ADD COLUMN challenge_token TEXT`,
+    `ALTER TABLE groups ADD COLUMN is_community INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE groups ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE groups ADD COLUMN avatar_color TEXT NOT NULL DEFAULT 'purple'`,
+    `ALTER TABLE groups ADD COLUMN community_key_seed TEXT`,
   ];
   for (const sql of safeAlters) {
     try {
@@ -1542,6 +1546,7 @@ async function hydrateCommunityMessages(db, rows, meRow, role) {
 async function listMyGroupsHydrated(db, meId) {
   const memRes = await db.execute({
     sql: `SELECT gm.group_id, gm.role, gm.muted, g.name, g.owner_id, g.avatar_url, g.created_at,
+                 g.is_community, g.description, g.avatar_color, g.community_key_seed,
                  gus.is_silenced, gus.is_archived, gus.last_read_at, gus.cleared_at
           FROM group_members gm
           JOIN groups g ON g.id = gm.group_id
@@ -1554,7 +1559,7 @@ async function listMyGroupsHydrated(db, meId) {
   const groupIds = memRes.rows.map((r) => String(r.group_id));
   const ph = groupIds.map(() => "?").join(",");
 
-  const [countsRes, latestBatchRes] = await Promise.all([
+  const [countsRes, latestBatchRes, unreadBatchRes] = await Promise.all([
     db.execute({
       sql: `SELECT group_id, COUNT(*) AS cnt FROM group_members WHERE group_id IN (${ph}) GROUP BY group_id`,
       args: groupIds,
@@ -1578,10 +1583,43 @@ async function listMyGroupsHydrated(db, meId) {
         args: [gid],
       })),
     ),
+    db.batch(
+      memRes.rows.map((r) => {
+        const gid = String(r.group_id);
+        const cutoff = Math.max(
+          r.last_read_at != null ? Number(r.last_read_at) : Number(r.created_at || 0),
+          r.cleared_at != null ? Number(r.cleared_at) : 0,
+        );
+        return {
+          sql: `SELECT COUNT(*) AS cnt FROM group_messages
+                WHERE group_id = ?
+                  AND created_at > ?
+                  AND sender_id != ?
+                  AND unsent_at IS NULL
+                  AND body NOT LIKE '__JATEXT_SIG__:%'
+                  AND body NOT LIKE '__JATEXT_CALL_SIG__:%'
+                  AND body NOT LIKE '__JATEXT_REACT__:%'
+                  AND body NOT LIKE '__JATEXT_SEEN__:%'
+                  AND body NOT LIKE '__JATEXT_GRP_SEEN__:%'
+                  AND body NOT LIKE '__JATEXT_GROUP_SEEN_V1__:%'
+                  AND body NOT LIKE '__JATEXT_IK_V1__:%'
+                  AND body NOT LIKE '__JATEXT_GK_V1__:%'
+                  AND body NOT LIKE '__JATEXT_E2EE_IK__:%'
+                  AND body NOT LIKE '__JATEXT_E2EE_GK__:%'`,
+          args: [gid, cutoff, meId],
+        };
+      }),
+    ),
   ]);
 
   const countMap = new Map();
   for (const c of countsRes.rows) countMap.set(String(c.group_id), Number(c.cnt));
+
+  const unreadMap = new Map();
+  memRes.rows.forEach((r, idx) => {
+    const cnt = Number(unreadBatchRes[idx]?.rows?.[0]?.cnt || 0);
+    unreadMap.set(String(r.group_id), cnt);
+  });
 
   const latestMap = new Map();
   const senderIds = [];
@@ -1614,13 +1652,21 @@ async function listMyGroupsHydrated(db, meId) {
               (latest.sticker_url ? `Sticker: ${latest.sticker_name || "Sticker"}` : "") ||
               (latest.attachment_name ? `Attachment: ${latest.attachment_name}` : ""),
           );
+    const isCommunity = Boolean(Number(r.is_community || 0));
     return {
       id: gid,
       name: String(r.name),
       ...(r.avatar_url ? { avatarUrl: String(r.avatar_url) } : {}),
+      avatarColor: String(r.avatar_color || "purple"),
+      description: String(r.description || ""),
+      isCommunity,
+      ...(isCommunity && r.community_key_seed
+        ? { communityKeySeed: String(r.community_key_seed) }
+        : {}),
       ownerId: String(r.owner_id),
       role: String(r.role),
       memberCount: countMap.get(gid) || 1,
+      unreadCount: unreadMap.get(gid) || 0,
       lastMessage,
       lastMessageAt: showLatest ? Number(latest.created_at) : Number(r.created_at),
       ...(showLatest ? { lastSenderId: String(latest.sender_id) } : {}),
@@ -1633,6 +1679,73 @@ async function listMyGroupsHydrated(db, meId) {
 
   summaries.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
   return summaries;
+}
+
+async function listExploreCommunitiesHydrated(db, meId) {
+  const commRes = await db.execute({
+    sql: `SELECT * FROM groups WHERE is_community = 1 ORDER BY updated_at DESC LIMIT 120`,
+    args: [],
+  });
+  if (!commRes.rows.length) return [];
+
+  const commIds = commRes.rows.map((r) => String(r.id));
+  const ph = commIds.map(() => "?").join(",");
+  const [countsRes, myMemsRes] = await Promise.all([
+    db.execute({
+      sql: `SELECT group_id, COUNT(*) AS cnt FROM group_members WHERE group_id IN (${ph}) GROUP BY group_id`,
+      args: commIds,
+    }),
+    db.execute({
+      sql: `SELECT group_id, role FROM group_members WHERE user_id = ? AND group_id IN (${ph})`,
+      args: [meId, ...commIds],
+    }),
+  ]);
+
+  const countMap = new Map();
+  for (const c of countsRes.rows) countMap.set(String(c.group_id), Number(c.cnt));
+
+  const myRoleMap = new Map();
+  for (const m of myMemsRes.rows) myRoleMap.set(String(m.group_id), String(m.role));
+
+  return commRes.rows
+    .map((r) => {
+      const cid = String(r.id);
+      const myRole = myRoleMap.get(cid) || null;
+      return {
+        id: cid,
+        name: String(r.name),
+        description: String(r.description || ""),
+        ...(r.avatar_url ? { avatarUrl: String(r.avatar_url) } : {}),
+        avatarColor: String(r.avatar_color || "purple"),
+        ownerId: String(r.owner_id),
+        memberCount: countMap.get(cid) || 1,
+        isJoined: Boolean(myRole),
+        ...(myRole ? { role: myRole } : {}),
+        createdAt: Number(r.created_at || 0),
+        updatedAt: Number(r.updated_at || 0),
+      };
+    })
+    .sort((a, b) => b.memberCount - a.memberCount || b.updatedAt - a.updatedAt);
+}
+
+async function getGroupReadReceipts(db, groupId) {
+  if (!groupId) return [];
+  const res = await db.execute({
+    sql: `SELECT gus.user_id, gus.last_read_at, u.display_name, u.username, u.avatar_color, u.avatar_url
+          FROM group_user_settings gus
+          INNER JOIN group_members gm ON gm.group_id = gus.group_id AND gm.user_id = gus.user_id
+          INNER JOIN users u ON u.id = gus.user_id
+          WHERE gus.group_id = ? AND gus.last_read_at IS NOT NULL AND gus.last_read_at > 0`,
+    args: [groupId],
+  });
+  return res.rows.map((r) => ({
+    userId: String(r.user_id),
+    lastReadAt: Number(r.last_read_at),
+    displayName: String(r.display_name || ""),
+    username: String(r.username || ""),
+    avatarColor: String(r.avatar_color || "black"),
+    ...(r.avatar_url ? { avatarUrl: String(r.avatar_url) } : {}),
+  }));
 }
 
 async function buildSocialAndPreviews(db, meId) {
@@ -2272,6 +2385,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         commSettingsRes,
         commMsgsRes,
         groups,
+        exploreCommunities,
         vaultRes,
         commDirRes,
         openedViewOnceIds,
@@ -2288,6 +2402,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           `SELECT * FROM community_messages WHERE type != 'deleted' ORDER BY created_at DESC LIMIT 121`,
         ),
         listMyGroupsHydrated(db, meId),
+        listExploreCommunitiesHydrated(db, meId),
         db.execute({
           sql: `SELECT key_id FROM e2ee_key_backups WHERE user_id = ? LIMIT 1`,
           args: [meId],
@@ -2341,6 +2456,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         communityMessages,
         communityHasMore: commHasMore,
         groups,
+        exploreCommunities,
         hasRemoteE2EEVault: vaultRes.rows.length > 0,
         remoteVaultKeyId: vaultRes.rows[0] ? String(vaultRes.rows[0].key_id) : null,
         openedViewOnceIds,
@@ -2540,6 +2656,18 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           ? await listMyGroupsHydrated(db, meId)
           : undefined;
 
+      const [groupReadReceipts, exploreCommunitiesCheck] = await Promise.all([
+        activeGroupId ? getGroupReadReceipts(db, activeGroupId) : Promise.resolve(undefined),
+        db.execute({
+          sql: `SELECT 1 FROM groups WHERE is_community = 1 AND updated_at > ? LIMIT 1`,
+          args: [sinceTs],
+        }),
+      ]);
+      const exploreCommunities =
+        exploreCommunitiesCheck.rows.length > 0 || args.forceGroups
+          ? await listExploreCommunitiesHydrated(db, meId)
+          : undefined;
+
       // Resolve typing users across active group, all member groups, community, and 1:1 DMs
       const dmTypingUserIds = dmTypingRes.rows.map((r) => String(r.user_id)).filter(Boolean);
       const allTypingIds = Array.from(
@@ -2580,6 +2708,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         ...(callGroupMessages.length ? { callGroupMessages } : {}),
         ...(changedCommunityMessages.length ? { changedCommunityMessages } : {}),
         ...(groups ? { groups } : {}),
+        ...(exploreCommunities ? { exploreCommunities } : {}),
+        ...(groupReadReceipts ? { groupReadReceipts } : {}),
         dmTypingUserIds,
         typingByGroup,
         groupTypingUsers,
@@ -2683,15 +2813,32 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
     case "getUserById": {
       await requireMeRow(db, auth);
       const uid = String(args.userId || "");
-      const res = await db.execute({ sql: `SELECT * FROM users WHERE id = ? LIMIT 1`, args: [uid] });
-      return { user: res.rows[0] ? mapUserRow(res.rows[0], false) : null };
+      const [res, presRes] = await Promise.all([
+        db.execute({ sql: `SELECT * FROM users WHERE id = ? LIMIT 1`, args: [uid] }),
+        db.execute({
+          sql: `SELECT last_seen_at, last_active_at FROM presence WHERE user_id = ? LIMIT 1`,
+          args: [uid],
+        }),
+      ]);
+      const base = res.rows[0] ? mapUserRow(res.rows[0], false) : null;
+      if (!base) return { user: null };
+      const pres = presRes.rows[0];
+      const lastSeenAt = pres?.last_seen_at != null ? Number(pres.last_seen_at) : null;
+      return {
+        user: {
+          ...base,
+          ...(lastSeenAt ? { lastSeenAt } : {}),
+        },
+      };
     }
 
     case "setActivity": {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
-      const status = ["online", "dnd", "offline"].includes(args.status) ? args.status : "online";
-      const customStatus = String(args.customStatus || "").slice(0, 80);
+      const status = ["online", "away", "idle", "dnd", "offline"].includes(args.status)
+        ? args.status
+        : "online";
+      const customStatus = String(args.customStatus || "").slice(0, 200);
       await db.execute({
         sql: `UPDATE users SET status_preference = ?, custom_status = ?, updated_at = ? WHERE id = ?`,
         args: [status, customStatus, now, meId],
@@ -3699,36 +3846,129 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
     }
 
     /* ---------- Groups ---------- */
-    case "createGroup": {
+    case "createGroup":
+    case "createCommunity": {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
+      const isCommunity = op === "createCommunity" || Boolean(args.isCommunity);
       const name = String(args.name || "").trim().slice(0, 60);
-      if (!name) throw new TursoAppError("Group name is required.");
+      if (!name) {
+        throw new TursoAppError(
+          isCommunity ? "Community name is required." : "Group name is required.",
+        );
+      }
+      const description = String(args.description || "").trim().slice(0, 240);
+      const avatarColor = String(args.avatarColor || "purple").trim().slice(0, 40) || "purple";
+      const avatarUrl = args.avatarUrl ? String(args.avatarUrl) : null;
+      const clientSeed =
+        typeof args.communityKeySeed === "string" && args.communityKeySeed.trim().length >= 32
+          ? args.communityKeySeed.trim().slice(0, 128)
+          : null;
+      const communityKeySeed = isCommunity
+        ? clientSeed || base64UrlEncode(crypto.randomBytes(32))
+        : null;
       const rawMembers = Array.isArray(args.memberIds) ? args.memberIds.map(String) : [];
-      const uniqueMembers = [...new Set([meId, ...rawMembers])];
+      const uniqueMembers = [...new Set([meId, ...rawMembers.filter(Boolean)])];
       const gid = newId();
       const stmts = [
         {
-          sql: `INSERT INTO groups (id, name, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-          args: [gid, name, meId, now, now],
+          sql: `INSERT INTO groups (id, name, avatar_url, avatar_color, description, is_community, community_key_seed, owner_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            gid,
+            name,
+            avatarUrl,
+            avatarColor,
+            description,
+            isCommunity ? 1 : 0,
+            communityKeySeed,
+            meId,
+            now,
+            now,
+          ],
         },
         ...uniqueMembers.map((uid) => ({
           sql: `INSERT INTO group_members (group_id, user_id, role, muted, joined_at, updated_at)
                 VALUES (?, ?, ?, 0, ?, ?)`,
           args: [gid, uid, uid === meId ? "owner" : "member", now, now],
         })),
+        {
+          sql: `INSERT INTO group_user_settings (user_id, group_id, is_silenced, is_archived, last_read_at, cleared_at, updated_at)
+                VALUES (?, ?, 0, 0, ?, NULL, ?)
+                ON CONFLICT(user_id, group_id) DO UPDATE SET last_read_at = excluded.last_read_at, updated_at = excluded.updated_at`,
+          args: [meId, gid, now, now],
+        },
       ];
       await db.batch(stmts, "write");
-      return { groupId: gid };
+      return {
+        groupId: gid,
+        ...(communityKeySeed ? { communityKeySeed } : {}),
+      };
+    }
+
+    case "exploreCommunities": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const communities = await listExploreCommunitiesHydrated(db, meId);
+      return { communities };
+    }
+
+    case "joinCommunity": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const communityId = String(args.communityId || args.groupId || "").trim();
+      if (!communityId) throw new TursoAppError("Community not found.");
+      const grpRes = await db.execute({
+        sql: `SELECT * FROM groups WHERE id = ? AND is_community = 1 LIMIT 1`,
+        args: [communityId],
+      });
+      if (!grpRes.rows.length) {
+        throw new TursoAppError("Community no longer exists.");
+      }
+      const g = grpRes.rows[0];
+      let seed = g.community_key_seed ? String(g.community_key_seed) : null;
+      if (!seed) {
+        seed = base64UrlEncode(crypto.randomBytes(32));
+        await db.execute({
+          sql: `UPDATE groups SET community_key_seed = ? WHERE id = ? AND community_key_seed IS NULL`,
+          args: [seed, communityId],
+        });
+      }
+      await db.batch(
+        [
+          {
+            sql: `INSERT OR IGNORE INTO group_members (group_id, user_id, role, muted, joined_at, updated_at)
+                  VALUES (?, ?, 'member', 0, ?, ?)`,
+            args: [communityId, meId, now, now],
+          },
+          {
+            sql: `INSERT INTO group_user_settings (user_id, group_id, is_silenced, is_archived, last_read_at, cleared_at, updated_at)
+                  VALUES (?, ?, 0, 0, ?, NULL, ?)
+                  ON CONFLICT(user_id, group_id) DO UPDATE SET last_read_at = excluded.last_read_at, updated_at = excluded.updated_at`,
+            args: [meId, communityId, now, now],
+          },
+          {
+            sql: `UPDATE groups SET updated_at = ? WHERE id = ?`,
+            args: [now, communityId],
+          },
+        ],
+        "write",
+      );
+      return {
+        ok: true,
+        groupId: communityId,
+        communityKeySeed: seed,
+      };
     }
 
     case "getGroupDetails": {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
       const groupId = String(args.groupId || "");
-      const [grpRes, memRes] = await Promise.all([
+      const [grpRes, memRes, readReceipts] = await Promise.all([
         db.execute({ sql: `SELECT * FROM groups WHERE id = ? LIMIT 1`, args: [groupId] }),
         db.execute({ sql: `SELECT * FROM group_members WHERE group_id = ?`, args: [groupId] }),
+        getGroupReadReceipts(db, groupId),
       ]);
       if (!grpRes.rows.length) return { details: null };
       const myMem = memRes.rows.find((m) => String(m.user_id) === meId);
@@ -3751,14 +3991,22 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         .filter(Boolean);
 
       const g = grpRes.rows[0];
+      const isCommunity = Boolean(Number(g.is_community || 0));
       return {
         details: {
           id: String(g.id),
           name: String(g.name),
           ...(g.avatar_url ? { avatarUrl: String(g.avatar_url) } : {}),
+          avatarColor: String(g.avatar_color || "purple"),
+          description: String(g.description || ""),
+          isCommunity,
+          ...(isCommunity && g.community_key_seed
+            ? { communityKeySeed: String(g.community_key_seed) }
+            : {}),
           ownerId: String(g.owner_id),
           role: String(myMem.role),
           members,
+          readReceipts,
         },
       };
     }
@@ -3770,41 +4018,53 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const beforeTs = args.beforeTs != null ? Number(args.beforeTs) : 0;
       const pageLimit = Math.min(250, Math.max(20, Number(args.limit || 160)));
 
-      const [memRes, gusRes, msgsRes, recentSigsRes] = await Promise.all([
-        db.execute({
-          sql: `SELECT role FROM group_members WHERE group_id = ? AND user_id = ? LIMIT 1`,
-          args: [groupId, meId],
-        }),
-        db.execute({
-          sql: `SELECT cleared_at FROM group_user_settings WHERE user_id = ? AND group_id = ? LIMIT 1`,
-          args: [meId, groupId],
-        }),
-        beforeTs > 0
-          ? db.execute({
-              sql: `SELECT * FROM group_messages
-                    WHERE group_id = ? AND created_at < ? AND body NOT LIKE '__JATEXT_SIG__:%'
-                    ORDER BY created_at DESC
-                    LIMIT ?`,
-              args: [groupId, beforeTs, pageLimit + 1],
-            })
-          : db.execute({
-              sql: `SELECT * FROM group_messages
-                    WHERE group_id = ? AND body NOT LIKE '__JATEXT_SIG__:%'
-                    ORDER BY created_at DESC
-                    LIMIT ?`,
-              args: [groupId, pageLimit + 1],
-            }),
-        beforeTs > 0
-          ? Promise.resolve({ rows: [] })
-          : db.execute({
-              sql: `SELECT * FROM group_messages
-                    WHERE group_id = ? AND body LIKE '__JATEXT_SIG__:%' AND created_at > ?
-                    ORDER BY created_at ASC
-                    LIMIT 40`,
-              args: [groupId, Date.now() - 120_000],
-            }),
-      ]);
-      if (!memRes.rows.length) return { messages: [], hasMore: false };
+      const [memRes, gusRes, msgsRes, recentSigsRes, recentSeenCursorsRes, readReceipts] =
+        await Promise.all([
+          db.execute({
+            sql: `SELECT role FROM group_members WHERE group_id = ? AND user_id = ? LIMIT 1`,
+            args: [groupId, meId],
+          }),
+          db.execute({
+            sql: `SELECT cleared_at FROM group_user_settings WHERE user_id = ? AND group_id = ? LIMIT 1`,
+            args: [meId, groupId],
+          }),
+          beforeTs > 0
+            ? db.execute({
+                sql: `SELECT * FROM group_messages
+                      WHERE group_id = ? AND created_at < ? AND body NOT LIKE '__JATEXT_SIG__:%'
+                      ORDER BY created_at DESC
+                      LIMIT ?`,
+                args: [groupId, beforeTs, pageLimit + 1],
+              })
+            : db.execute({
+                sql: `SELECT * FROM group_messages
+                      WHERE group_id = ? AND body NOT LIKE '__JATEXT_SIG__:%'
+                      ORDER BY created_at DESC
+                      LIMIT ?`,
+                args: [groupId, pageLimit + 1],
+              }),
+          beforeTs > 0
+            ? Promise.resolve({ rows: [] })
+            : db.execute({
+                sql: `SELECT * FROM group_messages
+                      WHERE group_id = ? AND body LIKE '__JATEXT_SIG__:%' AND created_at > ?
+                      ORDER BY created_at ASC
+                      LIMIT 40`,
+                args: [groupId, Date.now() - 120_000],
+              }),
+          beforeTs > 0
+            ? Promise.resolve({ rows: [] })
+            : db.execute({
+                sql: `SELECT * FROM group_messages
+                      WHERE group_id = ?
+                        AND (body LIKE '__JATEXT_CALL_SIG__:SEEN:%' OR body LIKE '__JATEXT_E2EE_V1__:%')
+                      ORDER BY updated_at DESC
+                      LIMIT 80`,
+                args: [groupId],
+              }),
+          beforeTs > 0 ? Promise.resolve([]) : getGroupReadReceipts(db, groupId),
+        ]);
+      if (!memRes.rows.length) return { messages: [], hasMore: false, readReceipts: [] };
       const clearedAt = gusRes.rows[0]?.cleared_at != null ? Number(gusRes.rows[0].cleared_at) : 0;
       const rawHasMore = msgsRes.rows.length > pageLimit;
       const sliced = rawHasMore ? msgsRes.rows.slice(0, pageLimit) : msgsRes.rows;
@@ -3818,11 +4078,14 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       for (const s of recentSigsRes.rows) {
         combinedMap.set(String(s.id), s);
       }
+      for (const sc of recentSeenCursorsRes.rows) {
+        combinedMap.set(String(sc.id), sc);
+      }
       const ordered = [...combinedMap.values()].sort(
         (a, b) => Number(a.created_at) - Number(b.created_at),
       );
       const messages = await hydrateGroupMessages(db, ordered, meId, clearedAt);
-      return { messages, hasMore };
+      return { messages, hasMore, readReceipts };
     }
 
     case "sendGroupMessage": {
@@ -3893,6 +4156,12 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           {
             sql: `UPDATE groups SET updated_at = ? WHERE id = ?`,
             args: [writeAt, groupId],
+          },
+          {
+            sql: `INSERT INTO group_user_settings (user_id, group_id, is_silenced, is_archived, last_read_at, cleared_at, updated_at)
+                  VALUES (?, ?, 0, 0, ?, NULL, ?)
+                  ON CONFLICT(user_id, group_id) DO UPDATE SET last_read_at = excluded.last_read_at, updated_at = excluded.updated_at`,
+            args: [meId, groupId, writeAt, writeAt],
           },
         ],
         "write",
@@ -4200,6 +4469,30 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           await db.execute({
             sql: `UPDATE groups SET avatar_url = ?, updated_at = ? WHERE id = ?`,
             args: [args.avatarUrl ? String(args.avatarUrl) : null, now, groupId],
+          });
+          return { ok: true };
+        }
+
+        case "setAvatarColor": {
+          if (!isMod) {
+            throw new TursoAppError("Only owners or moderators can change the avatar color.", 403);
+          }
+          const avatarColor = String(args.avatarColor || "purple").trim().slice(0, 40) || "purple";
+          await db.execute({
+            sql: `UPDATE groups SET avatar_color = ?, updated_at = ? WHERE id = ?`,
+            args: [avatarColor, now, groupId],
+          });
+          return { ok: true };
+        }
+
+        case "setDescription": {
+          if (!isMod) {
+            throw new TursoAppError("Only owners or moderators can update the description.", 403);
+          }
+          const description = String(args.description || "").trim().slice(0, 240);
+          await db.execute({
+            sql: `UPDATE groups SET description = ?, updated_at = ? WHERE id = ?`,
+            args: [description, now, groupId],
           });
           return { ok: true };
         }

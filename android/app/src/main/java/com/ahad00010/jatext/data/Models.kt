@@ -60,6 +60,7 @@ data class JaUser(
     val website: UserWebsiteLink? = null,
     val syncedTheme: SyncedThemePayload? = null,
     val totpEnabled: Boolean = false,
+    val lastSeenAt: Long? = null,
     @SerialName("isOwner")
     val serverIsOwner: Boolean = false,
 ) {
@@ -396,10 +397,39 @@ data class CommunityMessage(
 }
 
 @Serializable
+data class GroupReadReceipt(
+    val userId: String = "",
+    val lastReadAt: Long = 0L,
+    val displayName: String = "",
+    val username: String = "",
+    val avatarColor: String = "black",
+    val avatarUrl: String? = null,
+)
+
+@Serializable
+data class ExploreCommunitySummary(
+    val id: String = "",
+    val name: String = "",
+    val description: String = "",
+    val avatarUrl: String? = null,
+    val avatarColor: String = "purple",
+    val ownerId: String = "",
+    val memberCount: Int = 1,
+    val isJoined: Boolean = false,
+    val role: String? = null,
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L,
+)
+
+@Serializable
 data class GroupSummary(
     val id: String = "",
     val name: String = "",
     val avatarUrl: String? = null,
+    val avatarColor: String = "purple",
+    val description: String = "",
+    val isCommunity: Boolean = false,
+    val communityKeySeed: String? = null,
     val ownerId: String = "",
     val role: String = "member",
     val memberCount: Int = 0,
@@ -427,18 +457,46 @@ data class GroupMember(
     val avatarColor: String = "black",
     val avatarUrl: String? = null,
     val bannerUrl: String? = null,
+    val statusPreference: String? = "online",
+    val customStatus: String? = "",
+    val socials: List<UserSocialLink>? = null,
+    val website: UserWebsiteLink? = null,
+    val lastSeenAt: Long? = null,
     val role: String = "member",
     val muted: Boolean = false,
-)
+) {
+    fun toJaUser(): JaUser = JaUser(
+        id = id,
+        email = email,
+        displayName = displayName,
+        username = username,
+        bio = bio,
+        pronouns = pronouns,
+        avatarColor = avatarColor,
+        avatarUrl = avatarUrl,
+        bannerUrl = bannerUrl,
+        onboardingComplete = true,
+        statusPreference = statusPreference,
+        customStatus = customStatus,
+        socials = socials,
+        website = website,
+        lastSeenAt = lastSeenAt,
+    )
+}
 
 @Serializable
 data class GroupDetails(
     val id: String = "",
     val name: String = "",
     val avatarUrl: String? = null,
+    val avatarColor: String = "purple",
+    val description: String = "",
+    val isCommunity: Boolean = false,
+    val communityKeySeed: String? = null,
     val ownerId: String = "",
     val role: String = "member",
     val members: List<GroupMember> = emptyList(),
+    val readReceipts: List<GroupReadReceipt> = emptyList(),
 ) {
     val myRole: String
         get() = role
@@ -542,6 +600,7 @@ data class BootstrapResponse(
     val communityMessages: List<CommunityMessage> = emptyList(),
     val communityHasMore: Boolean = false,
     val groups: List<GroupSummary> = emptyList(),
+    val exploreCommunities: List<ExploreCommunitySummary> = emptyList(),
     val hasRemoteE2EEVault: Boolean = false,
     val remoteVaultKeyId: String? = null,
     val openedViewOnceIds: List<String> = emptyList(),
@@ -578,6 +637,8 @@ data class SyncResponse(
     val callGroupMessages: List<GroupMessage>? = null,
     val changedCommunityMessages: List<CommunityMessage>? = null,
     val groups: List<GroupSummary>? = null,
+    val exploreCommunities: List<ExploreCommunitySummary>? = null,
+    val groupReadReceipts: List<GroupReadReceipt>? = null,
     val dmTypingUserIds: List<String> = emptyList(),
     val typingByGroup: Map<String, List<ChatTypingUser>> = emptyMap(),
     val groupTypingUsers: List<ChatTypingUser> = emptyList(),

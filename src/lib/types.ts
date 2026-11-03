@@ -157,10 +157,44 @@ export interface CommunityUser {
   createdAt: number;
 }
 
+export interface GroupReadReceipt {
+  userId: string;
+  lastReadAt: number;
+  displayName: string;
+  username: string;
+  avatarColor: string;
+  avatarUrl?: string;
+}
+
+export interface ExploreCommunitySummary {
+  id: string;
+  name: string;
+  description?: string;
+  avatarUrl?: string;
+  avatarColor: string;
+  ownerId: string;
+  memberCount: number;
+  isJoined: boolean;
+  role?: "owner" | "moderator" | "member";
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface CreateCommunityInput {
+  name: string;
+  description?: string;
+  avatarColor?: string;
+  avatarFile?: File | null;
+}
+
 export interface GroupSummary {
   id: string;
   name: string;
   avatarUrl?: string;
+  avatarColor?: string;
+  description?: string;
+  isCommunity?: boolean;
+  communityKeySeed?: string;
   ownerId: string;
   role: "owner" | "moderator" | "member";
   memberCount: number;
@@ -183,9 +217,14 @@ export interface GroupDetails {
   id: string;
   name: string;
   avatarUrl?: string;
+  avatarColor?: string;
+  description?: string;
+  isCommunity?: boolean;
+  communityKeySeed?: string;
   ownerId: string;
   role: "owner" | "moderator" | "member";
   members: GroupMember[];
+  readReceipts?: GroupReadReceipt[];
 }
 
 export interface GroupMessage {
@@ -291,6 +330,7 @@ export interface JaTextStore {
   groupDetails: GroupDetails | null;
   groupMessages: GroupMessage[];
   groupMessagesReady: boolean;
+  exploreCommunities?: ExploreCommunitySummary[];
   groupTypingUsers: ChatTypingUser[];
   communityTypingUsers: ChatTypingUser[];
   notificationsEnabled: boolean;
@@ -381,6 +421,11 @@ export interface JaTextStore {
   favoriteGroupStickerFromMessage: (messageId: string) => Promise<void>;
   renameGroup: (groupId: string, name: string) => Promise<void>;
   setGroupAvatar: (groupId: string, file: File | null) => Promise<void>;
+  setGroupAvatarColor?: (groupId: string, avatarColor: string) => Promise<void>;
+  setGroupDescription?: (groupId: string, description: string) => Promise<void>;
+  createCommunity?: (input: CreateCommunityInput) => Promise<string>;
+  joinCommunity?: (communityId: string) => Promise<string>;
+  refreshExploreCommunities?: () => Promise<ExploreCommunitySummary[]>;
   setGroupMemberRole: (groupId: string, userId: string, role: "moderator" | "member") => Promise<void>;
   setGroupMuted: (groupId: string, userId: string, muted: boolean) => Promise<void>;
   removeGroupMember: (groupId: string, userId: string) => Promise<void>;

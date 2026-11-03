@@ -1027,6 +1027,29 @@ export function generateGroupEpochSecretB64(): string {
   return bytesToBase64Url(randomBytes(32));
 }
 
+export async function deriveCommunityEpochSecretB64(
+  groupId: string,
+  communityKeySeed: string,
+  epoch = 1,
+): Promise<string> {
+  const subtle = getSubtle();
+  const ikm = base64UrlToBytes(communityKeySeed.trim());
+  const salt = encoder.encode("JaText-Community-Salt-v1");
+  const info = encoder.encode(`JaText-Community-EpochSecret-v1|${groupId}|${epoch}`);
+  const baseKey = await subtle.importKey("raw", toArrayBuffer(ikm), "HKDF", false, ["deriveBits"]);
+  const bits = await subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: toArrayBuffer(salt),
+      info: toArrayBuffer(info),
+    },
+    baseKey,
+    256,
+  );
+  return bytesToBase64Url(new Uint8Array(bits));
+}
+
 function buildGroupKeyPacketSigPayload(
   gid: string,
   ep: number,

@@ -671,6 +671,10 @@ private fun JaTextRootHost(
                 details = state.groupDetails!!,
                 vm = vm,
                 onDismiss = { showGroupMembers = false },
+                onOpenMemberProfile = { peer ->
+                    showGroupMembers = false
+                    viewingPeerProfile = peer
+                },
             )
         }
 

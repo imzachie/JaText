@@ -91,6 +91,8 @@ const MUTATION_OPS = new Set([
   "mutateCommunityMessage",
   "setCommunityPrefs",
   "createGroup",
+  "createCommunity",
+  "joinCommunity",
   "sendGroupMessage",
   "mutateGroupMessage",
   "manageGroup",

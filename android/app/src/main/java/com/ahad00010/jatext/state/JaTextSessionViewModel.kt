@@ -42,11 +42,13 @@ import com.ahad00010.jatext.data.DeviceLinkStatusResponse
 import com.ahad00010.jatext.data.E2EEPlainPayload
 import com.ahad00010.jatext.data.EncryptedBlobDescriptor
 import com.ahad00010.jatext.data.EncryptedStickerDescriptor
+import com.ahad00010.jatext.data.ExploreCommunitySummary
 import com.ahad00010.jatext.data.ForwardedMessageContext
 import com.ahad00010.jatext.data.FriendActivity
 import com.ahad00010.jatext.data.FriendRequest
 import com.ahad00010.jatext.data.GroupDetails
 import com.ahad00010.jatext.data.GroupMessage
+import com.ahad00010.jatext.data.GroupReadReceipt
 import com.ahad00010.jatext.data.GroupSeenReader
 import com.ahad00010.jatext.data.GroupSummary
 import com.ahad00010.jatext.data.JaTextJson
@@ -179,6 +181,8 @@ data class SessionUiState(
     val pendingTwoFactorEmail: String = "",
     val securitySettings: SecuritySettingsResponse = SecuritySettingsResponse(),
     val blockedUsersList: List<JaUser> = emptyList(),
+    val exploreCommunities: List<ExploreCommunitySummary> = emptyList(),
+    val joiningCommunityId: String? = null,
 )
 
 class JaTextSessionViewModel(app: Application) :
@@ -636,6 +640,7 @@ class JaTextSessionViewModel(app: Application) :
                 pinnedMessagesByThread = cache.getPinnedMessagesMap(slotId),
                 soundboards = effectiveSoundboards,
                 groups = initialGroups,
+                exploreCommunities = boot.exploreCommunities,
                 communityPermissions = boot.communityPermissions,
                 communityDirectory = boot.communityDirectory,
                 communityMuted = boot.communityMuted,
@@ -686,6 +691,9 @@ class JaTextSessionViewModel(app: Application) :
             p.copy(body = text)
         }.sortedByDescending { it.createdAt }
         val hydratedGroups = rawGroups.map { g ->
+            if (!g.communityKeySeed.isNullOrBlank()) {
+                JaTextCryptoEngine.registerCommunitySeedEpoch(appCtx, myId, g.id, g.communityKeySeed)
+            }
             val rawDec = JaTextCryptoEngine.decryptPreviewText(
                 context = appCtx,
                 myUserId = myId,
@@ -841,9 +849,22 @@ class JaTextSessionViewModel(app: Application) :
                         it
                     )
                 }.orEmpty()
+                val readReceipts = msgRoot["readReceipts"]?.let {
+                    runCatching {
+                        JaTextJson.decodeFromJsonElement(
+                            kotlinx.serialization.builtins.ListSerializer(GroupReadReceipt.serializer()),
+                            it
+                        )
+                    }.getOrNull()
+                } ?: _state.value.groupDetails?.readReceipts.orEmpty()
+                val seedCandidate = _state.value.groupDetails?.communityKeySeed
+                    ?: _state.value.groups.firstOrNull { it.id == activeGrp }?.communityKeySeed
+                if (!seedCandidate.isNullOrBlank()) {
+                    JaTextCryptoEngine.registerCommunitySeedEpoch(appCtx, myId, activeGrp, seedCandidate)
+                }
                 val hasMore = msgRoot["hasMore"]?.jsonPrimitive?.booleanOrNull == true
                 val members = _state.value.groupDetails?.members.orEmpty()
-                val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(appCtx, myId, activeGrp, rawMsgs, members, token)
+                val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(appCtx, myId, activeGrp, rawMsgs, members, token, readReceipts)
                 syncWallpaperFromGroupMessages(activeGrp, outcome.messages)
                 cache.saveGroupMessagesCache(st.slotId, activeGrp, outcome.messages)
                 if (_state.value.activeGroupId == activeGrp) {
@@ -1094,7 +1115,11 @@ class JaTextSessionViewModel(app: Application) :
                         sync.changedGroupMessages,
                         members,
                         token,
+                        sync.groupReadReceipts ?: _state.value.groupDetails?.readReceipts.orEmpty(),
                     )
+                    if (!outcome.myCursorMessageId.isNullOrBlank()) {
+                        groupCursorRowByGroupId[syncGroup] = outcome.myCursorMessageId
+                    }
                     if (outcome.seenByMessageId.isNotEmpty()) {
                         deltaGroupSeen = outcome.seenByMessageId
                     }
@@ -1174,6 +1199,9 @@ class JaTextSessionViewModel(app: Application) :
             }
 
             val hydratedGroups = sync.groups?.map { g ->
+                if (!g.communityKeySeed.isNullOrBlank()) {
+                    JaTextCryptoEngine.registerCommunitySeedEpoch(appCtx, myUser.id, g.id, g.communityKeySeed)
+                }
                 val rawDec = JaTextCryptoEngine.decryptPreviewText(
                     appCtx, myUser.id, g.id, g.lastSenderId.orEmpty(), g.lastMessage, true, token
                 )
@@ -1301,6 +1329,27 @@ class JaTextSessionViewModel(app: Application) :
                     sync.groupTypingUsers
                 }
 
+                val nextGroupDetails = if (
+                    syncGroup != null &&
+                    prev.groupDetails?.id == syncGroup &&
+                    sync.groupReadReceipts != null
+                ) {
+                    prev.groupDetails.copy(readReceipts = sync.groupReadReceipts)
+                } else {
+                    prev.groupDetails
+                }
+                val recomputedSeen = if (syncGroup != null && prev.activeGroupId == syncGroup) {
+                    JaTextCryptoEngine.recomputeGroupSeenMap(
+                        groupId = syncGroup,
+                        myUserId = myUser.id,
+                        visibleMessages = nextGrps,
+                        members = nextGroupDetails?.members.orEmpty(),
+                        readReceipts = sync.groupReadReceipts ?: nextGroupDetails?.readReceipts.orEmpty(),
+                    )
+                } else {
+                    deltaGroupSeen ?: prev.groupSeenByMessageId
+                }
+
                 prev.copy(
                     me = sync.me ?: prev.me,
                     friends = sync.social?.friends ?: prev.friends,
@@ -1310,9 +1359,11 @@ class JaTextSessionViewModel(app: Application) :
                     previews = hydratedPreviews ?: prev.previews,
                     friendActivities = nextActivities,
                     groups = hydratedGroups ?: prev.groups,
+                    exploreCommunities = sync.exploreCommunities ?: prev.exploreCommunities,
+                    groupDetails = nextGroupDetails,
                     dmMessages = nextDms,
                     groupMessages = nextGrps,
-                    groupSeenByMessageId = deltaGroupSeen ?: prev.groupSeenByMessageId,
+                    groupSeenByMessageId = recomputedSeen,
                     communityMessages = nextComm,
                     dmTypingUserIds = sync.dmTypingUserIds,
                     typingByGroup = sync.typingByGroup,
@@ -1320,7 +1371,7 @@ class JaTextSessionViewModel(app: Application) :
                     communityTypingUsers = sync.communityTypingUsers,
                 )
             }
-            if (hydratedPreviews != null || hydratedGroups != null) {
+            if (hydratedPreviews != null || hydratedGroups != null || sync.exploreCommunities != null) {
                 JaTextCryptoEngine.savePeerBundlesToDisk(appCtx)
                 cache.loadBootstrapCache(st.slotId)?.let { cached ->
                     cache.saveBootstrapCache(
@@ -1328,6 +1379,7 @@ class JaTextSessionViewModel(app: Application) :
                         cached.copy(
                             previews = _state.value.previews,
                             groups = _state.value.groups,
+                            exploreCommunities = _state.value.exploreCommunities,
                         ),
                     )
                 }
@@ -1336,9 +1388,34 @@ class JaTextSessionViewModel(app: Application) :
                 syncWallpaperFromDmMessages(activeFriend, _state.value.dmMessages)
                 cache.saveDmMessagesCache(st.slotId, activeFriend, _state.value.dmMessages)
             }
-            if (hydratedGrpDelta.isNotEmpty() && st.activeGroupId != null && _state.value.activeGroupId == st.activeGroupId) {
-                syncWallpaperFromGroupMessages(st.activeGroupId, _state.value.groupMessages)
-                cache.saveGroupMessagesCache(st.slotId, st.activeGroupId, _state.value.groupMessages)
+            if (st.activeGroupId != null && _state.value.activeGroupId == st.activeGroupId) {
+                val activeGid = st.activeGroupId
+                if (hydratedGrpDelta.isNotEmpty()) {
+                    syncWallpaperFromGroupMessages(activeGid, _state.value.groupMessages)
+                    cache.saveGroupMessagesCache(st.slotId, activeGid, _state.value.groupMessages)
+                }
+                val latestIncomingVisible = _state.value.groupMessages.lastOrNull {
+                    it.unsentAt == null && !it.id.startsWith("opt-") && it.senderId != myUser.id
+                }
+                val alreadyPub = groupSeenPublishedTsByGroupId[activeGid] ?: 0L
+                if (latestIncomingVisible != null && latestIncomingVisible.createdAt > alreadyPub) {
+                    viewModelScope.launch {
+                        runCatching {
+                            TursoApiClient.rpcRaw(
+                                "manageGroup",
+                                mapOf("groupId" to activeGid, "subOp" to "setUserPrefs", "markRead" to true),
+                                token
+                            )
+                        }
+                    }
+                    publishGroupSeenCursorAsync(
+                        groupId = activeGid,
+                        latestMsgId = latestIncomingVisible.id,
+                        latestMsgTs = latestIncomingVisible.createdAt,
+                        memberIds = _state.value.groupDetails?.members?.map { it.id }.orEmpty(),
+                        existingCursorMsgId = groupCursorRowByGroupId[activeGid],
+                    )
+                }
             }
             syncPushSuppressionState()
         } catch (_: Throwable) {
@@ -1994,12 +2071,26 @@ class JaTextSessionViewModel(app: Application) :
                         it
                     )
                 }.orEmpty()
+                val readReceipts = msgRoot["readReceipts"]?.let {
+                    runCatching {
+                        JaTextJson.decodeFromJsonElement(
+                            kotlinx.serialization.builtins.ListSerializer(GroupReadReceipt.serializer()),
+                            it
+                        )
+                    }.getOrNull()
+                } ?: details?.readReceipts.orEmpty()
                 val hasMore = msgRoot["hasMore"]?.jsonPrimitive?.booleanOrNull == true
-                if (details != null) {
-                    JaTextCryptoEngine.ensurePeerBundles(details.members.map { it.id }, token)
-                    cache.saveGroupDetailsCache(slot, groupId, details)
+                val seedCandidate = details?.communityKeySeed
+                    ?: _state.value.groups.firstOrNull { it.id == groupId }?.communityKeySeed
+                if (!seedCandidate.isNullOrBlank()) {
+                    JaTextCryptoEngine.registerCommunitySeedEpoch(appCtx, myId, groupId, seedCandidate)
                 }
-                val effectiveMembers = details?.members ?: cachedDet?.members.orEmpty()
+                val enrichedDetails = details?.copy(readReceipts = readReceipts)
+                if (enrichedDetails != null) {
+                    JaTextCryptoEngine.ensurePeerBundles(enrichedDetails.members.map { it.id }, token)
+                    cache.saveGroupDetailsCache(slot, groupId, enrichedDetails)
+                }
+                val effectiveMembers = enrichedDetails?.members ?: cachedDet?.members.orEmpty()
                 val outcome = JaTextCryptoEngine.hydrateGroupMessagesWithSeen(
                     appCtx,
                     myId,
@@ -2007,13 +2098,17 @@ class JaTextSessionViewModel(app: Application) :
                     rawMsgs,
                     effectiveMembers,
                     token,
+                    readReceipts,
                 )
+                if (!outcome.myCursorMessageId.isNullOrBlank()) {
+                    groupCursorRowByGroupId[groupId] = outcome.myCursorMessageId
+                }
                 syncWallpaperFromGroupMessages(groupId, outcome.messages)
                 cache.saveGroupMessagesCache(slot, groupId, outcome.messages)
                 if (_state.value.activeGroupId == groupId) {
                     _state.update {
                         it.copy(
-                            groupDetails = details ?: it.groupDetails,
+                            groupDetails = enrichedDetails ?: it.groupDetails,
                             groupMessages = outcome.messages,
                             groupSeenByMessageId = outcome.seenByMessageId,
                             groupHasMore = hasMore,
@@ -3445,6 +3540,165 @@ class JaTextSessionViewModel(app: Application) :
             } catch (e: Throwable) {
                 showToast(e.message ?: "Could not create group")
             }
+        }
+    }
+
+    fun createNewCommunity(
+        name: String,
+        description: String = "",
+        avatarColor: String = "purple",
+        avatarUri: Uri? = null,
+    ) {
+        val token = currentAuthToken() ?: return
+        val myId = _state.value.me?.id.orEmpty()
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            try {
+                var uploadedAvatarUrl: String? = null
+                if (avatarUri != null) {
+                    val (b, n, m, _) = readAttachmentBytes(avatarUri, null)
+                        ?: throw IllegalStateException("Could not read community photo")
+                    uploadedAvatarUrl = TursoApiClient.uploadMediaBytes(b, n, m, token)
+                }
+                val root = TursoApiClient.rpcRaw(
+                    "createCommunity",
+                    mapOf(
+                        "name" to name.trim(),
+                        "description" to description.trim(),
+                        "avatarColor" to avatarColor.ifBlank { "purple" },
+                        "avatarUrl" to uploadedAvatarUrl,
+                    ),
+                    token
+                ).jsonObject
+                val cid = root["groupId"]?.jsonPrimitive?.contentOrNull
+                val seed = root["communityKeySeed"]?.jsonPrimitive?.contentOrNull
+                if (!cid.isNullOrBlank() && !seed.isNullOrBlank()) {
+                    JaTextCryptoEngine.registerCommunitySeedEpoch(appCtx, myId, cid, seed)
+                }
+                refreshExploreCommunities()
+                triggerImmediateSync(true)
+                if (!cid.isNullOrBlank()) {
+                    delay(180L)
+                    openGroupChat(cid)
+                }
+            } catch (e: Throwable) {
+                showToast(e.message ?: "Could not create community")
+            }
+        }
+    }
+
+    fun joinCommunity(communityId: String) {
+        val token = currentAuthToken() ?: return
+        val myId = _state.value.me?.id.orEmpty()
+        if (communityId.isBlank()) return
+        _state.update { it.copy(joiningCommunityId = communityId) }
+        viewModelScope.launch {
+            try {
+                val root = TursoApiClient.rpcRaw(
+                    "joinCommunity",
+                    mapOf("communityId" to communityId),
+                    token
+                ).jsonObject
+                val cid = root["groupId"]?.jsonPrimitive?.contentOrNull ?: communityId
+                val seed = root["communityKeySeed"]?.jsonPrimitive?.contentOrNull
+                if (!seed.isNullOrBlank()) {
+                    JaTextCryptoEngine.registerCommunitySeedEpoch(appCtx, myId, cid, seed)
+                }
+                _state.update { cur ->
+                    cur.copy(
+                        joiningCommunityId = null,
+                        exploreCommunities = cur.exploreCommunities.map { c ->
+                            if (c.id == communityId) {
+                                c.copy(
+                                    isJoined = true,
+                                    role = c.role ?: "member",
+                                    memberCount = if (c.isJoined) c.memberCount else c.memberCount + 1,
+                                )
+                            } else c
+                        },
+                    )
+                }
+                triggerImmediateSync(true)
+                delay(150L)
+                openGroupChat(cid)
+            } catch (e: Throwable) {
+                _state.update { it.copy(joiningCommunityId = null) }
+                showToast(e.message ?: "Could not join community")
+            }
+        }
+    }
+
+    fun refreshExploreCommunities() {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            try {
+                val root = TursoApiClient.rpcRaw("exploreCommunities", emptyMap(), token).jsonObject
+                val list = root["communities"]?.let {
+                    JaTextJson.decodeFromJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(ExploreCommunitySummary.serializer()),
+                        it
+                    )
+                }.orEmpty()
+                _state.update { it.copy(exploreCommunities = list) }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    fun updateGroupAvatarColor(groupId: String, avatarColor: String) {
+        val token = currentAuthToken() ?: return
+        if (groupId.isBlank() || avatarColor.isBlank()) return
+        viewModelScope.launch {
+            try {
+                TursoApiClient.rpcRaw(
+                    "manageGroup",
+                    mapOf("groupId" to groupId, "subOp" to "setAvatarColor", "avatarColor" to avatarColor),
+                    token
+                )
+                _state.update { cur ->
+                    cur.copy(
+                        groupDetails = if (cur.groupDetails?.id == groupId) cur.groupDetails.copy(avatarColor = avatarColor) else cur.groupDetails,
+                        groups = cur.groups.map { if (it.id == groupId) it.copy(avatarColor = avatarColor) else it },
+                        exploreCommunities = cur.exploreCommunities.map { if (it.id == groupId) it.copy(avatarColor = avatarColor) else it },
+                    )
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    fun updateGroupDescription(groupId: String, description: String) {
+        val token = currentAuthToken() ?: return
+        if (groupId.isBlank()) return
+        viewModelScope.launch {
+            try {
+                TursoApiClient.rpcRaw(
+                    "manageGroup",
+                    mapOf("groupId" to groupId, "subOp" to "setDescription", "description" to description.trim()),
+                    token
+                )
+                _state.update { cur ->
+                    cur.copy(
+                        groupDetails = if (cur.groupDetails?.id == groupId) cur.groupDetails.copy(description = description.trim()) else cur.groupDetails,
+                        groups = cur.groups.map { if (it.id == groupId) it.copy(description = description.trim()) else it },
+                        exploreCommunities = cur.exploreCommunities.map { if (it.id == groupId) it.copy(description = description.trim()) else it },
+                    )
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    suspend fun fetchUserProfileById(userId: String): JaUser? {
+        val token = currentAuthToken() ?: return null
+        if (userId.isBlank() || userId.startsWith("pending-")) return null
+        return try {
+            val root = TursoApiClient.rpcRaw("getUserById", mapOf("userId" to userId), token).jsonObject
+            val userElem = root["user"] ?: return null
+            if (userElem is kotlinx.serialization.json.JsonNull) null
+            else JaTextJson.decodeFromJsonElement(JaUser.serializer(), userElem)
+        } catch (_: Throwable) {
+            null
         }
     }
 

@@ -109,9 +109,10 @@ export function ProfileCard({
   const unpacked = unpackAvatarColorWithMeta(user.avatarColor, user.socials, user.website);
   const color = colorById(unpacked.avatarColor);
   const bannerSrc = normalizeAvatarSrc(user.bannerUrl);
-  const effectiveCustomStatus = (liveCustomStatus ?? user.customStatus ?? "").trim();
+  const effectiveCustomStatus = (liveCustomStatus || user.customStatus || "").trim();
   const effectiveWallpaper = wallpaperUrl?.trim() ? wallpaperUrl.trim() : null;
   const [copiedDiscordIdx, setCopiedDiscordIdx] = useState<number | null>(null);
+  const [statusExpanded, setStatusExpanded] = useState(false);
   const socials = unpacked.socials ?? [];
   const website =
     unpacked.website && isSafeExternalProfileUrl(unpacked.website.url)
@@ -144,10 +145,22 @@ export function ProfileCard({
           <Avatar user={user} size={86} ringWidth={3.5} status={status} />
           {effectiveCustomStatus ? (
             <div
-              className="profile-pfp-status-bubble"
-              role="status"
+              className={`profile-pfp-status-bubble ${statusExpanded ? "is-expanded" : ""}`}
+              role="button"
+              tabIndex={0}
+              aria-expanded={statusExpanded}
               aria-label={`Custom status: ${effectiveCustomStatus}`}
-              title={effectiveCustomStatus}
+              title={statusExpanded ? "Tap to collapse status" : effectiveCustomStatus}
+              onClick={(e) => {
+                e.stopPropagation();
+                setStatusExpanded((cur) => !cur);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setStatusExpanded((cur) => !cur);
+                }
+              }}
             >
               <span className="profile-pfp-status-tail-sm" aria-hidden="true" />
               <span className="profile-pfp-status-tail-lg" aria-hidden="true" />

@@ -36,6 +36,7 @@ import {
   useChatAutoScrollAndKeyboard,
 } from "../lib/useChatAutoScrollAndKeyboard";
 import { upsertCallHistoryEntry } from "../lib/callHistory";
+import { colorById } from "../lib/colors";
 import { formatCallDuration, formatPreviewMessageText, isHiddenCallSignal } from "../lib/calling";
 import {
   copyImageUrlToClipboard,
@@ -940,16 +941,18 @@ const GroupChatHistory = memo(function GroupChatHistory({
                               key={reader.id}
                               className="group-seen-avatar-wrap"
                               onClick={() =>
-                                onOpenProfile({
-                                  id: reader.id,
-                                  displayName: reader.displayName,
-                                  username: reader.username,
-                                  bio: "",
-                                  pronouns: "",
-                                  avatarColor: reader.avatarColor,
-                                  avatarUrl: reader.avatarUrl,
-                                  onboardingComplete: true,
-                                })
+                                onOpenProfile(
+                                  memberById.get(reader.id) ?? {
+                                    id: reader.id,
+                                    displayName: reader.displayName,
+                                    username: reader.username,
+                                    bio: "",
+                                    pronouns: "",
+                                    avatarColor: reader.avatarColor,
+                                    avatarUrl: reader.avatarUrl,
+                                    onboardingComplete: true,
+                                  },
+                                )
                               }
                             >
                               <Avatar user={reader} size={16} ringWidth={1} />
@@ -1541,8 +1544,9 @@ export function GroupChatView({
         conversationMessages,
         group?.members ?? EMPTY_GROUP_MEMBERS,
         store.me?.id,
+        group?.readReceipts,
       ),
-    [conversationMessages, group?.members, rawGroupMessages, store.me?.id],
+    [conversationMessages, group?.members, group?.readReceipts, rawGroupMessages, store.me?.id],
   );
 
   const seenSyncInFlightRef = useRef(false);
@@ -2891,6 +2895,17 @@ export function GroupChatView({
         <button
           type="button"
           className="group-header-avatar-btn"
+          style={
+            (group?.isCommunity ?? summary?.isCommunity) ||
+            Boolean(group?.avatarColor ?? summary?.avatarColor)
+              ? {
+                  borderRadius: "50%",
+                  boxShadow: `0 0 0 2.5px ${
+                    colorById(group?.avatarColor ?? summary?.avatarColor ?? "purple").hex
+                  }`,
+                }
+              : undefined
+          }
           onClick={openManageModal}
           aria-label="Open group settings"
         >
@@ -2908,6 +2923,7 @@ export function GroupChatView({
         <button type="button" className="chat-title" onClick={openManageModal}>
           <strong>{group?.name ?? summary?.name ?? "Group chat"}</strong>
           <span className="muted small">
+            {(group?.isCommunity ?? summary?.isCommunity) ? "Community · " : ""}
             {group?.members.length ?? summary?.memberCount ?? 0} members
             {latestGroupEpoch ? (
               <>
@@ -2915,7 +2931,9 @@ export function GroupChatView({
                 <LockClosedIcon size={12} /> Encrypted (Epoch #{latestGroupEpoch.epoch})
               </>
             ) : null}
-            {" · Tap for group settings"}
+            {(group?.isCommunity ?? summary?.isCommunity)
+              ? " · Tap for community info"
+              : " · Tap for group settings"}
           </span>
         </button>
         <div className="chat-header-actions">

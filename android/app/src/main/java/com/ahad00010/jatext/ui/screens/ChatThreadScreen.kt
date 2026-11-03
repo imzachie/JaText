@@ -715,7 +715,8 @@ fun ChatThreadScreen(
                                 avatarUrl = activeGroup.avatarUrl,
                                 name = activeGroup.name,
                                 size = 36.dp,
-                                ringWidth = 2.dp,
+                                ringWidth = if (activeGroup.isCommunity || !activeGroup.avatarColor.isNullOrBlank()) 2.5.dp else 2.dp,
+                                avatarColor = activeGroup.avatarColor,
                             )
                         }
                         activeFriend != null -> {
@@ -1402,7 +1403,15 @@ fun ChatThreadScreen(
                                     },
                                     onJumpToForwarded = { fwd -> vm.jumpToForwardedSource(fwd) },
                                     onOpenFullscreenImage = { model -> fullscreenImageModel = model },
-                                    onClickSenderOrReader = { user -> onOpenPeerProfile(user) },
+                                    onClickSenderOrReader = { user ->
+                                        val hydrated = state.groupDetails?.members
+                                            ?.firstOrNull { it.id == user.id }
+                                            ?.toJaUser()
+                                            ?: state.friends.firstOrNull { it.id == user.id }
+                                            ?: (if (state.me?.id == user.id) state.me else null)
+                                            ?: user
+                                        onOpenPeerProfile(hydrated)
+                                    },
                                     onCallAction = { mode ->
                                         dismissKeyboardForCall()
                                         if (callUiState.active) {

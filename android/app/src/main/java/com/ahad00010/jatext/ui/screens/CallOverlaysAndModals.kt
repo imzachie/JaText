@@ -14,6 +14,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -1092,12 +1093,42 @@ fun PeerProfileBottomModal(
     val context = LocalContext.current
     val palette = LocalJaTextPalette.current
     val sessionState by vm.state.collectAsState()
-    val colorSpec = remember(peer.avatarColor) {
-        JaTextThemeManager.avatarColorSpec(peer.avatarColor)
+    val localMatchedPeer = remember(peer, sessionState.me, sessionState.friends, sessionState.groupDetails) {
+        when {
+            sessionState.me?.id == peer.id -> sessionState.me ?: peer
+            else -> {
+                val fromGroup = sessionState.groupDetails?.members?.firstOrNull { it.id == peer.id }?.toJaUser()
+                val fromFriend = sessionState.friends.firstOrNull { it.id == peer.id }
+                val base = fromFriend ?: fromGroup ?: peer
+                base.copy(
+                    bio = base.bio.ifBlank { fromGroup?.bio.orEmpty().ifBlank { peer.bio } },
+                    pronouns = base.pronouns.ifBlank { fromGroup?.pronouns.orEmpty().ifBlank { peer.pronouns } },
+                    bannerUrl = base.bannerUrl ?: fromGroup?.bannerUrl ?: peer.bannerUrl,
+                    customStatus = base.customStatus ?: fromGroup?.customStatus ?: peer.customStatus,
+                    website = base.website ?: fromGroup?.website ?: peer.website,
+                    socials = base.socials ?: fromGroup?.socials ?: peer.socials,
+                    lastSeenAt = base.lastSeenAt ?: fromGroup?.lastSeenAt ?: peer.lastSeenAt,
+                )
+            }
+        }
+    }
+    var remoteFetchedPeer by remember(peer.id) { mutableStateOf<JaUser?>(null) }
+    LaunchedEffect(peer.id) {
+        if (sessionState.me?.id != peer.id) {
+            vm.fetchUserProfileById(peer.id)?.let { fetched ->
+                remoteFetchedPeer = fetched
+            }
+        }
+    }
+    val livePeer = remoteFetchedPeer ?: localMatchedPeer
+    var customStatusExpanded by remember(peer.id) { mutableStateOf(false) }
+
+    val colorSpec = remember(livePeer.avatarColor) {
+        JaTextThemeManager.avatarColorSpec(livePeer.avatarColor)
     }
 
-    val rawChatWallpaper = remember(peer.id, sessionState.wallpaperNonce) {
-        vm.cache.getWallpaperUrl("dm:${peer.id}")?.takeIf { it.isNotBlank() }
+    val rawChatWallpaper = remember(livePeer.id, sessionState.wallpaperNonce) {
+        vm.cache.getWallpaperUrl("dm:${livePeer.id}")?.takeIf { it.isNotBlank() }
     }
     val resolvedWallpaperUrl = remember(rawChatWallpaper) {
         rawChatWallpaper?.let { raw ->
@@ -1109,17 +1140,17 @@ fun PeerProfileBottomModal(
             }
         }
     }
-    val resolvedBannerUrl = remember(peer.bannerUrl, resolvedWallpaperUrl) {
+    val resolvedBannerUrl = remember(livePeer.bannerUrl, resolvedWallpaperUrl) {
         when {
-            !peer.bannerUrl.isNullOrBlank() -> TursoApiClient.resolveAbsoluteMediaUrl(peer.bannerUrl)
+            !livePeer.bannerUrl.isNullOrBlank() -> TursoApiClient.resolveAbsoluteMediaUrl(livePeer.bannerUrl)
             !resolvedWallpaperUrl.isNullOrBlank() -> resolvedWallpaperUrl
             else -> null
         }
     }
-    val isSelf = sessionState.me?.id == peer.id
+    val isSelf = sessionState.me?.id == livePeer.id
 
-    val securityPair by produceState<Pair<String, String>?>(initialValue = null, peer.id) {
-        if (!isSelf) value = vm.computePeerSecurityCode(peer.id)
+    val securityPair by produceState<Pair<String, String>?>(initialValue = null, livePeer.id) {
+        if (!isSelf) value = vm.computePeerSecurityCode(livePeer.id)
     }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -1201,14 +1232,14 @@ fun PeerProfileBottomModal(
                         }
                     }
 
-                    val peerLiveActivity = remember(peer.id, sessionState.friendActivities) {
-                        sessionState.friendActivities.firstOrNull { it.userId == peer.id }
+                    val peerLiveActivity = remember(livePeer.id, sessionState.friendActivities) {
+                        sessionState.friendActivities.firstOrNull { it.userId == livePeer.id }
                     }
-                    val peerCustomStatus = remember(isSelf, sessionState.me?.customStatus, peerLiveActivity?.customStatus, peer.customStatus) {
+                    val peerCustomStatus = remember(isSelf, sessionState.me?.customStatus, peerLiveActivity?.customStatus, livePeer.customStatus) {
                         val raw = if (isSelf) {
                             sessionState.me?.customStatus
                         } else {
-                            peerLiveActivity?.customStatus?.takeIf { it.isNotBlank() } ?: peer.customStatus
+                            peerLiveActivity?.customStatus?.takeIf { it.isNotBlank() } ?: livePeer.customStatus
                         }
                         raw?.trim().orEmpty()
                     }
@@ -1235,9 +1266,9 @@ fun PeerProfileBottomModal(
                             contentAlignment = Alignment.Center,
                         ) {
                             JaAvatar(
-                                avatarUrl = peer.avatarUrl,
-                                displayName = peer.displayName.ifBlank { peer.username },
-                                avatarColor = peer.avatarColor,
+                                avatarUrl = livePeer.avatarUrl,
+                                displayName = livePeer.displayName.ifBlank { livePeer.username },
+                                avatarColor = livePeer.avatarColor,
                                 size = 84.dp,
                                 ringWidth = 3.5.dp,
                                 presenceStatus = peerPresenceDot,
@@ -1248,7 +1279,9 @@ fun PeerProfileBottomModal(
                         if (peerCustomStatus.isNotEmpty()) {
                             Spacer(Modifier.width(8.dp))
                             Row(
-                                modifier = Modifier.padding(bottom = 12.dp),
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .padding(bottom = 12.dp),
                                 verticalAlignment = Alignment.Bottom,
                             ) {
                                 // Two thought-bubble tail dots leading from PFP to the status bubble!
@@ -1275,6 +1308,8 @@ fun PeerProfileBottomModal(
                                         .clip(RoundedCornerShape(16.dp))
                                         .background(palette.bgTertiary)
                                         .border(1.dp, palette.borderStrong, RoundedCornerShape(16.dp))
+                                        .clickable { customStatusExpanded = !customStatusExpanded }
+                                        .animateContentSize()
                                         .padding(horizontal = 12.dp, vertical = 7.dp)
                                 ) {
                                     Text(
@@ -1282,8 +1317,9 @@ fun PeerProfileBottomModal(
                                         color = palette.textPrimary,
                                         fontSize = 12.5.sp,
                                         fontWeight = FontWeight.SemiBold,
-                                        maxLines = 2,
+                                        maxLines = if (customStatusExpanded) 12 else 1,
                                         overflow = TextOverflow.Ellipsis,
+                                        lineHeight = 16.sp,
                                     )
                                 }
                             }
@@ -1299,7 +1335,7 @@ fun PeerProfileBottomModal(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(
-                            text = peer.displayName.ifBlank { peer.username },
+                            text = livePeer.displayName.ifBlank { livePeer.username },
                             color = palette.textPrimary,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Black,
@@ -1309,11 +1345,11 @@ fun PeerProfileBottomModal(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "@${peer.username}",
+                                text = "@${livePeer.username}",
                                 color = palette.textSecondary,
                                 fontSize = 13.5.sp,
                             )
-                            if (peer.pronouns.isNotBlank()) {
+                            if (livePeer.pronouns.isNotBlank()) {
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(999.dp))
@@ -1322,7 +1358,7 @@ fun PeerProfileBottomModal(
                                         .padding(horizontal = 9.dp, vertical = 2.dp),
                                 ) {
                                     Text(
-                                        text = peer.pronouns,
+                                        text = livePeer.pronouns,
                                         color = palette.textSecondary,
                                         fontSize = 11.5.sp,
                                         fontWeight = FontWeight.SemiBold,
@@ -1331,8 +1367,8 @@ fun PeerProfileBottomModal(
                             }
                         }
                         if (!isSelf) {
-                            val peerActivity = remember(peer.id, sessionState.friendActivities) {
-                                sessionState.friendActivities.firstOrNull { it.userId == peer.id }
+                            val peerActivity = remember(livePeer.id, sessionState.friendActivities) {
+                                sessionState.friendActivities.firstOrNull { it.userId == livePeer.id }
                             }
                             val peerPresenceDotColor = when {
                                 peerActivity?.online == true -> when (peerActivity.statusPreference) {
@@ -1348,7 +1384,7 @@ fun PeerProfileBottomModal(
                                     "away", "idle" -> "Idle"
                                     else -> "Online"
                                 }
-                                else -> formatLastSeenPresenceLabel(peerActivity?.lastSeenAt)
+                                else -> formatLastSeenPresenceLabel(peerActivity?.lastSeenAt ?: livePeer.lastSeenAt)
                             }
                             Row(
                                 modifier = Modifier.padding(top = 2.dp),
@@ -1373,9 +1409,9 @@ fun PeerProfileBottomModal(
                     }
 
                     /* ---- Rich Markdown Bio (1:1 with `ProfileCard.tsx`) ---- */
-                    if (peer.bio.isNotBlank()) {
+                    if (livePeer.bio.isNotBlank()) {
                         RichMarkdownText(
-                            text = peer.bio,
+                            text = livePeer.bio,
                             textColor = palette.textPrimary,
                             subTextColor = palette.textSecondary,
                             isLightSurface = !palette.isDark,
@@ -1386,8 +1422,8 @@ fun PeerProfileBottomModal(
                     }
 
                     /* ---- 1:1 Web Socials & Website Section (`.profile-links-section`) ---- */
-                    val validWebsite = peer.website?.takeIf { it.url.isNotBlank() }
-                    val validSocials = peer.socials?.filter { it.url.isNotBlank() || it.handle.isNotBlank() }.orEmpty()
+                    val validWebsite = livePeer.website?.takeIf { it.url.isNotBlank() }
+                    val validSocials = livePeer.socials?.filter { it.url.isNotBlank() || it.handle.isNotBlank() }.orEmpty()
 
                     if (validWebsite != null || validSocials.isNotEmpty()) {
                         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -1688,6 +1724,7 @@ fun GroupMembersBottomModal(
     details: GroupDetails,
     vm: JaTextSessionViewModel,
     onDismiss: () -> Unit,
+    onOpenMemberProfile: (JaUser) -> Unit = {},
 ) {
     val palette = LocalJaTextPalette.current
     val sessionState by vm.state.collectAsState()
@@ -1750,6 +1787,7 @@ fun GroupMembersBottomModal(
                         name = newName.ifBlank { details.name },
                         size = 64.dp,
                         ringWidth = 3.dp,
+                        avatarColor = details.avatarColor,
                     )
                     if (canEditGroup) {
                         Box(
@@ -1980,13 +2018,17 @@ fun GroupMembersBottomModal(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
                             .background(palette.bgSecondary)
-                            .then(
-                                if (canActOnMember) Modifier.clickable { moderatingMember = m } else Modifier
-                            )
+                            .clickable { onOpenMemberProfile(m.toJaUser()) }
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        JaAvatar(m.avatarUrl, m.displayName.ifBlank { m.username }, m.avatarColor, size = 38.dp)
+                        JaAvatar(
+                            m.avatarUrl,
+                            m.displayName.ifBlank { m.username },
+                            m.avatarColor,
+                            size = 38.dp,
+                            modifier = Modifier.clickable { onOpenMemberProfile(m.toJaUser()) },
+                        )
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
@@ -2301,7 +2343,7 @@ fun PostUpdateWelcomeDialog(onDismiss: () -> Unit) {
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = "You're now running JaText v${BuildConfig.VERSION_NAME} with all 24 vector mascot bubble styles, shared chat wallpapers that tint contact cards, rich media & video playback, Markdown bios, and 120 FPS transitions.",
+                text = "You're now running JaText v${BuildConfig.VERSION_NAME} with end-to-end encrypted Communities, Explore Communities directory, merged Mobile Chats, instant Seen-by group receipts, full member bios, and expandable custom statuses.",
                 color = palette.textSecondary,
                 fontSize = 13.5.sp,
                 lineHeight = 19.5.sp,

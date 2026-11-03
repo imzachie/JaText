@@ -31,6 +31,7 @@ import { useGroupCall } from "../lib/groupCalling";
 import { useI18n } from "../lib/i18n";
 import { useJaText } from "../lib/store";
 import { friendlyError } from "../lib/errors";
+import { AVATAR_COLORS, colorById } from "../lib/colors";
 import { isAuthorizedIosChatsRuntime } from "../lib/iosDetection";
 import { OFFICIAL_COMMUNITY_ID, type GroupSummary, type JaUser } from "../lib/types";
 import { AnimatedMediaImg, Avatar } from "./Avatar";
@@ -123,7 +124,7 @@ export function Sidebar({
   const draftsMap = useDraftsMap();
   const storedCallHistory = useCallHistoryEntries();
   const { me, friends, incoming, outgoing, previews, activeChatId, setActiveChatId } = store;
-  const [tab, setTab] = useState<"updates" | "calls" | "groups" | "chats" | "add">("chats");
+  const [tab, setTab] = useState<"updates" | "calls" | "communities" | "chats" | "add">("chats");
   const [search, setSearch] = useState("");
   const [iosSearchOpen, setIosSearchOpen] = useState(false);
   const iosSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -141,6 +142,16 @@ export function Sidebar({
   const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
   const [groupBusy, setGroupBusy] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
+  const [showCreateCommunityDialog, setShowCreateCommunityDialog] = useState(false);
+  const [communityName, setCommunityName] = useState("");
+  const [communityDesc, setCommunityDesc] = useState("");
+  const [communityColor, setCommunityColor] = useState("purple");
+  const [communityAvatarFile, setCommunityAvatarFile] = useState<File | null>(null);
+  const [communityAvatarPreview, setCommunityAvatarPreview] = useState<string | null>(null);
+  const [communityBusy, setCommunityBusy] = useState(false);
+  const [communityError, setCommunityError] = useState<string | null>(null);
+  const [joiningCommunityId, setJoiningCommunityId] = useState<string | null>(null);
+  const communityAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [chatMenu, setChatMenu] = useState<{
     x: number;
@@ -302,11 +313,43 @@ export function Sidebar({
     () =>
       store.groups.filter(
         (group) =>
+          !group.isCommunity &&
           Boolean(group.isArchived) === showArchived &&
           (!search.trim() || group.name.toLowerCase().includes(search.toLowerCase())),
       ),
     [search, showArchived, store.groups],
   );
+
+  const joinedCommunities = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return store.groups
+      .filter(
+        (group) =>
+          Boolean(group.isCommunity) &&
+          !group.isArchived &&
+          (!q ||
+            group.name.toLowerCase().includes(q) ||
+            (group.description ?? "").toLowerCase().includes(q)),
+      )
+      .sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0));
+  }, [search, store.groups]);
+
+  const exploreCommunitiesFiltered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const joinedIds = new Set(
+      store.groups.filter((g) => Boolean(g.isCommunity)).map((g) => g.id),
+    );
+    const list = (store.exploreCommunities ?? []).map((c) => ({
+      ...c,
+      isJoined: c.isJoined || joinedIds.has(c.id),
+    }));
+    if (!q) return list;
+    return list.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.description ?? "").toLowerCase().includes(q),
+    );
+  }, [search, store.exploreCommunities, store.groups]);
 
   const orderedThreads = useMemo(() => {
     type ThreadItem =
@@ -355,7 +398,7 @@ export function Sidebar({
 
   const archivedCount =
     friends.filter((friend) => previewByFriend.get(friend.id)?.isArchived).length +
-    store.groups.filter((group) => group.isArchived).length;
+    store.groups.filter((group) => !group.isCommunity && group.isArchived).length;
 
   const totalDmUnreadCount = useMemo(() => {
     let total = 0;
@@ -368,13 +411,13 @@ export function Sidebar({
     return total;
   }, [activeChatId, friends, previewByFriend]);
 
-  const totalGroupUnreadCount = useMemo(() => {
+  const totalNormalGroupUnreadCount = useMemo(() => {
     let total = 0;
     if (!store.communityMuted && activeChatId !== OFFICIAL_COMMUNITY_ID) {
       total += store.communityUnreadCount;
     }
     for (const grp of store.groups) {
-      if (!grp.isArchived && !grp.isSilenced && store.activeGroupId !== grp.id) {
+      if (!grp.isCommunity && !grp.isArchived && !grp.isSilenced && store.activeGroupId !== grp.id) {
         total += grp.unreadCount ?? 0;
       }
     }
@@ -387,11 +430,28 @@ export function Sidebar({
     store.groups,
   ]);
 
-  const totalUnreadCount = totalDmUnreadCount + totalGroupUnreadCount;
+  const totalCommunitiesUnreadCount = useMemo(() => {
+    let total = 0;
+    for (const grp of store.groups) {
+      if (grp.isCommunity && !grp.isArchived && !grp.isSilenced && store.activeGroupId !== grp.id) {
+        total += grp.unreadCount ?? 0;
+      }
+    }
+    return total;
+  }, [store.activeGroupId, store.groups]);
+
+  const totalChatsUnreadCount = totalDmUnreadCount + totalNormalGroupUnreadCount;
   const isIosChats = isAuthorizedIosChatsRuntime();
 
+  const refreshExploreFn = store.refreshExploreCommunities;
   useEffect(() => {
-    if (isIosChats && iosSearchOpen && (tab === "chats" || tab === "groups")) {
+    if (tab === "communities" && refreshExploreFn) {
+      void refreshExploreFn().catch(() => undefined);
+    }
+  }, [refreshExploreFn, tab]);
+
+  useEffect(() => {
+    if (isIosChats && iosSearchOpen && (tab === "chats" || tab === "communities")) {
       const id = window.setTimeout(() => {
         iosSearchInputRef.current?.focus();
       }, 60);
@@ -399,12 +459,7 @@ export function Sidebar({
     }
   }, [isIosChats, iosSearchOpen, tab]);
 
-  const displayedThreads = useMemo(() => {
-    if (!isIosChats) return orderedThreads;
-    if (tab === "groups") return orderedThreads.filter((item) => item.kind === "group");
-    if (tab === "chats") return orderedThreads.filter((item) => item.kind === "dm");
-    return orderedThreads;
-  }, [isIosChats, orderedThreads, tab]);
+  const displayedThreads = orderedThreads;
 
   if (!me) return null;
 
@@ -543,13 +598,27 @@ export function Sidebar({
           <span>JaText</span>
         </div>
         <div className="sidebar-header-actions">
-          {isIosChats && tab === "groups" && (
+          {isIosChats && tab === "chats" && (
             <button
               type="button"
               className="icon-btn"
               onClick={() => setShowGroupDialog(true)}
               title="New group"
               aria-label="New group"
+            >
+              <PlusIcon size={17} />
+            </button>
+          )}
+          {isIosChats && tab === "communities" && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => {
+                setCommunityError(null);
+                setShowCreateCommunityDialog(true);
+              }}
+              title="Add Communities"
+              aria-label="Add Communities"
             >
               <PlusIcon size={17} />
             </button>
@@ -604,8 +673,8 @@ export function Sidebar({
             ? "Updates"
             : tab === "calls"
               ? t("calls")
-              : tab === "groups"
-                ? "Groups"
+              : tab === "communities"
+                ? "Communities"
                 : tab === "add"
                   ? "Add Friends"
                   : t("chats")}
@@ -677,9 +746,21 @@ export function Sidebar({
           <button className={tab === "chats" ? "active" : ""} onClick={() => setTab("chats")}>
             <MessageCircleIcon size={15} />
             <span>{t("chats")}</span>
-            {totalUnreadCount > 0 && (
+            {totalChatsUnreadCount > 0 && (
               <span className="badge unread-tab-badge">
-                {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
+                {totalChatsUnreadCount > 99 ? "99+" : totalChatsUnreadCount}
+              </span>
+            )}
+          </button>
+          <button
+            className={tab === "communities" ? "active" : ""}
+            onClick={() => setTab("communities")}
+          >
+            <UsersIcon size={15} />
+            <span>Communities</span>
+            {totalCommunitiesUnreadCount > 0 && (
+              <span className="badge unread-tab-badge">
+                {totalCommunitiesUnreadCount > 99 ? "99+" : totalCommunitiesUnreadCount}
               </span>
             )}
           </button>
@@ -692,6 +773,256 @@ export function Sidebar({
             <span>{t("add")}</span>
             {incoming.length > 0 && <span className="badge">{incoming.length}</span>}
           </button>
+        </div>
+      )}
+
+      {tab === "communities" && (
+        <div className="sidebar-tab-pane communities-tab-pane" key="pane-communities">
+          <div className={isIosChats ? "ios-always-search-shell" : "desktop-always-search-shell"}>
+            <span className="always-search-icon" aria-hidden="true">
+              <SearchIcon size={15} />
+            </span>
+            <input
+              ref={isIosChats ? iosSearchInputRef : undefined}
+              className="search-input always-search-input"
+              placeholder="Search communities…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {search.length > 0 && (
+              <button
+                type="button"
+                className="always-search-clear-btn"
+                aria-label="Clear search"
+                onClick={() => setSearch("")}
+              >
+                ×
+              </button>
+            )}
+          </div>
+
+          <button
+            type="button"
+            className="add-communities-cta-btn"
+            onClick={() => {
+              setCommunityError(null);
+              setShowCreateCommunityDialog(true);
+            }}
+          >
+            <span className="add-communities-cta-icon">
+              <PlusIcon size={17} />
+            </span>
+            <span className="add-communities-cta-copy">
+              <strong>Add Communities</strong>
+              <span>Create an encrypted community server anyone can join</span>
+            </span>
+          </button>
+
+          <div className="communities-scroll-list">
+            <div className="communities-section-head">
+              <span>Your Communities ({joinedCommunities.length})</span>
+            </div>
+
+            {joinedCommunities.length === 0 ? (
+              <div className="communities-empty-joined">
+                <span>You haven&apos;t joined any communities yet. Create your own or explore below!</span>
+              </div>
+            ) : (
+              <div className="friend-list communities-joined-list">
+                {joinedCommunities.map((comm) => {
+                  const commColor = colorById(comm.avatarColor ?? "purple");
+                  const commDraft = draftsMap[`group:${comm.id}`];
+                  const commUnread =
+                    store.activeGroupId === comm.id ? 0 : (comm.unreadCount ?? 0);
+                  const isOwn = comm.role === "owner" || comm.ownerId === me.id;
+                  return (
+                    <div
+                      key={`comm:${comm.id}`}
+                      className={`friend-row community-joined-row ${
+                        store.activeGroupId === comm.id ? "active" : ""
+                      } ${commUnread > 0 ? "has-unread" : ""}`}
+                      style={
+                        {
+                          "--comm-accent": commColor.hex,
+                        } as React.CSSProperties
+                      }
+                      onClick={() => store.setActiveGroupId(comm.id)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openGroupMenuAt(event.clientX, event.clientY, comm);
+                      }}
+                      onPointerDown={(event) =>
+                        startRowHold(event, (x, y) => openGroupMenuAt(x, y, comm))
+                      }
+                      onPointerMove={moveRowHold}
+                      onPointerUp={cancelRowHold}
+                      onPointerCancel={cancelRowHold}
+                    >
+                      <div
+                        className="community-avatar-ring"
+                        style={{
+                          boxShadow: `0 0 0 2.5px ${commColor.hex}`,
+                          background: comm.avatarUrl ? undefined : commColor.gradient,
+                        }}
+                      >
+                        {comm.avatarUrl ? (
+                          <AnimatedMediaImg
+                            className="group-avatar sidebar-group-avatar"
+                            src={comm.avatarUrl}
+                            loading="lazy"
+                          />
+                        ) : (
+                          <span className="community-avatar-initials">
+                            {comm.name.slice(0, 2).toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+                      <div className="friend-row-text">
+                        <div className="friend-row-top">
+                          <strong>
+                            {comm.name}
+                            {isOwn && <span className="community-owner-tag">Owner</span>}
+                          </strong>
+                          <span className="friend-row-badges">
+                            {commUnread > 0 && (
+                              <span
+                                className={`unread-indicator-badge ${
+                                  comm.isSilenced ? "muted-unread" : ""
+                                }`}
+                              >
+                                {commUnread > 99 ? "99+" : commUnread}
+                              </span>
+                            )}
+                            <span className="community-members-pill">
+                              {comm.memberCount} {comm.memberCount === 1 ? "member" : "members"}
+                            </span>
+                          </span>
+                        </div>
+                        <span className="muted small friend-preview">
+                          {(() => {
+                            if (commDraft) {
+                              return (
+                                <>
+                                  <span className="draft-pill">{t("draft")}:</span>{" "}
+                                  {renderPreviewWithSpoilerMasks(formatPreviewMessageText(commDraft))}
+                                </>
+                              );
+                            }
+                            const previewTxt = comm.lastMessage
+                              ? formatPreviewMessageText(comm.lastMessage)
+                              : "";
+                            if (previewTxt) {
+                              const prefix =
+                                comm.lastSenderId === me.id
+                                  ? "You: "
+                                  : comm.lastSenderName
+                                    ? `${comm.lastSenderName}: `
+                                    : "";
+                              return renderPreviewWithSpoilerMasks(`${prefix}${previewTxt}`);
+                            }
+                            return comm.description || `${comm.memberCount} members`;
+                          })()}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="explore-communities-block">
+              <div className="explore-communities-header">
+                <h3>Explore Communities</h3>
+                <p>Join and find communities to hang out with.</p>
+              </div>
+              {exploreCommunitiesFiltered.length === 0 ? (
+                <div className="communities-empty-joined">
+                  <span>No public communities found yet. Be the first to create one!</span>
+                </div>
+              ) : (
+                <div className="explore-communities-grid">
+                  {exploreCommunitiesFiltered.map((comm) => {
+                    const commColor = colorById(comm.avatarColor ?? "purple");
+                    const isJoining = joiningCommunityId === comm.id;
+                    return (
+                      <div
+                        key={`explore:${comm.id}`}
+                        className="explore-community-card"
+                        style={
+                          {
+                            "--comm-accent": commColor.hex,
+                          } as React.CSSProperties
+                        }
+                      >
+                        <div
+                          className="community-avatar-ring explore-avatar-ring"
+                          style={{
+                            boxShadow: `0 0 0 2.5px ${commColor.hex}`,
+                            background: comm.avatarUrl ? undefined : commColor.gradient,
+                          }}
+                        >
+                          {comm.avatarUrl ? (
+                            <AnimatedMediaImg
+                              className="group-avatar sidebar-group-avatar"
+                              src={comm.avatarUrl}
+                              loading="lazy"
+                            />
+                          ) : (
+                            <span className="community-avatar-initials">
+                              {comm.name.slice(0, 2).toUpperCase()}
+                            </span>
+                          )}
+                        </div>
+                        <div className="explore-community-info">
+                          <strong>{comm.name}</strong>
+                          <span className="explore-community-members">
+                            {comm.memberCount} {comm.memberCount === 1 ? "member" : "members"} joined
+                          </span>
+                          {comm.description ? (
+                            <p className="explore-community-desc">{comm.description}</p>
+                          ) : null}
+                        </div>
+                        {comm.isJoined ? (
+                          <button
+                            type="button"
+                            className="explore-join-btn is-joined"
+                            onClick={() => store.setActiveGroupId(comm.id)}
+                          >
+                            Open
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="explore-join-btn"
+                            style={{ background: commColor.hex }}
+                            disabled={isJoining}
+                            onClick={() => {
+                              if (!store.joinCommunity) return;
+                              setJoiningCommunityId(comm.id);
+                              void store
+                                .joinCommunity(comm.id)
+                                .then((cid) => {
+                                  store.setActiveGroupId(cid);
+                                })
+                                .catch((err: unknown) => {
+                                  setChatActionError(
+                                    friendlyError(err, "Could not join community."),
+                                  );
+                                })
+                                .finally(() => setJoiningCommunityId(null));
+                            }}
+                          >
+                            {isJoining ? "Joining…" : "Join"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -708,7 +1039,7 @@ export function Sidebar({
         </div>
       )}
 
-      {(tab === "chats" || (isIosChats && tab === "groups")) && (
+      {tab === "chats" && (
         <div className="sidebar-tab-pane" key={`pane-${tab}`}>
           <div className={isIosChats ? "ios-always-search-shell" : "desktop-always-search-shell"}>
             <span className="always-search-icon" aria-hidden="true">
@@ -717,9 +1048,7 @@ export function Sidebar({
             <input
               ref={isIosChats ? iosSearchInputRef : undefined}
               className="search-input always-search-input"
-              placeholder={
-                isIosChats && tab === "groups" ? "Search groups…" : `${t("search_chats")}…`
-              }
+              placeholder={`${t("search_chats")}…`}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -734,7 +1063,7 @@ export function Sidebar({
               </button>
             )}
           </div>
-          {!showArchived && (!isIosChats || tab === "chats") && (
+          {!showArchived && (
             <div className="sidebar-folder-bar" role="tablist" aria-label={t("folders")}>
               <button
                 type="button"
@@ -821,7 +1150,7 @@ export function Sidebar({
             </div>
           )}
           <div className="friend-list">
-            {!showArchived && (!isIosChats || tab === "groups") && (
+            {!showArchived && selectedFolderId === "all" && (
               <div
                 className={`friend-row official-community-row ${
                   activeChatId === OFFICIAL_COMMUNITY_ID ? "active" : ""
@@ -1348,84 +1677,6 @@ export function Sidebar({
               <code>@kai.codes</code> or <code>@Nova</code>. They accept after a couple of seconds
               and will text you back.
             </div>
-          )}
-
-          {showGroupDialog && (
-            <AnimatedModal
-              onClose={() => setShowGroupDialog(false)}
-              cardClassName="modal-card create-group-dialog"
-              closeLabel="Close"
-            >
-              {(requestClose) => (
-                <>
-                  <h2>Create group chat</h2>
-                  <p className="muted small">
-                    You can add people you&apos;re already friends with.
-                  </p>
-                  <label>
-                    Group name
-                    <input
-                      value={groupName}
-                      maxLength={60}
-                      onChange={(event) => setGroupName(event.target.value)}
-                    />
-                  </label>
-                  <div className="create-group-members">
-                    {friends.map((friend) => (
-                      <label className="community-directory-person" key={friend.id}>
-                        <input
-                          type="checkbox"
-                          checked={groupMemberIds.includes(friend.id)}
-                          onChange={(event) =>
-                            setGroupMemberIds((current) =>
-                              event.target.checked
-                                ? [...current, friend.id]
-                                : current.filter((id) => id !== friend.id),
-                            )
-                          }
-                        />
-                        <Avatar user={friend} size={32} />
-                        <span>
-                          <strong>{friend.displayName}</strong>{" "}
-                          <span className="muted small">@{friend.username}</span>
-                        </span>
-                      </label>
-                    ))}
-                    {friends.length === 0 && (
-                      <p className="muted small">
-                        Add and accept a friend before creating a group.
-                      </p>
-                    )}
-                  </div>
-                  {groupError && (
-                    <div className="error-box" role="alert">
-                      {groupError}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    className="primary-btn"
-                    disabled={groupBusy || !groupName.trim() || groupMemberIds.length === 0}
-                    onClick={() => {
-                      setGroupBusy(true);
-                      setGroupError(null);
-                      void store
-                        .createGroup(groupName, groupMemberIds)
-                        .then((id) => {
-                          requestClose();
-                          store.setActiveGroupId(id);
-                        })
-                        .catch((error: unknown) => {
-                          setGroupError(friendlyError(error, "Could not create the group."));
-                        })
-                        .finally(() => setGroupBusy(false));
-                    }}
-                  >
-                    {groupBusy ? "Creating…" : "Create group"}
-                  </button>
-                </>
-              )}
-            </AnimatedModal>
           )}
 
           {incoming.length > 0 && (
@@ -2024,6 +2275,235 @@ export function Sidebar({
         </AnimatedModal>
       )}
 
+      {showGroupDialog && (
+        <AnimatedModal
+          onClose={() => setShowGroupDialog(false)}
+          cardClassName="modal-card create-group-dialog"
+          closeLabel="Close"
+        >
+          {(requestClose) => (
+            <>
+              <h2>Create group chat</h2>
+              <p className="muted small">
+                You can add people you&apos;re already friends with.
+              </p>
+              <label>
+                Group name
+                <input
+                  value={groupName}
+                  maxLength={60}
+                  onChange={(event) => setGroupName(event.target.value)}
+                />
+              </label>
+              <div className="create-group-members">
+                {friends.map((friend) => (
+                  <label className="community-directory-person" key={friend.id}>
+                    <input
+                      type="checkbox"
+                      checked={groupMemberIds.includes(friend.id)}
+                      onChange={(event) =>
+                        setGroupMemberIds((current) =>
+                          event.target.checked
+                            ? [...current, friend.id]
+                            : current.filter((id) => id !== friend.id),
+                        )
+                      }
+                    />
+                    <Avatar user={friend} size={32} />
+                    <span>
+                      <strong>{friend.displayName}</strong>{" "}
+                      <span className="muted small">@{friend.username}</span>
+                    </span>
+                  </label>
+                ))}
+                {friends.length === 0 && (
+                  <p className="muted small">
+                    Add and accept a friend before creating a group.
+                  </p>
+                )}
+              </div>
+              {groupError && (
+                <div className="error-box" role="alert">
+                  {groupError}
+                </div>
+              )}
+              <button
+                type="button"
+                className="primary-btn"
+                disabled={groupBusy || !groupName.trim() || groupMemberIds.length === 0}
+                onClick={() => {
+                  setGroupBusy(true);
+                  setGroupError(null);
+                  void store
+                    .createGroup(groupName, groupMemberIds)
+                    .then((id) => {
+                      setGroupName("");
+                      setGroupMemberIds([]);
+                      requestClose();
+                      store.setActiveGroupId(id);
+                    })
+                    .catch((error: unknown) => {
+                      setGroupError(friendlyError(error, "Could not create the group."));
+                    })
+                    .finally(() => setGroupBusy(false));
+                }}
+              >
+                {groupBusy ? "Creating…" : "Create group"}
+              </button>
+            </>
+          )}
+        </AnimatedModal>
+      )}
+
+      {showCreateCommunityDialog && (
+        <AnimatedModal
+          onClose={() => setShowCreateCommunityDialog(false)}
+          cardClassName="modal-card create-community-dialog"
+          closeLabel="Close"
+        >
+          {(requestClose) => {
+            const activePreviewColor = colorById(communityColor);
+            return (
+              <>
+                <h2>Add Community</h2>
+                <p className="muted small">
+                  Anyone on JaText can discover, join, and hang out in your community, end-to-end encrypted.
+                </p>
+
+                <div className="create-community-avatar-row">
+                  <button
+                    type="button"
+                    className="community-avatar-ring create-community-avatar-btn"
+                    style={{
+                      boxShadow: `0 0 0 3px ${activePreviewColor.hex}`,
+                      background: communityAvatarPreview ? undefined : activePreviewColor.gradient,
+                    }}
+                    onClick={() => communityAvatarInputRef.current?.click()}
+                    title="Upload community photo"
+                  >
+                    {communityAvatarPreview ? (
+                      <img
+                        src={communityAvatarPreview}
+                        alt=""
+                        className="group-avatar sidebar-group-avatar"
+                      />
+                    ) : (
+                      <span className="community-avatar-initials">
+                        {(communityName.trim() || "CM").slice(0, 2).toUpperCase()}
+                      </span>
+                    )}
+                  </button>
+                  <div className="create-community-avatar-copy">
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => communityAvatarInputRef.current?.click()}
+                    >
+                      {communityAvatarPreview ? "Change PFP" : "Upload Community PFP"}
+                    </button>
+                    <span className="muted small">PNG, JPG, or animated GIF</span>
+                  </div>
+                  <input
+                    ref={communityAvatarInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      setCommunityAvatarFile(f);
+                      if (communityAvatarPreview) {
+                        URL.revokeObjectURL(communityAvatarPreview);
+                      }
+                      setCommunityAvatarPreview(f ? URL.createObjectURL(f) : null);
+                    }}
+                  />
+                </div>
+
+                <label>
+                  Community name
+                  <input
+                    value={communityName}
+                    maxLength={60}
+                    placeholder="e.g. Late Night Lounge"
+                    onChange={(event) => setCommunityName(event.target.value)}
+                  />
+                </label>
+
+                <label>
+                  Description (optional)
+                  <input
+                    value={communityDesc}
+                    maxLength={180}
+                    placeholder="What is your community about?"
+                    onChange={(event) => setCommunityDesc(event.target.value)}
+                  />
+                </label>
+
+                <div className="create-community-colors">
+                  <span className="field-label">Community avatar colour &amp; outline</span>
+                  <div className="color-swatches">
+                    {AVATAR_COLORS.map((col) => (
+                      <button
+                        type="button"
+                        key={col.id}
+                        className={`color-swatch ${communityColor === col.id ? "selected" : ""}`}
+                        style={{ background: col.hex }}
+                        title={col.name}
+                        aria-label={col.name}
+                        onClick={() => setCommunityColor(col.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {communityError && (
+                  <div className="error-box" role="alert">
+                    {communityError}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  className="primary-btn"
+                  disabled={communityBusy || !communityName.trim()}
+                  onClick={() => {
+                    if (!store.createCommunity) return;
+                    setCommunityBusy(true);
+                    setCommunityError(null);
+                    void store
+                      .createCommunity({
+                        name: communityName.trim(),
+                        description: communityDesc.trim(),
+                        avatarColor: communityColor,
+                        avatarFile: communityAvatarFile,
+                      })
+                      .then((cid) => {
+                        setCommunityName("");
+                        setCommunityDesc("");
+                        setCommunityAvatarFile(null);
+                        if (communityAvatarPreview) {
+                          URL.revokeObjectURL(communityAvatarPreview);
+                        }
+                        setCommunityAvatarPreview(null);
+                        requestClose();
+                        store.setActiveGroupId(cid);
+                      })
+                      .catch((err: unknown) => {
+                        setCommunityError(
+                          friendlyError(err, "Could not create community."),
+                        );
+                      })
+                      .finally(() => setCommunityBusy(false));
+                  }}
+                >
+                  {communityBusy ? "Creating…" : "Create Community"}
+                </button>
+              </>
+            );
+          }}
+        </AnimatedModal>
+      )}
+
       {isIosChats && (
         <nav className="ios-liquid-bottom-nav" aria-label="Primary navigation">
           <div
@@ -2034,7 +2514,7 @@ export function Sidebar({
                   ? 0
                   : tab === "calls"
                     ? 1
-                    : tab === "groups"
+                    : tab === "communities"
                       ? 2
                       : 3) * 100
               }%)`,
@@ -2071,22 +2551,22 @@ export function Sidebar({
           </button>
           <button
             type="button"
-            className={`ios-liquid-bottom-tab ${tab === "groups" ? "active" : ""}`}
+            className={`ios-liquid-bottom-tab ${tab === "communities" ? "active" : ""}`}
             onClick={() => {
               setIosSearchOpen(false);
               setSearch("");
-              setTab("groups");
+              setTab("communities");
             }}
           >
             <span className="ios-liquid-bottom-icon-wrap">
-              <IosGroupsPeopleIcon size={24} selected={tab === "groups"} />
-              {totalGroupUnreadCount > 0 && (
+              <IosGroupsPeopleIcon size={24} selected={tab === "communities"} />
+              {totalCommunitiesUnreadCount > 0 && (
                 <span className="ios-liquid-bottom-badge">
-                  {totalGroupUnreadCount > 99 ? "99+" : totalGroupUnreadCount}
+                  {totalCommunitiesUnreadCount > 99 ? "99+" : totalCommunitiesUnreadCount}
                 </span>
               )}
             </span>
-            <span>Groups</span>
+            <span>Communities</span>
           </button>
           <button
             type="button"
@@ -2099,9 +2579,9 @@ export function Sidebar({
           >
             <span className="ios-liquid-bottom-icon-wrap">
               <IosDualChatsBubbleIcon size={24} selected={tab === "chats"} />
-              {totalDmUnreadCount > 0 && (
+              {totalChatsUnreadCount > 0 && (
                 <span className="ios-liquid-bottom-badge">
-                  {totalDmUnreadCount > 99 ? "99+" : totalDmUnreadCount}
+                  {totalChatsUnreadCount > 99 ? "99+" : totalChatsUnreadCount}
                 </span>
               )}
             </span>
