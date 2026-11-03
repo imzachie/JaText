@@ -1,7 +1,8 @@
+@file:Suppress("DEPRECATION")
+
 package com.ahad00010.jatext.ui.theme
 
 import android.content.Context
-import android.content.res.Resources
 import android.graphics.Typeface
 import android.graphics.fonts.Font as PlatformFont
 import android.graphics.fonts.FontFamily as PlatformFontFamily
@@ -9,13 +10,19 @@ import android.graphics.fonts.FontStyle as PlatformFontStyle
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.AndroidFont
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontLoadingStrategy
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import androidx.core.content.res.ResourcesCompat
 import com.ahad00010.jatext.R
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Dedicated iOS 26.4 Unicode 17.0 color emoji FontFamily (`res/font/jatext_ios_emoji.ttf`)
@@ -72,144 +79,242 @@ private val SF_PRO_ROUNDED_SPECS = listOf(
     SfProFaceSpec(R.font.sf_pro_rounded_black, FontWeight.Black),
 )
 
-private fun buildComposeFontFamily(specs: List<SfProFaceSpec>): FontFamily = FontFamily(
+@OptIn(ExperimentalTextApi::class)
+private class SfProWithIosEmojiFont(
+    val resId: Int,
+    override val weight: FontWeight,
+    override val style: FontStyle,
+) : AndroidFont(
+    loadingStrategy = FontLoadingStrategy.Blocking,
+    typefaceLoader = SfProEmojiTypefaceLoader,
+    variationSettings = FontVariation.Settings(),
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SfProWithIosEmojiFont) return false
+        return resId == other.resId && weight == other.weight && style == other.style
+    }
+
+    override fun hashCode(): Int {
+        var result = resId
+        result = 31 * result + weight.hashCode()
+        result = 31 * result + style.hashCode()
+        return result
+    }
+}
+
+private object SfProEmojiTypefaceLoader : AndroidFont.TypefaceLoader {
+    private val faceCache = ConcurrentHashMap<String, Typeface>()
+
+    @Volatile
+    private var cachedEmojiNativeFamily: Any? = null
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun getOrBuildEmojiNativeFamily(context: Context): PlatformFontFamily {
+        val existing = cachedEmojiNativeFamily as? PlatformFontFamily
+        if (existing != null) return existing
+        synchronized(this) {
+            val second = cachedEmojiNativeFamily as? PlatformFontFamily
+            if (second != null) return second
+            val built = PlatformFontFamily.Builder(
+                PlatformFont.Builder(context.applicationContext.resources, R.font.jatext_ios_emoji)
+                    .setWeight(400)
+                    .setSlant(PlatformFontStyle.FONT_SLANT_UPRIGHT)
+                    .build(),
+            ).build()
+            cachedEmojiNativeFamily = built
+            return built
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun buildApi29TypefaceWithEmojiFallback(
+        context: Context,
+        font: SfProWithIosEmojiFont,
+    ): Typeface {
+        val isItalic = font.style == FontStyle.Italic
+        val slant = if (isItalic) {
+            PlatformFontStyle.FONT_SLANT_ITALIC
+        } else {
+            PlatformFontStyle.FONT_SLANT_UPRIGHT
+        }
+        val res = context.applicationContext.resources
+        val primaryNativeFont = PlatformFont.Builder(res, font.resId)
+            .setWeight(font.weight.weight)
+            .setSlant(slant)
+            .build()
+        val primaryFamily = PlatformFontFamily.Builder(primaryNativeFont).build()
+        val emojiFamily = getOrBuildEmojiNativeFamily(context)
+        return Typeface.CustomFallbackBuilder(primaryFamily)
+            .addCustomFallback(emojiFamily)
+            .setSystemFallback("sans-serif")
+            .setStyle(PlatformFontStyle(font.weight.weight, slant))
+            .build()
+    }
+
+    override fun loadBlocking(context: Context, font: AndroidFont): Typeface? {
+        if (font !is SfProWithIosEmojiFont) return null
+        val key = "${font.resId}:${font.weight.weight}:${font.style == FontStyle.Italic}"
+        faceCache[key]?.let { return it }
+        val built = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            runCatching { buildApi29TypefaceWithEmojiFallback(context, font) }
+                .getOrElse { ResourcesCompat.getFont(context, font.resId) }
+        } else {
+            ResourcesCompat.getFont(context, font.resId)
+        }
+        if (built != null) {
+            faceCache[key] = built
+        }
+        return built
+    }
+
+    override suspend fun awaitLoad(context: Context, font: AndroidFont): Typeface? =
+        loadBlocking(context, font)
+}
+
+/**
+ * Builds a genuine Compose `FontListFontFamily` (`FontFamily(List<Font>)`) so Compose's
+ * `FontMatcher` resolves every individual SF Pro weight (`100`..`900`) and `Italic` face
+ * natively while chaining `jatext_ios_emoji.ttf` right behind every single face on API >= 29.
+ */
+private fun buildSfProWithEmojiFontFamily(specs: List<SfProFaceSpec>): FontFamily = FontFamily(
     specs.map { spec ->
-        Font(
-            resId = spec.resId,
-            weight = spec.weight,
-            style = if (spec.italic) FontStyle.Italic else FontStyle.Normal,
-        )
+        val fontStyle = if (spec.italic) FontStyle.Italic else FontStyle.Normal
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            SfProWithIosEmojiFont(
+                resId = spec.resId,
+                weight = spec.weight,
+                style = fontStyle,
+            )
+        } else {
+            Font(
+                resId = spec.resId,
+                weight = spec.weight,
+                style = fontStyle,
+            )
+        }
     },
 )
 
 /**
- * Apple SF Pro Text (< 20sp) + iOS 26.4 Unicode 17.0 Emoji fallback:
+ * Apple SF Pro Text (< 20sp) + iOS 26.4 Unicode 17.0 Emoji fallback across all 14 faces:
  * Messages, composer input, sidebar previews, buttons, timestamps, settings rows, labels, menus.
  */
-@Volatile
-var SfProTextFontFamily: FontFamily = buildComposeFontFamily(SF_PRO_TEXT_SPECS)
-    private set
+val SfProTextFontFamily: FontFamily = buildSfProWithEmojiFontFamily(SF_PRO_TEXT_SPECS)
 
 /**
- * Apple SF Pro Display (>= 20sp) + iOS 26.4 Unicode 17.0 Emoji fallback:
+ * Apple SF Pro Display (>= 20sp) + iOS 26.4 Unicode 17.0 Emoji fallback across all 11 faces:
  * Screen headers, hero greeting banners, login/onboarding titles, caller names, profile titles, modals.
  */
-@Volatile
-var SfProDisplayFontFamily: FontFamily = buildComposeFontFamily(SF_PRO_DISPLAY_SPECS)
-    private set
+val SfProDisplayFontFamily: FontFamily = buildSfProWithEmojiFontFamily(SF_PRO_DISPLAY_SPECS)
 
 /**
- * Apple SF Pro Rounded + iOS 26.4 Unicode 17.0 Emoji fallback:
+ * Apple SF Pro Rounded + iOS 26.4 Unicode 17.0 Emoji fallback across all 7 weight mappings:
  * Unread counters, numeric pill badges, avatar initials, call duration timers, GIF / media badges.
  */
-@Volatile
-var SfProRoundedFontFamily: FontFamily = buildComposeFontFamily(SF_PRO_ROUNDED_SPECS)
-    private set
+val SfProRoundedFontFamily: FontFamily = buildSfProWithEmojiFontFamily(SF_PRO_ROUNDED_SPECS)
 
-private fun buildJaTextTypography(
-    displayFamily: FontFamily,
-    textFamily: FontFamily,
-): Typography = Typography(
+val JaTextTypography: Typography = Typography(
     displayLarge = TextStyle(
-        fontFamily = displayFamily,
+        fontFamily = SfProDisplayFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 57.sp,
         lineHeight = 64.sp,
         letterSpacing = (-0.40).sp,
     ),
     displayMedium = TextStyle(
-        fontFamily = displayFamily,
+        fontFamily = SfProDisplayFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 45.sp,
         lineHeight = 52.sp,
         letterSpacing = (-0.35).sp,
     ),
     displaySmall = TextStyle(
-        fontFamily = displayFamily,
+        fontFamily = SfProDisplayFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 36.sp,
         lineHeight = 44.sp,
         letterSpacing = (-0.30).sp,
     ),
     headlineLarge = TextStyle(
-        fontFamily = displayFamily,
+        fontFamily = SfProDisplayFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 32.sp,
         lineHeight = 38.sp,
         letterSpacing = (-0.28).sp,
     ),
     headlineMedium = TextStyle(
-        fontFamily = displayFamily,
+        fontFamily = SfProDisplayFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 28.sp,
         lineHeight = 34.sp,
         letterSpacing = (-0.24).sp,
     ),
     headlineSmall = TextStyle(
-        fontFamily = displayFamily,
+        fontFamily = SfProDisplayFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 24.sp,
         lineHeight = 30.sp,
         letterSpacing = (-0.20).sp,
     ),
     titleLarge = TextStyle(
-        fontFamily = displayFamily,
+        fontFamily = SfProDisplayFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 21.sp,
         lineHeight = 27.sp,
         letterSpacing = (-0.18).sp,
     ),
     titleMedium = TextStyle(
-        fontFamily = textFamily,
+        fontFamily = SfProTextFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.5.sp,
         lineHeight = 22.sp,
         letterSpacing = (-0.12).sp,
     ),
     titleSmall = TextStyle(
-        fontFamily = textFamily,
+        fontFamily = SfProTextFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 14.5.sp,
         lineHeight = 20.sp,
         letterSpacing = (-0.08).sp,
     ),
     bodyLarge = TextStyle(
-        fontFamily = textFamily,
+        fontFamily = SfProTextFontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 15.5.sp,
         lineHeight = 21.sp,
         letterSpacing = (-0.10).sp,
     ),
     bodyMedium = TextStyle(
-        fontFamily = textFamily,
+        fontFamily = SfProTextFontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
         lineHeight = 20.sp,
         letterSpacing = (-0.08).sp,
     ),
     bodySmall = TextStyle(
-        fontFamily = textFamily,
+        fontFamily = SfProTextFontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 12.5.sp,
         lineHeight = 17.sp,
         letterSpacing = (-0.04).sp,
     ),
     labelLarge = TextStyle(
-        fontFamily = textFamily,
+        fontFamily = SfProTextFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 14.sp,
         lineHeight = 19.sp,
         letterSpacing = (-0.06).sp,
     ),
     labelMedium = TextStyle(
-        fontFamily = textFamily,
+        fontFamily = SfProTextFontFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
         lineHeight = 16.sp,
         letterSpacing = (-0.02).sp,
     ),
     labelSmall = TextStyle(
-        fontFamily = textFamily,
+        fontFamily = SfProTextFontFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
         lineHeight = 15.sp,
@@ -217,81 +322,22 @@ private fun buildJaTextTypography(
     ),
 )
 
-@Volatile
-var JaTextTypography: Typography = buildJaTextTypography(
-    displayFamily = SfProDisplayFontFamily,
-    textFamily = SfProTextFontFamily,
-)
-    private set
-
-@Volatile
-private var iosEmojiFallbackInstalled = false
-
-@RequiresApi(Build.VERSION_CODES.Q)
-private fun buildCustomFallbackFontFamily(
-    res: Resources,
-    specs: List<SfProFaceSpec>,
-    emojiNativeFamily: PlatformFontFamily,
-): FontFamily {
-    val first = specs.first()
-    val builder = PlatformFontFamily.Builder(
-        PlatformFont.Builder(res, first.resId)
-            .setWeight(first.weight.weight)
-            .setSlant(
-                if (first.italic) PlatformFontStyle.FONT_SLANT_ITALIC
-                else PlatformFontStyle.FONT_SLANT_UPRIGHT,
-            )
-            .build(),
-    )
-    for (idx in 1 until specs.size) {
-        val spec = specs[idx]
-        builder.addFont(
-            PlatformFont.Builder(res, spec.resId)
-                .setWeight(spec.weight.weight)
-                .setSlant(
-                    if (spec.italic) PlatformFontStyle.FONT_SLANT_ITALIC
-                    else PlatformFontStyle.FONT_SLANT_UPRIGHT,
-                )
-                .build(),
-        )
-    }
-    val typeface = Typeface.CustomFallbackBuilder(builder.build())
-        .addCustomFallback(emojiNativeFamily)
-        .setSystemFallback("sans-serif")
-        .build()
-    return FontFamily(typeface)
-}
-
 /**
- * Chains Apple SF Pro -> iOS 26.4 Unicode 17.0 Color Emoji (`jatext_ios_emoji.ttf`) -> system
- * fallback across the entire Android app so every Text, TextField, composer, reaction, title,
- * name, bio, status, and preview renders genuine iOS 26.4 emojis instead of system NotoColorEmoji.
+ * Eagerly warms the common SF Pro Text & Display Regular/Semibold/Bold faces + iOS 26.4
+ * emoji fallback at startup so the first frame renders without font-decode hitching.
  */
 fun ensureSfProWithIosEmojiInitialized(context: Context) {
-    if (iosEmojiFallbackInstalled) return
-    synchronized(IosEmojiOnlyFontFamily) {
-        if (iosEmojiFallbackInstalled) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            runCatching {
-                val res = context.applicationContext.resources
-                val emojiNativeFamily = PlatformFontFamily.Builder(
-                    PlatformFont.Builder(res, R.font.jatext_ios_emoji)
-                        .setWeight(400)
-                        .setSlant(PlatformFontStyle.FONT_SLANT_UPRIGHT)
-                        .build(),
-                ).build()
-                val textWithEmoji = buildCustomFallbackFontFamily(res, SF_PRO_TEXT_SPECS, emojiNativeFamily)
-                val displayWithEmoji = buildCustomFallbackFontFamily(res, SF_PRO_DISPLAY_SPECS, emojiNativeFamily)
-                val roundedWithEmoji = buildCustomFallbackFontFamily(res, SF_PRO_ROUNDED_SPECS, emojiNativeFamily)
-                SfProTextFontFamily = textWithEmoji
-                SfProDisplayFontFamily = displayWithEmoji
-                SfProRoundedFontFamily = roundedWithEmoji
-                JaTextTypography = buildJaTextTypography(
-                    displayFamily = displayWithEmoji,
-                    textFamily = textWithEmoji,
-                )
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        runCatching {
+            val warmSpecs = listOf(
+                SfProWithIosEmojiFont(R.font.sf_pro_text_regular, FontWeight.Normal, FontStyle.Normal),
+                SfProWithIosEmojiFont(R.font.sf_pro_text_semibold, FontWeight.SemiBold, FontStyle.Normal),
+                SfProWithIosEmojiFont(R.font.sf_pro_text_bold, FontWeight.Bold, FontStyle.Normal),
+                SfProWithIosEmojiFont(R.font.sf_pro_display_bold, FontWeight.Bold, FontStyle.Normal),
+            )
+            for (f in warmSpecs) {
+                SfProEmojiTypefaceLoader.loadBlocking(context.applicationContext, f)
             }
         }
-        iosEmojiFallbackInstalled = true
     }
 }

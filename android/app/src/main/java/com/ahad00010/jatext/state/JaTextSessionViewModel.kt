@@ -185,6 +185,11 @@ data class SessionUiState(
     val joiningCommunityId: String? = null,
     val sidebarTab: String = "chats",
     val exploreCommunitiesOpen: Boolean = false,
+    val navPushEpoch: Int = 0,
+    val updatesBundle: UpdatesBundlePayload = UpdatesBundlePayload(),
+    val updatesLoading: Boolean = false,
+    val requestedChannelJumpId: String? = null,
+    val requestedChannelJumpNonce: Int = 0,
 )
 
 class JaTextSessionViewModel(app: Application) :
@@ -1940,6 +1945,7 @@ class JaTextSessionViewModel(app: Application) :
             prev.copy(
                 sidebarTab = "communities",
                 exploreCommunitiesOpen = true,
+                navPushEpoch = prev.navPushEpoch + 1,
             )
         }
         refreshExploreCommunities()
@@ -1965,6 +1971,7 @@ class JaTextSessionViewModel(app: Application) :
                 activeChatId = friendId,
                 activeGroupId = null,
                 exploreCommunitiesOpen = false,
+                navPushEpoch = prev.navPushEpoch + 1,
                 dmMessages = cached,
                 dmHasMore = false,
                 highlightedMessageId = highlightMessageId,
@@ -2081,6 +2088,7 @@ class JaTextSessionViewModel(app: Application) :
                 activeGroupId = groupId,
                 activeChatId = null,
                 exploreCommunitiesOpen = false,
+                navPushEpoch = prev.navPushEpoch + 1,
                 sidebarTab = if (gsIsCommunity(groupSummary, cachedDet)) "communities" else prev.sidebarTab,
                 groupDetails = synthesizedDetails,
                 groupMessages = cachedMsgs,
@@ -2189,6 +2197,7 @@ class JaTextSessionViewModel(app: Application) :
                 activeChatId = OFFICIAL_COMMUNITY_ID,
                 activeGroupId = null,
                 exploreCommunitiesOpen = false,
+                navPushEpoch = it.navPushEpoch + 1,
                 communityUnreadCount = 0,
                 highlightedMessageId = highlightMessageId,
             )
@@ -2914,18 +2923,25 @@ class JaTextSessionViewModel(app: Application) :
         val token = currentAuthToken() ?: return
         val bubble = st.outgoingBubbleStyle
         val clean = newPlainText.trim()
-        if (clean.isEmpty()) return
 
         viewModelScope.launch {
             try {
                 if (st.activeChatId != null && st.activeChatId != OFFICIAL_COMMUNITY_ID) {
+                    val existingDm = st.dmMessages.firstOrNull { it.id == messageId }
+                    val hasExistingAtt = !existingDm?.attachmentUrl.isNullOrBlank() ||
+                        existingDm?.encryptedAttachment != null ||
+                        existingDm?.encryptedSticker != null
+                    if (clean.isEmpty() && !hasExistingAtt) return@launch
+                    val effectiveBubble = existingDm?.bubbleStyle?.takeIf { it.isNotBlank() } ?: bubble
                     val payload = E2EEPlainPayload(
                         v = 1,
-                        b = JaTextCryptoEngine.attachBubbleStyleToOutgoing(clean, bubble),
-                        bs = bubble.takeIf { it != "default" }
+                        b = JaTextCryptoEngine.attachBubbleStyleToOutgoing(clean, effectiveBubble),
+                        bs = effectiveBubble.takeIf { it != "default" },
+                        att = existingDm?.encryptedAttachment,
+                        stk = existingDm?.encryptedSticker,
                     )
                     val wire = JaTextCryptoEngine.encryptDmMessage(appCtx, me.id, st.activeChatId, payload, token)
-                        ?: JaTextCryptoEngine.attachBubbleStyleToOutgoing(clean, bubble)
+                        ?: JaTextCryptoEngine.attachBubbleStyleToOutgoing(clean, effectiveBubble)
                     TursoApiClient.rpcRaw("editMessage", mapOf("messageId" to messageId, "body" to wire), token)
                     _state.update { cur ->
                         cur.copy(
@@ -2935,11 +2951,19 @@ class JaTextSessionViewModel(app: Application) :
                         )
                     }
                 } else if (st.activeGroupId != null) {
+                    val existingGrp = st.groupMessages.firstOrNull { it.id == messageId }
+                    val hasExistingAtt = !existingGrp?.attachmentUrl.isNullOrBlank() ||
+                        existingGrp?.encryptedAttachment != null ||
+                        existingGrp?.encryptedSticker != null
+                    if (clean.isEmpty() && !hasExistingAtt) return@launch
+                    val effectiveBubble = existingGrp?.bubbleStyle?.takeIf { it.isNotBlank() } ?: bubble
                     val memberIds = st.groupDetails?.members?.map { it.id }.orEmpty()
                     val payload = E2EEPlainPayload(
                         v = 1,
-                        b = JaTextCryptoEngine.attachBubbleStyleToOutgoing(clean, bubble),
-                        bs = bubble.takeIf { it != "default" }
+                        b = JaTextCryptoEngine.attachBubbleStyleToOutgoing(clean, effectiveBubble),
+                        bs = effectiveBubble.takeIf { it != "default" },
+                        att = existingGrp?.encryptedAttachment,
+                        stk = existingGrp?.encryptedSticker,
                     )
                     val wire = JaTextCryptoEngine.encryptGroupMessage(appCtx, me.id, st.activeGroupId, memberIds, payload, token)
                     TursoApiClient.rpcRaw(
@@ -2955,6 +2979,7 @@ class JaTextSessionViewModel(app: Application) :
                         )
                     }
                 } else if (st.activeChatId == OFFICIAL_COMMUNITY_ID) {
+                    if (clean.isEmpty()) return@launch
                     TursoApiClient.rpcRaw(
                         "mutateCommunityMessage",
                         mapOf(
@@ -3290,6 +3315,21 @@ class JaTextSessionViewModel(app: Application) :
         val st = _state.value
         val meId = st.me?.id ?: return
         when (ctx.sourceKind) {
+            "channel" -> {
+                val cid = ctx.channelId ?: return
+                clearActiveTypingSignal()
+                _state.update { prev ->
+                    prev.copy(
+                        activeChatId = null,
+                        activeGroupId = null,
+                        exploreCommunitiesOpen = false,
+                        sidebarTab = "updates",
+                        requestedChannelJumpId = cid,
+                        requestedChannelJumpNonce = prev.requestedChannelJumpNonce + 1,
+                    )
+                }
+                refreshUpdatesBundle(silent = true)
+            }
             "community" -> openCommunityChat(highlightMessageId = ctx.originalMessageId)
             "group" -> {
                 val gid = ctx.groupId ?: return
@@ -5754,4 +5794,390 @@ class JaTextSessionViewModel(app: Application) :
             }
             res
         }
+
+    /* ======================================================================
+       WhatsApp iOS "Updates" Tab: Status, Privacy, Story Engagement & Channels
+       ====================================================================== */
+
+    fun refreshUpdatesBundle(silent: Boolean = false) {
+        val token = currentAuthToken() ?: return
+        if (!silent) {
+            _state.update { it.copy(updatesLoading = true) }
+        }
+        viewModelScope.launch {
+            try {
+                val bundle = TursoApiClient.rpc<UpdatesBundlePayload>(
+                    op = "getUpdatesBundle",
+                    args = emptyMap(),
+                    token = token,
+                )
+                _state.update {
+                    it.copy(
+                        updatesBundle = bundle,
+                        updatesLoading = false,
+                    )
+                }
+            } catch (_: Throwable) {
+                if (!silent) {
+                    _state.update { it.copy(updatesLoading = false) }
+                }
+            }
+        }
+    }
+
+    fun publishStatusPost(
+        imageUri: android.net.Uri?,
+        audioUri: android.net.Uri?,
+        builtinAudioId: String,
+        builtinAudioTitle: String,
+        builtinAudioDurationMs: Int,
+        caption: String,
+        bgColor: String,
+        mediaSource: String,
+        privacyType: String,
+        excludedIds: List<String>,
+        includedIds: List<String>,
+        groupId: String?,
+        mentionedIds: List<String>,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        val token = currentAuthToken() ?: run {
+            onError("Not signed in.")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                var uploadedMediaUrl = ""
+                var resolvedMediaType = "text"
+                if (imageUri != null) {
+                    val imgMeta = withContext(Dispatchers.IO) { readAttachmentBytes(imageUri, null) }
+                        ?: throw IllegalStateException("Could not read selected image.")
+                    uploadedMediaUrl = TursoApiClient.uploadMediaBytes(
+                        bytes = imgMeta.bytes,
+                        fileName = imgMeta.fileName.ifBlank { "status.jpg" },
+                        mimeType = imgMeta.mimeType.ifBlank { "image/jpeg" },
+                        token = token,
+                    )
+                    resolvedMediaType = "image"
+                }
+
+                var uploadedAudioUrl = ""
+                var resolvedAudioTitle = ""
+                var resolvedAudioDur = 0
+                if (audioUri != null) {
+                    val durMs = withContext(Dispatchers.IO) {
+                        val retriever = android.media.MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(appCtx, audioUri)
+                            retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                                ?.toIntOrNull() ?: 15_000
+                        } finally {
+                            runCatching { retriever.release() }
+                        }
+                    }
+                    if (durMs > 30_000) {
+                        throw IllegalStateException("Status audio clips are strictly capped at 30 seconds.")
+                    }
+                    val audMeta = withContext(Dispatchers.IO) { readAttachmentBytes(audioUri, null) }
+                        ?: throw IllegalStateException("Could not read selected audio clip.")
+                    uploadedAudioUrl = TursoApiClient.uploadMediaBytes(
+                        bytes = audMeta.bytes,
+                        fileName = audMeta.fileName.ifBlank { "status-audio.mp3" },
+                        mimeType = audMeta.mimeType.ifBlank { "audio/mpeg" },
+                        token = token,
+                    )
+                    resolvedAudioTitle = audMeta.fileName.substringBeforeLast('.').take(60)
+                    resolvedAudioDur = durMs.coerceIn(1_000, 30_000)
+                    if (uploadedMediaUrl.isBlank()) {
+                        resolvedMediaType = "audio"
+                    }
+                } else if (builtinAudioId.isNotBlank() && builtinAudioId != "none") {
+                    uploadedAudioUrl = "builtin:$builtinAudioId"
+                    resolvedAudioTitle = builtinAudioTitle
+                    resolvedAudioDur = builtinAudioDurationMs.coerceIn(0, 30_000)
+                }
+
+                TursoApiClient.rpcRaw(
+                    op = "createStatusPost",
+                    args = mapOf(
+                        "mediaUrl" to uploadedMediaUrl,
+                        "mediaType" to resolvedMediaType,
+                        "caption" to caption.trim(),
+                        "bgColor" to bgColor,
+                        "audioUrl" to uploadedAudioUrl,
+                        "audioTitle" to resolvedAudioTitle,
+                        "audioDurationMs" to resolvedAudioDur,
+                        "mediaSource" to mediaSource,
+                        "privacyType" to privacyType,
+                        "excludedUserIds" to if (privacyType == "CONTACTS_EXCEPT") excludedIds else emptyList<String>(),
+                        "includedUserIds" to if (privacyType == "ONLY_SHARE_WITH") includedIds else emptyList<String>(),
+                        "groupId" to if (privacyType == "GROUP_EXCLUSIVE") groupId else null,
+                        "mentionedUserIds" to mentionedIds,
+                    ),
+                    token = token,
+                )
+                refreshUpdatesBundle(silent = true)
+                onSuccess()
+            } catch (e: Throwable) {
+                onError(e.message ?: "Could not publish status.")
+            }
+        }
+    }
+
+    fun deleteStatusSegment(statusId: String) {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw("deleteStatusPost", mapOf("statusId" to statusId), token)
+                refreshUpdatesBundle(silent = true)
+            }
+        }
+    }
+
+    fun markStatusesViewed(statusIds: List<String>) {
+        if (statusIds.isEmpty()) return
+        val token = currentAuthToken() ?: return
+        val idSet = statusIds.toSet()
+        _state.update { cur ->
+            val b = cur.updatesBundle
+            val nextContacts = b.contactStacks.map { st ->
+                val nextSegs = st.segments.map { seg ->
+                    if (idSet.contains(seg.id)) seg.copy(viewed = true) else seg
+                }
+                st.copy(
+                    segments = nextSegs,
+                    allViewed = nextSegs.all { it.viewed },
+                    unreadCount = nextSegs.count { !it.viewed },
+                )
+            }
+            cur.copy(updatesBundle = b.copy(contactStacks = nextContacts))
+        }
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw("markStatusViewed", mapOf("statusIds" to statusIds), token)
+            }
+        }
+    }
+
+    fun toggleStatusSegmentLike(statusId: String) {
+        val token = currentAuthToken() ?: return
+        _state.update { cur ->
+            val b = cur.updatesBundle
+            val nextContacts = b.contactStacks.map { st ->
+                st.copy(
+                    segments = st.segments.map { seg ->
+                        if (seg.id == statusId) seg.copy(liked = !seg.liked) else seg
+                    },
+                )
+            }
+            cur.copy(updatesBundle = b.copy(contactStacks = nextContacts))
+        }
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw("toggleStatusLike", mapOf("statusId" to statusId), token)
+            }
+        }
+    }
+
+    fun saveStatusDefaultPrivacy(
+        privacyType: String,
+        excludedIds: List<String>,
+        includedIds: List<String>,
+        groupId: String?,
+        onSaved: () -> Unit,
+    ) {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw(
+                    "saveStatusPrivacyDefault",
+                    mapOf(
+                        "privacyType" to privacyType,
+                        "excludedUserIds" to excludedIds,
+                        "includedUserIds" to includedIds,
+                        "groupId" to groupId,
+                    ),
+                    token,
+                )
+                refreshUpdatesBundle(silent = true)
+            }
+            onSaved()
+        }
+    }
+
+    fun sendStoryDirectReply(targetUserId: String, storyCaption: String, replyBody: String) {
+        val me = _state.value.me ?: return
+        val token = currentAuthToken() ?: return
+        val clean = replyBody.trim()
+        if (clean.isEmpty()) return
+        val formatted = if (storyCaption.isNotBlank()) {
+            "[Status reply: \"${storyCaption.take(48)}\"] $clean"
+        } else {
+            "[Status reply] $clean"
+        }
+        viewModelScope.launch {
+            runCatching {
+                val payload = E2EEPlainPayload(v = 1, b = formatted)
+                val wire = JaTextCryptoEngine.encryptDmMessage(appCtx, me.id, targetUserId, payload, token) ?: formatted
+                TursoApiClient.rpcRaw(
+                    "sendMessage",
+                    mapOf("receiverId" to targetUserId, "body" to wire),
+                    token,
+                )
+                showToast("Sent reply")
+            }
+        }
+    }
+
+    fun createNewBroadcastChannel(
+        name: String,
+        description: String,
+        avatarColor: String,
+        isPremium: Boolean,
+        monthlyPriceLabel: String,
+        onCreated: (BroadcastChannelSummary) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        val token = currentAuthToken() ?: run {
+            onError("Not signed in.")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val res = TursoApiClient.rpc<CreateChannelResponse>(
+                    op = "createBroadcastChannel",
+                    args = mapOf(
+                        "name" to name.trim(),
+                        "description" to description.trim(),
+                        "avatarColor" to avatarColor,
+                        "category" to "New",
+                        "isPremium" to isPremium,
+                        "monthlyPriceLabel" to if (isPremium) monthlyPriceLabel else "",
+                    ),
+                    token = token,
+                )
+                val now = System.currentTimeMillis()
+                val created = BroadcastChannelSummary(
+                    id = res.id,
+                    name = name.trim(),
+                    handle = res.handle,
+                    description = description.trim(),
+                    avatarColor = avatarColor,
+                    verified = false,
+                    category = "New",
+                    isPremium = isPremium,
+                    monthlyPriceLabel = if (isPremium) monthlyPriceLabel else "",
+                    followerCount = 1,
+                    postCount = 1,
+                    latestSnippet = description.trim().ifBlank { "Welcome to ${name.trim()}!" },
+                    latestMediaType = "text",
+                    latestPostAt = now,
+                    createdAt = now,
+                    followed = true,
+                    unreadCount = 0,
+                    isOwner = true,
+                )
+                refreshUpdatesBundle(silent = true)
+                onCreated(created)
+            } catch (e: Throwable) {
+                onError(e.message ?: "Could not create channel.")
+            }
+        }
+    }
+
+    fun toggleFollowBroadcastChannel(channelId: String) {
+        val token = currentAuthToken() ?: return
+        _state.update { cur ->
+            val b = cur.updatesBundle
+            val inFollowed = b.followedChannels.firstOrNull { it.id == channelId }
+            val nextBundle = if (inFollowed != null) {
+                val nextFol = b.followedChannels.filterNot { it.id == channelId }
+                val nextDir = b.directoryChannels.map { c ->
+                    if (c.id == channelId) c.copy(followed = false, followerCount = (c.followerCount - 1).coerceAtLeast(0)) else c
+                }
+                b.copy(
+                    followedChannels = nextFol,
+                    followedChannelsCount = nextFol.size,
+                    directoryChannels = nextDir,
+                )
+            } else {
+                val dirItem = b.directoryChannels.firstOrNull { it.id == channelId }
+                if (dirItem != null) {
+                    val promoted = dirItem.copy(followed = true, followerCount = dirItem.followerCount + 1, unreadCount = 0)
+                    val nextFol = listOf(promoted) + b.followedChannels
+                    b.copy(
+                        followedChannels = nextFol,
+                        followedChannelsCount = nextFol.size,
+                        directoryChannels = b.directoryChannels.map { c -> if (c.id == channelId) promoted else c },
+                    )
+                } else {
+                    b
+                }
+            }
+            cur.copy(updatesBundle = nextBundle)
+        }
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw("toggleFollowChannel", mapOf("channelId" to channelId), token)
+                refreshUpdatesBundle(silent = true)
+            }
+        }
+    }
+
+    fun loadBroadcastChannelPosts(
+        channelId: String,
+        onLoaded: (ChannelPostsPayload) -> Unit,
+    ) {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            runCatching {
+                val res = TursoApiClient.rpc<ChannelPostsPayload>(
+                    op = "getChannelPosts",
+                    args = mapOf("channelId" to channelId),
+                    token = token,
+                )
+                onLoaded(res)
+            }
+        }
+    }
+
+    fun publishChannelBroadcast(
+        channelId: String,
+        body: String,
+        onDone: () -> Unit,
+    ) {
+        val token = currentAuthToken() ?: return
+        val clean = body.trim()
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw(
+                    "postChannelBroadcast",
+                    mapOf("channelId" to channelId, "body" to clean),
+                    token,
+                )
+                refreshUpdatesBundle(silent = true)
+            }
+            onDone()
+        }
+    }
+
+    fun reactToChannelBroadcast(
+        postId: String,
+        emoji: String,
+        onDone: () -> Unit,
+    ) {
+        val token = currentAuthToken() ?: return
+        viewModelScope.launch {
+            runCatching {
+                TursoApiClient.rpcRaw(
+                    "reactChannelPost",
+                    mapOf("postId" to postId, "emoji" to emoji),
+                    token,
+                )
+            }
+            onDone()
+        }
+    }
 }

@@ -488,6 +488,15 @@ fun ChatThreadScreen(
     var emojiPickerTargetMessageId by remember { mutableStateOf<String?>(null) }
     var forwardingItem by remember { mutableStateOf<UnifiedThreadItem?>(null) }
     var fullscreenImageModel by remember { mutableStateOf<Any?>(null) }
+    var showGroupExclusiveStories by remember { mutableStateOf(false) }
+    val groupExclusiveStacks = remember(activeGroup?.id, state.updatesBundle.groupExclusiveStacks) {
+        activeGroup?.id?.let { gid -> state.updatesBundle.groupExclusiveStacks[gid] }.orEmpty()
+    }
+    LaunchedEffect(activeGroup?.id) {
+        if (activeGroup != null) {
+            vm.refreshUpdatesBundle(silent = true)
+        }
+    }
     val shownTranscriptIds = remember { mutableStateMapOf<String, Boolean>() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -900,6 +909,25 @@ fun ChatThreadScreen(
                     )
                 }
 
+                if (groupExclusiveStacks.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0x2814D990))
+                            .border(1.dp, Color(0xFF14D990), RoundedCornerShape(999.dp))
+                            .jaBouncyClick { showGroupExclusiveStories = true }
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Status (${groupExclusiveStacks.size})",
+                            color = headerTitleColor,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Spacer(Modifier.width(5.dp))
+                }
                 Spacer(Modifier.width(5.dp))
                 Box {
                     Box(
@@ -1883,6 +1911,8 @@ fun ChatThreadScreen(
                                     subtitle = if (viewOnceMode) "Active · Tap to turn off" else "Disappears forever after viewing",
                                     onClick = {
                                         showComposerPlusMenu = false
+                                        focusManager.clearFocus(force = true)
+                                        keyboardController?.hide()
                                         viewOnceMode = !viewOnceMode
                                     },
                                 )
@@ -2055,7 +2085,9 @@ fun ChatThreadScreen(
                                     vm.updateChatDraft(activeThreadDraftKey, it)
                                 }
                             },
-                            cursorBrush = SolidColor(if (palette.isDark) Color.White else Color.Black),
+                            cursorBrush = SolidColor(
+                                if (hasWallpaper || palette.isDark) Color.White else Color(0xFF111318),
+                            ),
                             textStyle = TextStyle(
                                 color = composerTextCol,
                                 fontSize = 15.sp,
@@ -2078,17 +2110,34 @@ fun ChatThreadScreen(
                                 inner()
                             }
                         )
-                        if (viewOnceMode && !isCommunity) {
-                            Spacer(Modifier.width(8.dp))
-                            ViewOnceCircleBadge(
-                                burned = false,
-                                tint = palette.accent,
-                                modifier = Modifier.clickable { viewOnceMode = false },
-                            )
+                        AnimatedVisibility(
+                            visible = viewOnceMode && !isCommunity,
+                            enter = scaleIn(
+                                initialScale = 0.65f,
+                                animationSpec = spring(dampingRatio = 0.72f, stiffness = 520f),
+                            ) + fadeIn(tween(150)),
+                            exit = scaleOut(
+                                targetScale = 0.65f,
+                                animationSpec = tween(140),
+                            ) + fadeOut(tween(140)),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Spacer(Modifier.width(8.dp))
+                                ViewOnceCircleBadge(
+                                    burned = false,
+                                    tint = palette.accent,
+                                    modifier = Modifier.clickable { viewOnceMode = false },
+                                )
+                            }
                         }
                     }
 
-                    val canSendText = draftText.isNotBlank() || pendingAttachmentUris.isNotEmpty()
+                    val editingHasAttachment = editingTarget?.attachmentUrl?.isNotBlank() == true ||
+                        editingTarget?.encryptedAttachment != null ||
+                        editingTarget?.stickerUrl?.isNotBlank() == true
+                    val canSendText = draftText.isNotBlank() ||
+                        pendingAttachmentUris.isNotEmpty() ||
+                        (editingTarget != null && editingHasAttachment)
                     if (canSendText) {
                         Box(
                             modifier = Modifier
@@ -2181,6 +2230,19 @@ fun ChatThreadScreen(
                 }
             }
         }
+    }
+
+    if (showGroupExclusiveStories && groupExclusiveStacks.isNotEmpty()) {
+        FullScreenStoryViewerOverlay(
+            stacks = groupExclusiveStacks,
+            initialStackIndex = 0,
+            meId = me.id,
+            vm = vm,
+            onClose = {
+                showGroupExclusiveStories = false
+                vm.refreshUpdatesBundle(silent = true)
+            },
+        )
     }
 
     /* ==================== Message Hold Context Sheet (Nav-Bar-Safe + Multi-Reaction + More Emojis) ==================== */

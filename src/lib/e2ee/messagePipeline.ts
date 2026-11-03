@@ -165,9 +165,11 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
   wireBody: string;
   file?: File;
   sticker?: StickerMedia;
+  preserveAtt?: EncryptedBlobDescriptor;
+  preserveStk?: E2EEPlainPayload["stk"];
   uploadFile: (file: File) => Promise<TStorageId>;
 }): Promise<PreparedEncryptedWrite<TStorageId> | null> {
-  const { receiverId, wireBody, file, sticker, uploadFile } = params;
+  const { receiverId, wireBody, file, sticker, preserveAtt, preserveStk, uploadFile } = params;
   let state = getActiveE2EEState();
   if (!state) return null;
 
@@ -222,8 +224,8 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
   if (!peerEntry) return null;
 
   let attachmentId: TStorageId | undefined;
-  let attDescriptor: EncryptedBlobDescriptor | undefined;
-  let stkPayload: E2EEPlainPayload["stk"] | undefined;
+  let attDescriptor: EncryptedBlobDescriptor | undefined = preserveAtt;
+  let stkPayload: E2EEPlainPayload["stk"] | undefined = preserveStk;
 
   if (file) {
     const plainBytes = new Uint8Array(await file.arrayBuffer());
@@ -281,7 +283,7 @@ export async function prepareOutgoingDmEncrypted<TStorageId = string>(params: {
   };
 
   // Pre-check if very long message text needs encrypted msgBlob spill in attachmentId
-  if (!attachmentId && wireBody.length > 1800) {
+  if (!attachmentId && !attDescriptor && wireBody.length > 1800) {
     const textBytes = new TextEncoder().encode(wireBody);
     const { ciphertextBytes, descriptor } = await encryptAttachmentBytes(
       textBytes,
@@ -402,18 +404,29 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
   wireBody: string;
   file?: File;
   sticker?: StickerMedia;
+  preserveAtt?: EncryptedBlobDescriptor;
+  preserveStk?: E2EEPlainPayload["stk"];
   canMentionEveryone?: boolean;
   uploadFile: (file: File) => Promise<TStorageId>;
 }): Promise<PreparedEncryptedWrite<TStorageId> | null> {
-  const { groupId, wireBody, file, sticker, canMentionEveryone = false, uploadFile } = params;
+  const {
+    groupId,
+    wireBody,
+    file,
+    sticker,
+    preserveAtt,
+    preserveStk,
+    canMentionEveryone = false,
+    uploadFile,
+  } = params;
   const state = getActiveE2EEState();
   if (!state) return null;
   const epochEntry = getLatestGroupEpoch(groupId);
   if (!epochEntry) return null;
 
   let attachmentId: TStorageId | undefined;
-  let attDescriptor: EncryptedBlobDescriptor | undefined;
-  let stkPayload: E2EEPlainPayload["stk"] | undefined;
+  let attDescriptor: EncryptedBlobDescriptor | undefined = preserveAtt;
+  let stkPayload: E2EEPlainPayload["stk"] | undefined = preserveStk;
 
   if (file) {
     const plainBytes = new Uint8Array(await file.arrayBuffer());
@@ -470,7 +483,7 @@ export async function prepareOutgoingGroupEncrypted<TStorageId = string>(params:
     ...(stkPayload ? { stk: stkPayload } : {}),
   };
 
-  if (!attachmentId && wireBody.length > 1800) {
+  if (!attachmentId && !attDescriptor && wireBody.length > 1800) {
     const textBytes = new TextEncoder().encode(wireBody);
     const { ciphertextBytes, descriptor } = await encryptAttachmentBytes(
       textBytes,
@@ -897,6 +910,8 @@ export function hydrateDecryptedDmMessage(
         }
       : undefined,
     e2ee: proof,
+    encryptedAtt: payload.att,
+    encryptedStk: payload.stk,
   };
 }
 
@@ -1098,6 +1113,8 @@ export function hydrateDecryptedGroupMessage(
         ? raw.mentionedUserIds
         : mentions.mentionedUserIds,
     e2ee: proof,
+    encryptedAtt: payload.att,
+    encryptedStk: payload.stk,
   };
 }
 

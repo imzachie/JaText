@@ -21,9 +21,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -65,7 +69,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -573,76 +580,184 @@ private fun JaTextRootHost(
                     } ?: JaTextLoadingScreen()
                 }
                 else -> {
-                    val screenKey = when {
-                        showSettings -> "settings"
-                        state.activeChatId != null || state.activeGroupId != null -> "thread"
-                        state.exploreCommunitiesOpen -> "explore_communities"
-                        else -> "sidebar"
+                    var settingsEpoch by remember { mutableStateOf(0) }
+                    var latchedThreadState by remember { mutableStateOf(state) }
+                    if (state.activeChatId != null || state.activeGroupId != null) {
+                        latchedThreadState = state
                     }
 
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    val activeThreadIdentity = state.activeGroupId?.let { "grp:$it" }
+                        ?: state.activeChatId?.let { "dm:$it" }
+                    val foregroundKey = when {
+                        showSettings -> "settings:$settingsEpoch"
+                        activeThreadIdentity != null -> "thread:$activeThreadIdentity:${state.navPushEpoch}"
+                        state.exploreCommunitiesOpen -> "explore:${state.navPushEpoch}"
+                        else -> "none"
+                    }
+                    val hasForegroundPane = foregroundKey != "none"
+
+                    val sidebarParallaxFraction by animateFloatAsState(
+                        targetValue = if (hasForegroundPane) -0.24f else 0f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = 460f,
+                        ),
+                        label = "SidebarIosParallax",
+                    )
+                    val sidebarScrimAlpha by animateFloatAsState(
+                        targetValue = if (hasForegroundPane) 0.16f else 0f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = 460f,
+                        ),
+                        label = "SidebarIosScrim",
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(palette.bgPrimary),
+                    ) {
+                        // Base layer: Sidebar stays permanently mounted underneath (never unmounted or faded to black)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .zIndex(0f)
+                                .graphicsLayer {
+                                    translationX = size.width * sidebarParallaxFraction
+                                },
+                        ) {
+                            SidebarScreen(
+                                state = state,
+                                vm = vm,
+                                onOpenSettings = {
+                                    settingsEpoch += 1
+                                    showSettings = true
+                                },
+                                onOpenProfile = { peer -> viewingPeerProfile = peer },
+                                onInstallUpdate = { vm.downloadAndInstallApkUpdate(activity) },
+                            )
+                            if (sidebarScrimAlpha > 0.005f) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = sidebarScrimAlpha)),
+                                )
+                            }
+                        }
+
+                        // Foreground push/pop stack: guarantees full slide-in even if previous back animation was interrupted mid-flight
                         AnimatedContent(
-                            targetState = screenKey,
+                            targetState = foregroundKey,
                             transitionSpec = {
-                                if (
-                                    targetState == "thread" ||
-                                    targetState == "settings" ||
-                                    targetState == "explore_communities"
-                                ) {
-                                    (slideInHorizontally(
-                                        animationSpec = spring(
-                                            dampingRatio = Spring.DampingRatioNoBouncy,
-                                            stiffness = Spring.StiffnessMediumLow,
+                                val enteringPane = targetState != "none"
+                                val exitingPane = initialState != "none"
+                                when {
+                                    enteringPane && !exitingPane -> {
+                                        ContentTransform(
+                                            targetContentEnter = slideInHorizontally(
+                                                animationSpec = spring(
+                                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                                    stiffness = 460f,
+                                                ),
+                                                initialOffsetX = { fullWidth -> fullWidth },
+                                            ),
+                                            initialContentExit = ExitTransition.None,
+                                            targetContentZIndex = 2f,
                                         )
-                                    ) { (it * 0.28f).toInt() } + fadeIn(tween(180)))
-                                        .togetherWith(
-                                            slideOutHorizontally(tween(180)) { -(it * 0.10f).toInt() } + fadeOut(tween(150))
+                                    }
+                                    !enteringPane && exitingPane -> {
+                                        ContentTransform(
+                                            targetContentEnter = EnterTransition.None,
+                                            initialContentExit = slideOutHorizontally(
+                                                animationSpec = spring(
+                                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                                    stiffness = 480f,
+                                                ),
+                                                targetOffsetX = { fullWidth -> fullWidth },
+                                            ),
+                                            targetContentZIndex = 0f,
                                         )
-                                } else {
-                                    (slideInHorizontally(
-                                        animationSpec = spring(
-                                            dampingRatio = Spring.DampingRatioNoBouncy,
-                                            stiffness = Spring.StiffnessMediumLow,
+                                    }
+                                    enteringPane && exitingPane -> {
+                                        // Interrupted back transition or direct conversation switch: push fresh pane in from right edge!
+                                        ContentTransform(
+                                            targetContentEnter = slideInHorizontally(
+                                                animationSpec = spring(
+                                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                                    stiffness = 460f,
+                                                ),
+                                                initialOffsetX = { fullWidth -> fullWidth },
+                                            ),
+                                            initialContentExit = slideOutHorizontally(
+                                                animationSpec = tween(220),
+                                                targetOffsetX = { fullWidth -> -(fullWidth * 0.22f).toInt() },
+                                            ) + fadeOut(tween(200)),
+                                            targetContentZIndex = 3f,
                                         )
-                                    ) { -(it * 0.12f).toInt() } + fadeIn(tween(170)))
-                                        .togetherWith(
-                                            slideOutHorizontally(tween(190)) { (it * 0.28f).toInt() } + fadeOut(tween(150))
-                                        )
+                                    }
+                                    else -> {
+                                        EnterTransition.None.togetherWith(ExitTransition.None)
+                                    }
                                 }
                             },
-                            label = "JaTextRootNav",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .zIndex(2f),
+                            label = "JaTextForegroundNav",
                         ) { target ->
-                            when (target) {
-                                "settings" -> {
-                                    SettingsModalScreen(
-                                        state = state,
-                                        vm = vm,
-                                        onClose = { showSettings = false },
-                                    )
+                            when {
+                                target.startsWith("settings:") -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .shadow(16.dp)
+                                            .background(palette.bgPrimary),
+                                    ) {
+                                        SettingsModalScreen(
+                                            state = state,
+                                            vm = vm,
+                                            onClose = { showSettings = false },
+                                        )
+                                    }
                                 }
-                                "thread" -> {
-                                    ChatThreadScreen(
-                                        state = state,
-                                        vm = vm,
-                                        onOpenPeerProfile = { peer -> viewingPeerProfile = peer },
-                                        onOpenSecurityCode = { peer -> verifyingPeerCode = peer },
-                                        onOpenGroupMembers = { showGroupMembers = true },
-                                    )
+                                target.startsWith("thread:") -> {
+                                    val effectiveThreadState =
+                                        if (state.activeChatId != null || state.activeGroupId != null) {
+                                            state
+                                        } else {
+                                            latchedThreadState
+                                        }
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .shadow(16.dp)
+                                            .background(palette.bgPrimary),
+                                    ) {
+                                        ChatThreadScreen(
+                                            state = effectiveThreadState,
+                                            vm = vm,
+                                            onOpenPeerProfile = { peer -> viewingPeerProfile = peer },
+                                            onOpenSecurityCode = { peer -> verifyingPeerCode = peer },
+                                            onOpenGroupMembers = { showGroupMembers = true },
+                                        )
+                                    }
                                 }
-                                "explore_communities" -> {
-                                    com.ahad00010.jatext.ui.screens.ExploreCommunitiesScreen(
-                                        state = state,
-                                        vm = vm,
-                                    )
+                                target.startsWith("explore:") -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .shadow(16.dp)
+                                            .background(palette.bgPrimary),
+                                    ) {
+                                        com.ahad00010.jatext.ui.screens.ExploreCommunitiesScreen(
+                                            state = state,
+                                            vm = vm,
+                                        )
+                                    }
                                 }
                                 else -> {
-                                    SidebarScreen(
-                                        state = state,
-                                        vm = vm,
-                                        onOpenSettings = { showSettings = true },
-                                        onOpenProfile = { peer -> viewingPeerProfile = peer },
-                                        onInstallUpdate = { vm.downloadAndInstallApkUpdate(activity) },
-                                    )
+                                    // Nothing rendered above Sidebar when at root
                                 }
                             }
                         }

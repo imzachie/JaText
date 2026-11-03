@@ -4,7 +4,7 @@ export const FORWARD_METADATA_PREFIX = "__JATEXT_FWD_V1__:";
 
 export interface ForwardedMessageContext {
   v: 1;
-  sourceKind: "dm" | "group" | "community";
+  sourceKind: "dm" | "group" | "community" | "channel";
   originalMessageId: string;
   originalCreatedAt: number;
   originalSenderId: string;
@@ -17,6 +17,10 @@ export interface ForwardedMessageContext {
   /** For Groups: groupId + display name */
   groupId?: string;
   groupName?: string;
+  /** For Broadcast Channels: immutable attribution reference back to parent channel */
+  channelId?: string;
+  channelName?: string;
+  channelVerified?: boolean;
 }
 
 function encodeUtf8Base64Url(input: string): string {
@@ -76,7 +80,8 @@ export function extractForwardedContext(body?: string | null): {
       parsed &&
       (parsed.sourceKind === "dm" ||
         parsed.sourceKind === "group" ||
-        parsed.sourceKind === "community") &&
+        parsed.sourceKind === "community" ||
+        parsed.sourceKind === "channel") &&
       typeof parsed.originalMessageId === "string" &&
       typeof parsed.originalCreatedAt === "number" &&
       typeof parsed.originalSenderName === "string"
@@ -101,6 +106,9 @@ export function extractForwardedContext(body?: string | null): {
               : undefined,
           groupId: typeof parsed.groupId === "string" ? parsed.groupId : undefined,
           groupName: typeof parsed.groupName === "string" ? parsed.groupName : undefined,
+          channelId: typeof parsed.channelId === "string" ? parsed.channelId : undefined,
+          channelName: typeof parsed.channelName === "string" ? parsed.channelName : undefined,
+          channelVerified: Boolean(parsed.channelVerified),
         },
         strippedBody,
       };
@@ -125,6 +133,9 @@ export function canAccessForwardedContext(
   groups: GroupSummary[],
 ): boolean {
   if (!context || !context.originalMessageId || !meId) return false;
+  if (context.sourceKind === "channel") {
+    return Boolean(context.channelId);
+  }
   if (context.sourceKind === "community") {
     return true;
   }
@@ -179,6 +190,16 @@ export function requestJumpToForwardedMessage(
     setActiveGroupId: (id: string | null) => void;
   },
 ): boolean {
+  if (context.sourceKind === "channel" && context.channelId) {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("jatext:open-channel", {
+          detail: { channelId: context.channelId, postId: context.originalMessageId },
+        }),
+      );
+    }
+    return true;
+  }
   if (context.sourceKind === "community") {
     currentPendingJump = {
       targetKind: "community",

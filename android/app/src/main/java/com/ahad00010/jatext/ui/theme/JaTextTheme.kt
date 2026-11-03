@@ -1,6 +1,8 @@
 package com.ahad00010.jatext.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -628,7 +630,18 @@ fun JaTextTheme(
         }
     }
 
-    CompositionLocalProvider(LocalJaTextPalette provides palette) {
+    val textSelectionColors = remember(palette) {
+        val handle = if (palette.isDark) palette.accent else Color(0xFF6D28D9)
+        TextSelectionColors(
+            handleColor = handle,
+            backgroundColor = handle.copy(alpha = 0.28f),
+        )
+    }
+
+    CompositionLocalProvider(
+        LocalJaTextPalette provides palette,
+        LocalTextSelectionColors provides textSelectionColors,
+    ) {
         MaterialTheme(
             colorScheme = materialScheme,
             typography = JaTextTypography,

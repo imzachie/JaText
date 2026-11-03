@@ -1,5 +1,9 @@
 import type { BubbleStyleId } from "./chatCustomization";
-import type { DeviceSyncRequest } from "./e2ee/cryptoPrimitives";
+import type {
+  DeviceSyncRequest,
+  E2EEPlainPayload,
+  EncryptedBlobDescriptor,
+} from "./e2ee/cryptoPrimitives";
 import type { MessageE2EEProof } from "./e2ee/keystore";
 import type { ForwardedMessageContext } from "./forwardedContext";
 import type { SyncedThemePayload } from "./themeEngine";
@@ -78,6 +82,8 @@ export interface ChatMessage {
   unsentAt?: number;
   reactions?: MessageReaction[];
   e2ee?: MessageE2EEProof;
+  encryptedAtt?: EncryptedBlobDescriptor;
+  encryptedStk?: E2EEPlainPayload["stk"];
 }
 
 export type MessageDeliveryStatus = "delivered" | "sent" | "read";
@@ -254,6 +260,8 @@ export interface GroupMessage {
   mentionedUserIds?: string[];
   reactions?: MessageReaction[];
   e2ee?: MessageE2EEProof;
+  encryptedAtt?: EncryptedBlobDescriptor;
+  encryptedStk?: E2EEPlainPayload["stk"];
 }
 
 export interface ChatTypingUser {

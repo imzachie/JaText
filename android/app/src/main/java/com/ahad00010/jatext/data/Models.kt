@@ -192,6 +192,9 @@ data class ForwardedMessageContext(
     val dmUserIds: List<String>? = null,
     val groupId: String? = null,
     val groupName: String? = null,
+    val channelId: String? = null,
+    val channelName: String? = null,
+    val channelVerified: Boolean = false,
 )
 
 @Serializable
@@ -1085,6 +1088,126 @@ data class ClientPinnedMessage(
     val preview: String = "",
     val pinnedAt: Long = 0L,
 )
+
+@Serializable
+data class StatusSegmentItem(
+    val id: String = "",
+    val userId: String = "",
+    val mediaUrl: String = "",
+    val mediaType: String = "text",
+    val caption: String = "",
+    val bgColor: String = "#0f766e",
+    val audioUrl: String = "",
+    val audioTitle: String = "",
+    val audioDurationMs: Int = 0,
+    val mediaSource: String = "camera_roll",
+    val privacyType: String = "MY_CONTACTS",
+    val groupId: String? = null,
+    val mentionedUserIds: List<String> = emptyList(),
+    val viewed: Boolean = false,
+    val liked: Boolean = false,
+    val viewCount: Int = 0,
+    val likeCount: Int = 0,
+    val createdAt: Long = 0L,
+    val expiresAt: Long = 0L,
+)
+
+@Serializable
+data class MyStatusPayload(
+    val userId: String = "",
+    val displayName: String = "",
+    val username: String = "",
+    val avatarColor: String = "purple",
+    val avatarUrl: String? = null,
+    val segments: List<StatusSegmentItem> = emptyList(),
+    val latestAt: Long = 0L,
+)
+
+@Serializable
+data class ContactStatusStack(
+    val userId: String = "",
+    val displayName: String = "",
+    val username: String = "",
+    val avatarColor: String = "purple",
+    val avatarUrl: String? = null,
+    val segments: List<StatusSegmentItem> = emptyList(),
+    val unreadCount: Int = 0,
+    val allViewed: Boolean = true,
+    val latestAt: Long = 0L,
+)
+
+@Serializable
+data class StatusPrivacyDefaultState(
+    val privacyType: String = "MY_CONTACTS",
+    val excludedIds: List<String> = emptyList(),
+    val includedIds: List<String> = emptyList(),
+    val groupId: String = "",
+)
+
+@Serializable
+data class BroadcastChannelSummary(
+    val id: String = "",
+    val name: String = "",
+    val handle: String = "",
+    val description: String = "",
+    val avatarColor: String = "purple",
+    val avatarUrl: String? = null,
+    val verified: Boolean = false,
+    val category: String = "Most Active",
+    val isPremium: Boolean = false,
+    val monthlyPriceLabel: String = "",
+    val followerCount: Int = 0,
+    val postCount: Int = 0,
+    val latestSnippet: String = "",
+    val latestMediaType: String = "text",
+    val latestPostAt: Long = 0L,
+    val createdAt: Long = 0L,
+    val followed: Boolean = false,
+    val unreadCount: Int = 0,
+    val isOwner: Boolean = false,
+)
+
+@Serializable
+data class ChannelReactionSummary(
+    val emoji: String = "",
+    val count: Int = 0,
+)
+
+@Serializable
+data class ChannelBroadcastPost(
+    val id: String = "",
+    val channelId: String = "",
+    val body: String = "",
+    val mediaUrl: String = "",
+    val mediaType: String = "text",
+    val reactions: List<ChannelReactionSummary> = emptyList(),
+    val myEmoji: String = "",
+    val createdAt: Long = 0L,
+)
+
+@Serializable
+data class UpdatesBundlePayload(
+    val myStatus: MyStatusPayload = MyStatusPayload(),
+    val contactStacks: List<ContactStatusStack> = emptyList(),
+    val groupExclusiveStacks: Map<String, List<ContactStatusStack>> = emptyMap(),
+    val privacyDefault: StatusPrivacyDefaultState = StatusPrivacyDefaultState(),
+    val followedChannels: List<BroadcastChannelSummary> = emptyList(),
+    val followedChannelsCount: Int = 0,
+    val directoryChannels: List<BroadcastChannelSummary> = emptyList(),
+)
+
+@Serializable
+data class ChannelPostsPayload(
+    val channel: BroadcastChannelSummary = BroadcastChannelSummary(),
+    val posts: List<ChannelBroadcastPost> = emptyList(),
+)
+
+@Serializable
+data class CreateChannelResponse(
+    val id: String = "",
+    val handle: String = "",
+)
+
 
 
 

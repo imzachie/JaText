@@ -99,6 +99,15 @@ const MUTATION_OPS = new Set([
   "scheduleMessage",
   "deleteScheduledMessage",
   "flushScheduledMessages",
+  "createStatusPost",
+  "deleteStatusPost",
+  "markStatusViewed",
+  "toggleStatusLike",
+  "saveStatusPrivacyDefault",
+  "createBroadcastChannel",
+  "toggleFollowChannel",
+  "postChannelBroadcast",
+  "reactChannelPost",
 ]);
 
 let inFlightUserMutations = 0;

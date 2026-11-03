@@ -457,6 +457,84 @@ async function initSchema(db) {
       created_at INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS idx_webauthn_exp ON webauthn_challenges(expires_at)`,
+
+    `CREATE TABLE IF NOT EXISTS status_posts (
+      id TEXT PRIMARY KEY,
+      author_id TEXT NOT NULL,
+      media_url TEXT,
+      media_type TEXT NOT NULL DEFAULT 'text',
+      media_source TEXT NOT NULL DEFAULT 'camera_roll',
+      audio_url TEXT,
+      audio_duration_ms INTEGER NOT NULL DEFAULT 0,
+      caption TEXT NOT NULL DEFAULT '',
+      bg_color TEXT NOT NULL DEFAULT '#0F766E',
+      text_style TEXT NOT NULL DEFAULT 'bold',
+      privacy_mode TEXT NOT NULL DEFAULT 'MY_CONTACTS',
+      privacy_target_ids_json TEXT NOT NULL DEFAULT '[]',
+      exclusive_group_id TEXT,
+      mentioned_user_ids_json TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_status_posts_author ON status_posts(author_id, expires_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_status_posts_exp ON status_posts(expires_at)`,
+
+    `CREATE TABLE IF NOT EXISTS status_views (
+      status_id TEXT NOT NULL,
+      viewer_id TEXT NOT NULL,
+      liked INTEGER NOT NULL DEFAULT 0,
+      viewed_at INTEGER NOT NULL,
+      PRIMARY KEY (status_id, viewer_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_status_views_viewer ON status_views(viewer_id)`,
+
+    `CREATE TABLE IF NOT EXISTS status_privacy_defaults (
+      user_id TEXT PRIMARY KEY,
+      privacy_mode TEXT NOT NULL DEFAULT 'MY_CONTACTS',
+      target_ids_json TEXT NOT NULL DEFAULT '[]',
+      exclusive_group_id TEXT,
+      updated_at INTEGER NOT NULL
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS broadcast_channels (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT,
+      name TEXT NOT NULL,
+      handle TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      avatar_url TEXT,
+      avatar_color TEXT NOT NULL DEFAULT 'teal',
+      verified INTEGER NOT NULL DEFAULT 0,
+      category TEXT NOT NULL DEFAULT 'General',
+      popularity_tag TEXT NOT NULL DEFAULT 'Popular',
+      is_premium INTEGER NOT NULL DEFAULT 0,
+      price_label TEXT,
+      subscriber_count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_broadcast_channels_pop ON broadcast_channels(popularity_tag, subscriber_count DESC)`,
+
+    `CREATE TABLE IF NOT EXISTS channel_subscriptions (
+      channel_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      last_read_at INTEGER NOT NULL DEFAULT 0,
+      premium_unlocked INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, user_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_channel_subs_user ON channel_subscriptions(user_id)`,
+
+    `CREATE TABLE IF NOT EXISTS channel_posts (
+      id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      media_url TEXT,
+      media_type TEXT,
+      reactions_json TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_channel_posts_chan ON channel_posts(channel_id, created_at DESC)`,
   ];
 
   await db.batch(statements, "write");
@@ -6012,12 +6090,932 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       throw new TursoAppError(`Unknown owner action: ${subOp}`);
     }
 
+    /* ---------- WhatsApp iOS Updates Tab (Status Stories & Broadcast Channels) ---------- */
+    case "getUpdatesBundle": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      await sweepUpdatesHousekeepingAndSeedChannels(db, now);
+
+      const [friendsRes, groupsRes, privRes, activeStatusesRes, channelsRes, subsRes] =
+        await Promise.all([
+          db.execute({
+            sql: `SELECT CASE WHEN from_user_id = ? THEN to_user_id ELSE from_user_id END AS fid
+                  FROM friend_requests
+                  WHERE status = 'accepted' AND (from_user_id = ? OR to_user_id = ?)`,
+            args: [meId, meId, meId],
+          }),
+          db.execute({
+            sql: `SELECT group_id FROM group_members WHERE user_id = ?`,
+            args: [meId],
+          }),
+          db.execute({
+            sql: `SELECT * FROM status_privacy_defaults WHERE user_id = ? LIMIT 1`,
+            args: [meId],
+          }),
+          db.execute({
+            sql: `SELECT sp.*, u.display_name, u.username, u.avatar_url, u.avatar_color, u.is_verified
+                  FROM status_posts sp
+                  JOIN users u ON u.id = sp.author_id
+                  WHERE sp.expires_at > ?
+                  ORDER BY sp.created_at ASC`,
+            args: [now],
+          }),
+          db.execute({
+            sql: `SELECT * FROM broadcast_channels ORDER BY subscriber_count DESC, created_at DESC`,
+            args: [],
+          }),
+          db.execute({
+            sql: `SELECT channel_id, last_read_at, premium_unlocked
+                  FROM channel_subscriptions
+                  WHERE user_id = ?`,
+            args: [meId],
+          }),
+        ]);
+
+      const myFriendSet = new Set(friendsRes.rows.map((r) => String(r.fid)));
+      const myGroupSet = new Set(groupsRes.rows.map((r) => String(r.group_id)));
+
+      // Reverse friend map for authors who posted statuses so MY_CONTACTS / CONTACTS_EXCEPT check author's contacts
+      const statusAuthorIds = Array.from(
+        new Set(
+          activeStatusesRes.rows
+            .map((r) => String(r.author_id))
+            .filter((aid) => aid !== meId),
+        ),
+      );
+      const authorFriendPairs = new Set();
+      if (statusAuthorIds.length > 0) {
+        const ph = statusAuthorIds.map(() => "?").join(",");
+        const afRes = await db.execute({
+          sql: `SELECT from_user_id, to_user_id FROM friend_requests
+                WHERE status = 'accepted'
+                  AND ((from_user_id IN (${ph}) AND to_user_id = ?)
+                    OR (to_user_id IN (${ph}) AND from_user_id = ?))`,
+          args: [...statusAuthorIds, meId, ...statusAuthorIds, meId],
+        });
+        for (const r of afRes.rows) {
+          const a = String(r.from_user_id) === meId ? String(r.to_user_id) : String(r.from_user_id);
+          authorFriendPairs.add(a);
+        }
+      }
+
+      const visibleRows = activeStatusesRes.rows.filter((r) => {
+        const authorId = String(r.author_id);
+        if (authorId === meId) return true;
+        const mode = String(r.privacy_mode || "MY_CONTACTS");
+        let targetIds = [];
+        try {
+          targetIds = JSON.parse(String(r.privacy_target_ids_json || "[]"));
+        } catch {
+          targetIds = [];
+        }
+        const targetSet = new Set(Array.isArray(targetIds) ? targetIds.map(String) : []);
+        const isAuthorContact = authorFriendPairs.has(authorId) || myFriendSet.has(authorId);
+
+        if (mode === "MY_CONTACTS") {
+          return isAuthorContact;
+        }
+        if (mode === "CONTACTS_EXCEPT") {
+          return isAuthorContact && !targetSet.has(meId);
+        }
+        if (mode === "ONLY_SHARE_WITH") {
+          return targetSet.has(meId);
+        }
+        if (mode === "GROUP_EXCLUSIVE") {
+          const gid = r.exclusive_group_id ? String(r.exclusive_group_id) : "";
+          return Boolean(gid && myGroupSet.has(gid));
+        }
+        return false;
+      });
+
+      const statusIds = visibleRows.map((r) => String(r.id));
+      const myViewsByStatus = new Map();
+      const myAuthorStatsByStatus = new Map();
+      if (statusIds.length > 0) {
+        const ph = statusIds.map(() => "?").join(",");
+        const [viewsRes, authorStatsRes] = await Promise.all([
+          db.execute({
+            sql: `SELECT status_id, liked, viewed_at FROM status_views
+                  WHERE viewer_id = ? AND status_id IN (${ph})`,
+            args: [meId, ...statusIds],
+          }),
+          db.execute({
+            sql: `SELECT status_id, COUNT(*) AS view_cnt, SUM(CASE WHEN liked = 1 THEN 1 ELSE 0 END) AS like_cnt
+                  FROM status_views
+                  WHERE status_id IN (${ph}) AND viewer_id != ?
+                  GROUP BY status_id`,
+            args: [...statusIds, meId],
+          }),
+        ]);
+        for (const vr of viewsRes.rows) {
+          myViewsByStatus.set(String(vr.status_id), {
+            viewedAt: Number(vr.viewed_at),
+            liked: Boolean(Number(vr.liked || 0)),
+          });
+        }
+        for (const sr of authorStatsRes.rows) {
+          myAuthorStatsByStatus.set(String(sr.status_id), {
+            viewCount: Number(sr.view_cnt || 0),
+            likeCount: Number(sr.like_cnt || 0),
+          });
+        }
+      }
+
+      const mapSlide = (r) => {
+        const sid = String(r.id);
+        const authorId = String(r.author_id);
+        const myView = myViewsByStatus.get(sid);
+        const stats = myAuthorStatsByStatus.get(sid) || { viewCount: 0, likeCount: 0 };
+        let mentionedIds = [];
+        try {
+          mentionedIds = JSON.parse(String(r.mentioned_user_ids_json || "[]"));
+        } catch {
+          mentionedIds = [];
+        }
+        const mentionedSet = new Set(Array.isArray(mentionedIds) ? mentionedIds.map(String) : []);
+        return {
+          id: sid,
+          authorId,
+          mediaUrl: r.media_url ? String(r.media_url) : undefined,
+          mediaType: String(r.media_type || "text"),
+          mediaSource: String(r.media_source || "camera_roll"),
+          audioUrl: r.audio_url ? String(r.audio_url) : undefined,
+          audioDurationMs: Math.min(30000, Math.max(0, Number(r.audio_duration_ms || 0))),
+          caption: String(r.caption || ""),
+          bgColor: String(r.bg_color || "#0F766E"),
+          textStyle: String(r.text_style || "bold"),
+          privacyMode: String(r.privacy_mode || "MY_CONTACTS"),
+          exclusiveGroupId: r.exclusive_group_id ? String(r.exclusive_group_id) : undefined,
+          mentionedMe: authorId !== meId && mentionedSet.has(meId),
+          mentionedCount: authorId === meId ? mentionedSet.size : 0,
+          viewed: authorId === meId ? true : Boolean(myView),
+          liked: Boolean(myView?.liked),
+          viewCount: authorId === meId ? stats.viewCount : 0,
+          likeCount: authorId === meId ? stats.likeCount : 0,
+          createdAt: Number(r.created_at),
+          expiresAt: Number(r.expires_at),
+        };
+      };
+
+      const myStatuses = [];
+      const contactStackMap = new Map();
+      const groupExclusiveMap = new Map();
+
+      for (const r of visibleRows) {
+        const authorId = String(r.author_id);
+        const mode = String(r.privacy_mode || "MY_CONTACTS");
+        const slide = mapSlide(r);
+
+        if (mode === "GROUP_EXCLUSIVE" && r.exclusive_group_id) {
+          const gid = String(r.exclusive_group_id);
+          if (!groupExclusiveMap.has(gid)) {
+            groupExclusiveMap.set(gid, []);
+          }
+          groupExclusiveMap.get(gid).push({
+            ...slide,
+            authorName: String(r.display_name || r.username || "Member"),
+            authorUsername: String(r.username || "user"),
+            authorAvatarUrl: r.avatar_url ? String(r.avatar_url) : undefined,
+            authorAvatarColor: String(r.avatar_color || "teal"),
+          });
+          if (authorId !== meId) {
+            // GROUP_EXCLUSIVE bypasses the general Updates tab completely for contacts
+            continue;
+          }
+        }
+
+        if (authorId === meId) {
+          myStatuses.push(slide);
+        } else {
+          let stack = contactStackMap.get(authorId);
+          if (!stack) {
+            stack = {
+              userId: authorId,
+              displayName: String(r.display_name || r.username || "Contact"),
+              username: String(r.username || "user"),
+              avatarUrl: r.avatar_url ? String(r.avatar_url) : undefined,
+              avatarColor: String(r.avatar_color || "teal"),
+              isVerified: Boolean(Number(r.is_verified || 0)),
+              slides: [],
+              latestAt: 0,
+              allRead: true,
+            };
+            contactStackMap.set(authorId, stack);
+          }
+          stack.slides.push(slide);
+          if (slide.createdAt > stack.latestAt) stack.latestAt = slide.createdAt;
+          if (!slide.viewed) stack.allRead = false;
+        }
+      }
+
+      const contactStacks = Array.from(contactStackMap.values()).sort(
+        (a, b) => Number(a.allRead) - Number(b.allRead) || b.latestAt - a.latestAt,
+      );
+
+      // Hydrate Channels with Strict Identity Isolation (NEVER expose subscriber IDs/profiles!)
+      const subByChan = new Map();
+      for (const sr of subsRes.rows) {
+        subByChan.set(String(sr.channel_id), {
+          lastReadAt: Number(sr.last_read_at || 0),
+          premiumUnlocked: Boolean(Number(sr.premium_unlocked || 0)),
+        });
+      }
+
+      const chanIds = channelsRes.rows.map((c) => String(c.id));
+      const latestPostByChan = new Map();
+      const unreadCountByChan = new Map();
+      if (chanIds.length > 0) {
+        const cutoff30d = now - 30 * 24 * 60 * 60 * 1000;
+        const postsRes = await db.execute({
+          sql: `SELECT * FROM channel_posts WHERE created_at >= ? ORDER BY created_at DESC`,
+          args: [cutoff30d],
+        });
+        for (const pr of postsRes.rows) {
+          const cid = String(pr.channel_id);
+          const createdAt = Number(pr.created_at);
+          if (!latestPostByChan.has(cid)) {
+            latestPostByChan.set(cid, {
+              id: String(pr.id),
+              body: String(pr.body || ""),
+              mediaUrl: pr.media_url ? String(pr.media_url) : undefined,
+              mediaType: pr.media_type ? String(pr.media_type) : undefined,
+              createdAt,
+            });
+          }
+          const sub = subByChan.get(cid);
+          if (sub && createdAt > sub.lastReadAt) {
+            unreadCountByChan.set(cid, (unreadCountByChan.get(cid) || 0) + 1);
+          }
+        }
+      }
+
+      const allMappedChannels = channelsRes.rows.map((c) => {
+        const cid = String(c.id);
+        const sub = subByChan.get(cid);
+        const latest = latestPostByChan.get(cid);
+        return {
+          id: cid,
+          name: String(c.name),
+          handle: String(c.handle),
+          description: String(c.description || ""),
+          avatarUrl: c.avatar_url ? String(c.avatar_url) : undefined,
+          avatarColor: String(c.avatar_color || "teal"),
+          verified: Boolean(Number(c.verified || 0)),
+          category: String(c.category || "General"),
+          popularityTag: String(c.popularity_tag || "Popular"),
+          isPremium: Boolean(Number(c.is_premium || 0)),
+          priceLabel: c.price_label ? String(c.price_label) : undefined,
+          subscriberCount: Math.max(0, Number(c.subscriber_count || 0)),
+          isFollowed: Boolean(sub),
+          premiumUnlocked: Boolean(sub?.premiumUnlocked),
+          isOwner: c.owner_id ? String(c.owner_id) === meId : false,
+          unreadCount: sub ? unreadCountByChan.get(cid) || 0 : 0,
+          latestSnippet: latest
+            ? latest.body || (latest.mediaType === "image" ? "Photo" : "Broadcast media")
+            : String(c.description || "No broadcasts yet"),
+          latestAt: latest ? latest.createdAt : Number(c.updated_at || c.created_at),
+        };
+      });
+
+      const followedChannels = allMappedChannels
+        .filter((c) => c.isFollowed)
+        .sort((a, b) => b.latestAt - a.latestAt);
+
+      const privRow = privRes.rows[0];
+      let privTargets = [];
+      try {
+        privTargets = privRow ? JSON.parse(String(privRow.target_ids_json || "[]")) : [];
+      } catch {
+        privTargets = [];
+      }
+
+      const groupExclusiveStacks = {};
+      for (const [gid, slides] of groupExclusiveMap.entries()) {
+        groupExclusiveStacks[gid] = slides;
+      }
+
+      return {
+        myStatuses,
+        contactStacks,
+        followedChannels,
+        directoryChannels: allMappedChannels,
+        groupExclusiveStacks,
+        myPrivacyDefault: {
+          privacyMode: privRow ? String(privRow.privacy_mode || "MY_CONTACTS") : "MY_CONTACTS",
+          targetIds: Array.isArray(privTargets) ? privTargets.map(String) : [],
+          exclusiveGroupId: privRow?.exclusive_group_id
+            ? String(privRow.exclusive_group_id)
+            : undefined,
+        },
+      };
+    }
+
+    case "createStatusPost": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const mediaUrl = args.mediaUrl ? String(args.mediaUrl).trim() : null;
+      const mediaType = String(args.mediaType || (mediaUrl ? "image" : "text")).trim();
+      const mediaSource = ["camera_roll", "instagram", "facebook"].includes(String(args.mediaSource || ""))
+        ? String(args.mediaSource)
+        : "camera_roll";
+      const audioUrl = args.audioUrl ? String(args.audioUrl).trim() : null;
+      const audioDurationMs = Math.max(
+        0,
+        Math.min(30000, Math.round(Number(args.audioDurationMs || 0))),
+      );
+      const caption = String(args.caption || "").trim().slice(0, 700);
+      const bgColor = String(args.bgColor || "#0F766E").trim().slice(0, 32);
+      const textStyle = String(args.textStyle || "bold").trim().slice(0, 24);
+
+      if (!mediaUrl && !caption && !audioUrl) {
+        throw new TursoAppError("Status must contain text, photo/video, or audio.");
+      }
+
+      const allowedPrivacyModes = [
+        "MY_CONTACTS",
+        "CONTACTS_EXCEPT",
+        "ONLY_SHARE_WITH",
+        "GROUP_EXCLUSIVE",
+      ];
+      const privacyMode = allowedPrivacyModes.includes(String(args.privacyMode || ""))
+        ? String(args.privacyMode)
+        : "MY_CONTACTS";
+      const privacyTargetIds = Array.isArray(args.privacyTargetIds)
+        ? Array.from(new Set(args.privacyTargetIds.map(String).filter(Boolean)))
+        : [];
+      const exclusiveGroupId =
+        privacyMode === "GROUP_EXCLUSIVE" && args.exclusiveGroupId
+          ? String(args.exclusiveGroupId).trim()
+          : null;
+      if (privacyMode === "GROUP_EXCLUSIVE" && !exclusiveGroupId) {
+        throw new TursoAppError("Select a group for Group Exclusive status.");
+      }
+
+      const mentionedUserIds = Array.isArray(args.mentionedUserIds)
+        ? Array.from(
+            new Set(
+              args.mentionedUserIds
+                .map(String)
+                .filter((uid) => uid && uid !== meId),
+            ),
+          ).slice(0, 20)
+        : [];
+
+      const id = newId();
+      const expiresAt = now + 24 * 60 * 60 * 1000;
+      await db.execute({
+        sql: `INSERT INTO status_posts (
+                id, author_id, media_url, media_type, media_source, audio_url, audio_duration_ms,
+                caption, bg_color, text_style, privacy_mode, privacy_target_ids_json,
+                exclusive_group_id, mentioned_user_ids_json, created_at, expires_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          id,
+          meId,
+          mediaUrl,
+          mediaType,
+          mediaSource,
+          audioUrl,
+          audioDurationMs,
+          caption,
+          bgColor,
+          textStyle,
+          privacyMode,
+          JSON.stringify(privacyTargetIds),
+          exclusiveGroupId,
+          JSON.stringify(mentionedUserIds),
+          now,
+          expiresAt,
+        ],
+      });
+
+      // Dispatch private hidden mention notification ping to privately tagged @mention contacts
+      if (mentionedUserIds.length > 0) {
+        await dispatchPushToUsers(db, mentionedUserIds, {
+          type: "sync_poke",
+          senderId: meId,
+        }).catch(() => undefined);
+      }
+
+      return { ok: true, id, createdAt: now, expiresAt };
+    }
+
+    case "deleteStatusPost": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const statusId = String(args.statusId || "").trim();
+      if (!statusId) return { ok: true };
+      await db.batch(
+        [
+          {
+            sql: `DELETE FROM status_posts WHERE id = ? AND author_id = ?`,
+            args: [statusId, meId],
+          },
+          {
+            sql: `DELETE FROM status_views WHERE status_id = ?`,
+            args: [statusId],
+          },
+        ],
+        "write",
+      );
+      return { ok: true };
+    }
+
+    case "markStatusViewed": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const statusIds = Array.isArray(args.statusIds)
+        ? args.statusIds.map(String).filter(Boolean)
+        : args.statusId
+          ? [String(args.statusId)]
+          : [];
+      for (const sid of statusIds) {
+        await db.execute({
+          sql: `INSERT INTO status_views (status_id, viewer_id, liked, viewed_at)
+                VALUES (?, ?, 0, ?)
+                ON CONFLICT(status_id, viewer_id) DO NOTHING`,
+          args: [sid, meId, now],
+        });
+      }
+      return { ok: true };
+    }
+
+    case "toggleStatusLike": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const statusId = String(args.statusId || "").trim();
+      if (!statusId) throw new TursoAppError("Missing status ID.");
+      const liked = args.liked === undefined ? 1 : args.liked ? 1 : 0;
+      await db.execute({
+        sql: `INSERT INTO status_views (status_id, viewer_id, liked, viewed_at)
+              VALUES (?, ?, ?, ?)
+              ON CONFLICT(status_id, viewer_id) DO UPDATE SET liked = excluded.liked`,
+        args: [statusId, meId, liked, now],
+      });
+      return { ok: true, liked: Boolean(liked) };
+    }
+
+    case "saveStatusPrivacyDefault": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const allowed = ["MY_CONTACTS", "CONTACTS_EXCEPT", "ONLY_SHARE_WITH", "GROUP_EXCLUSIVE"];
+      const privacyMode = allowed.includes(String(args.privacyMode || ""))
+        ? String(args.privacyMode)
+        : "MY_CONTACTS";
+      const targetIds = Array.isArray(args.targetIds)
+        ? Array.from(new Set(args.targetIds.map(String).filter(Boolean)))
+        : [];
+      const exclusiveGroupId = args.exclusiveGroupId ? String(args.exclusiveGroupId) : null;
+      // Intentionally only updates defaults for NEW status posts; never retroactively alters active posts!
+      await db.execute({
+        sql: `INSERT INTO status_privacy_defaults (user_id, privacy_mode, target_ids_json, exclusive_group_id, updated_at)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(user_id) DO UPDATE SET
+                privacy_mode = excluded.privacy_mode,
+                target_ids_json = excluded.target_ids_json,
+                exclusive_group_id = excluded.exclusive_group_id,
+                updated_at = excluded.updated_at`,
+        args: [meId, privacyMode, JSON.stringify(targetIds), exclusiveGroupId, now],
+      });
+      return { ok: true };
+    }
+
+    case "createBroadcastChannel": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const name = String(args.name || "").trim().slice(0, 64);
+      if (name.length < 2) throw new TursoAppError("Channel name must be at least 2 characters.");
+      const description = String(args.description || "").trim().slice(0, 300);
+      const category = String(args.category || "General").trim().slice(0, 32);
+      const avatarColor = String(args.avatarColor || "teal").trim();
+      const avatarUrl = args.avatarUrl ? String(args.avatarUrl).trim() : null;
+      const isPremium = args.isPremium ? 1 : 0;
+      const priceLabel = isPremium ? String(args.priceLabel || "$2.99/mo").trim().slice(0, 24) : null;
+      const handleBase = name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 24) || "channel";
+      const id = `chan_${newId().slice(0, 12)}`;
+      const handle = `${handleBase}_${id.slice(-4)}`;
+
+      await db.batch(
+        [
+          {
+            sql: `INSERT INTO broadcast_channels (
+                    id, owner_id, name, handle, description, avatar_url, avatar_color,
+                    verified, category, popularity_tag, is_premium, price_label,
+                    subscriber_count, created_at, updated_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'New', ?, ?, 1, ?, ?)`,
+            args: [
+              id,
+              meId,
+              name,
+              handle,
+              description,
+              avatarUrl,
+              avatarColor,
+              category,
+              isPremium,
+              priceLabel,
+              now,
+              now,
+            ],
+          },
+          {
+            sql: `INSERT INTO channel_subscriptions (channel_id, user_id, last_read_at, premium_unlocked, created_at)
+                  VALUES (?, ?, ?, 1, ?)`,
+            args: [id, meId, now, now],
+          },
+          {
+            sql: `INSERT INTO channel_posts (id, channel_id, body, media_url, media_type, reactions_json, created_at)
+                  VALUES (?, ?, ?, NULL, NULL, '{}', ?)`,
+            args: [
+              newId(),
+              id,
+              description || `Welcome to ${name}! Broadcast updates will appear here.`,
+              now,
+            ],
+          },
+        ],
+        "write",
+      );
+      return { ok: true, channelId: id };
+    }
+
+    case "toggleFollowChannel": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const channelId = String(args.channelId || "").trim();
+      if (!channelId) throw new TursoAppError("Missing channel ID.");
+      const chanRes = await db.execute({
+        sql: `SELECT * FROM broadcast_channels WHERE id = ? LIMIT 1`,
+        args: [channelId],
+      });
+      if (!chanRes.rows.length) throw new TursoAppError("Channel not found.");
+      const chan = chanRes.rows[0];
+
+      const existingRes = await db.execute({
+        sql: `SELECT * FROM channel_subscriptions WHERE channel_id = ? AND user_id = ? LIMIT 1`,
+        args: [channelId, meId],
+      });
+      const shouldFollow =
+        args.follow !== undefined ? Boolean(args.follow) : existingRes.rows.length === 0;
+
+      if (shouldFollow && !existingRes.rows.length) {
+        const premiumUnlocked = Number(chan.is_premium || 0) ? (args.unlockPremium ? 1 : 0) : 1;
+        if (Number(chan.is_premium || 0) && !premiumUnlocked) {
+          throw new TursoAppError("Confirm premium channel subscription to follow this channel.");
+        }
+        await db.batch(
+          [
+            {
+              sql: `INSERT INTO channel_subscriptions (channel_id, user_id, last_read_at, premium_unlocked, created_at)
+                    VALUES (?, ?, ?, ?, ?)`,
+              args: [channelId, meId, now, premiumUnlocked, now],
+            },
+            {
+              sql: `UPDATE broadcast_channels SET subscriber_count = subscriber_count + 1 WHERE id = ?`,
+              args: [channelId],
+            },
+          ],
+          "write",
+        );
+      } else if (!shouldFollow && existingRes.rows.length) {
+        await db.batch(
+          [
+            {
+              sql: `DELETE FROM channel_subscriptions WHERE channel_id = ? AND user_id = ?`,
+              args: [channelId, meId],
+            },
+            {
+              sql: `UPDATE broadcast_channels
+                    SET subscriber_count = CASE WHEN subscriber_count > 0 THEN subscriber_count - 1 ELSE 0 END
+                    WHERE id = ?`,
+              args: [channelId],
+            },
+          ],
+          "write",
+        );
+      }
+      return { ok: true, followed: shouldFollow };
+    }
+
+    case "getChannelPosts": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const channelId = String(args.channelId || "").trim();
+      if (!channelId) throw new TursoAppError("Missing channel ID.");
+      const cutoff30d = now - 30 * 24 * 60 * 60 * 1000;
+
+      const [chanRes, postsRes, subRes] = await Promise.all([
+        db.execute({ sql: `SELECT * FROM broadcast_channels WHERE id = ? LIMIT 1`, args: [channelId] }),
+        db.execute({
+          sql: `SELECT * FROM channel_posts WHERE channel_id = ? AND created_at >= ? ORDER BY created_at ASC`,
+          args: [channelId, cutoff30d],
+        }),
+        db.execute({
+          sql: `SELECT * FROM channel_subscriptions WHERE channel_id = ? AND user_id = ? LIMIT 1`,
+          args: [channelId, meId],
+        }),
+      ]);
+      if (!chanRes.rows.length) throw new TursoAppError("Channel not found.");
+      const chan = chanRes.rows[0];
+      if (subRes.rows.length > 0) {
+        await db.execute({
+          sql: `UPDATE channel_subscriptions SET last_read_at = ? WHERE channel_id = ? AND user_id = ?`,
+          args: [now, channelId, meId],
+        });
+      }
+
+      // Strict Identity Isolation: reactions only expose anonymous counts + boolean myReactions without any user IDs!
+      const posts = postsRes.rows.map((pr) => {
+        let rawMap = {};
+        try {
+          rawMap = JSON.parse(String(pr.reactions_json || "{}"));
+        } catch {
+          rawMap = {};
+        }
+        const counts = {};
+        const myReactions = [];
+        for (const [emoji, uidList] of Object.entries(rawMap || {})) {
+          if (Array.isArray(uidList) && uidList.length > 0) {
+            counts[emoji] = uidList.length;
+            if (uidList.includes(meId)) myReactions.push(emoji);
+          } else if (typeof uidList === "number" && uidList > 0) {
+            counts[emoji] = uidList;
+          }
+        }
+        return {
+          id: String(pr.id),
+          channelId,
+          body: String(pr.body || ""),
+          mediaUrl: pr.media_url ? String(pr.media_url) : undefined,
+          mediaType: pr.media_type ? String(pr.media_type) : undefined,
+          reactionCounts: counts,
+          myReactions,
+          createdAt: Number(pr.created_at),
+        };
+      });
+
+      return {
+        channel: {
+          id: String(chan.id),
+          name: String(chan.name),
+          handle: String(chan.handle),
+          description: String(chan.description || ""),
+          avatarUrl: chan.avatar_url ? String(chan.avatar_url) : undefined,
+          avatarColor: String(chan.avatar_color || "teal"),
+          verified: Boolean(Number(chan.verified || 0)),
+          subscriberCount: Math.max(0, Number(chan.subscriber_count || 0)),
+          isFollowed: subRes.rows.length > 0,
+          isOwner: chan.owner_id ? String(chan.owner_id) === meId : false,
+        },
+        posts,
+      };
+    }
+
+    case "postChannelBroadcast": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const channelId = String(args.channelId || "").trim();
+      const body = String(args.body || "").trim().slice(0, 2000);
+      const mediaUrl = args.mediaUrl ? String(args.mediaUrl).trim() : null;
+      const mediaType = args.mediaType ? String(args.mediaType).trim() : null;
+      if (!channelId || (!body && !mediaUrl)) {
+        throw new TursoAppError("Broadcast message cannot be empty.");
+      }
+      const chanRes = await db.execute({
+        sql: `SELECT * FROM broadcast_channels WHERE id = ? LIMIT 1`,
+        args: [channelId],
+      });
+      if (!chanRes.rows.length) throw new TursoAppError("Channel not found.");
+      const chan = chanRes.rows[0];
+      const isAppOwner =
+        String(meRow.email || "").toLowerCase() === "aidilzafri2013@gmail.com" ||
+        String(meRow.username || "").toLowerCase() === "imzachie";
+      if (String(chan.owner_id || "") !== meId && !isAppOwner) {
+        throw new TursoAppError("Only channel admins can post broadcasts.");
+      }
+
+      const postId = newId();
+      await db.batch(
+        [
+          {
+            sql: `INSERT INTO channel_posts (id, channel_id, body, media_url, media_type, reactions_json, created_at)
+                  VALUES (?, ?, ?, ?, ?, '{}', ?)`,
+            args: [postId, channelId, body, mediaUrl, mediaType, now],
+          },
+          {
+            sql: `UPDATE broadcast_channels SET updated_at = ? WHERE id = ?`,
+            args: [now, channelId],
+          },
+          {
+            sql: `UPDATE channel_subscriptions SET last_read_at = ? WHERE channel_id = ? AND user_id = ?`,
+            args: [now, channelId, meId],
+          },
+        ],
+        "write",
+      );
+      return { ok: true, postId, createdAt: now };
+    }
+
+    case "reactChannelPost": {
+      const meRow = await requireMeRow(db, auth);
+      const meId = String(meRow.id);
+      const postId = String(args.postId || "").trim();
+      const emoji = String(args.emoji || "").trim();
+      if (!postId || !emoji) return { ok: true };
+      const postRes = await db.execute({
+        sql: `SELECT * FROM channel_posts WHERE id = ? LIMIT 1`,
+        args: [postId],
+      });
+      if (!postRes.rows.length) return { ok: true };
+      let map = {};
+      try {
+        map = JSON.parse(String(postRes.rows[0].reactions_json || "{}"));
+      } catch {
+        map = {};
+      }
+      const curList = Array.isArray(map[emoji]) ? map[emoji].map(String) : [];
+      if (curList.includes(meId)) {
+        map[emoji] = curList.filter((u) => u !== meId);
+        if (map[emoji].length === 0) delete map[emoji];
+      } else {
+        map[emoji] = [...curList, meId];
+      }
+      await db.execute({
+        sql: `UPDATE channel_posts SET reactions_json = ? WHERE id = ?`,
+        args: [JSON.stringify(map), postId],
+      });
+      return { ok: true };
+    }
+
     default:
       throw new TursoAppError(`Unknown operation: ${op}`);
   }
 }
 
 let lastScheduledSweepAt = 0;
+let lastUpdatesSweepAt = 0;
+
+async function sweepUpdatesHousekeepingAndSeedChannels(db, now) {
+  if (now - lastUpdatesSweepAt < 60_000) return;
+  lastUpdatesSweepAt = now;
+  const cutoff30d = now - 30 * 24 * 60 * 60 * 1000;
+  await db
+    .batch(
+      [
+        {
+          sql: `DELETE FROM status_views WHERE status_id IN (SELECT id FROM status_posts WHERE expires_at <= ?)`,
+          args: [now],
+        },
+        {
+          sql: `DELETE FROM status_posts WHERE expires_at <= ?`,
+          args: [now],
+        },
+        {
+          sql: `DELETE FROM channel_posts WHERE created_at < ?`,
+          args: [cutoff30d],
+        },
+      ],
+      "write",
+    )
+    .catch(() => undefined);
+
+  const countRes = await db.execute({
+    sql: `SELECT COUNT(*) AS cnt FROM broadcast_channels`,
+    args: [],
+  });
+  if (Number(countRes.rows[0]?.cnt || 0) > 0) return;
+
+  const seededChannels = [
+    {
+      id: "chan_jatext_official",
+      name: "JaText Official",
+      handle: "jatext_official",
+      description: "Official JaText feature drops, Liquid Glass updates, and security announcements.",
+      avatarColor: "purple",
+      verified: 1,
+      category: "Technology",
+      popularityTag: "Popular",
+      isPremium: 0,
+      priceLabel: null,
+      subscriberCount: 14820,
+      welcomePost:
+        "Welcome to the official JaText Channel! Stay tuned here for instant feature releases, Liquid Glass refinements, and E2EE updates.",
+    },
+    {
+      id: "chan_tech_pulse",
+      name: "Tech & AI Pulse",
+      handle: "tech_ai_pulse",
+      description: "Daily engineering highlights, mobile architecture deep dives, and AI breakthroughs.",
+      avatarColor: "blue",
+      verified: 1,
+      category: "Technology",
+      popularityTag: "Most Active",
+      isPremium: 0,
+      priceLabel: null,
+      subscriberCount: 9410,
+      welcomePost:
+        "Today in mobile engineering: native 120Hz spring transitions, zero-knowledge E2EE media pipelines, and OpenType color emoji rendering.",
+    },
+    {
+      id: "chan_design_craft",
+      name: "iOS Design Craft",
+      handle: "ios_design_craft",
+      description: "Apple HIG typography, SF Pro optical sizing, and tactile spring micro-interactions.",
+      avatarColor: "teal",
+      verified: 1,
+      category: "Design",
+      popularityTag: "Popular",
+      isPremium: 0,
+      priceLabel: null,
+      subscriberCount: 6280,
+      welcomePost:
+        "Design tip: pairing SF Pro Display for 20pt+ titles with SF Pro Text for body copy keeps hierarchy crisp across every screen density.",
+    },
+    {
+      id: "chan_gaming_arena",
+      name: "Gaming Clips Hub",
+      handle: "gaming_clips_hub",
+      description: "Top tournament moments, patch notes, and squad highlights around the clock.",
+      avatarColor: "orange",
+      verified: 0,
+      category: "Gaming",
+      popularityTag: "Most Active",
+      isPremium: 0,
+      priceLabel: null,
+      subscriberCount: 5190,
+      welcomePost:
+        "Weekend tournament finals are live! Drop a fire reaction below if your squad is queuing tonight.",
+    },
+    {
+      id: "chan_music_radar",
+      name: "Fresh Drops Radar",
+      handle: "fresh_drops_radar",
+      description: "New album releases, 30-second status audio picks, and late-night LoFi playlists.",
+      avatarColor: "pink",
+      verified: 0,
+      category: "Music",
+      popularityTag: "New",
+      isPremium: 0,
+      priceLabel: null,
+      subscriberCount: 2340,
+      welcomePost:
+        "Friday night soundtrack check: share your favorite 30-second track clip on your Status!",
+    },
+    {
+      id: "chan_creator_pro_vip",
+      name: "Creator Studio VIP",
+      handle: "creator_studio_vip",
+      description: "Exclusive behind-the-scenes builds, early prototypes, and subscriber-only drops.",
+      avatarColor: "yellow",
+      verified: 1,
+      category: "Creators",
+      popularityTag: "New",
+      isPremium: 1,
+      priceLabel: "$2.99/mo",
+      subscriberCount: 1890,
+      welcomePost:
+        "Welcome VIP subscribers! Exclusive prototype breakdowns and early asset packs drop here every week.",
+    },
+  ];
+
+  const batchStmts = [];
+  for (let i = 0; i < seededChannels.length; i++) {
+    const sc = seededChannels[i];
+    const ts = now - (seededChannels.length - i) * 600_000;
+    batchStmts.push({
+      sql: `INSERT OR IGNORE INTO broadcast_channels (
+              id, owner_id, name, handle, description, avatar_url, avatar_color,
+              verified, category, popularity_tag, is_premium, price_label,
+              subscriber_count, created_at, updated_at
+            ) VALUES (?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        sc.id,
+        sc.name,
+        sc.handle,
+        sc.description,
+        sc.avatarColor,
+        sc.verified,
+        sc.category,
+        sc.popularityTag,
+        sc.isPremium,
+        sc.priceLabel,
+        sc.subscriberCount,
+        ts,
+        ts,
+      ],
+    });
+    batchStmts.push({
+      sql: `INSERT OR IGNORE INTO channel_posts (id, channel_id, body, media_url, media_type, reactions_json, created_at)
+            VALUES (?, ?, ?, NULL, NULL, '{}', ?)`,
+      args: [`seed_post_${sc.id}`, sc.id, sc.welcomePost, ts],
+    });
+  }
+  await db.batch(batchStmts, "write").catch(() => undefined);
+}
 
 function mapScheduledMessageRow(r) {
   return {
