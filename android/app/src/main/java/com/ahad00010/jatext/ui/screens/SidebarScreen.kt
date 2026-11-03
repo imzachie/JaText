@@ -192,6 +192,7 @@ fun SidebarScreen(
     var addUsername by remember { mutableStateOf("") }
     var showAccountSwitcher by remember { mutableStateOf(false) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
+    var openStatusComposerNonce by remember { mutableIntStateOf(0) }
     var showCreateCommunityDialog by remember { mutableStateOf(false) }
     var activeFolderId by remember { mutableStateOf("all") }
     var editingFolderSpec by remember { mutableStateOf<com.ahad00010.jatext.data.ChatFolderSpec?>(null) }
@@ -403,12 +404,6 @@ fun SidebarScreen(
                         onOpenAccountSwitcher = { showAccountSwitcher = true },
                         onFullScreenOverlayChange = { settingsSubOverlayOpen = it },
                     )
-                } else if (currentTab == "updates") {
-                    UpdatesTabScreen(
-                        state = state,
-                        vm = vm,
-                        bottomBarClearance = bottomBarListClearance,
-                    )
                 } else {
                     Column(
                         modifier = Modifier
@@ -459,6 +454,12 @@ fun SidebarScreen(
                                         contentDescription = "New group",
                                         onClick = { showCreateGroupDialog = true },
                                     )
+                                } else if (currentTab == "updates") {
+                                    JaWebIconButton(
+                                        icon = Icons.Rounded.Add,
+                                        contentDescription = "Add status",
+                                        onClick = { openStatusComposerNonce++ },
+                                    )
                                 } else if (currentTab == "communities") {
                                     JaWebIconButton(
                                         icon = Icons.Rounded.Add,
@@ -503,37 +504,15 @@ fun SidebarScreen(
 
                         when (currentTab) {
             "updates" -> {
-                Box(
+                UpdatesTabScreen(
+                    state = state,
+                    vm = vm,
+                    bottomBarClearance = bottomBarListClearance,
+                    openComposerNonce = openStatusComposerNonce,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
-                        .padding(bottom = bottomBarListClearance),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(palette.bgTertiary)
-                            .border(1.dp, palette.border, RoundedCornerShape(18.dp))
-                            .padding(horizontal = 24.dp, vertical = 28.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        IosUpdatesNavIcon(
-                            tint = palette.textPrimary,
-                            selected = false,
-                            size = 34.dp,
-                        )
-                        Text(
-                            text = "Feature is under maintenance!",
-                            color = palette.textPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                }
+                        .weight(1f),
+                )
             }
 
             "communities" -> {

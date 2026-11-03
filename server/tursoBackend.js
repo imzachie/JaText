@@ -465,6 +465,7 @@ async function initSchema(db) {
       media_type TEXT NOT NULL DEFAULT 'text',
       media_source TEXT NOT NULL DEFAULT 'camera_roll',
       audio_url TEXT,
+      audio_title TEXT NOT NULL DEFAULT '',
       audio_duration_ms INTEGER NOT NULL DEFAULT 0,
       caption TEXT NOT NULL DEFAULT '',
       bg_color TEXT NOT NULL DEFAULT '#0F766E',
@@ -495,46 +496,6 @@ async function initSchema(db) {
       exclusive_group_id TEXT,
       updated_at INTEGER NOT NULL
     )`,
-
-    `CREATE TABLE IF NOT EXISTS broadcast_channels (
-      id TEXT PRIMARY KEY,
-      owner_id TEXT,
-      name TEXT NOT NULL,
-      handle TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      avatar_url TEXT,
-      avatar_color TEXT NOT NULL DEFAULT 'teal',
-      verified INTEGER NOT NULL DEFAULT 0,
-      category TEXT NOT NULL DEFAULT 'General',
-      popularity_tag TEXT NOT NULL DEFAULT 'Popular',
-      is_premium INTEGER NOT NULL DEFAULT 0,
-      price_label TEXT,
-      subscriber_count INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_broadcast_channels_pop ON broadcast_channels(popularity_tag, subscriber_count DESC)`,
-
-    `CREATE TABLE IF NOT EXISTS channel_subscriptions (
-      channel_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      last_read_at INTEGER NOT NULL DEFAULT 0,
-      premium_unlocked INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      PRIMARY KEY (channel_id, user_id)
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_channel_subs_user ON channel_subscriptions(user_id)`,
-
-    `CREATE TABLE IF NOT EXISTS channel_posts (
-      id TEXT PRIMARY KEY,
-      channel_id TEXT NOT NULL,
-      body TEXT NOT NULL DEFAULT '',
-      media_url TEXT,
-      media_type TEXT,
-      reactions_json TEXT NOT NULL DEFAULT '{}',
-      created_at INTEGER NOT NULL
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_channel_posts_chan ON channel_posts(channel_id, created_at DESC)`,
   ];
 
   await db.batch(statements, "write");
@@ -552,6 +513,7 @@ async function initSchema(db) {
     `ALTER TABLE groups ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE groups ADD COLUMN avatar_color TEXT NOT NULL DEFAULT 'purple'`,
     `ALTER TABLE groups ADD COLUMN community_key_seed TEXT`,
+    `ALTER TABLE status_posts ADD COLUMN audio_title TEXT NOT NULL DEFAULT ''`,
   ];
   for (const sql of safeAlters) {
     try {
@@ -6090,52 +6052,40 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       throw new TursoAppError(`Unknown owner action: ${subOp}`);
     }
 
-    /* ---------- WhatsApp iOS Updates Tab (Status Stories & Broadcast Channels) ---------- */
+    /* ---------- Updates Tab (24-Hour Status Stories & Per-Post Privacy) ---------- */
     case "getUpdatesBundle": {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
-      await sweepUpdatesHousekeepingAndSeedChannels(db, now);
+      await sweepExpiredStatusPosts(db, now);
 
-      const [friendsRes, groupsRes, privRes, activeStatusesRes, channelsRes, subsRes] =
-        await Promise.all([
-          db.execute({
-            sql: `SELECT CASE WHEN from_user_id = ? THEN to_user_id ELSE from_user_id END AS fid
-                  FROM friend_requests
-                  WHERE status = 'accepted' AND (from_user_id = ? OR to_user_id = ?)`,
-            args: [meId, meId, meId],
-          }),
-          db.execute({
-            sql: `SELECT group_id FROM group_members WHERE user_id = ?`,
-            args: [meId],
-          }),
-          db.execute({
-            sql: `SELECT * FROM status_privacy_defaults WHERE user_id = ? LIMIT 1`,
-            args: [meId],
-          }),
-          db.execute({
-            sql: `SELECT sp.*, u.display_name, u.username, u.avatar_url, u.avatar_color, u.is_verified
-                  FROM status_posts sp
-                  JOIN users u ON u.id = sp.author_id
-                  WHERE sp.expires_at > ?
-                  ORDER BY sp.created_at ASC`,
-            args: [now],
-          }),
-          db.execute({
-            sql: `SELECT * FROM broadcast_channels ORDER BY subscriber_count DESC, created_at DESC`,
-            args: [],
-          }),
-          db.execute({
-            sql: `SELECT channel_id, last_read_at, premium_unlocked
-                  FROM channel_subscriptions
-                  WHERE user_id = ?`,
-            args: [meId],
-          }),
-        ]);
+      const [friendsRes, groupsRes, privRes, activeStatusesRes] = await Promise.all([
+        db.execute({
+          sql: `SELECT CASE WHEN from_id = ? THEN to_id ELSE from_id END AS fid
+                FROM friend_requests
+                WHERE status = 'accepted' AND (from_id = ? OR to_id = ?)`,
+          args: [meId, meId, meId],
+        }),
+        db.execute({
+          sql: `SELECT group_id FROM group_members WHERE user_id = ?`,
+          args: [meId],
+        }),
+        db.execute({
+          sql: `SELECT * FROM status_privacy_defaults WHERE user_id = ? LIMIT 1`,
+          args: [meId],
+        }),
+        db.execute({
+          sql: `SELECT sp.*, u.display_name, u.username, u.avatar_url, u.avatar_color
+                FROM status_posts sp
+                JOIN users u ON u.id = sp.author_id
+                WHERE sp.expires_at > ?
+                ORDER BY sp.created_at ASC`,
+          args: [now],
+        }),
+      ]);
 
       const myFriendSet = new Set(friendsRes.rows.map((r) => String(r.fid)));
       const myGroupSet = new Set(groupsRes.rows.map((r) => String(r.group_id)));
 
-      // Reverse friend map for authors who posted statuses so MY_CONTACTS / CONTACTS_EXCEPT check author's contacts
       const statusAuthorIds = Array.from(
         new Set(
           activeStatusesRes.rows
@@ -6147,14 +6097,14 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       if (statusAuthorIds.length > 0) {
         const ph = statusAuthorIds.map(() => "?").join(",");
         const afRes = await db.execute({
-          sql: `SELECT from_user_id, to_user_id FROM friend_requests
+          sql: `SELECT from_id, to_id FROM friend_requests
                 WHERE status = 'accepted'
-                  AND ((from_user_id IN (${ph}) AND to_user_id = ?)
-                    OR (to_user_id IN (${ph}) AND from_user_id = ?))`,
+                  AND ((from_id IN (${ph}) AND to_id = ?)
+                    OR (to_id IN (${ph}) AND from_id = ?))`,
           args: [...statusAuthorIds, meId, ...statusAuthorIds, meId],
         });
         for (const r of afRes.rows) {
-          const a = String(r.from_user_id) === meId ? String(r.to_user_id) : String(r.from_user_id);
+          const a = String(r.from_id) === meId ? String(r.to_id) : String(r.from_id);
           authorFriendPairs.add(a);
         }
       }
@@ -6221,7 +6171,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         }
       }
 
-      const mapSlide = (r) => {
+      const mapSegment = (r) => {
         const sid = String(r.id);
         const authorId = String(r.author_id);
         const myView = myViewsByStatus.get(sid);
@@ -6232,22 +6182,20 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         } catch {
           mentionedIds = [];
         }
-        const mentionedSet = new Set(Array.isArray(mentionedIds) ? mentionedIds.map(String) : []);
+        const safeMentions = Array.isArray(mentionedIds) ? mentionedIds.map(String) : [];
         return {
           id: sid,
-          authorId,
-          mediaUrl: r.media_url ? String(r.media_url) : undefined,
-          mediaType: String(r.media_type || "text"),
-          mediaSource: String(r.media_source || "camera_roll"),
-          audioUrl: r.audio_url ? String(r.audio_url) : undefined,
-          audioDurationMs: Math.min(30000, Math.max(0, Number(r.audio_duration_ms || 0))),
+          userId: authorId,
+          mediaUrl: r.media_url ? String(r.media_url) : "",
+          mediaType: String(r.media_type || (r.media_url ? "image" : "text")),
           caption: String(r.caption || ""),
-          bgColor: String(r.bg_color || "#0F766E"),
-          textStyle: String(r.text_style || "bold"),
-          privacyMode: String(r.privacy_mode || "MY_CONTACTS"),
-          exclusiveGroupId: r.exclusive_group_id ? String(r.exclusive_group_id) : undefined,
-          mentionedMe: authorId !== meId && mentionedSet.has(meId),
-          mentionedCount: authorId === meId ? mentionedSet.size : 0,
+          bgColor: String(r.bg_color || "#0f766e"),
+          audioUrl: r.audio_url ? String(r.audio_url) : "",
+          audioTitle: r.audio_title ? String(r.audio_title) : "",
+          audioDurationMs: Math.min(30000, Math.max(0, Number(r.audio_duration_ms || 0))),
+          privacyType: String(r.privacy_mode || "MY_CONTACTS"),
+          groupId: r.exclusive_group_id ? String(r.exclusive_group_id) : null,
+          mentionedUserIds: authorId === meId ? safeMentions : safeMentions.includes(meId) ? [meId] : [],
           viewed: authorId === meId ? true : Boolean(myView),
           liked: Boolean(myView?.liked),
           viewCount: authorId === meId ? stats.viewCount : 0,
@@ -6257,35 +6205,49 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         };
       };
 
-      const myStatuses = [];
+      const mySegments = [];
       const contactStackMap = new Map();
-      const groupExclusiveMap = new Map();
+      const groupExclusiveAuthorMap = new Map();
 
       for (const r of visibleRows) {
         const authorId = String(r.author_id);
         const mode = String(r.privacy_mode || "MY_CONTACTS");
-        const slide = mapSlide(r);
+        const seg = mapSegment(r);
 
         if (mode === "GROUP_EXCLUSIVE" && r.exclusive_group_id) {
           const gid = String(r.exclusive_group_id);
-          if (!groupExclusiveMap.has(gid)) {
-            groupExclusiveMap.set(gid, []);
+          if (!groupExclusiveAuthorMap.has(gid)) {
+            groupExclusiveAuthorMap.set(gid, new Map());
           }
-          groupExclusiveMap.get(gid).push({
-            ...slide,
-            authorName: String(r.display_name || r.username || "Member"),
-            authorUsername: String(r.username || "user"),
-            authorAvatarUrl: r.avatar_url ? String(r.avatar_url) : undefined,
-            authorAvatarColor: String(r.avatar_color || "teal"),
-          });
+          const byAuthor = groupExclusiveAuthorMap.get(gid);
+          let gStack = byAuthor.get(authorId);
+          if (!gStack) {
+            gStack = {
+              userId: authorId,
+              displayName: String(r.display_name || r.username || "Member"),
+              username: String(r.username || "user"),
+              avatarColor: String(r.avatar_color || "purple"),
+              avatarUrl: r.avatar_url ? String(r.avatar_url) : null,
+              segments: [],
+              unreadCount: 0,
+              allViewed: true,
+              latestAt: 0,
+            };
+            byAuthor.set(authorId, gStack);
+          }
+          gStack.segments.push(seg);
+          if (seg.createdAt > gStack.latestAt) gStack.latestAt = seg.createdAt;
+          if (!seg.viewed) {
+            gStack.unreadCount += 1;
+            gStack.allViewed = false;
+          }
           if (authorId !== meId) {
-            // GROUP_EXCLUSIVE bypasses the general Updates tab completely for contacts
             continue;
           }
         }
 
         if (authorId === meId) {
-          myStatuses.push(slide);
+          mySegments.push(seg);
         } else {
           let stack = contactStackMap.get(authorId);
           if (!stack) {
@@ -6293,93 +6255,34 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
               userId: authorId,
               displayName: String(r.display_name || r.username || "Contact"),
               username: String(r.username || "user"),
-              avatarUrl: r.avatar_url ? String(r.avatar_url) : undefined,
-              avatarColor: String(r.avatar_color || "teal"),
-              isVerified: Boolean(Number(r.is_verified || 0)),
-              slides: [],
+              avatarColor: String(r.avatar_color || "purple"),
+              avatarUrl: r.avatar_url ? String(r.avatar_url) : null,
+              segments: [],
+              unreadCount: 0,
+              allViewed: true,
               latestAt: 0,
-              allRead: true,
             };
             contactStackMap.set(authorId, stack);
           }
-          stack.slides.push(slide);
-          if (slide.createdAt > stack.latestAt) stack.latestAt = slide.createdAt;
-          if (!slide.viewed) stack.allRead = false;
+          stack.segments.push(seg);
+          if (seg.createdAt > stack.latestAt) stack.latestAt = seg.createdAt;
+          if (!seg.viewed) {
+            stack.unreadCount += 1;
+            stack.allViewed = false;
+          }
         }
       }
 
       const contactStacks = Array.from(contactStackMap.values()).sort(
-        (a, b) => Number(a.allRead) - Number(b.allRead) || b.latestAt - a.latestAt,
+        (a, b) => Number(a.allViewed) - Number(b.allViewed) || b.latestAt - a.latestAt,
       );
 
-      // Hydrate Channels with Strict Identity Isolation (NEVER expose subscriber IDs/profiles!)
-      const subByChan = new Map();
-      for (const sr of subsRes.rows) {
-        subByChan.set(String(sr.channel_id), {
-          lastReadAt: Number(sr.last_read_at || 0),
-          premiumUnlocked: Boolean(Number(sr.premium_unlocked || 0)),
-        });
+      const groupExclusiveStacks = {};
+      for (const [gid, byAuthor] of groupExclusiveAuthorMap.entries()) {
+        groupExclusiveStacks[gid] = Array.from(byAuthor.values()).sort(
+          (a, b) => Number(a.allViewed) - Number(b.allViewed) || b.latestAt - a.latestAt,
+        );
       }
-
-      const chanIds = channelsRes.rows.map((c) => String(c.id));
-      const latestPostByChan = new Map();
-      const unreadCountByChan = new Map();
-      if (chanIds.length > 0) {
-        const cutoff30d = now - 30 * 24 * 60 * 60 * 1000;
-        const postsRes = await db.execute({
-          sql: `SELECT * FROM channel_posts WHERE created_at >= ? ORDER BY created_at DESC`,
-          args: [cutoff30d],
-        });
-        for (const pr of postsRes.rows) {
-          const cid = String(pr.channel_id);
-          const createdAt = Number(pr.created_at);
-          if (!latestPostByChan.has(cid)) {
-            latestPostByChan.set(cid, {
-              id: String(pr.id),
-              body: String(pr.body || ""),
-              mediaUrl: pr.media_url ? String(pr.media_url) : undefined,
-              mediaType: pr.media_type ? String(pr.media_type) : undefined,
-              createdAt,
-            });
-          }
-          const sub = subByChan.get(cid);
-          if (sub && createdAt > sub.lastReadAt) {
-            unreadCountByChan.set(cid, (unreadCountByChan.get(cid) || 0) + 1);
-          }
-        }
-      }
-
-      const allMappedChannels = channelsRes.rows.map((c) => {
-        const cid = String(c.id);
-        const sub = subByChan.get(cid);
-        const latest = latestPostByChan.get(cid);
-        return {
-          id: cid,
-          name: String(c.name),
-          handle: String(c.handle),
-          description: String(c.description || ""),
-          avatarUrl: c.avatar_url ? String(c.avatar_url) : undefined,
-          avatarColor: String(c.avatar_color || "teal"),
-          verified: Boolean(Number(c.verified || 0)),
-          category: String(c.category || "General"),
-          popularityTag: String(c.popularity_tag || "Popular"),
-          isPremium: Boolean(Number(c.is_premium || 0)),
-          priceLabel: c.price_label ? String(c.price_label) : undefined,
-          subscriberCount: Math.max(0, Number(c.subscriber_count || 0)),
-          isFollowed: Boolean(sub),
-          premiumUnlocked: Boolean(sub?.premiumUnlocked),
-          isOwner: c.owner_id ? String(c.owner_id) === meId : false,
-          unreadCount: sub ? unreadCountByChan.get(cid) || 0 : 0,
-          latestSnippet: latest
-            ? latest.body || (latest.mediaType === "image" ? "Photo" : "Broadcast media")
-            : String(c.description || "No broadcasts yet"),
-          latestAt: latest ? latest.createdAt : Number(c.updated_at || c.created_at),
-        };
-      });
-
-      const followedChannels = allMappedChannels
-        .filter((c) => c.isFollowed)
-        .sort((a, b) => b.latestAt - a.latestAt);
 
       const privRow = privRes.rows[0];
       let privTargets = [];
@@ -6388,24 +6291,26 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       } catch {
         privTargets = [];
       }
-
-      const groupExclusiveStacks = {};
-      for (const [gid, slides] of groupExclusiveMap.entries()) {
-        groupExclusiveStacks[gid] = slides;
-      }
+      const cleanPrivTargets = Array.isArray(privTargets) ? privTargets.map(String) : [];
+      const privType = privRow ? String(privRow.privacy_mode || "MY_CONTACTS") : "MY_CONTACTS";
 
       return {
-        myStatuses,
+        myStatus: {
+          userId: meId,
+          displayName: String(meRow.display_name || meRow.username || "Me"),
+          username: String(meRow.username || "me"),
+          avatarColor: String(meRow.avatar_color || "purple"),
+          avatarUrl: meRow.avatar_url ? String(meRow.avatar_url) : null,
+          segments: mySegments,
+          latestAt: mySegments.length > 0 ? mySegments[mySegments.length - 1].createdAt : 0,
+        },
         contactStacks,
-        followedChannels,
-        directoryChannels: allMappedChannels,
         groupExclusiveStacks,
-        myPrivacyDefault: {
-          privacyMode: privRow ? String(privRow.privacy_mode || "MY_CONTACTS") : "MY_CONTACTS",
-          targetIds: Array.isArray(privTargets) ? privTargets.map(String) : [],
-          exclusiveGroupId: privRow?.exclusive_group_id
-            ? String(privRow.exclusive_group_id)
-            : undefined,
+        privacyDefault: {
+          privacyType: privType,
+          excludedIds: privType === "CONTACTS_EXCEPT" ? cleanPrivTargets : [],
+          includedIds: privType === "ONLY_SHARE_WITH" ? cleanPrivTargets : [],
+          groupId: privRow?.exclusive_group_id ? String(privRow.exclusive_group_id) : "",
         },
       };
     }
@@ -6415,20 +6320,18 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const meId = String(meRow.id);
       const mediaUrl = args.mediaUrl ? String(args.mediaUrl).trim() : null;
       const mediaType = String(args.mediaType || (mediaUrl ? "image" : "text")).trim();
-      const mediaSource = ["camera_roll", "instagram", "facebook"].includes(String(args.mediaSource || ""))
-        ? String(args.mediaSource)
-        : "camera_roll";
       const audioUrl = args.audioUrl ? String(args.audioUrl).trim() : null;
+      const audioTitle = String(args.audioTitle || "").trim().slice(0, 80);
       const audioDurationMs = Math.max(
         0,
         Math.min(30000, Math.round(Number(args.audioDurationMs || 0))),
       );
       const caption = String(args.caption || "").trim().slice(0, 700);
-      const bgColor = String(args.bgColor || "#0F766E").trim().slice(0, 32);
+      const bgColor = String(args.bgColor || "#0f766e").trim().slice(0, 32);
       const textStyle = String(args.textStyle || "bold").trim().slice(0, 24);
 
       if (!mediaUrl && !caption && !audioUrl) {
-        throw new TursoAppError("Status must contain text, photo/video, or audio.");
+        throw new TursoAppError("Status must contain text, a photo, or audio.");
       }
 
       const allowedPrivacyModes = [
@@ -6437,16 +6340,22 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         "ONLY_SHARE_WITH",
         "GROUP_EXCLUSIVE",
       ];
-      const privacyMode = allowedPrivacyModes.includes(String(args.privacyMode || ""))
-        ? String(args.privacyMode)
-        : "MY_CONTACTS";
-      const privacyTargetIds = Array.isArray(args.privacyTargetIds)
-        ? Array.from(new Set(args.privacyTargetIds.map(String).filter(Boolean)))
-        : [];
+      const rawPrivacy = String(args.privacyType || args.privacyMode || "MY_CONTACTS");
+      const privacyMode = allowedPrivacyModes.includes(rawPrivacy) ? rawPrivacy : "MY_CONTACTS";
+
+      let rawTargets = [];
+      if (privacyMode === "CONTACTS_EXCEPT" && Array.isArray(args.excludedUserIds)) {
+        rawTargets = args.excludedUserIds;
+      } else if (privacyMode === "ONLY_SHARE_WITH" && Array.isArray(args.includedUserIds)) {
+        rawTargets = args.includedUserIds;
+      } else if (Array.isArray(args.privacyTargetIds)) {
+        rawTargets = args.privacyTargetIds;
+      }
+      const privacyTargetIds = Array.from(new Set(rawTargets.map(String).filter(Boolean)));
+
+      const rawGroupId = args.groupId || args.exclusiveGroupId;
       const exclusiveGroupId =
-        privacyMode === "GROUP_EXCLUSIVE" && args.exclusiveGroupId
-          ? String(args.exclusiveGroupId).trim()
-          : null;
+        privacyMode === "GROUP_EXCLUSIVE" && rawGroupId ? String(rawGroupId).trim() : null;
       if (privacyMode === "GROUP_EXCLUSIVE" && !exclusiveGroupId) {
         throw new TursoAppError("Select a group for Group Exclusive status.");
       }
@@ -6465,17 +6374,17 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const expiresAt = now + 24 * 60 * 60 * 1000;
       await db.execute({
         sql: `INSERT INTO status_posts (
-                id, author_id, media_url, media_type, media_source, audio_url, audio_duration_ms,
+                id, author_id, media_url, media_type, media_source, audio_url, audio_title, audio_duration_ms,
                 caption, bg_color, text_style, privacy_mode, privacy_target_ids_json,
                 exclusive_group_id, mentioned_user_ids_json, created_at, expires_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ) VALUES (?, ?, ?, ?, 'camera_roll', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           id,
           meId,
           mediaUrl,
           mediaType,
-          mediaSource,
           audioUrl,
+          audioTitle,
           audioDurationMs,
           caption,
           bgColor,
@@ -6489,7 +6398,6 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         ],
       });
 
-      // Dispatch private hidden mention notification ping to privately tagged @mention contacts
       if (mentionedUserIds.length > 0) {
         await dispatchPushToUsers(db, mentionedUserIds, {
           type: "sync_poke",
@@ -6497,7 +6405,32 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         }).catch(() => undefined);
       }
 
-      return { ok: true, id, createdAt: now, expiresAt };
+      return {
+        ok: true,
+        id,
+        createdAt: now,
+        expiresAt,
+        segment: {
+          id,
+          userId: meId,
+          mediaUrl: mediaUrl || "",
+          mediaType,
+          caption,
+          bgColor,
+          audioUrl: audioUrl || "",
+          audioTitle,
+          audioDurationMs,
+          privacyType: privacyMode,
+          groupId: exclusiveGroupId,
+          mentionedUserIds,
+          viewed: true,
+          liked: false,
+          viewCount: 0,
+          likeCount: 0,
+          createdAt: now,
+          expiresAt,
+        },
+      };
     }
 
     case "deleteStatusPost": {
@@ -6545,28 +6478,44 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const meId = String(meRow.id);
       const statusId = String(args.statusId || "").trim();
       if (!statusId) throw new TursoAppError("Missing status ID.");
-      const liked = args.liked === undefined ? 1 : args.liked ? 1 : 0;
+      const existing = await db.execute({
+        sql: `SELECT liked FROM status_views WHERE status_id = ? AND viewer_id = ? LIMIT 1`,
+        args: [statusId, meId],
+      });
+      const nextLiked =
+        args.liked !== undefined
+          ? args.liked
+            ? 1
+            : 0
+          : existing.rows.length && Number(existing.rows[0].liked || 0) === 1
+            ? 0
+            : 1;
       await db.execute({
         sql: `INSERT INTO status_views (status_id, viewer_id, liked, viewed_at)
               VALUES (?, ?, ?, ?)
               ON CONFLICT(status_id, viewer_id) DO UPDATE SET liked = excluded.liked`,
-        args: [statusId, meId, liked, now],
+        args: [statusId, meId, nextLiked, now],
       });
-      return { ok: true, liked: Boolean(liked) };
+      return { ok: true, liked: Boolean(nextLiked) };
     }
 
     case "saveStatusPrivacyDefault": {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
       const allowed = ["MY_CONTACTS", "CONTACTS_EXCEPT", "ONLY_SHARE_WITH", "GROUP_EXCLUSIVE"];
-      const privacyMode = allowed.includes(String(args.privacyMode || ""))
-        ? String(args.privacyMode)
-        : "MY_CONTACTS";
-      const targetIds = Array.isArray(args.targetIds)
-        ? Array.from(new Set(args.targetIds.map(String).filter(Boolean)))
-        : [];
-      const exclusiveGroupId = args.exclusiveGroupId ? String(args.exclusiveGroupId) : null;
-      // Intentionally only updates defaults for NEW status posts; never retroactively alters active posts!
+      const rawPrivacy = String(args.privacyType || args.privacyMode || "MY_CONTACTS");
+      const privacyMode = allowed.includes(rawPrivacy) ? rawPrivacy : "MY_CONTACTS";
+      let rawTargets = [];
+      if (privacyMode === "CONTACTS_EXCEPT" && Array.isArray(args.excludedIds || args.excludedUserIds)) {
+        rawTargets = args.excludedIds || args.excludedUserIds;
+      } else if (privacyMode === "ONLY_SHARE_WITH" && Array.isArray(args.includedIds || args.includedUserIds)) {
+        rawTargets = args.includedIds || args.includedUserIds;
+      } else if (Array.isArray(args.targetIds)) {
+        rawTargets = args.targetIds;
+      }
+      const targetIds = Array.from(new Set(rawTargets.map(String).filter(Boolean)));
+      const rawGroup = args.groupId || args.exclusiveGroupId;
+      const exclusiveGroupId = rawGroup ? String(rawGroup) : null;
       await db.execute({
         sql: `INSERT INTO status_privacy_defaults (user_id, privacy_mode, target_ids_json, exclusive_group_id, updated_at)
               VALUES (?, ?, ?, ?, ?)
@@ -6580,277 +6529,6 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       return { ok: true };
     }
 
-    case "createBroadcastChannel": {
-      const meRow = await requireMeRow(db, auth);
-      const meId = String(meRow.id);
-      const name = String(args.name || "").trim().slice(0, 64);
-      if (name.length < 2) throw new TursoAppError("Channel name must be at least 2 characters.");
-      const description = String(args.description || "").trim().slice(0, 300);
-      const category = String(args.category || "General").trim().slice(0, 32);
-      const avatarColor = String(args.avatarColor || "teal").trim();
-      const avatarUrl = args.avatarUrl ? String(args.avatarUrl).trim() : null;
-      const isPremium = args.isPremium ? 1 : 0;
-      const priceLabel = isPremium ? String(args.priceLabel || "$2.99/mo").trim().slice(0, 24) : null;
-      const handleBase = name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")
-        .slice(0, 24) || "channel";
-      const id = `chan_${newId().slice(0, 12)}`;
-      const handle = `${handleBase}_${id.slice(-4)}`;
-
-      await db.batch(
-        [
-          {
-            sql: `INSERT INTO broadcast_channels (
-                    id, owner_id, name, handle, description, avatar_url, avatar_color,
-                    verified, category, popularity_tag, is_premium, price_label,
-                    subscriber_count, created_at, updated_at
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'New', ?, ?, 1, ?, ?)`,
-            args: [
-              id,
-              meId,
-              name,
-              handle,
-              description,
-              avatarUrl,
-              avatarColor,
-              category,
-              isPremium,
-              priceLabel,
-              now,
-              now,
-            ],
-          },
-          {
-            sql: `INSERT INTO channel_subscriptions (channel_id, user_id, last_read_at, premium_unlocked, created_at)
-                  VALUES (?, ?, ?, 1, ?)`,
-            args: [id, meId, now, now],
-          },
-          {
-            sql: `INSERT INTO channel_posts (id, channel_id, body, media_url, media_type, reactions_json, created_at)
-                  VALUES (?, ?, ?, NULL, NULL, '{}', ?)`,
-            args: [
-              newId(),
-              id,
-              description || `Welcome to ${name}! Broadcast updates will appear here.`,
-              now,
-            ],
-          },
-        ],
-        "write",
-      );
-      return { ok: true, channelId: id };
-    }
-
-    case "toggleFollowChannel": {
-      const meRow = await requireMeRow(db, auth);
-      const meId = String(meRow.id);
-      const channelId = String(args.channelId || "").trim();
-      if (!channelId) throw new TursoAppError("Missing channel ID.");
-      const chanRes = await db.execute({
-        sql: `SELECT * FROM broadcast_channels WHERE id = ? LIMIT 1`,
-        args: [channelId],
-      });
-      if (!chanRes.rows.length) throw new TursoAppError("Channel not found.");
-      const chan = chanRes.rows[0];
-
-      const existingRes = await db.execute({
-        sql: `SELECT * FROM channel_subscriptions WHERE channel_id = ? AND user_id = ? LIMIT 1`,
-        args: [channelId, meId],
-      });
-      const shouldFollow =
-        args.follow !== undefined ? Boolean(args.follow) : existingRes.rows.length === 0;
-
-      if (shouldFollow && !existingRes.rows.length) {
-        const premiumUnlocked = Number(chan.is_premium || 0) ? (args.unlockPremium ? 1 : 0) : 1;
-        if (Number(chan.is_premium || 0) && !premiumUnlocked) {
-          throw new TursoAppError("Confirm premium channel subscription to follow this channel.");
-        }
-        await db.batch(
-          [
-            {
-              sql: `INSERT INTO channel_subscriptions (channel_id, user_id, last_read_at, premium_unlocked, created_at)
-                    VALUES (?, ?, ?, ?, ?)`,
-              args: [channelId, meId, now, premiumUnlocked, now],
-            },
-            {
-              sql: `UPDATE broadcast_channels SET subscriber_count = subscriber_count + 1 WHERE id = ?`,
-              args: [channelId],
-            },
-          ],
-          "write",
-        );
-      } else if (!shouldFollow && existingRes.rows.length) {
-        await db.batch(
-          [
-            {
-              sql: `DELETE FROM channel_subscriptions WHERE channel_id = ? AND user_id = ?`,
-              args: [channelId, meId],
-            },
-            {
-              sql: `UPDATE broadcast_channels
-                    SET subscriber_count = CASE WHEN subscriber_count > 0 THEN subscriber_count - 1 ELSE 0 END
-                    WHERE id = ?`,
-              args: [channelId],
-            },
-          ],
-          "write",
-        );
-      }
-      return { ok: true, followed: shouldFollow };
-    }
-
-    case "getChannelPosts": {
-      const meRow = await requireMeRow(db, auth);
-      const meId = String(meRow.id);
-      const channelId = String(args.channelId || "").trim();
-      if (!channelId) throw new TursoAppError("Missing channel ID.");
-      const cutoff30d = now - 30 * 24 * 60 * 60 * 1000;
-
-      const [chanRes, postsRes, subRes] = await Promise.all([
-        db.execute({ sql: `SELECT * FROM broadcast_channels WHERE id = ? LIMIT 1`, args: [channelId] }),
-        db.execute({
-          sql: `SELECT * FROM channel_posts WHERE channel_id = ? AND created_at >= ? ORDER BY created_at ASC`,
-          args: [channelId, cutoff30d],
-        }),
-        db.execute({
-          sql: `SELECT * FROM channel_subscriptions WHERE channel_id = ? AND user_id = ? LIMIT 1`,
-          args: [channelId, meId],
-        }),
-      ]);
-      if (!chanRes.rows.length) throw new TursoAppError("Channel not found.");
-      const chan = chanRes.rows[0];
-      if (subRes.rows.length > 0) {
-        await db.execute({
-          sql: `UPDATE channel_subscriptions SET last_read_at = ? WHERE channel_id = ? AND user_id = ?`,
-          args: [now, channelId, meId],
-        });
-      }
-
-      // Strict Identity Isolation: reactions only expose anonymous counts + boolean myReactions without any user IDs!
-      const posts = postsRes.rows.map((pr) => {
-        let rawMap = {};
-        try {
-          rawMap = JSON.parse(String(pr.reactions_json || "{}"));
-        } catch {
-          rawMap = {};
-        }
-        const counts = {};
-        const myReactions = [];
-        for (const [emoji, uidList] of Object.entries(rawMap || {})) {
-          if (Array.isArray(uidList) && uidList.length > 0) {
-            counts[emoji] = uidList.length;
-            if (uidList.includes(meId)) myReactions.push(emoji);
-          } else if (typeof uidList === "number" && uidList > 0) {
-            counts[emoji] = uidList;
-          }
-        }
-        return {
-          id: String(pr.id),
-          channelId,
-          body: String(pr.body || ""),
-          mediaUrl: pr.media_url ? String(pr.media_url) : undefined,
-          mediaType: pr.media_type ? String(pr.media_type) : undefined,
-          reactionCounts: counts,
-          myReactions,
-          createdAt: Number(pr.created_at),
-        };
-      });
-
-      return {
-        channel: {
-          id: String(chan.id),
-          name: String(chan.name),
-          handle: String(chan.handle),
-          description: String(chan.description || ""),
-          avatarUrl: chan.avatar_url ? String(chan.avatar_url) : undefined,
-          avatarColor: String(chan.avatar_color || "teal"),
-          verified: Boolean(Number(chan.verified || 0)),
-          subscriberCount: Math.max(0, Number(chan.subscriber_count || 0)),
-          isFollowed: subRes.rows.length > 0,
-          isOwner: chan.owner_id ? String(chan.owner_id) === meId : false,
-        },
-        posts,
-      };
-    }
-
-    case "postChannelBroadcast": {
-      const meRow = await requireMeRow(db, auth);
-      const meId = String(meRow.id);
-      const channelId = String(args.channelId || "").trim();
-      const body = String(args.body || "").trim().slice(0, 2000);
-      const mediaUrl = args.mediaUrl ? String(args.mediaUrl).trim() : null;
-      const mediaType = args.mediaType ? String(args.mediaType).trim() : null;
-      if (!channelId || (!body && !mediaUrl)) {
-        throw new TursoAppError("Broadcast message cannot be empty.");
-      }
-      const chanRes = await db.execute({
-        sql: `SELECT * FROM broadcast_channels WHERE id = ? LIMIT 1`,
-        args: [channelId],
-      });
-      if (!chanRes.rows.length) throw new TursoAppError("Channel not found.");
-      const chan = chanRes.rows[0];
-      const isAppOwner =
-        String(meRow.email || "").toLowerCase() === "aidilzafri2013@gmail.com" ||
-        String(meRow.username || "").toLowerCase() === "imzachie";
-      if (String(chan.owner_id || "") !== meId && !isAppOwner) {
-        throw new TursoAppError("Only channel admins can post broadcasts.");
-      }
-
-      const postId = newId();
-      await db.batch(
-        [
-          {
-            sql: `INSERT INTO channel_posts (id, channel_id, body, media_url, media_type, reactions_json, created_at)
-                  VALUES (?, ?, ?, ?, ?, '{}', ?)`,
-            args: [postId, channelId, body, mediaUrl, mediaType, now],
-          },
-          {
-            sql: `UPDATE broadcast_channels SET updated_at = ? WHERE id = ?`,
-            args: [now, channelId],
-          },
-          {
-            sql: `UPDATE channel_subscriptions SET last_read_at = ? WHERE channel_id = ? AND user_id = ?`,
-            args: [now, channelId, meId],
-          },
-        ],
-        "write",
-      );
-      return { ok: true, postId, createdAt: now };
-    }
-
-    case "reactChannelPost": {
-      const meRow = await requireMeRow(db, auth);
-      const meId = String(meRow.id);
-      const postId = String(args.postId || "").trim();
-      const emoji = String(args.emoji || "").trim();
-      if (!postId || !emoji) return { ok: true };
-      const postRes = await db.execute({
-        sql: `SELECT * FROM channel_posts WHERE id = ? LIMIT 1`,
-        args: [postId],
-      });
-      if (!postRes.rows.length) return { ok: true };
-      let map = {};
-      try {
-        map = JSON.parse(String(postRes.rows[0].reactions_json || "{}"));
-      } catch {
-        map = {};
-      }
-      const curList = Array.isArray(map[emoji]) ? map[emoji].map(String) : [];
-      if (curList.includes(meId)) {
-        map[emoji] = curList.filter((u) => u !== meId);
-        if (map[emoji].length === 0) delete map[emoji];
-      } else {
-        map[emoji] = [...curList, meId];
-      }
-      await db.execute({
-        sql: `UPDATE channel_posts SET reactions_json = ? WHERE id = ?`,
-        args: [JSON.stringify(map), postId],
-      });
-      return { ok: true };
-    }
-
     default:
       throw new TursoAppError(`Unknown operation: ${op}`);
   }
@@ -6859,10 +6537,9 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
 let lastScheduledSweepAt = 0;
 let lastUpdatesSweepAt = 0;
 
-async function sweepUpdatesHousekeepingAndSeedChannels(db, now) {
+async function sweepExpiredStatusPosts(db, now) {
   if (now - lastUpdatesSweepAt < 60_000) return;
   lastUpdatesSweepAt = now;
-  const cutoff30d = now - 30 * 24 * 60 * 60 * 1000;
   await db
     .batch(
       [
@@ -6874,147 +6551,10 @@ async function sweepUpdatesHousekeepingAndSeedChannels(db, now) {
           sql: `DELETE FROM status_posts WHERE expires_at <= ?`,
           args: [now],
         },
-        {
-          sql: `DELETE FROM channel_posts WHERE created_at < ?`,
-          args: [cutoff30d],
-        },
       ],
       "write",
     )
     .catch(() => undefined);
-
-  const countRes = await db.execute({
-    sql: `SELECT COUNT(*) AS cnt FROM broadcast_channels`,
-    args: [],
-  });
-  if (Number(countRes.rows[0]?.cnt || 0) > 0) return;
-
-  const seededChannels = [
-    {
-      id: "chan_jatext_official",
-      name: "JaText Official",
-      handle: "jatext_official",
-      description: "Official JaText feature drops, Liquid Glass updates, and security announcements.",
-      avatarColor: "purple",
-      verified: 1,
-      category: "Technology",
-      popularityTag: "Popular",
-      isPremium: 0,
-      priceLabel: null,
-      subscriberCount: 14820,
-      welcomePost:
-        "Welcome to the official JaText Channel! Stay tuned here for instant feature releases, Liquid Glass refinements, and E2EE updates.",
-    },
-    {
-      id: "chan_tech_pulse",
-      name: "Tech & AI Pulse",
-      handle: "tech_ai_pulse",
-      description: "Daily engineering highlights, mobile architecture deep dives, and AI breakthroughs.",
-      avatarColor: "blue",
-      verified: 1,
-      category: "Technology",
-      popularityTag: "Most Active",
-      isPremium: 0,
-      priceLabel: null,
-      subscriberCount: 9410,
-      welcomePost:
-        "Today in mobile engineering: native 120Hz spring transitions, zero-knowledge E2EE media pipelines, and OpenType color emoji rendering.",
-    },
-    {
-      id: "chan_design_craft",
-      name: "iOS Design Craft",
-      handle: "ios_design_craft",
-      description: "Apple HIG typography, SF Pro optical sizing, and tactile spring micro-interactions.",
-      avatarColor: "teal",
-      verified: 1,
-      category: "Design",
-      popularityTag: "Popular",
-      isPremium: 0,
-      priceLabel: null,
-      subscriberCount: 6280,
-      welcomePost:
-        "Design tip: pairing SF Pro Display for 20pt+ titles with SF Pro Text for body copy keeps hierarchy crisp across every screen density.",
-    },
-    {
-      id: "chan_gaming_arena",
-      name: "Gaming Clips Hub",
-      handle: "gaming_clips_hub",
-      description: "Top tournament moments, patch notes, and squad highlights around the clock.",
-      avatarColor: "orange",
-      verified: 0,
-      category: "Gaming",
-      popularityTag: "Most Active",
-      isPremium: 0,
-      priceLabel: null,
-      subscriberCount: 5190,
-      welcomePost:
-        "Weekend tournament finals are live! Drop a fire reaction below if your squad is queuing tonight.",
-    },
-    {
-      id: "chan_music_radar",
-      name: "Fresh Drops Radar",
-      handle: "fresh_drops_radar",
-      description: "New album releases, 30-second status audio picks, and late-night LoFi playlists.",
-      avatarColor: "pink",
-      verified: 0,
-      category: "Music",
-      popularityTag: "New",
-      isPremium: 0,
-      priceLabel: null,
-      subscriberCount: 2340,
-      welcomePost:
-        "Friday night soundtrack check: share your favorite 30-second track clip on your Status!",
-    },
-    {
-      id: "chan_creator_pro_vip",
-      name: "Creator Studio VIP",
-      handle: "creator_studio_vip",
-      description: "Exclusive behind-the-scenes builds, early prototypes, and subscriber-only drops.",
-      avatarColor: "yellow",
-      verified: 1,
-      category: "Creators",
-      popularityTag: "New",
-      isPremium: 1,
-      priceLabel: "$2.99/mo",
-      subscriberCount: 1890,
-      welcomePost:
-        "Welcome VIP subscribers! Exclusive prototype breakdowns and early asset packs drop here every week.",
-    },
-  ];
-
-  const batchStmts = [];
-  for (let i = 0; i < seededChannels.length; i++) {
-    const sc = seededChannels[i];
-    const ts = now - (seededChannels.length - i) * 600_000;
-    batchStmts.push({
-      sql: `INSERT OR IGNORE INTO broadcast_channels (
-              id, owner_id, name, handle, description, avatar_url, avatar_color,
-              verified, category, popularity_tag, is_premium, price_label,
-              subscriber_count, created_at, updated_at
-            ) VALUES (?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [
-        sc.id,
-        sc.name,
-        sc.handle,
-        sc.description,
-        sc.avatarColor,
-        sc.verified,
-        sc.category,
-        sc.popularityTag,
-        sc.isPremium,
-        sc.priceLabel,
-        sc.subscriberCount,
-        ts,
-        ts,
-      ],
-    });
-    batchStmts.push({
-      sql: `INSERT OR IGNORE INTO channel_posts (id, channel_id, body, media_url, media_type, reactions_json, created_at)
-            VALUES (?, ?, ?, NULL, NULL, '{}', ?)`,
-      args: [`seed_post_${sc.id}`, sc.id, sc.welcomePost, ts],
-    });
-  }
-  await db.batch(batchStmts, "write").catch(() => undefined);
 }
 
 function mapScheduledMessageRow(r) {

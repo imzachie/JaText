@@ -192,9 +192,6 @@ data class ForwardedMessageContext(
     val dmUserIds: List<String>? = null,
     val groupId: String? = null,
     val groupName: String? = null,
-    val channelId: String? = null,
-    val channelName: String? = null,
-    val channelVerified: Boolean = false,
 )
 
 @Serializable
@@ -1145,67 +1142,20 @@ data class StatusPrivacyDefaultState(
 )
 
 @Serializable
-data class BroadcastChannelSummary(
-    val id: String = "",
-    val name: String = "",
-    val handle: String = "",
-    val description: String = "",
-    val avatarColor: String = "purple",
-    val avatarUrl: String? = null,
-    val verified: Boolean = false,
-    val category: String = "Most Active",
-    val isPremium: Boolean = false,
-    val monthlyPriceLabel: String = "",
-    val followerCount: Int = 0,
-    val postCount: Int = 0,
-    val latestSnippet: String = "",
-    val latestMediaType: String = "text",
-    val latestPostAt: Long = 0L,
-    val createdAt: Long = 0L,
-    val followed: Boolean = false,
-    val unreadCount: Int = 0,
-    val isOwner: Boolean = false,
-)
-
-@Serializable
-data class ChannelReactionSummary(
-    val emoji: String = "",
-    val count: Int = 0,
-)
-
-@Serializable
-data class ChannelBroadcastPost(
-    val id: String = "",
-    val channelId: String = "",
-    val body: String = "",
-    val mediaUrl: String = "",
-    val mediaType: String = "text",
-    val reactions: List<ChannelReactionSummary> = emptyList(),
-    val myEmoji: String = "",
-    val createdAt: Long = 0L,
-)
-
-@Serializable
 data class UpdatesBundlePayload(
     val myStatus: MyStatusPayload = MyStatusPayload(),
     val contactStacks: List<ContactStatusStack> = emptyList(),
     val groupExclusiveStacks: Map<String, List<ContactStatusStack>> = emptyMap(),
     val privacyDefault: StatusPrivacyDefaultState = StatusPrivacyDefaultState(),
-    val followedChannels: List<BroadcastChannelSummary> = emptyList(),
-    val followedChannelsCount: Int = 0,
-    val directoryChannels: List<BroadcastChannelSummary> = emptyList(),
 )
 
 @Serializable
-data class ChannelPostsPayload(
-    val channel: BroadcastChannelSummary = BroadcastChannelSummary(),
-    val posts: List<ChannelBroadcastPost> = emptyList(),
-)
-
-@Serializable
-data class CreateChannelResponse(
+data class CreateStatusPostResponse(
+    val ok: Boolean = true,
     val id: String = "",
-    val handle: String = "",
+    val createdAt: Long = 0L,
+    val expiresAt: Long = 0L,
+    val segment: StatusSegmentItem? = null,
 )
 
 

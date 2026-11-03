@@ -145,10 +145,6 @@ function AppContent() {
   }, [me?.id, me?.syncedTheme]);
   const [isMobileClosing, setIsMobileClosing] = useState(false);
   const [mobilePushSeq, setMobilePushSeq] = useState(0);
-  const [requestedChannelJump, setRequestedChannelJump] = useState<{
-    channelId: string;
-    nonce: number;
-  } | null>(null);
   const mobileCloseTimerRef = useRef<number | null>(null);
   const closingTargetKeyRef = useRef<string>("");
   const prevPaneKeyRef = useRef<string>("");
@@ -308,27 +304,6 @@ function AppContent() {
     }
     prevPaneKeyRef.current = activePaneKey;
   }, [activePaneKey]);
-
-  useEffect(() => {
-    const onOpenChannel = (ev: Event) => {
-      const detail = (ev as CustomEvent<{ channelId?: string }>).detail;
-      const cid = detail?.channelId;
-      if (!cid) return;
-      if (mobileCloseTimerRef.current !== null) {
-        window.clearTimeout(mobileCloseTimerRef.current);
-        mobileCloseTimerRef.current = null;
-      }
-      closingTargetKeyRef.current = "";
-      setIsMobileClosing(false);
-      setExploreCommunitiesOpen(false);
-      setActiveGroupId(null);
-      setActiveChatId(null);
-      setSidebarTab("updates");
-      setRequestedChannelJump((prev) => ({ channelId: cid, nonce: (prev?.nonce ?? 0) + 1 }));
-    };
-    window.addEventListener("jatext:open-channel", onOpenChannel);
-    return () => window.removeEventListener("jatext:open-channel", onOpenChannel);
-  }, [setActiveChatId, setActiveGroupId]);
 
   useEffect(() => {
     return () => {
@@ -1023,7 +998,6 @@ function AppContent() {
         onCloseExploreCommunities={() => setExploreCommunitiesOpen(false)}
         createCommunityRequestNonce={createCommunityRequestNonce}
         onMobileConversationTap={triggerFreshMobilePushIn}
-        requestedChannelJump={requestedChannelJump}
         onOpenProfile={setProfileUser}
         onOpenSettings={() => {
           setSettingsInitialCategory("profile");

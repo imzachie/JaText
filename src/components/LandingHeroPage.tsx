@@ -130,13 +130,13 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
-    version: "v4.2.0",
+    version: "v4.2.1",
     date: "November 3, 2026",
-    headline: "WhatsApp iOS Updates Tab, Broadcast Channels, Full SF Pro Weights & Seamless Navigation Transitions",
+    headline: "Updates Tab on Desktop & Mobile, Instant Status Posting, Full SF Pro Weights & Smooth Transitions",
     latest: true,
     bullets: [
-      "Launched the full Updates tab with 24-hour Status stories, segmented unread/read avatar rings, 5-second full-screen Story Viewer with hold-to-pause and swipe replies, per-post privacy controls, anonymous Broadcast Channels with 30-day housekeeping, and a Find Channels directory.",
-      "Restored all 29 Apple SF Pro font weights and italics alongside iOS 26.4 emojis on Android, preserved encrypted attachments when editing captions, fixed Light theme text cursors, dismissed mobile keyboards on View Once, and added parallax back and lightbox spring animations.",
+      "Launched the clean Updates tab across Desktop, Mobile Web, and Android APK with 24-hour Status stories, live Camera Roll photo previews, segmented unread/read avatar rings, 5-second full-screen Story Viewer with hold-to-pause and swipe replies, and per-post privacy controls.",
+      "Restored the top JaText brand header above Updates on Mobile, restored all 29 Apple SF Pro font weights and italics alongside iOS 26.4 emojis on Android, preserved encrypted attachments when editing captions, fixed Light theme text cursors, and added parallax back and lightbox spring animations.",
     ],
   },
   {
@@ -539,7 +539,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v4.2.0 · Live
+                v4.2.1 · Live
               </span>
             </span>
           </a>
@@ -678,7 +678,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v4.2.0 (Build 69)</strong>
+                    <strong>v4.2.1 (Build 70)</strong>
                     <span>{isIosVisitor ? "iOS Web & Liquid Glass PWA" : "Web & Signed APK"}</span>
                   </div>
                 </div>
@@ -1060,7 +1060,7 @@ export function LandingHeroPage() {
                   <>
                     Launch the full JaText web app at{" "}
                     <strong>jatext.vercel.app/chats</strong> or grab the latest signed Android
-                    Release APK (v4.2.0).
+                    Release APK (v4.2.1).
                   </>
                 )}
               </p>
@@ -1090,7 +1090,7 @@ export function LandingHeroPage() {
                   href="/downloads/JaText-release.apk"
                   className="jt-btn-secondary jt-btn-lg"
                 >
-                  Get Android APK (v4.2.0)
+                  Get Android APK (v4.2.1)
                 </a>
               )}
             </div>
@@ -1103,7 +1103,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v4.2.0</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v4.2.1</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

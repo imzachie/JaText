@@ -126,7 +126,6 @@ export function Sidebar({
   onCloseExploreCommunities,
   createCommunityRequestNonce = 0,
   onMobileConversationTap,
-  requestedChannelJump,
   onOpenProfile,
   onOpenSettings,
   onOpenAccountSwitcher,
@@ -138,7 +137,6 @@ export function Sidebar({
   onCloseExploreCommunities?: () => void;
   createCommunityRequestNonce?: number;
   onMobileConversationTap?: () => void;
-  requestedChannelJump?: { channelId: string; nonce: number } | null;
   onOpenProfile: (user: JaUser) => void;
   onOpenSettings: () => void;
   onOpenAccountSwitcher?: () => void;
@@ -186,6 +184,7 @@ export function Sidebar({
   const [groupBusy, setGroupBusy] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
   const [showCreateCommunityDialog, setShowCreateCommunityDialog] = useState(false);
+  const [openStatusComposerNonce, setOpenStatusComposerNonce] = useState(0);
   const [communityName, setCommunityName] = useState("");
   const [communityDesc, setCommunityDesc] = useState("");
   const [communityColor, setCommunityColor] = useState("purple");
@@ -654,7 +653,6 @@ export function Sidebar({
 
   return (
     <aside className={`sidebar ${isIosChats ? "ios-bottom-nav-layout" : ""} ${tab === "updates" ? "is-updates-tab" : ""}`}>
-      {!(isIosChats && tab === "updates") && (
       <header className="sidebar-header">
         <div className="brand">
           <img className="logo-icon" src="/jatext-logo-icon.png" alt="" />
@@ -668,6 +666,17 @@ export function Sidebar({
               onClick={() => setShowGroupDialog(true)}
               title="New group"
               aria-label="New group"
+            >
+              <PlusIcon size={17} />
+            </button>
+          )}
+          {isIosChats && tab === "updates" && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setOpenStatusComposerNonce((n) => n + 1)}
+              title="Add status"
+              aria-label="Add status"
             >
               <PlusIcon size={17} />
             </button>
@@ -729,9 +738,8 @@ export function Sidebar({
           )}
         </div>
       </header>
-      )}
 
-      {isIosChats && tab === "updates" ? null : isIosChats ? (
+      {isIosChats ? (
         <h1 className="ios-page-large-title">
           {tab === "updates"
             ? "Updates"
@@ -815,6 +823,13 @@ export function Sidebar({
                 {totalChatsUnreadCount > 99 ? "99+" : totalChatsUnreadCount}
               </span>
             )}
+          </button>
+          <button
+            className={tab === "updates" ? "active" : ""}
+            onClick={() => setTab("updates")}
+          >
+            <IosUpdatesStatusIcon size={15} selected={tab === "updates"} />
+            <span>Updates</span>
           </button>
           <button
             className={tab === "communities" ? "active" : ""}
@@ -1135,7 +1150,10 @@ export function Sidebar({
 
       {tab === "updates" && (
         <div className="sidebar-tab-pane jt-updates-pane-host" key="pane-updates">
-          <UpdatesTabView requestedChannelJump={requestedChannelJump} />
+          <UpdatesTabView
+            isIosChats={isIosChats}
+            openComposerNonce={openStatusComposerNonce}
+          />
         </div>
       )}
 
