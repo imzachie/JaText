@@ -2074,7 +2074,7 @@ class JaTextSessionViewModel(app: Application) :
                     description = gs.description,
                     communityKeySeed = gs.communityKeySeed,
                     ownerId = gs.ownerId,
-                    createdAt = gs.createdAt,
+                    role = gs.role,
                 )
             }
             prev.copy(

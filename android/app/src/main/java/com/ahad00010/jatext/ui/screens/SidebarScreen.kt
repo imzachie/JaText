@@ -3300,7 +3300,12 @@ fun ExploreCommunitiesScreen(
                             val c = commColor
                             val u = commAvatarUri
                             showCreateDialog = false
-                            vm.createCommunity(n, d, c, u)
+                            vm.createNewCommunity(
+                                name = n,
+                                description = d,
+                                avatarColor = c,
+                                avatarUri = u,
+                            )
                         },
                     )
                 }
