@@ -1416,6 +1416,10 @@ export function ChatView({
       window.clearTimeout(imageCloseTimerRef.current);
       imageCloseTimerRef.current = null;
     }
+    if (typeof document !== "undefined") {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && typeof active.blur === "function") active.blur();
+    }
     imageTransformRef.current = { scale: 1, x: 0, y: 0 };
     imageGestureRef.current = null;
     setImageClosing(false);
@@ -1429,7 +1433,7 @@ export function ChatView({
       setImagePreview(null);
       setImageClosing(false);
       imageCloseTimerRef.current = null;
-    }, 160);
+    }, 200);
   }, []);
 
   const closeMessageMenu = useCallback(() => {
@@ -1751,7 +1755,10 @@ export function ChatView({
   const handleSubmitDraft = useCallback(
     async (submittedBody: string) => {
       if (editingMessage) {
-        if (!submittedBody || isFriendBlocked) return;
+        const hasAttachmentOnEdited = Boolean(
+          editingMessage.attachmentUrl || editingMessage.encryptedAtt || editingMessage.stickerKey,
+        );
+        if ((!submittedBody && !hasAttachmentOnEdited) || isFriendBlocked) return;
         const targetId = editingMessage.id;
         setError(null);
         setEditingMessage(null);
@@ -2525,7 +2532,13 @@ export function ChatView({
           initialDraft={editingMessage ? editingMessage.body : composerSeed.text}
           hasFile={files.length > 0}
           viewOnceActive={viewOnceActive}
-          onToggleViewOnce={() => setViewOnceActive((v) => !v)}
+          onToggleViewOnce={() => {
+            if (typeof window !== "undefined" && window.innerWidth <= 820) {
+              const active = document.activeElement as HTMLElement | null;
+              if (active && typeof active.blur === "function") active.blur();
+            }
+            setViewOnceActive((v) => !v);
+          }}
           isFriendBlocked={isFriendBlocked}
           isEditing={Boolean(editingMessage)}
           composerRef={composerRef}
@@ -3018,26 +3031,28 @@ export function ChatView({
           >
             <CloseIcon size={20} />
           </button>
-          <img
-            ref={imageElementRef}
-            src={imagePreview}
-            alt="Full-size attachment"
-            style={{ transform: "translate3d(0, 0, 0) scale(1)" }}
-            onClick={(event) => event.stopPropagation()}
-            onTouchStart={startImageGesture}
-            onTouchMove={moveImageGesture}
-            onTouchEnd={endImageGesture}
-            onTouchCancel={endImageGesture}
-            onWheel={(event) => {
-              event.preventDefault();
-              const { scale, x, y } = imageTransformRef.current;
-              applyImageTransform(
-                Math.min(4, Math.max(1, scale + (event.deltaY < 0 ? 0.2 : -0.2))),
-                x,
-                y,
-              );
-            }}
-          />
+          <div className="media-lightbox-stage">
+            <img
+              ref={imageElementRef}
+              src={imagePreview}
+              alt="Full-size attachment"
+              style={{ transform: "translate3d(0, 0, 0) scale(1)" }}
+              onClick={(event) => event.stopPropagation()}
+              onTouchStart={startImageGesture}
+              onTouchMove={moveImageGesture}
+              onTouchEnd={endImageGesture}
+              onTouchCancel={endImageGesture}
+              onWheel={(event) => {
+                event.preventDefault();
+                const { scale, x, y } = imageTransformRef.current;
+                applyImageTransform(
+                  Math.min(4, Math.max(1, scale + (event.deltaY < 0 ? 0.2 : -0.2))),
+                  x,
+                  y,
+                );
+              }}
+            />
+          </div>
           <span className="media-lightbox-hint">
             Pinch to zoom · Drag to move · Click outside or press Esc to close
           </span>

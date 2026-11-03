@@ -632,6 +632,10 @@ export function CommunityChatView({
       window.clearTimeout(imageCloseTimerRef.current);
       imageCloseTimerRef.current = null;
     }
+    if (typeof document !== "undefined") {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && typeof active.blur === "function") active.blur();
+    }
     imageTransformRef.current = { scale: 1, x: 0, y: 0 };
     imageGestureRef.current = null;
     setImageClosing(false);
@@ -644,7 +648,7 @@ export function CommunityChatView({
       setImagePreview(null);
       setImageClosing(false);
       imageCloseTimerRef.current = null;
-    }, 160);
+    }, 200);
   }, []);
 
   useEffect(() => {
@@ -1971,7 +1975,9 @@ export function CommunityChatView({
       {imagePreview && (
         <div className={`media-lightbox ${imageClosing ? "closing" : ""}`} role="dialog" aria-modal="true" aria-label="Image viewer" onClick={closeImagePreview}>
           <button type="button" className="media-lightbox-close" aria-label="Close image viewer" onClick={closeImagePreview}><CloseIcon size={20} /></button>
-          <img ref={imageElementRef} src={imagePreview} alt="Full-size attachment" style={{ transform: "translate3d(0, 0, 0) scale(1)" }} onClick={(event) => event.stopPropagation()} onTouchStart={startImageGesture} onTouchMove={moveImageGesture} onTouchEnd={endImageGesture} onTouchCancel={endImageGesture} onWheel={(event) => { event.preventDefault(); const { scale, x, y } = imageTransformRef.current; applyImageTransform(Math.min(4, Math.max(1, scale + (event.deltaY < 0 ? 0.2 : -0.2))), x, y); }} />
+          <div className="media-lightbox-stage">
+            <img ref={imageElementRef} src={imagePreview} alt="Full-size attachment" style={{ transform: "translate3d(0, 0, 0) scale(1)" }} onClick={(event) => event.stopPropagation()} onTouchStart={startImageGesture} onTouchMove={moveImageGesture} onTouchEnd={endImageGesture} onTouchCancel={endImageGesture} onWheel={(event) => { event.preventDefault(); const { scale, x, y } = imageTransformRef.current; applyImageTransform(Math.min(4, Math.max(1, scale + (event.deltaY < 0 ? 0.2 : -0.2))), x, y); }} />
+          </div>
           <span className="media-lightbox-hint">Pinch to zoom · Drag to move · Click outside or press Esc to close</span>
         </div>
       )}

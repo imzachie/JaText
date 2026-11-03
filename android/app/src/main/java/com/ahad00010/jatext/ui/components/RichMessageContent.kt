@@ -426,6 +426,7 @@ fun ForwardedContextCardUi(
     onJumpToOriginal: (ForwardedMessageContext) -> Unit,
 ) {
     val canJump = when (contextCard.sourceKind) {
+        "channel" -> !contextCard.channelId.isNullOrBlank()
         "community" -> true
         "group" -> contextCard.groupId != null && knownGroupIds.contains(contextCard.groupId)
         "dm" -> {
@@ -474,6 +475,11 @@ fun ForwardedContextCardUi(
         }
         val labelText = contextCard.sourceLabel.ifBlank {
             when (contextCard.sourceKind) {
+                "channel" -> {
+                    val cname = contextCard.channelName?.takeIf { it.isNotBlank() }
+                        ?: contextCard.originalSenderName.ifBlank { "Channel" }
+                    if (contextCard.channelVerified) "Channel · $cname ✓" else "Channel · $cname"
+                }
                 "community" -> "JaText Community"
                 "group" -> contextCard.groupName ?: "Group Chat"
                 else -> "Direct Message"

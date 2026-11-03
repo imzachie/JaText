@@ -19,6 +19,13 @@ import { playMessageSound } from "../lib/alerts";
 import { ComposerPlusMenu, ViewOnceRingIcon } from "./ComposerPlusMenu";
 import { ViewOnceMessageBubble } from "./ViewOnceViewerModal";
 import {
+  FullScreenStoryViewerModal,
+  getCachedGroupExclusiveStatuses,
+  refreshUpdatesBundleGlobal,
+  subscribeGroupExclusiveStatuses,
+  type ContactStatusStack,
+} from "./UpdatesTabView";
+import {
   buildEncryptedViewOnceBody,
   isViewOnceBody,
   parseViewOnceEnvelope,
@@ -1684,6 +1691,23 @@ export function GroupChatView({
     sendGroupMessage,
   } = store;
 
+  const [groupExclusiveStacks, setGroupExclusiveStacks] = useState<ContactStatusStack[]>(() =>
+    groupId ? getCachedGroupExclusiveStatuses(groupId) : [],
+  );
+  const [groupStoryViewerOpen, setGroupStoryViewerOpen] = useState(false);
+
+  useEffect(() => {
+    if (!groupId) {
+      setGroupExclusiveStacks([]);
+      return;
+    }
+    setGroupExclusiveStacks(getCachedGroupExclusiveStatuses(groupId));
+    void refreshUpdatesBundleGlobal();
+    return subscribeGroupExclusiveStatuses(() => {
+      setGroupExclusiveStacks(getCachedGroupExclusiveStatuses(groupId));
+    });
+  }, [groupId]);
+
   // Publish / update our single in-place seen cursor row & mark local unread cleared when actively viewing
   useEffect(() => {
     if (!groupId || !currentGroupMe?.id || activeGroupId !== groupId) {
@@ -1924,6 +1948,10 @@ export function GroupChatView({
       window.clearTimeout(imageCloseTimerRef.current);
       imageCloseTimerRef.current = null;
     }
+    if (typeof document !== "undefined") {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && typeof active.blur === "function") active.blur();
+    }
     imageTransformRef.current = { scale: 1, x: 0, y: 0 };
     imageGestureRef.current = null;
     setImageClosing(false);
@@ -1937,7 +1965,7 @@ export function GroupChatView({
       setImagePreview(null);
       setImageClosing(false);
       imageCloseTimerRef.current = null;
-    }, 160);
+    }, 200);
   }, []);
 
   const closeMessageMenu = useCallback(() => {
@@ -2260,7 +2288,10 @@ export function GroupChatView({
       return;
     }
     if (editingMessage) {
-      if (!submittedBody) return;
+      const hasAttachmentOnEdited = Boolean(
+        editingMessage.attachmentUrl || editingMessage.encryptedAtt || editingMessage.stickerUrl,
+      );
+      if (!submittedBody && !hasAttachmentOnEdited) return;
       const targetId = editingMessage.id;
       setError(null);
       setEditingMessage(null);
@@ -2962,6 +2993,17 @@ export function GroupChatView({
           </span>
         </button>
         <div className="chat-header-actions">
+          {groupExclusiveStacks.length > 0 && (
+            <button
+              type="button"
+              className="jt-group-status-hdr-pill"
+              title="View group-exclusive status updates"
+              onClick={() => setGroupStoryViewerOpen(true)}
+            >
+              <span className="jt-group-status-dot" />
+              <span>Status ({groupExclusiveStacks.length})</span>
+            </button>
+          )}
           <button
             type="button"
             className={`icon-btn chat-header-search-btn ${searchOpen ? "menu-open" : ""}`}
@@ -3351,7 +3393,13 @@ export function GroupChatView({
           activityByUserId={activityByUserId}
           hasFile={files.length > 0}
           viewOnceActive={viewOnceActive}
-          onToggleViewOnce={() => setViewOnceActive((v) => !v)}
+          onToggleViewOnce={() => {
+            if (typeof window !== "undefined" && window.innerWidth <= 820) {
+              const active = document.activeElement as HTMLElement | null;
+              if (active && typeof active.blur === "function") active.blur();
+            }
+            setViewOnceActive((v) => !v);
+          }}
           hasForwardedMessage={Boolean(forwardedMessage)}
           isEditing={Boolean(editingMessage)}
           busy={busy}
@@ -3724,30 +3772,41 @@ export function GroupChatView({
           >
             <CloseIcon size={20} />
           </button>
-          <img
-            ref={imageElementRef}
-            src={imagePreview}
-            alt="Full-size attachment"
-            style={{ transform: "translate3d(0, 0, 0) scale(1)" }}
-            onClick={(event) => event.stopPropagation()}
-            onTouchStart={startImageGesture}
-            onTouchMove={moveImageGesture}
-            onTouchEnd={endImageGesture}
-            onTouchCancel={endImageGesture}
-            onWheel={(event) => {
-              event.preventDefault();
-              const { scale, x, y } = imageTransformRef.current;
-              applyImageTransform(
-                Math.min(4, Math.max(1, scale + (event.deltaY < 0 ? 0.2 : -0.2))),
-                x,
-                y,
-              );
-            }}
-          />
+          <div className="media-lightbox-stage">
+            <img
+              ref={imageElementRef}
+              src={imagePreview}
+              alt="Full-size attachment"
+              style={{ transform: "translate3d(0, 0, 0) scale(1)" }}
+              onClick={(event) => event.stopPropagation()}
+              onTouchStart={startImageGesture}
+              onTouchMove={moveImageGesture}
+              onTouchEnd={endImageGesture}
+              onTouchCancel={endImageGesture}
+              onWheel={(event) => {
+                event.preventDefault();
+                const { scale, x, y } = imageTransformRef.current;
+                applyImageTransform(
+                  Math.min(4, Math.max(1, scale + (event.deltaY < 0 ? 0.2 : -0.2))),
+                  x,
+                  y,
+                );
+              }}
+            />
+          </div>
           <span className="media-lightbox-hint">
             Pinch to zoom · Drag to move · Click outside or press Esc to close
           </span>
         </div>
+      )}
+      {groupStoryViewerOpen && groupExclusiveStacks.length > 0 && (
+        <FullScreenStoryViewerModal
+          stacks={groupExclusiveStacks}
+          initialStackIndex={0}
+          meId={currentGroupMe?.id ?? ""}
+          onClose={() => setGroupStoryViewerOpen(false)}
+          onStatusMutated={() => void refreshUpdatesBundleGlobal()}
+        />
       )}
 
       {showManage && group && (

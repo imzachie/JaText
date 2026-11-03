@@ -3,11 +3,21 @@ package com.ahad00010.jatext.ui.components
 import android.app.Activity
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateListOf
@@ -15,6 +25,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
@@ -90,6 +102,16 @@ fun FullscreenOverlayStage(
     val anySecure = hostState.entries.any { it.secureScreen }
     val palette = LocalJaTextPalette.current
     val rootView = LocalView.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Immediately dismiss the soft keyboard whenever any fullscreen overlay (View Once, Image Lightbox, Story Viewer) opens!
+    LaunchedEffect(top?.id) {
+        if (top != null) {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+        }
+    }
 
     DisposableEffect(top != null, anySecure, palette.isDark) {
         runCatching {
@@ -122,20 +144,47 @@ fun FullscreenOverlayStage(
         BackHandler(enabled = true) {
             top.onBackState.value.invoke()
         }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(980f)
-                .background(top.backgroundColor)
-                .pointerInput(top.id) {
-                    awaitPointerEventScope {
-                        while (true) {
-                            awaitPointerEvent()
+    }
+
+    AnimatedContent(
+        targetState = top,
+        contentKey = { it?.id ?: "__none__" },
+        transitionSpec = {
+            if (targetState != null) {
+                (fadeIn(animationSpec = tween(210)) +
+                    scaleIn(
+                        initialScale = 0.89f,
+                        animationSpec = spring(dampingRatio = 0.82f, stiffness = 520f),
+                    )).togetherWith(
+                    fadeOut(animationSpec = tween(170)),
+                )
+            } else {
+                fadeIn(animationSpec = tween(140)).togetherWith(
+                    scaleOut(
+                        targetScale = 0.90f,
+                        animationSpec = tween(195, easing = FastOutSlowInEasing),
+                    ) + fadeOut(animationSpec = tween(195)),
+                )
+            }
+        },
+        modifier = Modifier.zIndex(980f),
+        label = "FullscreenOverlayAnimatedStage",
+    ) { activeEntry ->
+        if (activeEntry != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(activeEntry.backgroundColor)
+                    .pointerInput(activeEntry.id) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent()
+                            }
                         }
-                    }
-                },
-        ) {
-            top.contentState.value.invoke()
+                    },
+            ) {
+                activeEntry.contentState.value.invoke()
+            }
         }
     }
 }

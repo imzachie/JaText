@@ -55,7 +55,7 @@ import {
 import { OFFICIAL_COMMUNITY_ID, type JaUser } from "./lib/types";
 
 const NOTIFICATION_WELCOME_KEY = "jatext-notification-welcome-seen-v1";
-const MOBILE_SLIDE_MS = 235;
+const MOBILE_SLIDE_MS = 285;
 
 function isPlaceholderNotificationText(text: string | null | undefined): boolean {
   if (!text) return true;
@@ -144,8 +144,14 @@ function AppContent() {
     }
   }, [me?.id, me?.syncedTheme]);
   const [isMobileClosing, setIsMobileClosing] = useState(false);
+  const [mobilePushSeq, setMobilePushSeq] = useState(0);
+  const [requestedChannelJump, setRequestedChannelJump] = useState<{
+    channelId: string;
+    nonce: number;
+  } | null>(null);
   const mobileCloseTimerRef = useRef<number | null>(null);
   const closingTargetKeyRef = useRef<string>("");
+  const prevPaneKeyRef = useRef<string>("");
   const firebasePushActiveRef = useRef(false);
   const e2eeSnapshot = useE2EESnapshot();
   const [notificationWelcomeSeen, setNotificationWelcomeSeen] = useState(
@@ -279,17 +285,50 @@ function AppContent() {
         ? "explore:communities"
         : "";
 
-  // If user taps a different chat in Sidebar while a back slide-out was mid-flight, cancel close timer
+  const triggerFreshMobilePushIn = useCallback(() => {
+    if (mobileCloseTimerRef.current !== null) {
+      window.clearTimeout(mobileCloseTimerRef.current);
+      mobileCloseTimerRef.current = null;
+    }
+    closingTargetKeyRef.current = "";
+    setIsMobileClosing(false);
+    setMobilePushSeq((s) => (s === 1 ? 2 : 1));
+  }, []);
+
+  // Always play a crisp push-in animation whenever a conversation opens or interrupts an in-flight back transition
   useEffect(() => {
-    if (isMobileClosing && activePaneKey && activePaneKey !== closingTargetKeyRef.current) {
+    if (activePaneKey && activePaneKey !== prevPaneKeyRef.current) {
       if (mobileCloseTimerRef.current !== null) {
         window.clearTimeout(mobileCloseTimerRef.current);
         mobileCloseTimerRef.current = null;
       }
       closingTargetKeyRef.current = "";
       setIsMobileClosing(false);
+      setMobilePushSeq((s) => (s === 1 ? 2 : 1));
     }
-  }, [activePaneKey, isMobileClosing]);
+    prevPaneKeyRef.current = activePaneKey;
+  }, [activePaneKey]);
+
+  useEffect(() => {
+    const onOpenChannel = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ channelId?: string }>).detail;
+      const cid = detail?.channelId;
+      if (!cid) return;
+      if (mobileCloseTimerRef.current !== null) {
+        window.clearTimeout(mobileCloseTimerRef.current);
+        mobileCloseTimerRef.current = null;
+      }
+      closingTargetKeyRef.current = "";
+      setIsMobileClosing(false);
+      setExploreCommunitiesOpen(false);
+      setActiveGroupId(null);
+      setActiveChatId(null);
+      setSidebarTab("updates");
+      setRequestedChannelJump((prev) => ({ channelId: cid, nonce: (prev?.nonce ?? 0) + 1 }));
+    };
+    window.addEventListener("jatext:open-channel", onOpenChannel);
+    return () => window.removeEventListener("jatext:open-channel", onOpenChannel);
+  }, [setActiveChatId, setActiveGroupId]);
 
   useEffect(() => {
     return () => {
@@ -301,6 +340,10 @@ function AppContent() {
 
   const handleMobileAnimatedBack = useCallback(() => {
     flushPendingDrafts();
+    if (typeof document !== "undefined") {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && typeof active.blur === "function") active.blur();
+    }
     const returnToCommunities = activeGroupIsCommunity || exploreCommunitiesOpen;
     const isMobileViewport = typeof window !== "undefined" && window.innerWidth <= 820;
     if (!isMobileViewport || (!activeGroupId && !activeChatId && !exploreCommunitiesOpen)) {
@@ -954,6 +997,12 @@ function AppContent() {
     <div
       className={`app-shell ${hasActivePane && !isMobileClosing ? "chat-open" : ""} ${
         hasActivePane && isMobileClosing ? "chat-closing" : ""
+      } ${
+        hasActivePane && !isMobileClosing && mobilePushSeq === 1
+          ? "mobile-push-a"
+          : hasActivePane && !isMobileClosing && mobilePushSeq === 2
+            ? "mobile-push-b"
+            : ""
       }`}
     >
       <Sidebar
@@ -966,12 +1015,15 @@ function AppContent() {
         }}
         exploreCommunitiesOpen={exploreCommunitiesOpen}
         onOpenExploreCommunities={() => {
+          triggerFreshMobilePushIn();
           setActiveGroupId(null);
           setActiveChatId(null);
           setExploreCommunitiesOpen(true);
         }}
         onCloseExploreCommunities={() => setExploreCommunitiesOpen(false)}
         createCommunityRequestNonce={createCommunityRequestNonce}
+        onMobileConversationTap={triggerFreshMobilePushIn}
+        requestedChannelJump={requestedChannelJump}
         onOpenProfile={setProfileUser}
         onOpenSettings={() => {
           setSettingsInitialCategory("profile");

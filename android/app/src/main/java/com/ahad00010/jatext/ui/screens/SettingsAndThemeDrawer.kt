@@ -2488,7 +2488,7 @@ private fun YouHubRootScreen(
                         value = searchQuery,
                         onValueChange = onSearchQueryChange,
                         singleLine = true,
-                        cursorBrush = SolidColor(palette.accent),
+                        cursorBrush = SolidColor(if (palette.isDark) Color.White else Color(0xFF111318)),
                         textStyle = TextStyle(
                             color = palette.textPrimary,
                             fontSize = 15.sp,
@@ -2790,7 +2790,7 @@ private fun CustomStatusBubbleEditDialog(
                     onValueChange = { if (it.length <= 200) draft = it },
                     singleLine = false,
                     maxLines = 4,
-                    cursorBrush = SolidColor(palette.accent),
+                    cursorBrush = SolidColor(if (palette.isDark) Color.White else Color(0xFF111318)),
                     textStyle = TextStyle(
                         color = palette.textPrimary,
                         fontSize = 15.sp,

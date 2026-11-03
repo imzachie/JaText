@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { decryptRemoteAttachmentToObjectUrl, getCachedDecryptedMediaUrl } from "../lib/e2ee/keystore";
 import { useI18n } from "../lib/i18n";
@@ -122,6 +122,12 @@ export function ViewOnceMessageBubble({
         className={`jt-vo-bubble jt-vo-unopened ${mine ? "is-mine" : "is-peer"}`}
         onClick={(e) => {
           e.stopPropagation();
+          if (typeof document !== "undefined") {
+            const active = document.activeElement as HTMLElement | null;
+            if (active && typeof active.blur === "function") {
+              active.blur();
+            }
+          }
           setViewerOpen(true);
         }}
       >
@@ -153,31 +159,51 @@ function ViewOnceFullscreenViewer({
 }) {
   const photoState = useResolvedViewOnceMedia(envelope.photo);
   const audioState = useResolvedViewOnceMedia(envelope.audio);
+  const [isClosing, setIsClosing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+
+  const requestAnimatedClose = useCallback(() => {
+    if (closeTimerRef.current !== null) return;
+    setIsClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      onClose();
+    }, 210);
+  }, [onClose]);
 
   useEffect(() => {
+    if (typeof document !== "undefined") {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && typeof active.blur === "function") {
+        active.blur();
+      }
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        requestAnimatedClose();
       }
     };
     const onPopState = () => {
-      onClose();
+      requestAnimatedClose();
     };
     window.history.pushState({ jatextViewOnce: true }, "");
     window.addEventListener("keydown", onKey);
     window.addEventListener("popstate", onPopState);
     return () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("popstate", onPopState);
     };
-  }, [onClose]);
+  }, [requestAnimatedClose]);
 
   if (typeof document === "undefined") return null;
 
   return createPortal(
     <div
-      className="jt-vo-fullscreen-overlay"
+      className={`jt-vo-fullscreen-overlay ${isClosing ? "is-closing" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label="View once message"
@@ -187,7 +213,7 @@ function ViewOnceFullscreenViewer({
         <button
           type="button"
           className="jt-vo-fs-nav-btn"
-          onClick={onClose}
+          onClick={requestAnimatedClose}
           aria-label="Back and close view once message"
         >
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
@@ -212,7 +238,7 @@ function ViewOnceFullscreenViewer({
         <button
           type="button"
           className="jt-vo-fs-nav-btn"
-          onClick={onClose}
+          onClick={requestAnimatedClose}
           aria-label="Close view once message"
         >
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none">

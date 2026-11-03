@@ -42,7 +42,10 @@ export const ForwardedMessageCard = memo(function ForwardedMessageCard({
 
   let sourceBadgeText = "";
   if (context) {
-    if (context.sourceKind === "community") {
+    if (context.sourceKind === "channel") {
+      const cname = context.channelName || context.originalSenderName || "Channel";
+      sourceBadgeText = context.channelVerified ? `Channel · ${cname} ✓` : `Channel · ${cname}`;
+    } else if (context.sourceKind === "community") {
       sourceBadgeText = "JaText Community";
     } else if (context.sourceKind === "group") {
       const liveGroup = store.groups.find((g) => g.id === context.groupId);

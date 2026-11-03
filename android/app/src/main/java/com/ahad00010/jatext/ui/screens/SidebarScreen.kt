@@ -403,6 +403,12 @@ fun SidebarScreen(
                         onOpenAccountSwitcher = { showAccountSwitcher = true },
                         onFullScreenOverlayChange = { settingsSubOverlayOpen = it },
                     )
+                } else if (currentTab == "updates") {
+                    UpdatesTabScreen(
+                        state = state,
+                        vm = vm,
+                        bottomBarClearance = bottomBarListClearance,
+                    )
                 } else {
                     Column(
                         modifier = Modifier

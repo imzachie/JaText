@@ -2160,6 +2160,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         const enc = await prepareOutgoingGroupEncrypted({
           groupId: activeGroupId,
           wireBody: preserved,
+          preserveAtt: existing?.encryptedAtt,
+          preserveStk: existing?.encryptedStk,
           uploadFile: upload,
         });
         if (enc) {
@@ -3272,6 +3274,8 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
         const enc = await prepareOutgoingDmEncrypted({
           receiverId: peerId,
           wireBody: preserved,
+          preserveAtt: existing?.encryptedAtt,
+          preserveStk: existing?.encryptedStk,
           uploadFile: upload,
         });
         if (enc) {

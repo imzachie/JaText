@@ -8,6 +8,7 @@ import {
   type MouseEvent,
 } from "react";
 import { AnimatedModal } from "./AnimatedModal";
+import { UpdatesTabView } from "./UpdatesTabView";
 import { Phone, Video } from "./CallIcons";
 import { ContextMenu } from "./ContextMenu";
 import {
@@ -124,6 +125,8 @@ export function Sidebar({
   onOpenExploreCommunities,
   onCloseExploreCommunities,
   createCommunityRequestNonce = 0,
+  onMobileConversationTap,
+  requestedChannelJump,
   onOpenProfile,
   onOpenSettings,
   onOpenAccountSwitcher,
@@ -134,6 +137,8 @@ export function Sidebar({
   onOpenExploreCommunities?: () => void;
   onCloseExploreCommunities?: () => void;
   createCommunityRequestNonce?: number;
+  onMobileConversationTap?: () => void;
+  requestedChannelJump?: { channelId: string; nonce: number } | null;
   onOpenProfile: (user: JaUser) => void;
   onOpenSettings: () => void;
   onOpenAccountSwitcher?: () => void;
@@ -147,6 +152,16 @@ export function Sidebar({
   const draftsMap = useDraftsMap();
   const storedCallHistory = useCallHistoryEntries();
   const { me, friends, incoming, outgoing, previews, activeChatId, setActiveChatId } = store;
+  const openChatFromSidebar = (id: string) => {
+    onMobileConversationTap?.();
+    store.setActiveGroupId(null);
+    setActiveChatId(id);
+  };
+  const openGroupFromSidebar = (id: string) => {
+    onMobileConversationTap?.();
+    setActiveChatId(null);
+    store.setActiveGroupId(id);
+  };
   const [uncontrolledTab, setUncontrolledTab] = useState<SidebarTab>("chats");
   const tab = controlledTab ?? uncontrolledTab;
   const setTab = (next: SidebarTab) => {
@@ -638,7 +653,8 @@ export function Sidebar({
   }
 
   return (
-    <aside className={`sidebar ${isIosChats ? "ios-bottom-nav-layout" : ""}`}>
+    <aside className={`sidebar ${isIosChats ? "ios-bottom-nav-layout" : ""} ${tab === "updates" ? "is-updates-tab" : ""}`}>
+      {!(isIosChats && tab === "updates") && (
       <header className="sidebar-header">
         <div className="brand">
           <img className="logo-icon" src="/jatext-logo-icon.png" alt="" />
@@ -713,8 +729,9 @@ export function Sidebar({
           )}
         </div>
       </header>
+      )}
 
-      {isIosChats ? (
+      {isIosChats && tab === "updates" ? null : isIosChats ? (
         <h1 className="ios-page-large-title">
           {tab === "updates"
             ? "Updates"
@@ -903,15 +920,13 @@ export function Sidebar({
                           }`}
                           onClick={() => {
                             onCloseExploreCommunities?.();
-                            store.setActiveGroupId(null);
-                            setActiveChatId(OFFICIAL_COMMUNITY_ID);
+                            openChatFromSidebar(OFFICIAL_COMMUNITY_ID);
                           }}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
                               onCloseExploreCommunities?.();
-                              store.setActiveGroupId(null);
-                              setActiveChatId(OFFICIAL_COMMUNITY_ID);
+                              openChatFromSidebar(OFFICIAL_COMMUNITY_ID);
                             }
                           }}
                           onContextMenu={(event) => {
@@ -978,8 +993,7 @@ export function Sidebar({
                         const isOwn = comm.role === "owner" || comm.ownerId === me.id;
                         const openComm = () => {
                           onCloseExploreCommunities?.();
-                          setActiveChatId(null);
-                          store.setActiveGroupId(comm.id);
+                          openGroupFromSidebar(comm.id);
                         };
                         return (
                           <div
@@ -1120,15 +1134,8 @@ export function Sidebar({
       )}
 
       {tab === "updates" && (
-        <div className="sidebar-tab-pane" key="pane-updates">
-          <div className="empty-box" style={{ marginTop: 18 }}>
-            <p>
-              <IosUpdatesStatusIcon size={28} />
-            </p>
-            <p>
-              <strong>Feature is under maintenance!</strong>
-            </p>
-          </div>
+        <div className="sidebar-tab-pane jt-updates-pane-host" key="pane-updates">
+          <UpdatesTabView requestedChannelJump={requestedChannelJump} />
         </div>
       )}
 
@@ -1252,7 +1259,7 @@ export function Sidebar({
                     ? "has-unread"
                     : ""
                 }`}
-                onClick={() => setActiveChatId(OFFICIAL_COMMUNITY_ID)}
+                onClick={() => openChatFromSidebar(OFFICIAL_COMMUNITY_ID)}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -1320,7 +1327,7 @@ export function Sidebar({
                       store.activeGroupId === group.id ? "active" : ""
                     } ${groupUnread > 0 ? "has-unread" : ""}`}
                     key={entry.threadKey}
-                    onClick={() => store.setActiveGroupId(group.id)}
+                    onClick={() => openGroupFromSidebar(group.id)}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -1430,7 +1437,7 @@ export function Sidebar({
                   className={`friend-row ${activeChatId === friend.id ? "active" : ""} ${
                     dmUnread > 0 ? "has-unread" : ""
                   }`}
-                  onClick={() => setActiveChatId(friend.id)}
+                  onClick={() => openChatFromSidebar(friend.id)}
                   onContextMenu={(event) => {
                     if (!isSelfRow) openChatMenu(event, friend);
                   }}
@@ -1606,9 +1613,9 @@ export function Sidebar({
                     className="call-history-row"
                     onClick={() => {
                       if (entry.kind === "group" && liveGroup) {
-                        store.setActiveGroupId(liveGroup.id);
+                        openGroupFromSidebar(liveGroup.id);
                       } else if (liveFriend) {
-                        setActiveChatId(liveFriend.id);
+                        openChatFromSidebar(liveFriend.id);
                       }
                     }}
                   >
@@ -1744,7 +1751,7 @@ export function Sidebar({
                   type="button"
                   className="group-add-row"
                   key={group.id}
-                  onClick={() => store.setActiveGroupId(group.id)}
+                  onClick={() => openGroupFromSidebar(group.id)}
                 >
                   <span>
                     {group.avatarUrl ? (

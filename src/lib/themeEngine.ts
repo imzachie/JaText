@@ -858,6 +858,7 @@ export function applyThemeToDocument(config: JaTextThemeConfig): void {
   root.dataset.jtMode = mode;
   root.dataset.jtGradient = hasGradient ? "true" : "false";
   root.dataset.jtLightAccent = isLightAccent ? "true" : "false";
+  root.style.colorScheme = mode;
   root.style.setProperty("--bg", vars.bg);
   root.style.setProperty("--app-bg-image", vars.bgImage);
   root.style.setProperty("--panel", vars.panel);
