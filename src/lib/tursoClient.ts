@@ -104,10 +104,6 @@ const MUTATION_OPS = new Set([
   "markStatusViewed",
   "toggleStatusLike",
   "saveStatusPrivacyDefault",
-  "createBroadcastChannel",
-  "toggleFollowChannel",
-  "postChannelBroadcast",
-  "reactChannelPost",
 ]);
 
 let inFlightUserMutations = 0;

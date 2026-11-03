@@ -24,9 +24,7 @@ import com.ahad00010.jatext.data.ApkVersionManifest
 import com.ahad00010.jatext.data.BeginTotpSetupResponse
 import com.ahad00010.jatext.data.BlockedUsersResponse
 import com.ahad00010.jatext.data.BootstrapResponse
-import com.ahad00010.jatext.data.BroadcastChannelSummary
 import com.ahad00010.jatext.data.CallHistoryEntry
-import com.ahad00010.jatext.data.ChannelPostsPayload
 import com.ahad00010.jatext.data.ChatFolderSpec
 import com.ahad00010.jatext.data.ChatMessage
 import com.ahad00010.jatext.data.ChatOrganizationResponse
@@ -39,8 +37,8 @@ import com.ahad00010.jatext.data.CommunityMessage
 import com.ahad00010.jatext.data.CommunityPermissions
 import com.ahad00010.jatext.data.CommunityUser
 import com.ahad00010.jatext.data.ConfirmTotpSetupResponse
-import com.ahad00010.jatext.data.CreateChannelResponse
 import com.ahad00010.jatext.data.CreateSoundboardResponse
+import com.ahad00010.jatext.data.CreateStatusPostResponse
 import com.ahad00010.jatext.data.DeviceLinkStatusResponse
 import com.ahad00010.jatext.data.E2EEPlainPayload
 import com.ahad00010.jatext.data.EncryptedBlobDescriptor
@@ -70,6 +68,7 @@ import com.ahad00010.jatext.data.ScheduleMessageResponse
 import com.ahad00010.jatext.data.ScheduledMessageItem
 import com.ahad00010.jatext.data.SecuritySettingsResponse
 import com.ahad00010.jatext.data.SoundboardClip
+import com.ahad00010.jatext.data.StatusSegmentItem
 import com.ahad00010.jatext.data.StickerMedia
 import com.ahad00010.jatext.data.SyncResponse
 import com.ahad00010.jatext.data.SyncedThemePayload
@@ -192,8 +191,6 @@ data class SessionUiState(
     val navPushEpoch: Int = 0,
     val updatesBundle: UpdatesBundlePayload = UpdatesBundlePayload(),
     val updatesLoading: Boolean = false,
-    val requestedChannelJumpId: String? = null,
-    val requestedChannelJumpNonce: Int = 0,
 )
 
 class JaTextSessionViewModel(app: Application) :
@@ -440,6 +437,7 @@ class JaTextSessionViewModel(app: Application) :
                 applyBootstrapState(targetSlotId, activeTok, boot, fromCache = false)
                 ensureE2EEPublishedAndSynced(boot.me, boot.friends, activeTok)
                 refreshScheduledMessages()
+                refreshUpdatesBundle(silent = true)
                 registerFcmDeviceTokenIfAvailable(activeTok)
                 startDeltaSyncLoop()
                 val isOwner = boot.me.username.equals("imzachie", ignoreCase = true) ||
@@ -3319,21 +3317,6 @@ class JaTextSessionViewModel(app: Application) :
         val st = _state.value
         val meId = st.me?.id ?: return
         when (ctx.sourceKind) {
-            "channel" -> {
-                val cid = ctx.channelId ?: return
-                clearActiveTypingSignal()
-                _state.update { prev ->
-                    prev.copy(
-                        activeChatId = null,
-                        activeGroupId = null,
-                        exploreCommunitiesOpen = false,
-                        sidebarTab = "updates",
-                        requestedChannelJumpId = cid,
-                        requestedChannelJumpNonce = prev.requestedChannelJumpNonce + 1,
-                    )
-                }
-                refreshUpdatesBundle(silent = true)
-            }
             "community" -> openCommunityChat(highlightMessageId = ctx.originalMessageId)
             "group" -> {
                 val gid = ctx.groupId ?: return
@@ -5800,7 +5783,7 @@ class JaTextSessionViewModel(app: Application) :
         }
 
     /* ======================================================================
-       WhatsApp iOS "Updates" Tab: Status, Privacy, Story Engagement & Channels
+       Updates Tab: 24-Hour Status Stories, Per-Post Privacy & Story Likes
        ====================================================================== */
 
     fun refreshUpdatesBundle(silent: Boolean = false) {
@@ -5837,7 +5820,6 @@ class JaTextSessionViewModel(app: Application) :
         builtinAudioDurationMs: Int,
         caption: String,
         bgColor: String,
-        mediaSource: String,
         privacyType: String,
         excludedIds: List<String>,
         includedIds: List<String>,
@@ -5881,7 +5863,7 @@ class JaTextSessionViewModel(app: Application) :
                         }
                     }
                     if (durMs > 30_000) {
-                        throw IllegalStateException("Status audio clips are strictly capped at 30 seconds.")
+                        throw IllegalStateException("Status audio clips must be 30 seconds or shorter.")
                     }
                     val audMeta = withContext(Dispatchers.IO) { readAttachmentBytes(audioUri, null) }
                         ?: throw IllegalStateException("Could not read selected audio clip.")
@@ -5902,7 +5884,7 @@ class JaTextSessionViewModel(app: Application) :
                     resolvedAudioDur = builtinAudioDurationMs.coerceIn(0, 30_000)
                 }
 
-                TursoApiClient.rpcRaw(
+                val res = TursoApiClient.rpc<CreateStatusPostResponse>(
                     op = "createStatusPost",
                     args = mapOf(
                         "mediaUrl" to uploadedMediaUrl,
@@ -5912,7 +5894,6 @@ class JaTextSessionViewModel(app: Application) :
                         "audioUrl" to uploadedAudioUrl,
                         "audioTitle" to resolvedAudioTitle,
                         "audioDurationMs" to resolvedAudioDur,
-                        "mediaSource" to mediaSource,
                         "privacyType" to privacyType,
                         "excludedUserIds" to if (privacyType == "CONTACTS_EXCEPT") excludedIds else emptyList<String>(),
                         "includedUserIds" to if (privacyType == "ONLY_SHARE_WITH") includedIds else emptyList<String>(),
@@ -5921,6 +5902,47 @@ class JaTextSessionViewModel(app: Application) :
                     ),
                     token = token,
                 )
+
+                val now = System.currentTimeMillis()
+                val me = _state.value.me
+                val createdSeg = res.segment ?: StatusSegmentItem(
+                    id = res.id.ifBlank { "local_$now" },
+                    userId = me?.id.orEmpty(),
+                    mediaUrl = uploadedMediaUrl,
+                    mediaType = resolvedMediaType,
+                    caption = caption.trim(),
+                    bgColor = bgColor,
+                    audioUrl = uploadedAudioUrl,
+                    audioTitle = resolvedAudioTitle,
+                    audioDurationMs = resolvedAudioDur,
+                    privacyType = privacyType,
+                    groupId = if (privacyType == "GROUP_EXCLUSIVE") groupId else null,
+                    mentionedUserIds = mentionedIds,
+                    viewed = true,
+                    liked = false,
+                    viewCount = 0,
+                    likeCount = 0,
+                    createdAt = if (res.createdAt > 0L) res.createdAt else now,
+                    expiresAt = if (res.expiresAt > 0L) res.expiresAt else (now + 24L * 3600L * 1000L),
+                )
+
+                _state.update { cur ->
+                    val b = cur.updatesBundle
+                    val curSegs = b.myStatus.segments
+                    val nextSegs = if (curSegs.any { it.id == createdSeg.id }) curSegs else curSegs + createdSeg
+                    val nextMyStatus = b.myStatus.copy(
+                        userId = me?.id ?: b.myStatus.userId,
+                        displayName = me?.displayName ?: b.myStatus.displayName,
+                        username = me?.username ?: b.myStatus.username,
+                        avatarColor = me?.avatarColor ?: b.myStatus.avatarColor,
+                        avatarUrl = me?.avatarUrl ?: b.myStatus.avatarUrl,
+                        segments = nextSegs,
+                        latestAt = createdSeg.createdAt,
+                    )
+                    cur.copy(updatesBundle = b.copy(myStatus = nextMyStatus))
+                }
+
+                showToast("Status posted!")
                 refreshUpdatesBundle(silent = true)
                 onSuccess()
             } catch (e: Throwable) {
@@ -5931,6 +5953,18 @@ class JaTextSessionViewModel(app: Application) :
 
     fun deleteStatusSegment(statusId: String) {
         val token = currentAuthToken() ?: return
+        _state.update { cur ->
+            val b = cur.updatesBundle
+            val nextSegs = b.myStatus.segments.filterNot { it.id == statusId }
+            cur.copy(
+                updatesBundle = b.copy(
+                    myStatus = b.myStatus.copy(
+                        segments = nextSegs,
+                        latestAt = nextSegs.lastOrNull()?.createdAt ?: 0L,
+                    ),
+                ),
+            )
+        }
         viewModelScope.launch {
             runCatching {
                 TursoApiClient.rpcRaw("deleteStatusPost", mapOf("statusId" to statusId), token)
@@ -5998,8 +6032,8 @@ class JaTextSessionViewModel(app: Application) :
                     "saveStatusPrivacyDefault",
                     mapOf(
                         "privacyType" to privacyType,
-                        "excludedUserIds" to excludedIds,
-                        "includedUserIds" to includedIds,
+                        "excludedIds" to excludedIds,
+                        "includedIds" to includedIds,
                         "groupId" to groupId,
                     ),
                     token,
@@ -6031,157 +6065,6 @@ class JaTextSessionViewModel(app: Application) :
                 )
                 showToast("Sent reply")
             }
-        }
-    }
-
-    fun createNewBroadcastChannel(
-        name: String,
-        description: String,
-        avatarColor: String,
-        isPremium: Boolean,
-        monthlyPriceLabel: String,
-        onCreated: (BroadcastChannelSummary) -> Unit,
-        onError: (String) -> Unit,
-    ) {
-        val token = currentAuthToken() ?: run {
-            onError("Not signed in.")
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val res = TursoApiClient.rpc<CreateChannelResponse>(
-                    op = "createBroadcastChannel",
-                    args = mapOf(
-                        "name" to name.trim(),
-                        "description" to description.trim(),
-                        "avatarColor" to avatarColor,
-                        "category" to "New",
-                        "isPremium" to isPremium,
-                        "monthlyPriceLabel" to if (isPremium) monthlyPriceLabel else "",
-                    ),
-                    token = token,
-                )
-                val now = System.currentTimeMillis()
-                val created = BroadcastChannelSummary(
-                    id = res.id,
-                    name = name.trim(),
-                    handle = res.handle,
-                    description = description.trim(),
-                    avatarColor = avatarColor,
-                    verified = false,
-                    category = "New",
-                    isPremium = isPremium,
-                    monthlyPriceLabel = if (isPremium) monthlyPriceLabel else "",
-                    followerCount = 1,
-                    postCount = 1,
-                    latestSnippet = description.trim().ifBlank { "Welcome to ${name.trim()}!" },
-                    latestMediaType = "text",
-                    latestPostAt = now,
-                    createdAt = now,
-                    followed = true,
-                    unreadCount = 0,
-                    isOwner = true,
-                )
-                refreshUpdatesBundle(silent = true)
-                onCreated(created)
-            } catch (e: Throwable) {
-                onError(e.message ?: "Could not create channel.")
-            }
-        }
-    }
-
-    fun toggleFollowBroadcastChannel(channelId: String) {
-        val token = currentAuthToken() ?: return
-        _state.update { cur ->
-            val b = cur.updatesBundle
-            val inFollowed = b.followedChannels.firstOrNull { it.id == channelId }
-            val nextBundle = if (inFollowed != null) {
-                val nextFol = b.followedChannels.filterNot { it.id == channelId }
-                val nextDir = b.directoryChannels.map { c ->
-                    if (c.id == channelId) c.copy(followed = false, followerCount = (c.followerCount - 1).coerceAtLeast(0)) else c
-                }
-                b.copy(
-                    followedChannels = nextFol,
-                    followedChannelsCount = nextFol.size,
-                    directoryChannels = nextDir,
-                )
-            } else {
-                val dirItem = b.directoryChannels.firstOrNull { it.id == channelId }
-                if (dirItem != null) {
-                    val promoted = dirItem.copy(followed = true, followerCount = dirItem.followerCount + 1, unreadCount = 0)
-                    val nextFol = listOf(promoted) + b.followedChannels
-                    b.copy(
-                        followedChannels = nextFol,
-                        followedChannelsCount = nextFol.size,
-                        directoryChannels = b.directoryChannels.map { c -> if (c.id == channelId) promoted else c },
-                    )
-                } else {
-                    b
-                }
-            }
-            cur.copy(updatesBundle = nextBundle)
-        }
-        viewModelScope.launch {
-            runCatching {
-                TursoApiClient.rpcRaw("toggleFollowChannel", mapOf("channelId" to channelId), token)
-                refreshUpdatesBundle(silent = true)
-            }
-        }
-    }
-
-    fun loadBroadcastChannelPosts(
-        channelId: String,
-        onLoaded: (ChannelPostsPayload) -> Unit,
-    ) {
-        val token = currentAuthToken() ?: return
-        viewModelScope.launch {
-            runCatching {
-                val res = TursoApiClient.rpc<ChannelPostsPayload>(
-                    op = "getChannelPosts",
-                    args = mapOf("channelId" to channelId),
-                    token = token,
-                )
-                onLoaded(res)
-            }
-        }
-    }
-
-    fun publishChannelBroadcast(
-        channelId: String,
-        body: String,
-        onDone: () -> Unit,
-    ) {
-        val token = currentAuthToken() ?: return
-        val clean = body.trim()
-        if (clean.isEmpty()) return
-        viewModelScope.launch {
-            runCatching {
-                TursoApiClient.rpcRaw(
-                    "postChannelBroadcast",
-                    mapOf("channelId" to channelId, "body" to clean),
-                    token,
-                )
-                refreshUpdatesBundle(silent = true)
-            }
-            onDone()
-        }
-    }
-
-    fun reactToChannelBroadcast(
-        postId: String,
-        emoji: String,
-        onDone: () -> Unit,
-    ) {
-        val token = currentAuthToken() ?: return
-        viewModelScope.launch {
-            runCatching {
-                TursoApiClient.rpcRaw(
-                    "reactChannelPost",
-                    mapOf("postId" to postId, "emoji" to emoji),
-                    token,
-                )
-            }
-            onDone()
         }
     }
 }
