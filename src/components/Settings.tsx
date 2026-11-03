@@ -263,6 +263,7 @@ export function SettingsModal({
   const [youSearchQuery, setYouSearchQuery] = useState("");
   const [customStatusModalOpen, setCustomStatusModalOpen] = useState(false);
   const [customStatusDraft, setCustomStatusDraft] = useState(me?.customStatus ?? "");
+  const [youStatusExpanded, setYouStatusExpanded] = useState(false);
   const [autoStartQrScanner, setAutoStartQrScanner] = useState(false);
   const youSearchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -713,10 +714,18 @@ export function SettingsModal({
                     {currentUser.customStatus?.trim() ? (
                       <button
                         type="button"
-                        className="you-roadmap-status-bubble"
+                        className={`you-roadmap-status-bubble ${
+                          youStatusExpanded ? "is-expanded" : ""
+                        }`}
                         onClick={() => {
-                          setCustomStatusDraft(currentUser.customStatus ?? "");
-                          setCustomStatusModalOpen(true);
+                          if ((currentUser.customStatus?.trim().length ?? 0) > 44 && !youStatusExpanded) {
+                            setYouStatusExpanded(true);
+                          } else if (youStatusExpanded) {
+                            setYouStatusExpanded(false);
+                          } else {
+                            setCustomStatusDraft(currentUser.customStatus ?? "");
+                            setCustomStatusModalOpen(true);
+                          }
                         }}
                       >
                         <span className="you-roadmap-status-bubble-pill">
@@ -1259,7 +1268,7 @@ export function SettingsModal({
                     Custom status
                     <input
                       value={customStatus}
-                      maxLength={60}
+                      maxLength={200}
                       placeholder="What are you up to?"
                       onChange={(event) => setCustomStatus(event.target.value)}
                     />
@@ -1776,15 +1785,18 @@ export function SettingsModal({
             <p className="muted small" style={{ margin: 0 }}>
               Appears as a status bubble above your avatar.
             </p>
-            <input
-              type="text"
+            <textarea
               className="you-custom-status-input"
-              maxLength={80}
+              rows={3}
+              maxLength={200}
               value={customStatusDraft}
               onChange={(e) => setCustomStatusDraft(e.target.value)}
               placeholder="What's on your mind?"
               autoFocus
             />
+            <div className="muted small" style={{ textAlign: "right", marginTop: -6 }}>
+              {customStatusDraft.length} / 200
+            </div>
             <div className="you-custom-status-presets">
               {["Available", "Busy", "Studying", "At work", "In a call", "Gaming"].map(
                 (preset) => (

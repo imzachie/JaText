@@ -1,4 +1,4 @@
-import type { GroupMember, GroupMessage } from "./types";
+import type { GroupMember, GroupMessage, GroupReadReceipt } from "./types";
 
 export const GROUP_SEEN_SIGNAL_PREFIX = "__JATEXT_CALL_SIG__:SEEN:";
 
@@ -59,6 +59,7 @@ export function computeGroupSeenMap(
   visibleMessages: GroupMessage[],
   members: GroupMember[],
   myUserId: string | undefined,
+  readReceipts?: GroupReadReceipt[],
 ): {
   myCursorMessageId: string | null;
   mySeenUpToTs: number;
@@ -79,6 +80,28 @@ export function computeGroupSeenMap(
       avatarColor: m.avatarColor,
       avatarUrl: m.avatarUrl,
     });
+  }
+
+  if (Array.isArray(readReceipts)) {
+    for (const rr of readReceipts) {
+      if (!rr || !rr.userId || rr.lastReadAt <= 0) continue;
+      if (!memberInfoFallback.has(rr.userId)) {
+        memberInfoFallback.set(rr.userId, {
+          id: rr.userId,
+          displayName: rr.displayName || rr.username || "Member",
+          username: rr.username || "member",
+          avatarColor: rr.avatarColor || "black",
+          avatarUrl: rr.avatarUrl,
+        });
+      }
+      const prev = memberSeenTs.get(rr.userId) ?? 0;
+      if (rr.lastReadAt > prev) {
+        memberSeenTs.set(rr.userId, rr.lastReadAt);
+      }
+      if (myUserId && rr.userId === myUserId && rr.lastReadAt > mySeenUpToTs) {
+        mySeenUpToTs = rr.lastReadAt;
+      }
+    }
   }
 
   for (const msg of rawGroupMessages) {

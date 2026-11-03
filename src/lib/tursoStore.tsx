@@ -279,6 +279,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     communityMessagesQuery,
     communityTypingUsers,
     groupsQuery,
+    exploreCommunitiesQuery,
     activeMessagesQuery,
     hasMoreOlderMessages,
     loadingOlderMessages,
@@ -343,6 +344,9 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     restoreCommunityForMeMut,
     unsendCommunityMut,
     createGroupMut,
+    createCommunityMut,
+    joinCommunityMut,
+    refreshExploreCommunitiesMut,
     addGroupMembersMut,
     sendGroupMessageMut,
     forwardGroupMut,
@@ -354,6 +358,8 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     editGroupMut,
     renameGroupMut,
     setGroupAvatarMut,
+    setGroupAvatarColorMut,
+    setGroupDescriptionMut,
     setGroupMemberRoleMut,
     setGroupMutedMut,
     removeGroupMemberMut,
@@ -2278,6 +2284,58 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     },
     [setGroupAvatarMut, upload],
   );
+  const setGroupAvatarColor = useCallback<NonNullable<JaTextStore["setGroupAvatarColor"]>>(
+    async (groupId, avatarColor) => {
+      await setGroupAvatarColorMut({ groupId, avatarColor });
+    },
+    [setGroupAvatarColorMut],
+  );
+  const setGroupDescription = useCallback<NonNullable<JaTextStore["setGroupDescription"]>>(
+    async (groupId, description) => {
+      await setGroupDescriptionMut({ groupId, description });
+    },
+    [setGroupDescriptionMut],
+  );
+  const createCommunity = useCallback<NonNullable<JaTextStore["createCommunity"]>>(
+    async (input) => {
+      const normalized = input.avatarFile
+        ? await normalizeImageFileForUpload(input.avatarFile, 512)
+        : null;
+      const avatarUrl = normalized ? await upload(normalized) : null;
+      const cid = await createCommunityMut({
+        name: input.name,
+        description: input.description,
+        avatarColor: input.avatarColor ?? "purple",
+        avatarUrl,
+      });
+      const state = getActiveE2EEState();
+      if (state) {
+        await sendGroupMessageMut({
+          groupId: cid,
+          body: serializeIdentitySignal(state.primaryIdentity),
+        }).catch(() => undefined);
+      }
+      return cid;
+    },
+    [createCommunityMut, sendGroupMessageMut, upload],
+  );
+  const joinCommunity = useCallback<NonNullable<JaTextStore["joinCommunity"]>>(
+    async (communityId) => {
+      const cid = await joinCommunityMut(communityId);
+      const state = getActiveE2EEState();
+      if (state) {
+        await sendGroupMessageMut({
+          groupId: cid,
+          body: serializeIdentitySignal(state.primaryIdentity),
+        }).catch(() => undefined);
+      }
+      return cid;
+    },
+    [joinCommunityMut, sendGroupMessageMut],
+  );
+  const refreshExploreCommunities = useCallback<
+    NonNullable<JaTextStore["refreshExploreCommunities"]>
+  >(async () => refreshExploreCommunitiesMut(), [refreshExploreCommunitiesMut]);
   const setGroupMemberRole = useCallback<JaTextStore["setGroupMemberRole"]>(
     async (groupId, userId, role) => {
       await setGroupMemberRoleMut({
@@ -4338,6 +4396,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       groupDetails,
       groupMessages,
       groupMessagesReady,
+      exploreCommunities: exploreCommunitiesQuery,
       hasMoreOlderGroupMessages,
       loadingOlderGroupMessages,
       loadOlderGroupMessages,
@@ -4409,6 +4468,11 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       favoriteGroupStickerFromMessage,
       renameGroup,
       setGroupAvatar,
+      setGroupAvatarColor,
+      setGroupDescription,
+      createCommunity,
+      joinCommunity,
+      refreshExploreCommunities,
       setGroupMemberRole,
       setGroupMuted,
       removeGroupMember,
@@ -4459,7 +4523,13 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       communityTypingUsers,
       communityUnreadCount,
       createCommunityPoll,
+      createCommunity,
       createGroup,
+      joinCommunity,
+      refreshExploreCommunities,
+      exploreCommunitiesQuery,
+      setGroupAvatarColor,
+      setGroupDescription,
       deleteCommunityMessage,
       deleteCommunityMessageForMe,
       deleteConversationForMe,

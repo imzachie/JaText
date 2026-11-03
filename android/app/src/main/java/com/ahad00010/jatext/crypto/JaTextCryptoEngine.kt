@@ -16,6 +16,7 @@ import com.ahad00010.jatext.data.GroupEpochWrapEntry
 import com.ahad00010.jatext.data.GroupKeySignalPacket
 import com.ahad00010.jatext.data.GroupMember
 import com.ahad00010.jatext.data.GroupMessage
+import com.ahad00010.jatext.data.GroupReadReceipt
 import com.ahad00010.jatext.data.GroupSeenReader
 import com.ahad00010.jatext.data.JaTextJson
 import com.ahad00010.jatext.data.MessageE2EEProof
@@ -177,6 +178,8 @@ object JaTextCryptoEngine {
     private val decryptedMediaFileCache = ConcurrentHashMap<String, File>()
     private val peerBundlesByUserId = ConcurrentHashMap<String, MutableList<PublicIdentityBundle>>()
     private val groupEpochSecrets = ConcurrentHashMap<String, String>()
+    private val communitySeedsByGroupId = ConcurrentHashMap<String, String>()
+    private val latestSeenCursorTsByGroupAndUser = ConcurrentHashMap<String, ConcurrentHashMap<String, Long>>()
     private val publishedSessionKeyIds: MutableSet<String> =
         Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
@@ -967,8 +970,9 @@ object JaTextCryptoEngine {
     ): DecryptedWireResult? = withContext(Dispatchers.Default) {
         val trimmedWire = wireBody.trim()
         decryptedByWireCache[trimmedWire]?.let { return@withContext it }
-        if (messageId.isNotBlank()) {
-            decryptedByMsgIdCache[messageId]?.let { return@withContext it }
+        val dmMsgCacheKey = if (messageId.isNotBlank()) "$messageId:${trimmedWire.length}:${trimmedWire.takeLast(32)}" else ""
+        if (dmMsgCacheKey.isNotEmpty()) {
+            decryptedByMsgIdCache[dmMsgCacheKey]?.let { return@withContext it }
         }
 
         val markerIdx = trimmedWire.indexOf(E2EE_WIRE_MARKER)
@@ -1181,7 +1185,7 @@ object JaTextCryptoEngine {
             )
         )
         decryptedByWireCache[trimmedWire] = res
-        if (messageId.isNotBlank()) decryptedByMsgIdCache[messageId] = res
+        if (dmMsgCacheKey.isNotEmpty()) decryptedByMsgIdCache[dmMsgCacheKey] = res
         res
     }
 
@@ -1196,10 +1200,33 @@ object JaTextCryptoEngine {
             .split(",")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-        if (existingList.contains(clean)) return false
-        val merged = (listOf(clean) + existingList).distinct().joinToString(",")
+        if (existingList.firstOrNull() == clean) return false
+        val merged = (listOf(clean) + existingList.filter { it != clean }).distinct().joinToString(",")
         groupEpochSecrets[mapKey] = merged
         return true
+    }
+
+    fun registerCommunitySeedEpoch(
+        context: Context,
+        myUserId: String,
+        groupId: String,
+        communityKeySeed: String?,
+    ) {
+        val cleanSeed = communityKeySeed?.trim().orEmpty()
+        if (groupId.isBlank() || cleanSeed.length < 16) return
+        communitySeedsByGroupId[groupId] = cleanSeed
+        try {
+            val derived = hkdfSha256(
+                b64UrlDecode(cleanSeed),
+                "JaText-Community-Salt-v1".toByteArray(Charsets.UTF_8),
+                "JaText-Community-EpochSecret-v1|$groupId|1",
+            )
+            val secretB64 = b64UrlEncode(derived)
+            if (addGroupEpochCandidateSecret(groupId, 1, secretB64) && myUserId.isNotBlank()) {
+                persistGroupEpochMap(context, myUserId)
+            }
+        } catch (_: Throwable) {
+        }
     }
 
     private fun tryIngestIdentitySignal(senderId: String, rawBody: String) {
@@ -1307,6 +1334,16 @@ object JaTextCryptoEngine {
         forceRedistribute: Boolean = false,
         rotateEpoch: Boolean = false,
     ): Pair<Int, String> = withContext(Dispatchers.Default) {
+        communitySeedsByGroupId[groupId]?.let { commSeed ->
+            registerCommunitySeedEpoch(context, myUserId, groupId, commSeed)
+            val seeded = groupEpochSecrets["$groupId:1"]
+                ?.split(",")
+                ?.firstOrNull { it.isNotBlank() }
+                ?.trim()
+            if (!seeded.isNullOrBlank() && !rotateEpoch) {
+                return@withContext 1 to seeded
+            }
+        }
         val existing = getLatestKnownGroupEpoch(groupId)
         if (existing != null && !forceRedistribute && !rotateEpoch) {
             return@withContext existing
@@ -1593,8 +1630,9 @@ object JaTextCryptoEngine {
     ): DecryptedWireResult? = withContext(Dispatchers.Default) {
         val trimmed = wireBody.trim()
         decryptedByWireCache[trimmed]?.let { return@withContext it }
-        if (messageId.isNotBlank()) {
-            decryptedByMsgIdCache[messageId]?.let { return@withContext it }
+        val grpMsgCacheKey = if (messageId.isNotBlank()) "$messageId:${trimmed.length}:${trimmed.takeLast(32)}" else ""
+        if (grpMsgCacheKey.isNotEmpty()) {
+            decryptedByMsgIdCache[grpMsgCacheKey]?.let { return@withContext it }
         }
         val markerIdx = trimmed.indexOf(E2EE_WIRE_MARKER)
         if (markerIdx < 0) return@withContext null
@@ -1606,6 +1644,14 @@ object JaTextCryptoEngine {
         }
         if (env.v != 1 || env.c != "grp") return@withContext null
         var rawSecretEntry = groupEpochSecrets["$groupId:${env.ep}"]
+        if (rawSecretEntry == null && env.ep == 1) {
+            communitySeedsByGroupId[groupId]?.let { commSeed ->
+                if (context != null) {
+                    registerCommunitySeedEpoch(context, myUserId, groupId, commSeed)
+                }
+                rawSecretEntry = groupEpochSecrets["$groupId:1"]
+            }
+        }
         if (rawSecretEntry == null && context != null && myUserId.isNotBlank() && token.isNotBlank()) {
             trySelfHealKeyringOnMiss(context, myUserId, token)
             tryPullGroupEpochKeysFromServer(context, myUserId, groupId, token)
@@ -1659,7 +1705,7 @@ object JaTextCryptoEngine {
                     )
                 )
                 decryptedByWireCache[trimmed] = res
-                if (messageId.isNotBlank()) decryptedByMsgIdCache[messageId] = res
+                if (grpMsgCacheKey.isNotEmpty()) decryptedByMsgIdCache[grpMsgCacheKey] = res
                 return@withContext res
             } catch (_: Throwable) {
             }
@@ -2075,6 +2121,7 @@ object JaTextCryptoEngine {
         rawMessages: List<GroupMessage>,
         members: List<GroupMember> = emptyList(),
         token: String = "",
+        readReceipts: List<GroupReadReceipt> = emptyList(),
     ): GroupHydrationOutcome {
         for (m in rawMessages) {
             val raw = m.rawWireBody ?: m.body
@@ -2111,6 +2158,11 @@ object JaTextCryptoEngine {
             avatarUrl: String?,
         ) {
             if (uid.isBlank() || seenUpToTs <= 0L) return
+            if (groupId.isNotBlank()) {
+                val perGrp = latestSeenCursorTsByGroupAndUser.getOrPut(groupId) { ConcurrentHashMap() }
+                val prev = perGrp[uid] ?: 0L
+                if (seenUpToTs > prev) perGrp[uid] = seenUpToTs
+            }
             val existing = cursorsByUser[uid]
             if (existing == null || seenUpToTs >= existing.seenUpToTs) {
                 cursorsByUser[uid] = CursorMeta(
@@ -2123,6 +2175,34 @@ object JaTextCryptoEngine {
                     fallbackAvatarUrl = avatarUrl,
                 )
             }
+        }
+
+        // Seed from previously observed cursors for this group + server `readReceipts`
+        latestSeenCursorTsByGroupAndUser[groupId]?.forEach { (uid, tsVal) ->
+            val mem = members.firstOrNull { it.id == uid }
+            recordSeenCursor(
+                uid = uid,
+                seenUpToTs = tsVal,
+                seenAt = tsVal,
+                name = mem?.displayName.orEmpty(),
+                username = mem?.username.orEmpty(),
+                color = mem?.avatarColor.orEmpty().ifBlank { "black" },
+                avatarUrl = mem?.avatarUrl,
+            )
+        }
+        for (rr in readReceipts) {
+            if (rr.userId == myUserId) {
+                mySeenUpToTs = maxOf(mySeenUpToTs, rr.lastReadAt)
+            }
+            recordSeenCursor(
+                uid = rr.userId,
+                seenUpToTs = rr.lastReadAt,
+                seenAt = rr.lastReadAt,
+                name = rr.displayName,
+                username = rr.username,
+                color = rr.avatarColor,
+                avatarUrl = rr.avatarUrl,
+            )
         }
 
         val firstPass = ArrayList<GroupMessage>(rawMessages.size)
@@ -2384,6 +2464,74 @@ object JaTextCryptoEngine {
             myCursorMessageId = myCursorMsgId,
             mySeenUpToTs = mySeenUpToTs,
         )
+    }
+
+    fun recomputeGroupSeenMap(
+        groupId: String,
+        myUserId: String,
+        visibleMessages: List<GroupMessage>,
+        members: List<GroupMember>,
+        readReceipts: List<GroupReadReceipt> = emptyList(),
+    ): Map<String, List<GroupSeenReader>> {
+        val candidateVisible = visibleMessages.filter {
+            it.unsentAt == null && !it.id.startsWith("pending-") && parseWallpaperSignal(it.body, it.attachmentUrl) == null
+        }
+        if (candidateVisible.isEmpty()) return emptyMap()
+
+        val perGrp = latestSeenCursorTsByGroupAndUser.getOrPut(groupId) { ConcurrentHashMap() }
+        val fallbackByUid = HashMap<String, GroupReadReceipt>()
+        for (rr in readReceipts) {
+            if (rr.userId.isBlank() || rr.lastReadAt <= 0L) continue
+            fallbackByUid[rr.userId] = rr
+            val prev = perGrp[rr.userId] ?: 0L
+            if (rr.lastReadAt > prev) perGrp[rr.userId] = rr.lastReadAt
+        }
+        for (m in candidateVisible) {
+            if (m.senderId.isNotBlank() && m.createdAt > 0L) {
+                val prev = perGrp[m.senderId] ?: 0L
+                if (m.createdAt > prev) perGrp[m.senderId] = m.createdAt
+                if (!fallbackByUid.containsKey(m.senderId)) {
+                    fallbackByUid[m.senderId] = GroupReadReceipt(
+                        userId = m.senderId,
+                        lastReadAt = m.createdAt,
+                        displayName = m.senderName,
+                        username = m.senderUsername,
+                        avatarColor = m.senderAvatarColor,
+                        avatarUrl = m.senderAvatarUrl,
+                    )
+                }
+            }
+        }
+
+        val memberById = members.associateBy { it.id }
+        val out = HashMap<String, MutableList<GroupSeenReader>>()
+        for ((uid, seenUpToTs) in perGrp.entries) {
+            if (uid == myUserId || seenUpToTs <= 0L) continue
+            var targetMsg: GroupMessage? = null
+            for (i in candidateVisible.indices.reversed()) {
+                val cand = candidateVisible[i]
+                if (cand.createdAt <= seenUpToTs) {
+                    targetMsg = cand
+                    break
+                }
+            }
+            if (targetMsg == null || targetMsg.senderId == uid) continue
+            val mem = memberById[uid]
+            val fb = fallbackByUid[uid]
+            val reader = GroupSeenReader(
+                id = uid,
+                displayName = mem?.displayName?.ifBlank { null } ?: fb?.displayName?.ifBlank { null } ?: "Member",
+                username = mem?.username?.ifBlank { null } ?: fb?.username?.ifBlank { null } ?: "member",
+                avatarColor = mem?.avatarColor?.ifBlank { null } ?: fb?.avatarColor?.ifBlank { null } ?: "black",
+                avatarUrl = (mem?.avatarUrl ?: fb?.avatarUrl)?.takeIf { it.isNotBlank() },
+                seenAt = seenUpToTs,
+            )
+            out.getOrPut(targetMsg.id) { mutableListOf() }.add(reader)
+        }
+        for ((_, list) in out) {
+            list.sortByDescending { it.seenAt }
+        }
+        return out
     }
 
     suspend fun hydrateGroupMessages(

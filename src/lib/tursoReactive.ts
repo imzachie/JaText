@@ -24,6 +24,7 @@ import {
   prewarmDecryptedDmBatch,
   prewarmDecryptedGroupBatch,
 } from "./e2ee/messagePipeline";
+import { registerCommunitySeedEpoch } from "./e2ee/keystore";
 import { removeMessageFromConversationCache } from "./chatCache";
 import { ingestServerChatOrganization, type ChatOrganizationState } from "./chatOrganization";
 import { isAuthorizedIosChatsRuntime } from "./iosDetection";
@@ -42,10 +43,12 @@ import type {
   ChatTypingUser,
   CommunityMessage,
   CommunityUser,
+  ExploreCommunitySummary,
   FriendActivity,
   FriendRequest,
   GroupDetails,
   GroupMessage,
+  GroupReadReceipt,
   GroupSummary,
   JaUser,
   PollVoter,
@@ -71,6 +74,7 @@ interface BootstrapResponse {
   communityMessages: CommunityMessage[];
   communityHasMore?: boolean;
   groups: GroupSummary[];
+  exploreCommunities?: ExploreCommunitySummary[];
   hasRemoteE2EEVault: boolean;
   remoteVaultKeyId: string | null;
   openedViewOnceIds?: string[];
@@ -93,6 +97,8 @@ interface SyncResponse {
   changedGroupMessages?: GroupMessage[];
   changedCommunityMessages?: CommunityMessage[];
   groups?: GroupSummary[];
+  exploreCommunities?: ExploreCommunitySummary[];
+  groupReadReceipts?: GroupReadReceipt[];
   stickers?: {
     stickerFavorites: StickerMedia[];
     recentStickers: StickerMedia[];
@@ -204,6 +210,9 @@ export function useTursoReactiveSession(
   >(undefined);
   const [communityTypingUsers, setCommunityTypingUsers] = useState<ChatTypingUser[]>([]);
   const [groupsQuery, setGroupsQuery] = useState<GroupSummary[] | undefined>(undefined);
+  const [exploreCommunitiesQuery, setExploreCommunitiesQuery] = useState<ExploreCommunitySummary[]>(
+    [],
+  );
   const [activeMessagesQuery, setActiveMessagesQuery] = useState<ChatMessage[] | undefined>(
     undefined,
   );
@@ -277,6 +286,7 @@ export function useTursoReactiveSession(
     setCommunityMessagesQuery(undefined);
     setCommunityTypingUsers([]);
     setGroupsQuery(undefined);
+    setExploreCommunitiesQuery([]);
     setActiveMessagesQuery(undefined);
     setGroupDetailsQuery(undefined);
     setGroupMessagesQuery(undefined);
@@ -313,7 +323,13 @@ export function useTursoReactiveSession(
       ),
     );
     setHasMoreOlderCommunityMessages(Boolean(boot.communityHasMore));
+    for (const grp of boot.groups ?? []) {
+      if (grp.communityKeySeed) {
+        void registerCommunitySeedEpoch(grp.id, grp.communityKeySeed);
+      }
+    }
     setGroupsQuery(boot.groups);
+    setExploreCommunitiesQuery(boot.exploreCommunities ?? []);
     setServerHasRemoteVault(Boolean(boot.hasRemoteE2EEVault));
     setServerRemoteVaultKeyId(boot.remoteVaultKeyId);
     ingestServerOpenedViewOnceIds(boot.openedViewOnceIds);
@@ -491,7 +507,7 @@ export function useTursoReactiveSession(
           { groupId: activeGroupId },
           { slotId },
         ),
-        tursoRpc<{ messages: GroupMessage[]; hasMore?: boolean }>(
+        tursoRpc<{ messages: GroupMessage[]; hasMore?: boolean; readReceipts?: GroupReadReceipt[] }>(
           "listGroupMessages",
           { groupId: activeGroupId },
           { slotId },
@@ -499,12 +515,21 @@ export function useTursoReactiveSession(
       ])
         .then(async ([detRes, msgRes]) => {
           if (cancelled) return;
+          if (detRes.details?.communityKeySeed) {
+            await registerCommunitySeedEpoch(activeGroupId, detRes.details.communityKeySeed);
+          }
           const visible = (msgRes.messages ?? []).filter(
             (m) => !deletedForMeIdsRef.current.has(m.id),
           );
           await prewarmDecryptedGroupBatch(visible, activeGroupId);
           if (cancelled) return;
-          setGroupDetailsQuery(detRes.details);
+          const hydratedDetails = detRes.details
+            ? {
+                ...detRes.details,
+                readReceipts: msgRes.readReceipts ?? detRes.details.readReceipts ?? [],
+              }
+            : null;
+          setGroupDetailsQuery(hydratedDetails);
           setGroupMessagesQuery(
             visible.filter((m) => !deletedForMeIdsRef.current.has(m.id)),
           );
@@ -778,9 +803,28 @@ export function useTursoReactiveSession(
       }
       if (res.groups) {
         const nextGroups = res.groups;
+        for (const grp of nextGroups) {
+          if (grp.communityKeySeed) {
+            void registerCommunitySeedEpoch(grp.id, grp.communityKeySeed);
+          }
+        }
         setGroupsQuery((prev) =>
           prev && sameJsonValue(prev, nextGroups) ? prev : nextGroups,
         );
+      }
+      if (res.exploreCommunities) {
+        const nextExplore = res.exploreCommunities;
+        setExploreCommunitiesQuery((prev) =>
+          sameJsonValue(prev, nextExplore) ? prev : nextExplore,
+        );
+      }
+      if (res.groupReadReceipts && curGroup && activeGroupRef.current === curGroup) {
+        const nextReceipts = res.groupReadReceipts;
+        setGroupDetailsQuery((prev) => {
+          if (!prev || prev.id !== curGroup) return prev;
+          if (sameJsonValue(prev.readReceipts ?? [], nextReceipts)) return prev;
+          return { ...prev, readReceipts: nextReceipts };
+        });
       }
       if (res.stickers) {
         const nextStickers = {
@@ -1718,6 +1762,67 @@ export function useTursoReactiveSession(
         return res.groupId;
       },
 
+      createCommunityMut: async (args: {
+        name: string;
+        description?: string;
+        avatarColor?: string;
+        avatarUrl?: string | null;
+      }) => {
+        const res = await tursoRpc<{ groupId: string; communityKeySeed?: string }>(
+          "createCommunity",
+          {
+            name: args.name,
+            description: args.description ?? "",
+            avatarColor: args.avatarColor ?? "purple",
+            avatarUrl: args.avatarUrl ?? null,
+          },
+          { slotId },
+        );
+        if (res.communityKeySeed) {
+          await registerCommunitySeedEpoch(res.groupId, res.communityKeySeed);
+        }
+        void tursoRpc<{ communities: ExploreCommunitySummary[] }>(
+          "exploreCommunities",
+          {},
+          { slotId },
+        )
+          .then((r) => setExploreCommunitiesQuery(r.communities ?? []))
+          .catch(() => undefined);
+        triggerImmediateTursoSync();
+        return res.groupId;
+      },
+
+      joinCommunityMut: async (communityId: string) => {
+        const res = await tursoRpc<{ ok: boolean; groupId: string; communityKeySeed?: string }>(
+          "joinCommunity",
+          { communityId },
+          { slotId },
+        );
+        if (res.communityKeySeed) {
+          await registerCommunitySeedEpoch(res.groupId, res.communityKeySeed);
+        }
+        setExploreCommunitiesQuery((prev) =>
+          prev.map((c) =>
+            c.id === communityId
+              ? { ...c, isJoined: true, role: c.role ?? "member", memberCount: c.isJoined ? c.memberCount : c.memberCount + 1 }
+              : c,
+          ),
+        );
+        triggerImmediateTursoSync();
+        return res.groupId;
+      },
+
+      refreshExploreCommunitiesMut: async () => {
+        const res = await tursoRpc<{ communities: ExploreCommunitySummary[] }>(
+          "exploreCommunities",
+          {},
+          { slotId },
+        );
+        const list = res.communities ?? [];
+        setExploreCommunitiesQuery(list);
+        return list;
+      },
+
       addGroupMembersMut: async (args: { groupId: string; memberIds: string[] }) => {
         await tursoRpc(
           "manageGroup",
@@ -1957,6 +2062,40 @@ export function useTursoReactiveSession(
         );
         setGroupDetailsQuery((prev) =>
           prev ? { ...prev, avatarUrl: args.avatarId ?? undefined } : prev,
+        );
+      },
+
+      setGroupAvatarColorMut: async (args: { groupId: string; avatarColor: string }) => {
+        await tursoRpc(
+          "manageGroup",
+          { groupId: args.groupId, subOp: "setAvatarColor", avatarColor: args.avatarColor },
+          { slotId },
+        );
+        setGroupDetailsQuery((prev) =>
+          prev ? { ...prev, avatarColor: args.avatarColor } : prev,
+        );
+        setGroupsQuery((prev) =>
+          prev?.map((g) => (g.id === args.groupId ? { ...g, avatarColor: args.avatarColor } : g)),
+        );
+        setExploreCommunitiesQuery((prev) =>
+          prev.map((c) => (c.id === args.groupId ? { ...c, avatarColor: args.avatarColor } : c)),
+        );
+      },
+
+      setGroupDescriptionMut: async (args: { groupId: string; description: string }) => {
+        await tursoRpc(
+          "manageGroup",
+          { groupId: args.groupId, subOp: "setDescription", description: args.description },
+          { slotId },
+        );
+        setGroupDetailsQuery((prev) =>
+          prev ? { ...prev, description: args.description } : prev,
+        );
+        setGroupsQuery((prev) =>
+          prev?.map((g) => (g.id === args.groupId ? { ...g, description: args.description } : g)),
+        );
+        setExploreCommunitiesQuery((prev) =>
+          prev.map((c) => (c.id === args.groupId ? { ...c, description: args.description } : c)),
         );
       },
 
@@ -2200,6 +2339,7 @@ export function useTursoReactiveSession(
     communityMessagesQuery,
     communityTypingUsers,
     groupsQuery,
+    exploreCommunitiesQuery,
     activeMessagesQuery,
     hasMoreOlderMessages,
     loadingOlderMessages,

@@ -9,6 +9,7 @@ import {
   decryptAttachmentBytes,
   decryptDmEnvelope,
   decryptGroupEnvelope,
+  deriveCommunityEpochSecretB64,
   generateGroupEpochSecretB64,
   generateIdentityRecord,
   isEncryptedWireBody,
@@ -300,6 +301,9 @@ export async function ensureUserE2EEInitialized(userId: string): Promise<Persist
     if (activeUserId === userId) {
       activeState = loaded;
       failedDecryptRetryAt.clear();
+      for (const [gid, seed] of communitySeedsByGroupId.entries()) {
+        await installCommunitySeedIntoActiveState(gid, seed).catch(() => undefined);
+      }
       notifyListeners();
     }
     return loaded;
@@ -665,6 +669,31 @@ export function getGroupEpochAllSecrets(entry?: GroupEpochEntry | null): string[
 
 const packetSecretByEpk = new Map<string, string>();
 const checkedGroupKeyPackets = new Set<string>();
+const communitySeedsByGroupId = new Map<string, string>();
+
+async function installCommunitySeedIntoActiveState(
+  groupId: string,
+  communityKeySeed: string,
+): Promise<GroupEpochEntry | null> {
+  if (!groupId || !communityKeySeed || communityKeySeed.trim().length < 16) return null;
+  if (!activeState) return null;
+  const secretB64 = await deriveCommunityEpochSecretB64(groupId, communityKeySeed.trim(), 1);
+  return storeGroupEpochSecret(groupId, 1, secretB64, { preferExistingPrimary: false });
+}
+
+export async function registerCommunitySeedEpoch(
+  groupId: string,
+  communityKeySeed?: string | null,
+): Promise<GroupEpochEntry | null> {
+  if (!groupId || !communityKeySeed || communityKeySeed.trim().length < 16) return null;
+  const cleanSeed = communityKeySeed.trim();
+  const prev = communitySeedsByGroupId.get(groupId);
+  communitySeedsByGroupId.set(groupId, cleanSeed);
+  if (prev === cleanSeed && activeState?.groupEpochs[groupId]?.[1]) {
+    return activeState.groupEpochs[groupId][1];
+  }
+  return installCommunitySeedIntoActiveState(groupId, cleanSeed);
+}
 
 export function recordPacketSecretB64(epk: string, secretB64: string): void {
   if (epk && secretB64) {
@@ -744,6 +773,11 @@ export function getLatestGroupEpoch(groupId: string): GroupEpochEntry | null {
 }
 
 export async function ensureInitialGroupEpoch(groupId: string): Promise<GroupEpochEntry | null> {
+  const commSeed = communitySeedsByGroupId.get(groupId);
+  if (commSeed) {
+    const seeded = await installCommunitySeedIntoActiveState(groupId, commSeed);
+    if (seeded) return seeded;
+  }
   const existing = getLatestGroupEpoch(groupId);
   if (existing) return existing;
   const secretB64 = generateGroupEpochSecretB64();

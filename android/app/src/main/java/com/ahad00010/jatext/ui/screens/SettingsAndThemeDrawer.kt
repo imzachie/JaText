@@ -13,6 +13,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -2268,8 +2269,11 @@ private fun YouHubRootScreen(
             }
 
             // Floating custom status thought-bubble on top of the account when set
+            var statusBubbleExpanded by remember(me.customStatus) { mutableStateOf(false) }
+            val myStatusText = me.customStatus.orEmpty().trim()
+            val isLongMyStatus = myStatusText.length > 30 || myStatusText.contains('\n')
             androidx.compose.animation.AnimatedVisibility(
-                visible = !me.customStatus.isNullOrBlank(),
+                visible = myStatusText.isNotEmpty(),
                 enter = scaleIn(
                     animationSpec = spring(
                         dampingRatio = 0.68f,
@@ -2279,30 +2283,56 @@ private fun YouHubRootScreen(
                 exit = scaleOut(tween(140)) + fadeOut(tween(120)),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = avatarSize - 12.dp, start = 64.dp),
+                    .padding(bottom = avatarSize - 12.dp, start = if (statusBubbleExpanded) 18.dp else 64.dp, end = 14.dp),
             ) {
                 Column(
                     horizontalAlignment = Alignment.Start,
-                    modifier = Modifier.jaBouncyClick { onOpenCustomStatusDialog() },
+                    modifier = Modifier.jaBouncyClick {
+                        if (isLongMyStatus) {
+                            statusBubbleExpanded = !statusBubbleExpanded
+                        } else {
+                            onOpenCustomStatusDialog()
+                        }
+                    },
                 ) {
                     Box(
                         modifier = Modifier
-                            .widthIn(min = 48.dp, max = 196.dp)
+                            .widthIn(min = 48.dp, max = if (statusBubbleExpanded) 276.dp else 196.dp)
                             .shadow(6.dp, RoundedCornerShape(16.dp))
                             .clip(RoundedCornerShape(16.dp))
                             .background(cardBgColor)
                             .border(1.dp, cardBorderColor, RoundedCornerShape(16.dp))
+                            .animateContentSize()
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
-                        Text(
-                            text = me.customStatus.orEmpty(),
-                            color = palette.textPrimary,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            lineHeight = 15.5.sp,
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = myStatusText,
+                                color = palette.textPrimary,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = if (statusBubbleExpanded) 10 else 1,
+                                overflow = TextOverflow.Ellipsis,
+                                lineHeight = 15.5.sp,
+                            )
+                            if (statusBubbleExpanded) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                ) {
+                                    Text(
+                                        text = "Edit status",
+                                        color = palette.accent,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { onOpenCustomStatusDialog() }
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                        }
                     }
                     Row(
                         modifier = Modifier.padding(start = 10.dp, top = 2.dp),
@@ -2757,8 +2787,9 @@ private fun CustomStatusBubbleEditDialog(
                 }
                 BasicTextField(
                     value = draft,
-                    onValueChange = { if (it.length <= 80) draft = it },
-                    singleLine = true,
+                    onValueChange = { if (it.length <= 200) draft = it },
+                    singleLine = false,
+                    maxLines = 4,
                     cursorBrush = SolidColor(palette.accent),
                     textStyle = TextStyle(
                         color = palette.textPrimary,
@@ -2768,6 +2799,17 @@ private fun CustomStatusBubbleEditDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Text(
+                    text = "${draft.length}/200",
+                    color = palette.textTertiary,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
                 )
             }
 
