@@ -804,9 +804,10 @@ fun FullScreenStoryViewerOverlay(
         }
     }
 
+    if (currentStack == null || currentSeg == null) return
+
     FullscreenOverlaySlot(
-        visible = currentStack != null && currentSeg != null,
-        key = "updates-story-viewer",
+        id = "updates-story-viewer",
         onBack = {
             if (replyOpen) replyOpen = false else onClose()
         },
