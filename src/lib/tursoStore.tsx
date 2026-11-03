@@ -1040,8 +1040,12 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       id: summary.id,
       name: summary.name,
       avatarUrl: summary.avatarUrl,
+      avatarColor: summary.avatarColor,
       ownerId: summary.ownerId,
       role: summary.role,
+      isCommunity: summary.isCommunity,
+      description: summary.description,
+      communityKeySeed: summary.communityKeySeed,
       members: me
         ? [
             {

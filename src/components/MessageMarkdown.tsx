@@ -1,6 +1,7 @@
 import { Fragment, memo, useState, type ReactNode } from "react";
 import { parseWallpaperSignal, WALLPAPER_PREFIX } from "../lib/chatCustomization";
 import type { GroupMember, JaUser } from "../lib/types";
+import { IosEmojiText, renderTextWithIosEmojis } from "./IosEmoji";
 import { CheckIcon, CopyIcon } from "./UiIcons";
 
 export interface MarkdownMentionContext {
@@ -24,24 +25,37 @@ function isSafeLinkUrl(raw: string): boolean {
 
 function SpoilerSpan({ children }: { children: ReactNode }) {
   const [revealed, setRevealed] = useState(false);
+  const [animPhase, setAnimPhase] = useState<"idle" | "revealing" | "hiding">("idle");
+  const toggleSpoiler = () => {
+    setRevealed((prev) => {
+      const next = !prev;
+      setAnimPhase(next ? "revealing" : "hiding");
+      return next;
+    });
+  };
   return (
     <span
       role="button"
       tabIndex={0}
-      className={`md-spoiler ${revealed ? "revealed" : ""}`}
+      aria-expanded={revealed}
+      className={`md-spoiler ${revealed ? "revealed" : ""} ${
+        animPhase !== "idle" ? `spoiler-${animPhase}` : ""
+      }`}
       title={revealed ? "Tap to hide spoiler" : "Tap to reveal spoiler"}
       onClick={(e) => {
         e.stopPropagation();
-        setRevealed((v) => !v);
+        toggleSpoiler();
       }}
+      onAnimationEnd={() => setAnimPhase("idle")}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           e.stopPropagation();
-          setRevealed((v) => !v);
+          toggleSpoiler();
         }
       }}
     >
+      <span className="md-spoiler-curtain" aria-hidden="true" />
       <span className="md-spoiler-inner">{children}</span>
     </span>
   );
@@ -194,18 +208,23 @@ function CodeBlockView({ lang, code }: { lang: string; code: string }) {
 let currentHighlightNeedle = "";
 
 function renderHighlightedSegment(segment: string, keyPrefix: string): ReactNode {
-  if (!segment || !currentHighlightNeedle) return segment;
+  if (!segment) return segment;
+  if (!currentHighlightNeedle) {
+    return renderTextWithIosEmojis(segment, `${keyPrefix}-em`);
+  }
   const escaped = currentHighlightNeedle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const rx = new RegExp(`(${escaped})`, "gi");
   const parts = segment.split(rx);
-  if (parts.length <= 1) return segment;
+  if (parts.length <= 1) return renderTextWithIosEmojis(segment, `${keyPrefix}-em`);
   return parts.map((chunk, idx) =>
     chunk.toLowerCase() === currentHighlightNeedle ? (
       <mark key={`${keyPrefix}-hl-${idx}`} className="inchat-search-highlight">
-        {chunk}
+        <IosEmojiText text={chunk} />
       </mark>
     ) : (
-      chunk
+      <Fragment key={`${keyPrefix}-tx-${idx}`}>
+        {renderTextWithIosEmojis(chunk, `${keyPrefix}-em-${idx}`)}
+      </Fragment>
     ),
   );
 }

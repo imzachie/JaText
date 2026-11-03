@@ -1,15 +1,18 @@
 import { useState } from "react";
 import type { GroupSummary } from "../lib/types";
+import { IosEmojiText } from "./IosEmoji";
 import { CloseIcon, TrashIcon } from "./UiIcons";
 
 interface DeleteGroupConfirmModalProps {
-  group: Pick<GroupSummary, "id" | "name" | "role">;
+  group: Pick<GroupSummary, "id" | "name" | "role" | "isCommunity">;
+  isCommunity?: boolean;
   onCancel: () => void;
   onConfirmDelete: () => Promise<void>;
 }
 
 export function DeleteGroupConfirmModal({
   group,
+  isCommunity,
   onCancel,
   onConfirmDelete,
 }: DeleteGroupConfirmModalProps) {
@@ -19,6 +22,8 @@ export function DeleteGroupConfirmModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  const comm = Boolean(isCommunity ?? group.isCommunity);
+  const entityLower = comm ? "community" : "group";
   const exactMatch = typedName === group.name;
 
   function requestClose() {
@@ -36,7 +41,9 @@ export function DeleteGroupConfirmModal({
       await onConfirmDelete();
       onCancel();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't delete this group.");
+      setError(
+        err instanceof Error ? err.message : `Couldn't delete this ${entityLower}.`,
+      );
       setBusy(false);
     }
   }
@@ -56,7 +63,7 @@ export function DeleteGroupConfirmModal({
               <TrashIcon size={17} />
             </span>
             <div>
-              <h2>Delete group</h2>
+              <h2>Delete {entityLower}</h2>
               <p className="muted small">
                 Step {step} of 2 · Owner permanent deletion
               </p>
@@ -76,8 +83,11 @@ export function DeleteGroupConfirmModal({
           <div className="delete-group-step">
             <p className="delete-group-warning-text">
               Are you sure you want to permanently delete{" "}
-              <strong>{group.name}</strong>? All messages, attachments, and
-              member access will be permanently erased for everyone immediately.
+              <strong>
+                <IosEmojiText text={group.name} />
+              </strong>
+              ? All messages, attachments, and member access will be permanently
+              erased for everyone immediately.
             </p>
             <div className="delete-group-actions">
               <button
@@ -99,8 +109,10 @@ export function DeleteGroupConfirmModal({
         ) : (
           <form className="delete-group-step" onSubmit={handleFinalDelete}>
             <p className="delete-group-warning-text">
-              To confirm, type the exact group name{" "}
-              <code className="delete-group-name-chip">{group.name}</code>{" "}
+              To confirm, type the exact {entityLower} name{" "}
+              <code className="delete-group-name-chip">
+                <IosEmojiText text={group.name} />
+              </code>{" "}
               below:
             </p>
             <input
@@ -128,7 +140,7 @@ export function DeleteGroupConfirmModal({
                 className="danger-solid-btn"
                 disabled={!exactMatch || busy}
               >
-                {busy ? "Deleting…" : "Delete group"}
+                {busy ? "Deleting…" : `Delete ${entityLower}`}
               </button>
             </div>
           </form>
@@ -139,19 +151,24 @@ export function DeleteGroupConfirmModal({
 }
 
 interface RemoveGroupChatModalProps {
-  group: Pick<GroupSummary, "id" | "name">;
+  group: Pick<GroupSummary, "id" | "name" | "isCommunity">;
+  isCommunity?: boolean;
   onCancel: () => void;
   onConfirmRemoveChat: () => Promise<void>;
 }
 
 export function RemoveGroupChatModal({
   group,
+  isCommunity,
   onCancel,
   onConfirmRemoveChat,
 }: RemoveGroupChatModalProps) {
   const [closing, setClosing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  const comm = Boolean(isCommunity ?? group.isCommunity);
+  const entityLower = comm ? "community" : "group";
 
   function requestClose() {
     if (busy || closing) return;
@@ -167,7 +184,11 @@ export function RemoveGroupChatModal({
       await onConfirmRemoveChat();
       onCancel();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't clear group chat history.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : `Couldn't clear ${entityLower} chat history.`,
+      );
       setBusy(false);
     }
   }
@@ -188,7 +209,9 @@ export function RemoveGroupChatModal({
             </span>
             <div>
               <h2>Remove chat</h2>
-              <p className="muted small">Clears history for you · Stays in group</p>
+              <p className="muted small">
+                Clears history for you · Stays in {entityLower}
+              </p>
             </div>
           </div>
           <button
@@ -203,9 +226,13 @@ export function RemoveGroupChatModal({
 
         <div className="delete-group-step">
           <p className="delete-group-warning-text">
-            Clear your chat history in <strong>{group.name}</strong>? You will{" "}
-            <strong>stay in the group</strong> and still receive new messages,
-            while other members keep their copy of the chat.
+            Clear your chat history in{" "}
+            <strong>
+              <IosEmojiText text={group.name} />
+            </strong>
+            ? You will <strong>stay in the {entityLower}</strong> and still
+            receive new messages, while other members keep their copy of the
+            chat.
           </p>
           {error ? <div className="form-error">{error}</div> : null}
           <div className="delete-group-actions">

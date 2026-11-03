@@ -16,6 +16,7 @@ import { useJaText } from "../lib/store";
 import type { ActivityStatus, JaUser } from "../lib/types";
 import { AnimatedMediaImg, Avatar } from "./Avatar";
 import { LockIcon } from "./E2EEModals";
+import { IosEmojiText } from "./IosEmoji";
 import { MessageMarkdown } from "./MessageMarkdown";
 import {
   ExternalArrowIcon,
@@ -164,15 +165,24 @@ export function ProfileCard({
             >
               <span className="profile-pfp-status-tail-sm" aria-hidden="true" />
               <span className="profile-pfp-status-tail-lg" aria-hidden="true" />
-              <span className="profile-pfp-status-text">{effectiveCustomStatus}</span>
+              <span className="profile-pfp-status-text">
+                <IosEmojiText text={effectiveCustomStatus} />
+              </span>
             </div>
           ) : null}
         </div>
         <div className="profile-names">
-          <div className="profile-display">{user.displayName || "Unnamed"}</div>
+          <div className="profile-display">
+            <IosEmojiText text={user.displayName || "Unnamed"} />
+          </div>
           <div className="profile-username">
             @{user.username}
-            {user.pronouns ? <span className="profile-pronouns"> · {user.pronouns}</span> : null}
+            {user.pronouns ? (
+              <span className="profile-pronouns">
+                {" · "}
+                <IosEmojiText text={user.pronouns} />
+              </span>
+            ) : null}
           </div>
         </div>
         {user.bio ? (

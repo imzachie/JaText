@@ -9,6 +9,7 @@ import {
   type EmojiCategoryId,
 } from "../lib/emojis";
 import { Smile } from "./CallIcons";
+import { IosEmojiGlyph } from "./IosEmoji";
 import {
   ClockIcon,
   CloseIcon,
@@ -243,7 +244,7 @@ export const ReactionEmojiPicker = memo(function ReactionEmojiPicker({
                 onClick={() => handlePick(emoji)}
                 aria-label={`React with ${emoji}`}
               >
-                {emoji}
+                <IosEmojiGlyph emoji={emoji} size={24} />
               </button>
             ))
           )}

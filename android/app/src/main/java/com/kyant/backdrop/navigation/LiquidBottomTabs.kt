@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -65,6 +66,7 @@ fun LiquidBottomTabs(
     backdrop: Backdrop,
     tabsCount: Int,
     modifier: Modifier = Modifier,
+    tabWeights: List<Float>? = null,
     isLightTheme: Boolean = !isSystemInDarkTheme(),
     accentColor: Color = if (isLightTheme) Color(0xFF1C1C1E) else Color(0xFFFFFFFF),
     inactiveColor: Color = if (isLightTheme) Color(0xFF2C2C2E).copy(alpha = 0.88f) else Color(0xFFF2F2F7).copy(alpha = 0.86f),
@@ -75,15 +77,35 @@ fun LiquidBottomTabs(
         else Color(0xFF16161E).copy(alpha = 0.84f)
 
     val tabsBackdrop = rememberLayerBackdrop()
+    val safeTabsCount = tabsCount.coerceAtLeast(1)
+    val resolvedWeights = remember(tabWeights, safeTabsCount) {
+        val raw = if (tabWeights != null && tabWeights.size == safeTabsCount) {
+            tabWeights.map { it.coerceAtLeast(0.1f) }
+        } else {
+            List(safeTabsCount) { 1f }
+        }
+        val total = raw.sum().coerceAtLeast(0.1f)
+        raw.map { it / total }
+    }
+    val tabStartFractions = remember(resolvedWeights) {
+        val starts = FloatArray(resolvedWeights.size)
+        var acc = 0f
+        for (i in resolvedWeights.indices) {
+            starts[i] = acc
+            acc += resolvedWeights[i]
+        }
+        starts
+    }
 
     BoxWithConstraints(
         modifier = modifier,
         contentAlignment = Alignment.CenterStart
     ) {
         val density = LocalDensity.current
-        val tabWidth = with(density) {
-            ((constraints.maxWidth.toFloat() - 8f.dp.toPx()) / tabsCount.coerceAtLeast(1)).coerceAtLeast(1f)
+        val innerTrackWidthPx = with(density) {
+            (constraints.maxWidth.toFloat() - 8f.dp.toPx()).coerceAtLeast(1f)
         }
+        val avgTabWidthPx = (innerTrackWidthPx / safeTabsCount).coerceAtLeast(1f)
 
         val offsetAnimation = remember { Animatable(0f) }
         val panelOffset by remember(density, constraints.maxWidth) {
@@ -100,11 +122,11 @@ fun LiquidBottomTabs(
         val animationScope = rememberCoroutineScope()
         val latestSelectedTabIndex by rememberUpdatedState(selectedTabIndex)
         val latestOnTabSelected by rememberUpdatedState(onTabSelected)
-        val maxIndex = (tabsCount - 1).coerceAtLeast(0)
+        val maxIndex = (safeTabsCount - 1).coerceAtLeast(0)
         var currentIndex by remember {
             mutableIntStateOf(selectedTabIndex().coerceIn(0, maxIndex))
         }
-        val dampedDragAnimation = remember(animationScope, tabsCount) {
+        val dampedDragAnimation = remember(animationScope, safeTabsCount, avgTabWidthPx) {
             DampedDragAnimation(
                 animationScope = animationScope,
                 initialValue = currentIndex.toFloat(),
@@ -127,7 +149,7 @@ fun LiquidBottomTabs(
                 },
                 onDrag = { _, dragAmount ->
                     updateValue(
-                        (targetValue + dragAmount.x / tabWidth * if (isLtr) 1f else -1f)
+                        (targetValue + dragAmount.x / avgTabWidthPx * if (isLtr) 1f else -1f)
                             .fastCoerceIn(0f, maxIndex.toFloat())
                     )
                     animationScope.launch {
@@ -146,15 +168,27 @@ fun LiquidBottomTabs(
                 }
         }
 
-        val interactiveHighlight = remember(animationScope, tabWidth, isLtr) {
+        fun thumbGeometryForValue(v: Float): Pair<Float, Float> {
+            val clamped = v.fastCoerceIn(0f, maxIndex.toFloat())
+            val i0 = clamped.toInt().coerceIn(0, maxIndex)
+            val i1 = (i0 + 1).coerceIn(0, maxIndex)
+            val frac = (clamped - i0).fastCoerceIn(0f, 1f)
+            val leftPx = lerp(tabStartFractions[i0], tabStartFractions[i1], frac) * innerTrackWidthPx
+            val widthPx = lerp(resolvedWeights[i0], resolvedWeights[i1], frac) * innerTrackWidthPx
+            return leftPx to widthPx.coerceAtLeast(1f)
+        }
+
+        val interactiveHighlight = remember(animationScope, innerTrackWidthPx, resolvedWeights, isLtr) {
             InteractiveHighlight(
                 animationScope = animationScope,
                 position = { size, _ ->
                     val w = if (size.isSpecified) size.width else 0f
                     val h = if (size.isSpecified) size.height else 0f
+                    val (leftPx, widthPx) = thumbGeometryForValue(dampedDragAnimation.value)
+                    val centerPx = leftPx + widthPx * 0.5f
                     Offset(
-                        if (isLtr) (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset
-                        else w - (dampedDragAnimation.value + 0.5f) * tabWidth + panelOffset,
+                        if (isLtr) 4f + centerPx + panelOffset
+                        else w - 4f - centerPx + panelOffset,
                         h / 2f
                     )
                 }
@@ -238,14 +272,16 @@ fun LiquidBottomTabs(
             )
         }
 
+        val (currentThumbLeftPx, currentThumbWidthPx) = thumbGeometryForValue(dampedDragAnimation.value)
+        val currentThumbWidthDp = with(density) { currentThumbWidthPx.toDp() }
+
         Box(
             Modifier
                 .padding(horizontal = 4f.dp)
                 .graphicsLayer {
-                    val w = if (size.isSpecified) size.width else 0f
                     translationX =
-                        if (isLtr) dampedDragAnimation.value * tabWidth + panelOffset
-                        else w - (dampedDragAnimation.value + 1f) * tabWidth + panelOffset
+                        if (isLtr) currentThumbLeftPx + panelOffset
+                        else (innerTrackWidthPx - currentThumbLeftPx - currentThumbWidthPx) + panelOffset
                 }
                 .then(interactiveHighlight.gestureModifier)
                 .then(dampedDragAnimation.modifier)
@@ -293,8 +329,7 @@ fun LiquidBottomTabs(
                     }
                 )
                 .height(56f.dp)
-                .fillMaxWidth(1f / tabsCount.coerceAtLeast(1))
+                .width(currentThumbWidthDp)
         )
     }
 }
-

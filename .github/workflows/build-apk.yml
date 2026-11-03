@@ -59,12 +59,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/jatext-sf-pro-fonts
-          key: jatext-sf-pro-fonts-${{ hashFiles('scripts/fetch-sf-pro-fonts.py') }}
+          key: jatext-sf-pro-fonts-${{ hashFiles('scripts/fetch-sf-pro-fonts.py', 'scripts/ios-emoji-grid.json') }}
 
-      - name: Fetch and prepare Apple SF Pro fonts from JaText-Essential-Stuff
+      - name: Fetch and prepare Apple SF Pro + iOS 26.4 Emoji fonts from JaText-Essential-Stuff
         run: |
-          if [ "${{ steps.sfpro-cache.outputs.cache-hit }}" != "true" ]; then
-            python3 -m pip install --user --break-system-packages --quiet fonttools || python3 -m pip install --quiet fonttools
+          if [ ! -f ~/.cache/jatext-sf-pro-fonts/subset_v2/jatext_ios_emoji.ttf ] || [ ! -f ~/.cache/jatext-sf-pro-fonts/subset_v2/sf_pro_text_regular.otf ]; then
+            python3 -m pip install --user --break-system-packages --quiet fonttools Pillow || python3 -m pip install --quiet fonttools Pillow
           fi
           python3 scripts/fetch-sf-pro-fonts.py --fetch
 

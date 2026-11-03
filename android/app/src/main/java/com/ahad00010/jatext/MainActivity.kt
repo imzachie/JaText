@@ -198,6 +198,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        com.ahad00010.jatext.ui.theme.ensureSfProWithIosEmojiInitialized(this)
         window.setSoftInputMode(
             WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
@@ -575,6 +576,7 @@ private fun JaTextRootHost(
                     val screenKey = when {
                         showSettings -> "settings"
                         state.activeChatId != null || state.activeGroupId != null -> "thread"
+                        state.exploreCommunitiesOpen -> "explore_communities"
                         else -> "sidebar"
                     }
 
@@ -582,7 +584,11 @@ private fun JaTextRootHost(
                         AnimatedContent(
                             targetState = screenKey,
                             transitionSpec = {
-                                if (targetState == "thread" || targetState == "settings") {
+                                if (
+                                    targetState == "thread" ||
+                                    targetState == "settings" ||
+                                    targetState == "explore_communities"
+                                ) {
                                     (slideInHorizontally(
                                         animationSpec = spring(
                                             dampingRatio = Spring.DampingRatioNoBouncy,
@@ -621,6 +627,12 @@ private fun JaTextRootHost(
                                         onOpenPeerProfile = { peer -> viewingPeerProfile = peer },
                                         onOpenSecurityCode = { peer -> verifyingPeerCode = peer },
                                         onOpenGroupMembers = { showGroupMembers = true },
+                                    )
+                                }
+                                "explore_communities" -> {
+                                    com.ahad00010.jatext.ui.screens.ExploreCommunitiesScreen(
+                                        state = state,
+                                        vm = vm,
                                     )
                                 }
                                 else -> {

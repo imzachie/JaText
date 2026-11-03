@@ -56,6 +56,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -1766,6 +1767,9 @@ fun GroupMembersBottomModal(
         containerColor = palette.surface,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
     ) {
+        val entityWordCap = if (details.isCommunity) "Community" else "Group"
+        val entityWordLower = if (details.isCommunity) "community" else "group"
+        val currentCommColor = JaTextThemeManager.stripProfileMetaFromColorId(details.avatarColor.ifBlank { "purple" })
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1801,7 +1805,7 @@ fun GroupMembersBottomModal(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.CameraAlt,
-                                contentDescription = "Change group photo",
+                                contentDescription = "Change $entityWordLower photo",
                                 tint = palette.accentDark,
                                 modifier = Modifier.size(13.dp),
                             )
@@ -1827,7 +1831,7 @@ fun GroupMembersBottomModal(
                         Spacer(Modifier.height(4.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text(
-                                text = "Change group photo",
+                                text = "Change $entityWordLower photo",
                                 color = palette.accent,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
@@ -1850,12 +1854,44 @@ fun GroupMembersBottomModal(
                 }
             }
 
+            if (canEditGroup && details.isCommunity) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    JaTextThemeManager.COMMUNITY_AVATAR_COLOR_IDS.forEach { cKey ->
+                        val cSpec = JaTextThemeManager.avatarColorSpec(cKey)
+                        val selected = currentCommColor == cKey
+                        Box(
+                            modifier = Modifier
+                                .size(26.dp)
+                                .clip(CircleShape)
+                                .background(Brush.linearGradient(cSpec.gradientStops))
+                                .border(
+                                    width = if (selected) 2.5.dp else 1.dp,
+                                    color = if (selected) Color.White else Color.Transparent,
+                                    shape = CircleShape,
+                                )
+                                .clickable {
+                                    vm.updateGroupProfile(
+                                        groupId = details.id,
+                                        newAvatarColor = cKey,
+                                    )
+                                }
+                        )
+                    }
+                }
+            }
+
             if (canEditGroup) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     JaWebInput(
                         value = newName,
                         onValueChange = { newName = it },
-                        placeholder = "Group name",
+                        placeholder = "$entityWordCap name",
                         modifier = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(8.dp))
@@ -1927,7 +1963,7 @@ fun GroupMembersBottomModal(
                         )
                         if (addableFriends.isEmpty()) {
                             Text(
-                                text = "All of your friends are already in this group.",
+                                text = "All of your friends are already in this $entityWordLower.",
                                 color = palette.textSecondary,
                                 fontSize = 12.5.sp,
                                 modifier = Modifier.padding(vertical = 6.dp),
@@ -1991,7 +2027,7 @@ fun GroupMembersBottomModal(
                                 }
                             }
                             JaWebPrimaryButton(
-                                text = if (selectedFriendIds.isEmpty()) "Select friends" else "Add ${selectedFriendIds.size} to group",
+                                text = if (selectedFriendIds.isEmpty()) "Select friends" else "Add ${selectedFriendIds.size} to $entityWordLower",
                                 enabled = selectedFriendIds.isNotEmpty(),
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = {
@@ -2199,7 +2235,7 @@ fun GroupMembersBottomModal(
                         )
                         Spacer(Modifier.width(12.dp))
                         Text(
-                            text = "Remove from group",
+                            text = "Remove from ${if (details.isCommunity) "community" else "group"}",
                             color = palette.danger,
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.5.sp,
@@ -2343,7 +2379,7 @@ fun PostUpdateWelcomeDialog(onDismiss: () -> Unit) {
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = "You're now running JaText v${BuildConfig.VERSION_NAME} with end-to-end encrypted Communities, Explore Communities directory, merged Mobile Chats, instant Seen-by group receipts, full member bios, and expandable custom statuses.",
+                text = "You're now running JaText v${BuildConfig.VERSION_NAME} with universal iOS 26.4 Unicode 17.0 emojis, animated Communities message sending & spoiler reveals, dedicated Explore Communities page, and refined Liquid Glass navigation.",
                 color = palette.textSecondary,
                 fontSize = 13.5.sp,
                 lineHeight = 19.5.sp,
