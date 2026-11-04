@@ -361,6 +361,10 @@ sudo journalctl -u cloudflared -f
 sudo systemctl restart jatext.service
 sudo systemctl restart cloudflared
 
+# Pull new code and rebuild right now (section 15)
+sudo systemctl start jatext-autoupdate.service
+sudo journalctl -u jatext-autoupdate -f
+
 # Open the database shell
 sudo -u postgres psql -d jatext
 
@@ -507,3 +511,74 @@ is online. So these still need hands on the device:
 If you want it to survive a reboot unattended, turn on **Settings > Users > Automatic Login** on the
 laptop. Without that, a reboot means the laptop sits at the login screen with Tailscale down and no
 remote way in.
+
+---
+
+## 15. Automatic updates: push code, the laptop updates itself
+
+With the updater installed, a code change is a GitHub merge and nothing else. Every 10 minutes the
+laptop checks `main`, and when there is something new it pulls, rebuilds, and restarts. If the build
+fails it keeps serving the version that already works, so a bad commit can never take the site down.
+
+### 15.1 Install it on a machine that is already set up
+
+```bash
+cd ~/JaText && git pull --ff-only
+NODE_DIR="$(dirname "$(command -v node)")"
+sudo sed -e "s|__JATEXT_USER__|$USER|g" -e "s|__JATEXT_DIR__|$HOME/JaText|g" -e "s|__JATEXT_NODE_DIR__|$NODE_DIR|g" scripts/jatext-autoupdate.service | sudo tee /etc/systemd/system/jatext-autoupdate.service >/dev/null
+sudo cp scripts/jatext-autoupdate.timer /etc/systemd/system/
+sudo chmod +x scripts/selfhost-autoupdate.sh
+printf '%s ALL=(root) NOPASSWD: %s restart jatext.service\n' "$USER" "$(command -v systemctl)" | sudo tee /etc/sudoers.d/jatext-autoupdate >/dev/null
+sudo chmod 440 /etc/sudoers.d/jatext-autoupdate
+sudo systemctl daemon-reload
+sudo systemctl enable --now jatext-autoupdate.timer
+systemctl list-timers jatext-autoupdate.timer
+```
+
+Expected from the last command, one line showing the next run and the last one:
+
+```
+NEXT                        LEFT     LAST  PASSED  UNIT                     ACTIVATES
+Tue 2026-11-04 21:07:00 UTC 9min left  -     -      jatext-autoupdate.timer jatext-autoupdate.service
+```
+
+The sudoers line grants exactly one thing: restarting `jatext.service` without a password. Nothing
+else on the machine gets a passwordless command.
+
+### 15.2 What still needs you, and what does not
+
+| Change | Do you touch the laptop? |
+| --- | --- |
+| Web UI, pages, features | No. Merged to `main`, live within 10 minutes |
+| Server or API code | No. Same |
+| A new Android APK | No. GitHub Actions builds and commits it, the laptop pulls and rebuilds it, phones pick it up through the in-app updater |
+| A new API key or secret | Once, add the line to `~/JaText/.env.selfhost` and restart |
+| Changing the domain | Yes, three places, see section 13 |
+| Hardware, power, WiFi, reboots | Yes, see section 14.5 |
+
+### 15.3 Commands
+
+```bash
+# Run an update right now instead of waiting for the timer
+sudo systemctl start jatext-autoupdate.service
+
+# Watch what it did
+sudo journalctl -u jatext-autoupdate -f
+
+# Turn it off (useful while you are editing files on the laptop by hand)
+sudo systemctl stop jatext-autoupdate.timer
+sudo systemctl disable jatext-autoupdate.timer
+```
+
+### 15.4 What it refuses to do
+
+- **A failed build never goes live.** The old `dist/` keeps serving, the error is logged, and the next
+  good commit fixes it automatically.
+- **It never overwrites your own edits.** If you have modified tracked files in `~/JaText`, it skips
+  the run and says which files. Undo or commit them and updates resume.
+- **It only ever fast-forwards.** No merges, no rebase, no force.
+- **`package-lock.json` is expected to change on the machine**, because `npm install` rewrites it.
+  That alone does not count as a local edit, otherwise updates would silently stop forever.
+
+The restart itself takes about two seconds. Messages in flight are not affected, they are written to
+PostgreSQL first and the client reconnects on its own.

@@ -1,0 +1,21 @@
+[Unit]
+Description=JaText self-host auto update (pull, rebuild, restart)
+Documentation=https://jatext.us.ci
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__JATEXT_USER__
+Group=__JATEXT_USER__
+WorkingDirectory=__JATEXT_DIR__
+Environment=PATH=__JATEXT_NODE_DIR__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/env bash __JATEXT_DIR__/scripts/selfhost-autoupdate.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jatext-autoupdate
+TimeoutStartSec=900
+# Never let an update run forever and pile up on the next timer tick.
+
+[Install]
+WantedBy=multi-user.target

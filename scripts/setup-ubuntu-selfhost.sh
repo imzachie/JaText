@@ -8,7 +8,8 @@
 #   3. The JaText source tree (private repo, via GitHub CLI login, no password prompts)
 #   4. The production web build (dist/)
 #   5. A systemd service (jatext.service) running web + API 24/7
-#   6. cloudflared, ready for a permanent Cloudflare Tunnel HTTPS URL
+#   6. An automatic updater that pulls new code and rebuilds every 10 minutes
+#   7. cloudflared, ready for a permanent Cloudflare Tunnel HTTPS URL
 #
 # Usage:
 #   bash scripts/setup-ubuntu-selfhost.sh
@@ -223,7 +224,7 @@ set +a
 npm run build
 info "Web build ready at $APP_DIR/dist"
 
-log "7/8  Installing the 24/7 systemd service ($SERVICE_NAME)"
+log "7/9  Installing the 24/7 systemd service ($SERVICE_NAME)"
 # Remove the older PostgreSQL bridge service if it is still around from a previous setup.
 if systemctl list-unit-files 2>/dev/null | grep -q "jatext-pg-bridge.service"; then
   info "Removing the legacy jatext-pg-bridge.service (it squats on port 8787 and only speaks the old SQL bridge protocol)"
@@ -250,7 +251,32 @@ else
   warn "The service is starting. Check it with: sudo journalctl -u $SERVICE_NAME -f"
 fi
 
-log "8/8  Cloudflare Tunnel (your permanent public HTTPS URL)"
+log "8/9  Installing the automatic updater (checks GitHub every 10 minutes)"
+# Runs as your own user so pulled files stay yours, with one narrow passwordless
+# sudo rule that only allows restarting the JaText service and nothing else.
+NODE_DIR="$(dirname "$NODE_BIN")"
+SYSTEMCTL_BIN="$(command -v systemctl)"
+chmod +x "$APP_DIR/scripts/selfhost-autoupdate.sh"
+sudo sed -e "s|__JATEXT_USER__|$USER|g" \
+    -e "s|__JATEXT_DIR__|$APP_DIR|g" \
+    -e "s|__JATEXT_NODE_DIR__|$NODE_DIR|g" \
+    "$APP_DIR/scripts/jatext-autoupdate.service" | sudo tee /etc/systemd/system/jatext-autoupdate.service >/dev/null
+sudo cp "$APP_DIR/scripts/jatext-autoupdate.timer" /etc/systemd/system/jatext-autoupdate.timer
+SUDOERS_TMP="$(mktemp)"
+printf '%s ALL=(root) NOPASSWD: %s restart %s\n' "$USER" "$SYSTEMCTL_BIN" "$SERVICE_NAME" >"$SUDOERS_TMP"
+if sudo visudo -cf "$SUDOERS_TMP" >/dev/null 2>&1; then
+  sudo install -o root -g root -m 440 "$SUDOERS_TMP" /etc/sudoers.d/jatext-autoupdate
+else
+  warn "Could not validate the sudoers rule, automatic restarts may fail. Add it by hand if so."
+fi
+rm -f "$SUDOERS_TMP"
+sudo systemctl daemon-reload
+sudo systemctl enable --now jatext-autoupdate.timer
+info "New code pushed to $APP_BRANCH is picked up within 10 minutes, no keyboard needed."
+info "Force an update now:  sudo systemctl start jatext-autoupdate.service"
+info "Watch an update:      sudo journalctl -u jatext-autoupdate -f"
+
+log "9/9  Cloudflare Tunnel (your permanent public HTTPS URL)"
 if ! sudo test -f /etc/cloudflared/config.yml; then
   cat <<EOF
 
