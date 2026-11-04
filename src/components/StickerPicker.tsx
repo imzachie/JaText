@@ -35,6 +35,7 @@ export function StickerPicker({
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [savedUpload, setSavedUpload] = useState<StickerMedia | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [klipyNotice, setKlipyNotice] = useState<string | null>(null);
   const [sendingKey, setSendingKey] = useState<string | null>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -88,8 +89,10 @@ export function StickerPicker({
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void searchKlipy(search)
-        .then((items) => {
-          if (!cancelled) setResults(items);
+        .then((res) => {
+          if (cancelled) return;
+          setResults(Array.isArray(res?.results) ? res.results : []);
+          setKlipyNotice(res?.error && !res.results.length ? res.error : null);
         })
         .catch((cause: unknown) => {
           if (!cancelled)
@@ -245,6 +248,7 @@ export function StickerPicker({
                 setResults([]);
                 setSearching(true);
                 setError(null);
+                setKlipyNotice(null);
               }}
               placeholder="Search Klipy GIFs..."
               aria-label="Search Klipy GIFs"
@@ -328,7 +332,10 @@ export function StickerPicker({
                 <p className="klipy-attribution">GIFs by KLIPY</p>
               )}
               {searching && <p className="sticker-empty">Loading...</p>}
-              {!searching && !error && visibleItems.length === 0 && (
+              {!searching && !error && !!klipyNotice && tab === "klipy" && (
+                <p className="sticker-empty">{klipyNotice}</p>
+              )}
+              {!searching && !error && !(klipyNotice && tab === "klipy") && visibleItems.length === 0 && (
                 <p className="sticker-empty">
                   {tab === "klipy"
                     ? search.trim()

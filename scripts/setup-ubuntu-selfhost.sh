@@ -166,6 +166,20 @@ if [ -t 0 ] && ! grep -q "^FCM_SERVICE_ACCOUNT_FILE=" "$ENV_FILE" 2>/dev/null; t
   fi
 fi
 
+# Optional Klipy GIF picker. Only prompts on an interactive terminal, never when piped.
+if [ -t 0 ] && ! grep -q "^KLIPY_API_KEY=" "$ENV_FILE" 2>/dev/null; then
+  printf '\n\e[1;36m==> Klipy GIF picker (optional)\e[0m\n'
+  printf '    Free key from https://partner.klipy.com - without it the GIF tab stays empty.\n'
+  printf '    Paste your Klipy API key, or press Enter to skip: '
+  read -r KLIPY_API_KEY || true
+  if [ -n "${KLIPY_API_KEY:-}" ]; then
+    printf 'KLIPY_API_KEY=%s\n' "$KLIPY_API_KEY" >>"$ENV_FILE"
+    info "Klipy GIF picker enabled."
+  else
+    info "Skipped. Add KLIPY_API_KEY to $ENV_FILE later to turn on GIF search."
+  fi
+fi
+
 # Optional Google Sign-In. Only prompts on an interactive terminal, never when piped.
 if [ -t 0 ] && ! grep -q "^GOOGLE_CLIENT_ID=" "$ENV_FILE" 2>/dev/null; then
   printf '\n\e[1;36m==> Google Sign-In (optional)\e[0m\n'

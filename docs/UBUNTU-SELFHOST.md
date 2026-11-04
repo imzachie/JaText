@@ -279,7 +279,64 @@ Push only works for the **Android app**. The web app has no push, it is not impl
 
 ---
 
-## 8. Optional: bring over your old Turso data
+## 8. Turn on the Klipy GIF picker (free)
+
+The GIF and sticker picker is already in the app. It is silent and empty without a key, which is
+exactly why it looks broken: the server returns no results and the picker shows
+"No trending GIFs are available." So get a key.
+
+### 8.1 Get the key
+
+1. Sign up at `https://partner.klipy.com` (free, no card).
+2. Create an app/project and copy its **API key**.
+
+### 8.2 Put it on the server
+
+```bash
+cat >> ~/JaText/.env.selfhost <<'EOF'
+KLIPY_API_KEY=paste-your-key-here
+EOF
+chmod 600 ~/JaText/.env.selfhost
+sudo systemctl restart jatext.service
+```
+
+Expected: no output from the first two, nothing from the restart.
+
+### 8.3 Check it
+
+```bash
+curl -sS "https://jatext.us.ci/api/klipy-test"; echo
+```
+
+Expected: `{"ok":true,"configured":true,"usage":"POST with an Authorization: Bearer <JaText token> header to run a real Klipy search."}`
+
+### 8.4 Prove the key actually works
+
+Grab your login token the same way as section 7.4 step 2, then:
+
+```bash
+curl -sS -X POST -H "Authorization: Bearer PASTE" "https://jatext.us.ci/api/klipy-test?q=hello"; echo
+```
+
+Expected, with `count` above zero and real GIF urls:
+
+```json
+{"ok":true,"query":"hello","configured":true,"error":null,"count":6,"sample":[{"name":"hello.gif","url":"https://.../medium.gif"}, ...]}
+```
+
+| Response | Meaning | Fix |
+| --- | --- | --- |
+| `configured":false` | `KLIPY_API_KEY` is not in `~/JaText/.env.selfhost`, or you forgot the restart | `grep KLIPY ~/JaText/.env.selfhost` then `sudo systemctl restart jatext.service` |
+| `HTTP 401` or `HTTP 403` | Key is wrong, disabled, or not activated yet | Copy it again from `partner.klipy.com`; new keys can take a few minutes to go live |
+| `Could not reach Klipy` | Laptop has no route to `api.klipy.com` | Check `curl -sS -o /dev/null -w "%{http_code}" https://api.klipy.com/v2/featured` |
+| `Klipy returned no GIFs` | Key works, that query is empty | Try another word |
+
+The picker now shows the real reason instead of an empty grid, so if it ever breaks again you will
+see the server's message right in the GIF tab.
+
+---
+
+## 9. Optional: bring over your old Turso data
 
 Only possible if your old Turso database still answers reads.
 
@@ -293,7 +350,7 @@ npm run pg:migrate
 
 ---
 
-## 9. Day to day commands
+## 10. Day to day commands
 
 ```bash
 # Live logs
@@ -316,7 +373,7 @@ sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-M
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
@@ -334,7 +391,7 @@ sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-M
 
 ---
 
-## 11. No-DNS fallback: Tailscale Funnel
+## 12. No-DNS fallback: Tailscale Funnel
 
 If your DNS provider will not delegate nameservers, Tailscale Funnel gives you a permanent public HTTPS URL with zero DNS records. You already have Tailscale installed from an earlier step.
 
@@ -352,7 +409,7 @@ The web app works on that URL immediately, because it derives its API origin fro
 3. Push to `main`, GitHub Actions publishes the new signed APK to `apk-latest`.
 4. Update `release-cdn/apk-version.json` so phones see the update.
 
-## 12. If you ever change the domain
+## 13. If you ever change the domain
 
 The domain lives in exactly three places:
 

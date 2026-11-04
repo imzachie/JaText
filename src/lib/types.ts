@@ -105,6 +105,12 @@ export interface StickerMedia {
   updatedAt?: number;
 }
 
+export interface KlipySearchResult {
+  results: StickerMedia[];
+  configured: boolean;
+  error: string | null;
+}
+
 export interface MessageReaction {
   userId: string;
   emoji: string;
@@ -391,7 +397,7 @@ export interface JaTextStore {
   markMessagesRead: (friendId: string) => Promise<void>;
   stickerFavorites: StickerMedia[];
   recentStickers: StickerMedia[];
-  searchKlipy: (query: string) => Promise<StickerMedia[]>;
+  searchKlipy: (query: string) => Promise<KlipySearchResult>;
   saveSticker: (file: File) => Promise<StickerMedia>;
   setStickerFavorite: (sticker: StickerMedia, favorite: boolean) => Promise<void>;
   favoriteStickerFromMessage: (messageId: string) => Promise<void>;

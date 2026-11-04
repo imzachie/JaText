@@ -2746,12 +2746,16 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
 
   const searchKlipy = useCallback<JaTextStore["searchKlipy"]>(
     async (query) => {
-      const results = await klipySearchAction({ query });
-      return results.map((item) => ({
-        ...item,
-        isFavorite: false,
-        useCount: 0,
-      })) as StickerMedia[];
+      const res = await klipySearchAction({ query });
+      return {
+        results: res.results.map((item) => ({
+          ...item,
+          isFavorite: false,
+          useCount: 0,
+        })) as StickerMedia[],
+        configured: res.configured,
+        error: res.error,
+      };
     },
     [klipySearchAction],
   );

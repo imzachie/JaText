@@ -29,6 +29,7 @@ import ios404Handler from "../api/ios-404.js";
 import linkPreviewHandler from "../api/link-preview.js";
 import mediaHandler from "../api/media.js";
 import oauthGoogleHandler from "../api/oauth-google.js";
+import klipyTestHandler from "../api/klipy-test.js";
 import pushTestHandler from "../api/push-test.js";
 import tursoHandler from "../api/turso.js";
 
@@ -336,6 +337,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (pathname === "/api/push-test") {
     return runApiHandler(pushTestHandler, req, res, { maxBodyBytes: 64 * 1024 });
+  }
+  if (pathname === "/api/klipy-test") {
+    return runApiHandler(klipyTestHandler, req, res, { maxBodyBytes: 64 * 1024 });
   }
   if (pathname === "/api/media") {
     return runApiHandler(mediaHandler, req, res, {

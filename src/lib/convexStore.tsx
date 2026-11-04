@@ -2882,12 +2882,21 @@ export function ConvexStoreProvider({ children }: { children: ReactNode }) {
 
   const searchKlipy = useCallback<JaTextStore["searchKlipy"]>(
     async (query) => {
-      const results = await klipySearchAction({ query });
-      return results.map((item) => ({
-        ...item,
-        isFavorite: false,
-        useCount: 0,
-      })) as StickerMedia[];
+      const res = (await klipySearchAction({ query })) as {
+        results?: StickerMedia[];
+        configured?: boolean;
+        error?: string | null;
+      };
+      const items = Array.isArray(res?.results) ? res.results : [];
+      return {
+        results: items.map((item) => ({
+          ...item,
+          isFavorite: false,
+          useCount: 0,
+        })) as StickerMedia[],
+        configured: res?.configured !== false,
+        error: res?.error ?? null,
+      };
     },
     [klipySearchAction],
   );
