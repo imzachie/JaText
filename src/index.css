@@ -12850,6 +12850,70 @@ label,
   min-width: 0;
 }
 
+/* Desktop: the Updates tab lives inside the 376-432px sidebar, so the mobile
+   first spacing has to tighten or the rows and action chips run out of room. */
+@media (min-width: 900px) {
+  .jt-updates-pane-host {
+    gap: 8px;
+  }
+
+  .jt-updates-scroll {
+    padding-bottom: 20px;
+  }
+
+  .jt-updates-quick-bar {
+    gap: 6px;
+  }
+
+  .jt-updates-action-chip {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .jt-status-my-row-card {
+    padding: 7px 9px;
+    gap: 7px;
+  }
+
+  .jt-status-row {
+    gap: 10px;
+    padding: 6px 8px;
+  }
+
+  .jt-status-sublabel {
+    padding: 8px 4px 2px;
+  }
+
+  .jt-status-row-copy strong {
+    font-size: 14px;
+  }
+
+  .jt-status-row-copy span {
+    font-size: 12px;
+  }
+}
+
+@keyframes jtUpdatesPaneIn {
+  from {
+    opacity: 0;
+    transform: translateY(7px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.jt-updates-root {
+  animation: jtUpdatesPaneIn 210ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jt-updates-root {
+    animation: none;
+  }
+}
+
 .jt-updates-pane-host {
   flex: 1;
   min-height: 0;
