@@ -1851,7 +1851,7 @@ export function ChatView({
             attachmentName: item.file?.name,
             attachmentType: item.file?.type,
             createdAt: sentAt,
-            deliveryStatus: "sent",
+            deliveryStatus: "delivered",
           },
         ]);
       }

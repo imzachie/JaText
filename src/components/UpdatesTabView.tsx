@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { Avatar } from "./Avatar";
 import { IosEmojiText } from "./IosEmoji";
+import { IosEyeIcon, IosHeartIcon, IosMusicNoteIcon } from "./IosVectorIcons";
 import { useJaText } from "../lib/store";
 import {
   resolveTursoMediaUrl,
@@ -100,11 +101,19 @@ const STATUS_BG_SWATCHES = [
   "#9333ea",
 ];
 
+/**
+ * The Status music library. Placeholder tones are gone: every entry is a real
+ * audio file served from /sounds, and uploading your own clip is always there
+ * as the third option.
+ */
 const BUILTIN_TRACKS = [
-  { id: "none", title: "No Music", freq: 0, durationMs: 0 },
-  { id: "lofi_night", title: "Midnight Lo-Fi", freq: 392, durationMs: 15000 },
-  { id: "warm_sunrise", title: "Sunrise Acoustic", freq: 440, durationMs: 15000 },
-  { id: "neon_drive", title: "Neon Pulse", freq: 523.25, durationMs: 15000 },
+  { id: "none", title: "No Music", url: "", durationMs: 0 },
+  {
+    id: "melly_mike",
+    title: "Melly Mike - Young Black & Rich",
+    url: "/sounds/melly-mike-young-black-and-rich.mp3?v=1",
+    durationMs: 24960,
+  },
 ];
 
 const QUICK_STORY_REACTIONS = ["❤️", "🔥", "😂", "😮", "😢", "👏"];
@@ -769,8 +778,8 @@ function StatusComposerModal({
         if (!mediaUrl) mediaType = "audio";
       } else if (selectedBuiltinTrack !== "none") {
         const track = BUILTIN_TRACKS.find((t) => t.id === selectedBuiltinTrack);
-        if (track) {
-          audioUrl = `builtin:${track.id}`;
+        if (track?.url) {
+          audioUrl = track.url;
           audioTitle = track.title;
           finalAudioDur = track.durationMs;
         }
@@ -960,9 +969,10 @@ function StatusComposerModal({
                 onChange={(e) => void handleAudioPick(e)}
                 style={{ display: "none" }}
               />
-              <span>
+              <span className="jt-upd-audio-upload-label">
+                {audioFile ? <IosMusicNoteIcon size={14} /> : null}
                 {audioFile
-                  ? `🎵 ${audioFile.name.slice(0, 18)} (${Math.round(audioDurationMs / 1000)}s)`
+                  ? audioFile.name.slice(0, 18) + ` (${Math.round(audioDurationMs / 1000)}s)`
                   : "Upload Audio"}
               </span>
             </label>
@@ -1386,30 +1396,9 @@ export function FullScreenStoryViewerModal({
     if (!currentSeg?.audioUrl) return;
 
     if (currentSeg.audioUrl.startsWith("builtin:")) {
-      const trackId = currentSeg.audioUrl.slice("builtin:".length);
-      const track = BUILTIN_TRACKS.find((t) => t.id === trackId);
-      if (!track || !track.freq || typeof AudioContext === "undefined") return;
-      const ctx = new AudioContext();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = track.freq;
-      gain.gain.value = 0.03;
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      try {
-        osc.start();
-      } catch {
-        // ignore autoplay gate
-      }
-      return () => {
-        try {
-          osc.stop();
-          void ctx.close();
-        } catch {
-          // ignore
-        }
-      };
+      // Legacy placeholder tone from before the real music library existed.
+      // There is no oscillator to play any more, those old posts are silent.
+      return;
     }
 
     const audio = new Audio(resolveTursoMediaUrl(currentSeg.audioUrl));
@@ -1622,7 +1611,14 @@ export function FullScreenStoryViewerModal({
                 </strong>
                 <span>
                   {formatStatusRelativeTime(currentSeg.createdAt)}
-                  {currentSeg.audioTitle ? ` · 🎵 ${currentSeg.audioTitle}` : ""}
+                  {currentSeg.audioTitle ? (
+                    <>
+                      {" · "}
+                      <IosMusicNoteIcon size={13} /> {currentSeg.audioTitle}
+                    </>
+                  ) : (
+                    ""
+                  )}
                 </span>
               </div>
             </div>
@@ -1679,7 +1675,7 @@ export function FullScreenStoryViewerModal({
           ) : (
             <div className="jt-story-text-canvas">
               <p>
-                <IosEmojiText text={currentSeg.caption || "🎵 Audio Status"} />
+                <IosEmojiText text={currentSeg.caption || "Audio Status"} />
               </p>
             </div>
           )}
@@ -1695,8 +1691,14 @@ export function FullScreenStoryViewerModal({
         <div className={`jt-story-chrome-bottom ${isHoldPaused ? "is-hidden" : ""}`}>
           {isOwnStory ? (
             <div className="jt-story-own-metrics">
-              <span>👁 {currentSeg.viewCount} views</span>
-              <span>❤️ {currentSeg.likeCount} likes</span>
+              <span className="jt-story-metric">
+                <IosEyeIcon size={15} />
+                {currentSeg.viewCount} views
+              </span>
+              <span className="jt-story-metric">
+                <IosHeartIcon size={15} />
+                {currentSeg.likeCount} likes
+              </span>
             </div>
           ) : replyOpen ? (
             <div className="jt-story-reply-drawer" onClick={(e) => e.stopPropagation()}>
