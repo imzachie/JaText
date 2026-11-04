@@ -4442,7 +4442,18 @@ class JaTextSessionViewModel(app: Application) :
                 if (manual) showToast("Could not reach update server")
                 return@launch
             }
-            if (manifest.versionCode > BuildConfig.VERSION_CODE) {
+            // A web-only change rebuilds the APK without bumping versionCode, so
+            // comparing version codes alone silently hides those updates. When the
+            // codes match, fall back to the commit each build was cut from.
+            val remoteSha = manifest.commitSha?.trim().orEmpty()
+            val localSha = BuildConfig.BUILD_COMMIT.trim()
+            val isSameCodeRebuild =
+                manifest.versionCode == BuildConfig.VERSION_CODE &&
+                    remoteSha.isNotEmpty() &&
+                    localSha.isNotEmpty() &&
+                    localSha != "unknown" &&
+                    !remoteSha.equals(localSha, ignoreCase = true)
+            if (manifest.versionCode > BuildConfig.VERSION_CODE || isSameCodeRebuild) {
                 _state.update { it.copy(availableUpdate = manifest) }
             } else if (manual) {
                 showToast("You are on the latest JaText v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})")
