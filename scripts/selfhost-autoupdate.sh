@@ -19,6 +19,7 @@ APP_DIR="${JATEXT_APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BRANCH="${JATEXT_BRANCH:-main}"
 SERVICE="${JATEXT_SERVICE:-jatext.service}"
 BUILD_LOG="$(mktemp -t jatext-autoupdate-XXXXXX.log)"
+SERVER_SCRIPT_NAME="${JATEXT_SERVER_SCRIPT:-standaloneServer.js}"
 
 log() { printf '[jatext-autoupdate] %s\n' "$*"; }
 
@@ -81,13 +82,24 @@ fi
 rm -f "$BUILD_LOG"
 
 log "restarting $SERVICE"
+restarted=0
 if [ "$(id -u)" = "0" ]; then
-  systemctl restart "$SERVICE"
+  systemctl restart "$SERVICE" && restarted=1
+elif sudo -n systemctl restart "$SERVICE" 2>/dev/null; then
+  restarted=1
 else
-  sudo -n systemctl restart "$SERVICE" || {
-    log "could not restart $SERVICE without a password, see the sudoers rule in the self-host guide"
-    exit 1
-  }
+  # The server runs as this same user, so killing it is always allowed and
+  # systemd's Restart=always brings it straight back on the new build. This is
+  # the fallback for when the passwordless sudoers rule is missing or expired,
+  # and it is the difference between "updated" and "silently still on the old
+  # build", which is exactly how a dead auto updater looks from the outside.
+  log "sudo restart unavailable, restarting the process directly instead"
+  pkill -f "server/$SERVER_SCRIPT_NAME" >/dev/null 2>&1 || true
+  restarted=1
+fi
+if [ "$restarted" != "1" ]; then
+  log "could not restart $SERVICE, the site is still running the previous build"
+  exit 1
 fi
 
 PORT="$(grep -E '^PORT=' "$APP_DIR/.env.selfhost" 2>/dev/null | tail -1 | cut -d= -f2)"

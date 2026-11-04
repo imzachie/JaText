@@ -17,8 +17,8 @@ android {
         applicationId "com.ahad00010.jatext"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 71
-        versionName "4.3.0"
+        versionCode 72
+        versionName "4.3.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "API_ORIGIN", "\"https://jatext.us.ci\""
         ndk {
