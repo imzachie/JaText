@@ -617,7 +617,8 @@ fun ReplyQuoteBannerUi(
                 maxLines = 1,
             )
             val safeQuoteAnnotated = remember(reply.body, reply.attachmentName, ink.isLightSurface) {
-                val base = ViewOnceCodec.sanitizePreview(reply.body)
+                val base = com.ahad00010.jatext.data.StatusReplyParser
+                    .preview(ViewOnceCodec.sanitizePreview(reply.body))
                     .ifBlank { reply.attachmentName ?: "Attachment" }
                 buildPreviewAnnotatedWithSpoilers(base, isDark = !ink.isLightSurface)
             }
