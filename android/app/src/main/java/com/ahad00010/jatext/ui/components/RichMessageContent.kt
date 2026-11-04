@@ -96,7 +96,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -554,7 +553,9 @@ fun StatusReplyCardUi(
         verticalAlignment = Alignment.Top,
     ) {
         Icon(
-            imageVector = ImageVector.vectorResource(id = com.ahad00010.jatext.R.drawable.ic_jt_status_reply),
+            painter = androidx.compose.ui.res.painterResource(
+                id = com.ahad00010.jatext.R.drawable.ic_jt_status_reply,
+            ),
             contentDescription = null,
             tint = ink.textColor.copy(alpha = 0.8f),
             modifier = Modifier.size(14.dp).padding(top = 1.dp),

@@ -2,7 +2,6 @@ package com.ahad00010.jatext.ui.screens
 
 import android.media.AudioManager
 import android.media.MediaPlayer
-import android.media.ToneGenerator
 import android.net.Uri
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -55,7 +54,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -124,15 +122,10 @@ private data class BuiltinStatusTrack(
  * track served by the same origin as the API, and uploading your own clip is
  * always available as the other option.
  */
-private const val MELLY_MIKE_URL = "/sounds/melly-mike-young-black-and-rich.mp3"
-
 private val BUILTIN_STATUS_TRACKS = listOf(
     BuiltinStatusTrack("none", "No Music", 0),
     BuiltinStatusTrack("melly_mike", "Melly Mike - Young Black & Rich", 24_960),
 )
-
-private fun builtinTrackUrl(id: String): String =
-    if (id == "melly_mike") MELLY_MIKE_URL else ""
 
 @Composable
 private fun StoryMetricRow(views: Int, likes: Int) {
