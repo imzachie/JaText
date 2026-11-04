@@ -153,6 +153,13 @@ npm run build
 info "Web build ready at $APP_DIR/dist"
 
 log "7/8  Installing the 24/7 systemd service ($SERVICE_NAME)"
+# Remove the older PostgreSQL bridge service if it is still around from a previous setup.
+if systemctl list-unit-files 2>/dev/null | grep -q "jatext-pg-bridge.service"; then
+  info "Disabling the legacy jatext-pg-bridge.service (no longer needed, the app now talks to PostgreSQL directly)"
+  sudo systemctl disable --now jatext-pg-bridge.service >/dev/null 2>&1 || true
+  sudo rm -f /etc/systemd/system/jatext-pg-bridge.service
+  sudo systemctl daemon-reload
+fi
 NODE_BIN="$(command -v node)"
 sed -e "s|__JATEXT_USER__|$USER|g" \
     -e "s|__JATEXT_DIR__|$APP_DIR|g" \

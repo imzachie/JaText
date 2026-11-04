@@ -25,24 +25,27 @@ Why it is built this way:
 
 On the laptop, open Terminal and run:
 
+JaText lives in a private repo, so cloning it needs the GitHub CLI instead of a password (GitHub blocked normal password login for git). Run these three blocks:
+
 ```bash
+# 1. Install the GitHub CLI
 sudo apt-get update
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ahad00010/JaText/main/scripts/setup-ubuntu-selfhost.sh)"
+sudo apt-get install -y gh
 ```
 
-That private repo means the `curl` above will not work until the repo is public, so use this instead, from any folder:
+```bash
+# 2. Log in once in your browser (no password typing, no tokens to copy)
+gh auth login -h github.com -p https -w
+```
 
 ```bash
-# 1. get GitHub CLI and log in once (browser, no password typing)
-sudo apt-get install -y gh
-gh auth login -h github.com -p https -w
-
-# 2. clone your private repo and run the installer
+# 3. Clone your private repo and run the installer
 gh repo clone Ahad00010/JaText ~/JaText -- -b main
 cd ~/JaText
-chmod +x scripts/setup-ubuntu-selfhost.sh
 bash scripts/setup-ubuntu-selfhost.sh
 ```
+
+Already have the repo cloned? Just run `cd ~/JaText && git pull --ff-only && bash scripts/setup-ubuntu-selfhost.sh`.
 
 The installer does all of this for you, and is safe to re-run:
 
