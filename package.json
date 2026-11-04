@@ -1,7 +1,7 @@
 {
   "name": "jatext",
   "private": true,
-  "version": "4.2.1",
+  "version": "4.3.0",
   "packageManager": "pnpm@9.15.9",
   "type": "module",
   "scripts": {
@@ -14,7 +14,9 @@
     "pg:bridge": "node server/pgBridgeServer.js",
     "pg:migrate": "node scripts/migrate-turso-to-postgres.mjs",
     "convex:dev": "convex dev",
-    "convex:deploy": "convex deploy"
+    "convex:deploy": "convex deploy",
+    "selfhost": "node server/standaloneServer.js",
+    "selfhost:setup": "bash scripts/setup-ubuntu-selfhost.sh"
   },
   "dependencies": {
     "@auth/core": "^0.41.3",

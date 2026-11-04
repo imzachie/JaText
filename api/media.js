@@ -8,6 +8,9 @@ export const config = {
 };
 
 export const MEDIA_CHUNK_BYTES = 768 * 1024; // 768 KB per DB chunk
+const DEFAULT_PUBLIC_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci")
+  .replace(/^https?:\/\//, "")
+  .replace(/\/+$/, "");
 const MAX_SINGLE_SHOT_BYTES = 768 * 1024; // > 768 KB splits into media_chunks
 const MAX_SERVE_BYTES = 3 * 1024 * 1024; // 3 MB max per HTTP Range slice (< Vercel 4.5 MB cap)
 const MAX_INLINE_IMAGE_SERVE_BYTES = 4 * 1024 * 1024; // 4 MB max full 200 OK image (< Vercel 4.5 MB cap)
@@ -134,7 +137,7 @@ function resolvePublicOrigin(req) {
   const explicit = (process.env.PUBLIC_APP_ORIGIN || "").trim();
   if (explicit) return explicit.replace(/\/+$/, "");
   const proto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "jatext.vercel.app")
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || DEFAULT_PUBLIC_HOST)
     .split(",")[0]
     .trim();
   return `${proto}://${host}`;

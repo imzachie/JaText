@@ -1,4 +1,5 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { PUBLIC_APP_HOST } from "../lib/publicOrigin";
 import { isGenuineIosDevice } from "../lib/iosDetection";
 import { navigateToChats, navigateToIosChats } from "../lib/webRoute";
 import { IosWelcomeGate } from "./IosWelcomeGate";
@@ -663,8 +664,8 @@ export function LandingHeroPage() {
                   </svg>
                   <span>
                     {isIosVisitor
-                      ? "Opens jatext.vercel.app/ios/chats right in your iOS browser, no install needed."
-                      : "Opens jatext.vercel.app/chats right in your browser, no install needed."}
+                      ? `Opens ${PUBLIC_APP_HOST}/ios/chats right in your iOS browser, no install needed.`
+                      : `Opens ${PUBLIC_APP_HOST}/chats right in your browser, no install needed.`}
                   </span>
                 </div>
 
@@ -1054,12 +1055,12 @@ export function LandingHeroPage() {
                 {isIosVisitor ? (
                   <>
                     Launch JaText for iOS instantly at{" "}
-                    <strong>jatext.vercel.app/ios/chats</strong> with zero installation required.
+                    <strong>{PUBLIC_APP_HOST}/ios/chats</strong> with zero installation required.
                   </>
                 ) : (
                   <>
                     Launch the full JaText web app at{" "}
-                    <strong>jatext.vercel.app/chats</strong> or grab the latest signed Android
+                    <strong>{PUBLIC_APP_HOST}/chats</strong> or grab the latest signed Android
                     Release APK (v4.2.1).
                   </>
                 )}

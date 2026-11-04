@@ -130,7 +130,7 @@ jobs:
           gh release delete apk-latest --cleanup-tag --yes || true
           gh release create apk-latest /tmp/JaText-release.apk \
             --title "JaText v${VERSION_NAME} (build ${VERSION_CODE})" \
-            --notes "Pure Native Kotlin + Jetpack Compose Signed Release APK built from commit ${GITHUB_SHA}. VersionName: ${VERSION_NAME}. VersionCode: ${VERSION_CODE}. Backend: Turso. Blob: ${BLOB_SHA}"
+            --notes "Pure Native Kotlin + Jetpack Compose Signed Release APK built from commit ${GITHUB_SHA}. VersionName: ${VERSION_NAME}. VersionCode: ${VERSION_CODE}. Backend: self-hosted PostgreSQL. Blob: ${BLOB_SHA}"
 
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
             AUTHOR_NAME=$(git log -1 --format='%an')
@@ -146,7 +146,7 @@ jobs:
             jq -n \
               --arg vn "${VERSION_NAME}" \
               --argjson vc "${VERSION_CODE}" \
-              --arg url "https://jatext.vercel.app/downloads/JaText-release.apk" \
+              --arg url "https://jatext.us.ci/downloads/JaText-release.apk" \
               --arg sha "${GITHUB_SHA}" \
               --arg at "${PUBLISHED_AT}" \
               '{versionName: $vn, versionCode: $vc, downloadUrl: $url, commitSha: $sha, publishedAt: $at}' \

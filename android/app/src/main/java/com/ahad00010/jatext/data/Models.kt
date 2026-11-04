@@ -1,4 +1,5 @@
 package com.ahad00010.jatext.data
+import com.ahad00010.jatext.BuildConfig
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -743,7 +744,7 @@ data class LinkPreviewInfo(
 data class ApkVersionManifest(
     val versionName: String = "",
     val versionCode: Int = 0,
-    val downloadUrl: String = "https://jatext.vercel.app/downloads/JaText-release.apk",
+    val downloadUrl: String = "${BuildConfig.API_ORIGIN.trimEnd('/')}/downloads/JaText-release.apk",
     val commitSha: String? = null,
     val publishedAt: String? = null,
 )

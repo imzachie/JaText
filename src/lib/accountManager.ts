@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { PUBLIC_APP_ORIGIN } from "./publicOrigin";
 import { Capacitor } from "@capacitor/core";
 import { clearActiveE2EESession, clearDecryptedSessionCaches } from "./e2ee/keystore";
 import { isPrimaryMobileAppRuntime } from "./iosDetection";
@@ -401,7 +402,7 @@ export async function syncNativeActiveSlotTokens(
     await JaTextNative.setAuthStorageItem({
       key: tursoKey,
       value: tursoJwt,
-      convexUrl: convexUrl || "https://jatext.vercel.app",
+      convexUrl: convexUrl || PUBLIC_APP_ORIGIN,
     }).catch(() => undefined);
     return;
   }
@@ -446,7 +447,7 @@ export async function syncActiveUserToSavedAccounts(
       await writeAuthItem(
         getTursoTokenKeyForSlot(canonicalSlotId),
         tursoToken,
-        convexUrl || "https://jatext.vercel.app",
+        convexUrl || PUBLIC_APP_ORIGIN,
       );
       await clearSlotStoredTokens(currentSlotId, convexUrl);
     } else if (convexUrl && convexUrl !== "turso") {

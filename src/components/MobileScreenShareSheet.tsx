@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { PUBLIC_APP_ORIGIN } from "../lib/publicOrigin";
 import { MonitorUp, Video, Volume2, X } from "./CallIcons";
 import { AnimatedModal } from "./AnimatedModal";
 import { formatAudioDuration } from "../lib/voiceNotes";
 import { FilmIcon, PauseIcon, PlayIcon, SmartphoneShareIcon } from "./UiIcons";
 
-const APK_DOWNLOAD_URL = "https://jatext.vercel.app/downloads/JaText-release.apk";
+const APK_DOWNLOAD_URL = `${PUBLIC_APP_ORIGIN}/downloads/JaText-release.apk`;
 
 export function MobileScreenShareSheet({
   open,

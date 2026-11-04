@@ -1,0 +1,23 @@
+[Unit]
+Description=JaText self-hosted web + API server (PostgreSQL)
+Documentation=https://jatext.us.ci
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=__JATEXT_USER__
+WorkingDirectory=__JATEXT_DIR__
+EnvironmentFile=__JATEXT_DIR__/.env.selfhost
+ExecStart=__JATEXT_NODE__ __JATEXT_DIR__/server/standaloneServer.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jatext
+
+[Install]
+WantedBy=multi-user.target

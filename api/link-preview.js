@@ -107,12 +107,18 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
+const SELF_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci")
+  .replace(/^https?:\/\//, "")
+  .replace(/\/+$/, "")
+  .toLowerCase();
+const SELF_ORIGIN = `https://${SELF_HOST}`;
+
 async function trySpecialOEmbed(parsedUrl) {
   const host = parsedUrl.hostname.toLowerCase().replace(/^www\./, "");
   const fullUrl = parsedUrl.toString();
 
   // Official JaText Web & Chat routes
-  if (host === "jatext.vercel.app") {
+  if (host === SELF_HOST) {
     const isChats = parsedUrl.pathname.startsWith("/chats");
     return {
       url: fullUrl,
@@ -123,7 +129,7 @@ async function trySpecialOEmbed(parsedUrl) {
         : "JaText · Private End-to-End Encrypted Chat & HD Calls",
       description:
         "Zero-knowledge E2EE messaging (ECDH P-256 + AES-256-GCM) with 1:1 & mesh group voice/video calls, screen sharing with audio, custom illustrated chat bubbles, voice-note transcription, and instant multi-account switching.",
-      imageUrl: "https://jatext.vercel.app/jatext-og-banner.jpg",
+      imageUrl: `${SELF_ORIGIN}/jatext-og-banner.jpg`,
       themeColor: "#16A34A",
     };
   }
@@ -260,7 +266,7 @@ export default async function handler(req, res) {
       redirect: "follow",
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (compatible; Discordbot/2.0; +https://jatext.vercel.app)",
+          `Mozilla/5.0 (compatible; Discordbot/2.0; +${SELF_ORIGIN})`,
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
         "Accept-Language": "en-US,en;q=0.9",
       },

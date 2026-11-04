@@ -92,6 +92,16 @@ export function getTursoConfig() {
   };
 }
 
+function publicAppOrigin() {
+  return (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+function defaultWebAuthnRpId() {
+  return publicAppOrigin().replace(/^https?:\/\//, "").toLowerCase();
+}
+
 function getJwtSecret() {
   const explicit = (process.env.AUTH_SECRET || process.env.JWT_SECRET || "").trim();
   if (explicit) return explicit;
@@ -952,7 +962,12 @@ function isAllowedWebAuthnOrigin(origin, rpId) {
     if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") return true;
     if (parsed.protocol !== "https:") return false;
     if (parsed.hostname === rpId || parsed.hostname.endsWith(`.${rpId}`)) return true;
-    if (rpId === "jatext.vercel.app" && parsed.hostname.endsWith(".vercel.app")) return true;
+    const defaultRpId = defaultWebAuthnRpId();
+    if (
+      defaultRpId !== rpId &&
+      (parsed.hostname === defaultRpId || parsed.hostname.endsWith(`.${defaultRpId}`))
+    )
+      return true;
     const extraWeb = String(process.env.WEBAUTHN_EXTRA_ORIGINS || "")
       .split(",")
       .map((s) => s.trim())
@@ -5024,7 +5039,9 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const pairingId = String(args.pairingId || "").trim();
       const linkSecret = String(args.linkSecret || "").trim();
       if (!pairingId || !linkSecret) {
-        throw new TursoAppError("Invalid QR code. Point your camera at the QR code on jatext.vercel.app/chats.");
+        throw new TursoAppError(
+        `Invalid QR code. Point your camera at the QR code on ${publicAppOrigin()}/chats.`,
+      );
       }
       const res = await db.execute({
         sql: `SELECT * FROM device_link_sessions WHERE pairing_id = ? LIMIT 1`,
@@ -5464,7 +5481,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
     case "beginPasskeyRegistration": {
       const meRow = await requireMeRow(db, auth);
       const meId = String(meRow.id);
-      const rpId = String(args.rpId || "jatext.vercel.app").trim().toLowerCase();
+      const rpId = String(args.rpId || defaultWebAuthnRpId()).trim().toLowerCase();
       const challengeId = newId();
       const challengeB64 = base64UrlEncode(crypto.randomBytes(32));
       await db
@@ -5629,7 +5646,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
     }
 
     case "beginPasskeyLogin": {
-      const rpId = String(args.rpId || "jatext.vercel.app").trim().toLowerCase();
+      const rpId = String(args.rpId || defaultWebAuthnRpId()).trim().toLowerCase();
       const emailHint = String(args.email || "").trim().toLowerCase();
       const challengeId = newId();
       const challengeB64 = base64UrlEncode(crypto.randomBytes(32));

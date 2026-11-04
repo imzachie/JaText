@@ -1,4 +1,5 @@
 package com.ahad00010.jatext.webrtc
+import com.ahad00010.jatext.BuildConfig
 
 import android.Manifest
 import android.content.Context
@@ -844,8 +845,8 @@ class NativeCallEngine(
         if (clean.isEmpty()) return
         val fullUrl = when {
             clean.startsWith("http://") || clean.startsWith("https://") -> clean
-            clean.startsWith("/") -> "https://jatext.vercel.app$clean"
-            else -> "https://jatext.vercel.app/api/media?id=$clean"
+            clean.startsWith("/") -> "${BuildConfig.API_ORIGIN.trimEnd('/')}$clean"
+            else -> "${BuildConfig.API_ORIGIN.trimEnd('/')}/api/media?id=$clean"
         }
         scope.launch(Dispatchers.IO) {
             try {

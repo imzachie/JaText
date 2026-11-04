@@ -3,6 +3,7 @@ import {
   DEFAULT_ACCOUNT_SLOT_ID,
   setTursoTokenForSlot,
 } from "./accountManager";
+import { PUBLIC_APP_ORIGIN } from "./publicOrigin";
 import { PUBLIC_TURSO_API_ORIGIN, tursoRpc } from "./tursoClient";
 import {
   base64UrlToBytes,
@@ -363,7 +364,7 @@ export async function approveQrPairingFromPrimaryMobile(
   const parts = trimmed.split("|");
   if (parts.length < 4 || parts[0] !== QR_LINK_PREFIX) {
     throw new Error(
-      "That QR code is not a valid JaText Web login code. Open jatext.vercel.app/chats on your computer and scan the QR code shown there.",
+      `That QR code is not a valid JaText Web login code. Open ${PUBLIC_APP_ORIGIN}/chats on your computer and scan the QR code shown there.`,
     );
   }
   const [, pairingId, linkSecret, webDhPubB64] = parts;

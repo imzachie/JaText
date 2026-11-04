@@ -1362,8 +1362,8 @@ fun SettingsModalScreen(
                                                             val raw = clip.audioUrl.trim()
                                                             val full = when {
                                                                 raw.startsWith("http") -> raw
-                                                                raw.startsWith("/") -> "https://jatext.vercel.app$raw"
-                                                                else -> "https://jatext.vercel.app/api/media?id=$raw"
+                                                                raw.startsWith("/") -> "${BuildConfig.API_ORIGIN.trimEnd('/')}$raw"
+                                                                else -> "${BuildConfig.API_ORIGIN.trimEnd('/')}/api/media?id=$raw"
                                                             }
                                                             runCatching {
                                                                 MediaPlayer().apply {
@@ -4335,7 +4335,7 @@ private fun LinkedDevicesSettingsSection(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "Open jatext.vercel.app/chats on your computer and scan the QR code to use JaText on Web.",
+                    text = "Open ${BuildConfig.API_ORIGIN.trimEnd('/')}/chats on your computer and scan the QR code to use JaText on Web.",
                     color = palette.textSecondary,
                     fontSize = 13.sp,
                     lineHeight = 18.5.sp,

@@ -1,4 +1,5 @@
 package com.ahad00010.jatext.ui.components
+import com.ahad00010.jatext.BuildConfig
 
 import android.content.Intent
 import android.graphics.Bitmap
@@ -2986,7 +2987,7 @@ fun ViewOnceMessageBubbleUi(
                 }
                 pushStringAnnotation(
                     tag = "LEARN_MORE",
-                    annotation = "https://jatext.vercel.app/view-once-privacy.html",
+                    annotation = "${BuildConfig.API_ORIGIN.trimEnd('/')}/view-once-privacy.html",
                 )
                 withStyle(
                     SpanStyle(

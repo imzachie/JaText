@@ -1,4 +1,5 @@
 package com.ahad00010.jatext.auth
+import com.ahad00010.jatext.BuildConfig
 
 import android.app.Activity
 import androidx.credentials.CreatePublicKeyCredentialRequest
@@ -23,7 +24,7 @@ import kotlinx.serialization.json.jsonPrimitive
 class PasskeyCancelledException : Exception("Passkey operation was cancelled.")
 
 object PasskeyManagerHelper {
-    private const val RP_ID = "jatext.vercel.app"
+    private val RP_ID = BuildConfig.API_ORIGIN.trimEnd('/').substringAfter("://")
 
     suspend fun registerPasskey(
         activity: Activity,
