@@ -28,6 +28,7 @@ import {
   parseCallInvite,
   useCall,
 } from "./lib/calling";
+import { formatStatusReplyPreview } from "./lib/statusReply";
 import { flushPendingDrafts } from "./lib/drafts";
 import {
   applyRemoteSyncedThemeIfChanged,
@@ -491,7 +492,7 @@ function AppContent() {
         playMessageSound("received");
       }
 
-      const readableText = formatPreviewMessageText(preview.body);
+      const readableText = formatStatusReplyPreview(formatPreviewMessageText(preview.body));
       const shouldDispatchAlert =
         notificationsEnabled &&
         !viewingThisExactChat &&
@@ -552,7 +553,7 @@ function AppContent() {
                 .reverse()
                 .find((m) => m.senderId === friend.id && !m.unsentAt && !isHiddenCallSignal(m.body));
               const resolved = latest
-                ? formatPreviewMessageText(latest.body) ||
+                ? formatStatusReplyPreview(formatPreviewMessageText(latest.body)) ||
                   (latest.attachmentType?.startsWith("audio/")
                     ? "Voice note"
                     : latest.attachmentName || "Sent you an attachment")
@@ -623,7 +624,7 @@ function AppContent() {
       const title = group.lastMentionedMe
         ? `${senderLabel} mentioned you in ${group.name}`
         : `${group.name} · ${senderLabel}`;
-      const readableGroupBody = formatPreviewMessageText(group.lastMessage);
+      const readableGroupBody = formatStatusReplyPreview(formatPreviewMessageText(group.lastMessage));
 
       if (
         notificationsEnabled &&
@@ -684,7 +685,7 @@ function AppContent() {
                 .reverse()
                 .find((m) => m.senderId !== me.id && !m.unsentAt && !isHiddenCallSignal(m.body));
               const resolved = latest
-                ? formatPreviewMessageText(latest.body) ||
+                ? formatStatusReplyPreview(formatPreviewMessageText(latest.body)) ||
                   latest.stickerName ||
                   latest.attachmentName ||
                   "New message in group"

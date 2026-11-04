@@ -202,6 +202,15 @@ export function IosEyeIcon({ size = 16, strokeWidth = 2.1, className }: IconProp
   );
 }
 
+export function IosReplyIcon({ size = 16, strokeWidth = 2.1, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <polyline points="9 17 4 12 9 7" />
+      <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+    </svg>
+  );
+}
+
 export function IosHeartIcon({ size = 16, strokeWidth = 2.1, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">

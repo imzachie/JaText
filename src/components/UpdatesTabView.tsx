@@ -1295,6 +1295,13 @@ export function FullScreenStoryViewerModal({
   const currentSeg = currentStack?.segments[segIdx];
   const isOwnStory = currentStack?.userId === meId;
   const effectivePaused = isHoldPaused || replyOpen || isClosing;
+  /**
+   * True for the moment between "story is on screen" and "audio actually started".
+   * The progress bar waits for it so the music never begins half a story late.
+   */
+  const [audioStarting, setAudioStarting] = useState(false);
+  const audioStartTimerRef = useRef<number | null>(null);
+  const progressPaused = effectivePaused || audioStarting;
 
   const triggerSmoothDismiss = useCallback(() => {
     if (isClosing) return;
@@ -1372,7 +1379,7 @@ export function FullScreenStoryViewerModal({
     const step = (now: number) => {
       const dt = Math.min(100, Math.max(0, now - lastTickRef.current));
       lastTickRef.current = now;
-      if (!effectivePaused) {
+      if (!progressPaused) {
         setElapsedMs((prev) => {
           const next = prev + dt;
           if (next >= STORY_SEGMENT_DURATION_MS) {
@@ -1386,7 +1393,7 @@ export function FullScreenStoryViewerModal({
     };
     rafId = window.requestAnimationFrame(step);
     return () => window.cancelAnimationFrame(rafId);
-  }, [advanceNext, effectivePaused]);
+  }, [advanceNext, progressPaused]);
 
   useEffect(() => {
     if (audioElRef.current) {
@@ -1403,13 +1410,37 @@ export function FullScreenStoryViewerModal({
 
     const audio = new Audio(resolveTursoMediaUrl(currentSeg.audioUrl));
     audio.volume = 0.7;
+    // "auto" is the default for new Audio(), but being explicit keeps the clip
+    // buffering from the moment the story opens instead of after play() is called.
+    audio.preload = "auto";
     audioElRef.current = audio;
-    void audio.play().catch(() => undefined);
+
+    setAudioStarting(true);
+    const markAudioReady = () => {
+      setAudioStarting(false);
+      if (audioStartTimerRef.current !== null) {
+        window.clearTimeout(audioStartTimerRef.current);
+        audioStartTimerRef.current = null;
+      }
+    };
+    // Safety net: never hold the story hostage to a slow or blocked stream.
+    audioStartTimerRef.current = window.setTimeout(markAudioReady, 1500);
+    audio.addEventListener("playing", markAudioReady);
+    audio.addEventListener("error", markAudioReady);
+    void audio.play().catch(() => markAudioReady());
+
     const capTimer = window.setTimeout(() => {
       audio.pause();
     }, MAX_AUDIO_DURATION_MS);
     return () => {
       window.clearTimeout(capTimer);
+      if (audioStartTimerRef.current !== null) {
+        window.clearTimeout(audioStartTimerRef.current);
+        audioStartTimerRef.current = null;
+      }
+      audio.removeEventListener("playing", markAudioReady);
+      audio.removeEventListener("error", markAudioReady);
+      setAudioStarting(false);
       audio.pause();
     };
   }, [currentSeg?.audioUrl, currentSeg?.id]);
