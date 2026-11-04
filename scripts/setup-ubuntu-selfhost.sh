@@ -144,6 +144,28 @@ else
   info "$ENV_FILE already exists, keeping your existing credentials untouched."
 fi
 
+# Optional Android push notifications (FCM).
+# The Firebase key is a file: pasting a private key through a prompt mangles its newlines,
+# which fails silently with no push and no error. So ask for a path, not for the key itself.
+if [ -t 0 ] && ! grep -q "^FCM_SERVICE_ACCOUNT_FILE=" "$ENV_FILE" 2>/dev/null; then
+  printf '\n\e[1;36m==> Android push notifications (optional)\e[0m\n'
+  printf '    Firebase Console > Project settings > Service accounts > Generate new private key.\n'
+  printf '    Paste the full path of the downloaded .json, or press Enter to skip: '
+  read -r FCM_KEY_FILE || true
+  FCM_KEY_FILE="${FCM_KEY_FILE%\"}"
+  FCM_KEY_FILE="${FCM_KEY_FILE#\"}"
+  if [ -n "${FCM_KEY_FILE:-}" ] && [ -f "$FCM_KEY_FILE" ]; then
+    cp "$FCM_KEY_FILE" "$APP_DIR/fcm-service-account.json"
+    chmod 600 "$APP_DIR/fcm-service-account.json"
+    printf 'FCM_SERVICE_ACCOUNT_FILE=%s/fcm-service-account.json\n' "$APP_DIR" >>"$ENV_FILE"
+    info "Push notifications enabled from $APP_DIR/fcm-service-account.json."
+  elif [ -n "${FCM_KEY_FILE:-}" ]; then
+    warn "No such file: $FCM_KEY_FILE - skipping push for now."
+  else
+    info "Skipped. Drop the key at $APP_DIR/fcm-service-account.json later to enable push."
+  fi
+fi
+
 # Optional Google Sign-In. Only prompts on an interactive terminal, never when piped.
 if [ -t 0 ] && ! grep -q "^GOOGLE_CLIENT_ID=" "$ENV_FILE" 2>/dev/null; then
   printf '\n\e[1;36m==> Google Sign-In (optional)\e[0m\n'

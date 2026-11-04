@@ -29,6 +29,7 @@ import ios404Handler from "../api/ios-404.js";
 import linkPreviewHandler from "../api/link-preview.js";
 import mediaHandler from "../api/media.js";
 import oauthGoogleHandler from "../api/oauth-google.js";
+import pushTestHandler from "../api/push-test.js";
 import tursoHandler from "../api/turso.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -332,6 +333,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (pathname === "/api/oauth-google") {
     return runApiHandler(oauthGoogleHandler, req, res, { maxBodyBytes: 2 * 1024 * 1024 });
+  }
+  if (pathname === "/api/push-test") {
+    return runApiHandler(pushTestHandler, req, res, { maxBodyBytes: 64 * 1024 });
   }
   if (pathname === "/api/media") {
     return runApiHandler(mediaHandler, req, res, {
