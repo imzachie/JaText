@@ -199,7 +199,87 @@ curl -sS "https://jatext.us.ci/api/oauth-google?action=config"; echo
 
 If your Android app uses its own Android-type OAuth client, add `GOOGLE_ANDROID_CLIENT_ID=<android-client-id>` as well. In most cases you do not need it, the server already accepts any audience from the same Google Cloud project.
 
-## 7. Optional: bring over your old Turso data
+## 7. Enable Android push notifications (FCM)
+
+Push notifications are **already compiled into your APK**. The Firebase app id baked into build 71 is
+`1:1033149674697:android:a8f331c4a67ce9a7144918`, so your Firebase project number is **1033149674697**.
+The only missing piece is the server-side key that lets your laptop talk to Firebase. No APK rebuild needed.
+
+### 7.1 Download the service-account key
+
+1. Open `https://console.firebase.google.com` and select the project that owns the Android app
+   `com.ahad00010.jatext`. If you have several projects, it is the one with project number `1033149674697`.
+2. Gear icon next to **Project overview** > **Project settings** > **Service accounts** tab.
+3. Click **Generate new private key** > **Generate key**. A `.json` file downloads.
+
+### 7.2 Put the key on the server
+
+```bash
+cp ~/Downloads/*firebase-adminsdk*.json ~/JaText/fcm-service-account.json
+chmod 600 ~/JaText/fcm-service-account.json
+printf 'FCM_SERVICE_ACCOUNT_FILE=%s/fcm-service-account.json\n' "$HOME/JaText" >> ~/JaText/.env.selfhost
+sudo systemctl restart jatext.service
+```
+
+Expected: the first three commands print nothing, `systemctl restart` prints nothing.
+
+Use a **file**, not `FCM_SERVICE_ACCOUNT_JSON`. The key contains newlines that systemd env files and
+shell prompts mangle, and a mangled key fails silently with no push and no error.
+
+(If you really want the env var version: `FCM_SERVICE_ACCOUNT_JSON=$(base64 -w0 ~/JaText/fcm-service-account.json)`
+is accepted too, base64 is detected automatically.)
+
+### 7.3 Check the server sees it
+
+```bash
+curl -sS "https://jatext.us.ci/api/push-test"; echo
+```
+
+Expected, the important part is `"configured":true` and your real project id:
+
+```json
+{"ok":true,"configured":true,"projectId":"jatext-xxxxx","clientEmail":"firebase-adminsdk-xxxx@jatext-xxxxx.iam.gserviceaccount.com","source":"FCM_SERVICE_ACCOUNT_FILE","usage":"POST with an Authorization: Bearer <JaText token> header to send a test push."}
+```
+
+`https://jatext.us.ci/api/auth-status` also reports `"fcmConfigured":true` and `"fcmProjectId":"jatext-xxxxx"`.
+
+### 7.4 Send a real test push to your phone
+
+1. On the phone: open JaText, log in, and allow notifications.
+2. In a desktop browser logged in to `https://jatext.us.ci` with the **same** account, press F12, go to the
+   Console tab, paste this and press Enter (it copies your login token to the clipboard):
+
+```js
+copy(localStorage.getItem("jatext:turso-jwt:v1"))
+```
+
+3. Back on the laptop, paste the token where it says `PASTE`:
+
+```bash
+curl -sS -X POST -H "Authorization: Bearer PASTE" "https://jatext.us.ci/api/push-test"; echo
+```
+
+Expected when everything is correct, your phone buzzes within a second or two:
+
+```json
+{"ok":true,"code":"sent","projectId":"jatext-xxxxx","deviceCount":1,"successCount":1,"removedStaleTokens":0,"results":[{"token":"fAbCdEfGhI...xyz1","success":true,"error":null}]}
+```
+
+### 7.5 What the error codes mean
+
+| Response | Meaning | Fix |
+| --- | --- | --- |
+| `code":"fcm_not_configured"` | No readable service-account key | Redo 7.2, check the file path and `sudo systemctl restart jatext.service` |
+| `code":"no_devices"` | Server is fine, no phone has registered a push token | Log in on the Android app and allow notifications, then retry |
+| `code":"send_failed"` with `messaging/registration-token-not-registered` | Stale token, the app was reinstalled | Log out and back in on the phone, the token is re-registered |
+| `code":"send_failed"` with `messaging/invalid-argument` or `sender-id-mismatch` | Key is from a **different Firebase project** than the APK | Generate the key in project `1033149674697` |
+| `code":"fcm_send_error"` | Firebase rejected the request or has no network | Check Cloud Messaging is enabled in the Firebase project |
+
+Push only works for the **Android app**. The web app has no push, it is not implemented.
+
+---
+
+## 8. Optional: bring over your old Turso data
 
 Only possible if your old Turso database still answers reads.
 
@@ -213,7 +293,7 @@ npm run pg:migrate
 
 ---
 
-## 8. Day to day commands
+## 9. Day to day commands
 
 ```bash
 # Live logs
@@ -236,13 +316,15 @@ sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-M
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
 | `cloudflared.service` fails with `Job for cloudflared.service failed because the control process exited with error code` | The service runs as root and reads `/etc/cloudflared/config.yml`, but `cloudflared tunnel create` saves credentials to your own `~/.cloudflared/<TUNNEL_ID>.json`. Copy them with `sudo cp ~/.cloudflared/<TUNNEL_ID>.json /root/.cloudflared/`, write the config shown in section 3, then `sudo systemctl restart cloudflared` |
 | `curl http://127.0.0.1:8787/api/auth-status` refuses the connection | `sudo systemctl status jatext.service` then `sudo journalctl -u jatext.service -n 80` |
 | `dbConnected: false` | Check PostgreSQL is up: `sudo -u postgres pg_isready`, and confirm `DATABASE_URL` in `~/JaText/.env.selfhost` |
+| `/api/push-test` says `configured:false` after adding the key | The file path in `FCM_SERVICE_ACCOUNT_FILE` is wrong, or the service was not restarted. Run `ls -l ~/JaText/fcm-service-account.json`, `grep FCM ~/JaText/.env.selfhost`, then `sudo systemctl restart jatext.service` |
+| Push works from `/api/push-test` but not for real messages | The phone has not registered a token under the account receiving them. Log out and back in on Android, then re run the test |
 | Cloudflare shows `1033` or `1034` error | The tunnel service is not connected. `sudo systemctl restart cloudflared` and check `sudo cloudflared tunnel info jatext` |
 | Browser shows `ERR_NAME_NOT_RESOLVED` | DNS has not propagated yet, or the CNAME from step 2 Option B is missing or wrong |
 | Site works at home, not on mobile data | Wait for DNS propagation, then `dig jatext.us.ci +short` |
@@ -252,7 +334,7 @@ sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-M
 
 ---
 
-## 10. No-DNS fallback: Tailscale Funnel
+## 11. No-DNS fallback: Tailscale Funnel
 
 If your DNS provider will not delegate nameservers, Tailscale Funnel gives you a permanent public HTTPS URL with zero DNS records. You already have Tailscale installed from an earlier step.
 
@@ -270,7 +352,7 @@ The web app works on that URL immediately, because it derives its API origin fro
 3. Push to `main`, GitHub Actions publishes the new signed APK to `apk-latest`.
 4. Update `release-cdn/apk-version.json` so phones see the update.
 
-## 11. If you ever change the domain
+## 12. If you ever change the domain
 
 The domain lives in exactly three places:
 

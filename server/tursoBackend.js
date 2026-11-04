@@ -7,6 +7,7 @@ import {
   createPostgresBridgeClient,
   createPostgresPoolClient,
 } from "./postgresAdapter.js";
+import { getFcmServiceAccount, getFcmStatus } from "./fcmServiceAccount.js";
 
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -1153,20 +1154,18 @@ function computeActivityStatus(pref, presenceRow) {
 /* ==================== Optional Background FCM Push ==================== */
 
 function getFirebaseMessagingIfConfigured() {
-  const raw = process.env.FCM_SERVICE_ACCOUNT_JSON;
-  if (!raw) return null;
+  const creds = getFcmServiceAccount();
+  if (!creds) return null;
   try {
-    const creds = JSON.parse(raw);
-    if (!creds?.project_id || !creds?.client_email || !creds?.private_key) return null;
     const appName = "jatext-turso-fcm";
     const app =
       getApps().find((a) => a.name === appName) ||
       initializeApp(
         {
           credential: cert({
-            projectId: creds.project_id,
-            clientEmail: creds.client_email,
-            privateKey: creds.private_key,
+            projectId: creds.projectId,
+            clientEmail: creds.clientEmail,
+            privateKey: creds.privateKey,
           }),
         },
         appName,
@@ -1174,6 +1173,130 @@ function getFirebaseMessagingIfConfigured() {
     return getMessaging(app);
   } catch {
     return null;
+  }
+}
+
+export function isFcmConfigured() {
+  return Boolean(getFcmServiceAccount());
+}
+
+export { getFcmStatus };
+
+/**
+ * Sends one push to every device registered by `userId` and reports per-token
+ * results. Used by `POST /api/push-test` so a self-hoster can prove the whole
+ * chain (Firebase credential -> stored token -> device) in a single command.
+ */
+export async function sendDiagnosticPush(userId, options = {}) {
+  const status = getFcmStatus();
+  if (!status.configured) {
+    return {
+      ok: false,
+      code: "fcm_not_configured",
+      error:
+        "No Firebase service account on the server. Set FCM_SERVICE_ACCOUNT_FILE (path to the downloaded JSON key) in .env.selfhost and restart jatext.service.",
+      ...status,
+    };
+  }
+  const messaging = getFirebaseMessagingIfConfigured();
+  if (!messaging) {
+    return {
+      ok: false,
+      code: "fcm_init_failed",
+      error: "The Firebase service account was found but could not be initialised (bad private key?).",
+      ...status,
+    };
+  }
+  const uid = String(userId || "");
+  if (!uid) {
+    return { ok: false, code: "missing_user", error: "Missing user id.", ...status };
+  }
+
+  let tokens = [];
+  try {
+    const db = await getDb();
+    const res = await db.execute({
+      sql: `SELECT token, updated_at FROM push_devices WHERE user_id = ?`,
+      args: [uid],
+    });
+    tokens = [...new Set(res.rows.map((r) => String(r.token || "")).filter(Boolean))];
+  } catch (err) {
+    return {
+      ok: false,
+      code: "db_error",
+      error: err instanceof Error ? err.message : String(err),
+      ...status,
+    };
+  }
+
+  if (!tokens.length) {
+    return {
+      ok: false,
+      code: "no_devices",
+      error:
+        "No Android device has registered a push token for this account. Open JaText on the phone, log in, and allow notifications.",
+      deviceCount: 0,
+      ...status,
+    };
+  }
+
+  const title = String(options.title || "JaText test push");
+  const body = String(options.body || "Push notifications are working.");
+
+  try {
+    const out = await messaging.sendEachForMulticast({
+      tokens,
+      data: {
+        title,
+        body,
+        type: "message",
+        senderId: "",
+        isEncrypted: "0",
+      },
+      android: { priority: "high", ttl: 60_000 },
+    });
+    const results = out.responses.map((r, idx) => ({
+      token: `${tokens[idx].slice(0, 10)}...${tokens[idx].slice(-4)}`,
+      success: Boolean(r.success),
+      error: r.error?.code || r.error?.message || null,
+    }));
+    const stale = [];
+    results.forEach((r, idx) => {
+      if (
+        !r.success &&
+        (r.error === "messaging/registration-token-not-registered" ||
+          r.error === "messaging/invalid-registration-token")
+      ) {
+        stale.push(tokens[idx]);
+      }
+    });
+    if (stale.length) {
+      const ph = stale.map(() => "?").join(",");
+      try {
+        const db = await getDb();
+        await db.execute({ sql: `DELETE FROM push_devices WHERE token IN (${ph})`, args: stale });
+      } catch {
+        // best effort cleanup
+      }
+    }
+    const successCount = results.filter((r) => r.success).length;
+    return {
+      ok: successCount > 0,
+      code: successCount > 0 ? "sent" : "send_failed",
+      projectId: status.projectId,
+      deviceCount: tokens.length,
+      successCount,
+      removedStaleTokens: stale.length,
+      results,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: "fcm_send_error",
+      error: err instanceof Error ? err.message : String(err),
+      deviceCount: tokens.length,
+      ...status,
+    };
   }
 }
 

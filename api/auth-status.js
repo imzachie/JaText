@@ -1,4 +1,4 @@
-import { getDb, getTursoConfig } from "../server/tursoBackend.js";
+import { getDb, getFcmStatus, getTursoConfig } from "../server/tursoBackend.js";
 import { enforceHttpRateLimit } from "../server/rateLimiter.js";
 
 export default async function handler(req, res) {
@@ -16,7 +16,8 @@ export default async function handler(req, res) {
     (process.env.GOOGLE_CLIENT_ID || process.env.AUTH_GOOGLE_ID) &&
       (process.env.GOOGLE_CLIENT_SECRET || process.env.AUTH_GOOGLE_SECRET),
   );
-  const fcmConfigured = Boolean(process.env.FCM_SERVICE_ACCOUNT_JSON);
+  const fcm = getFcmStatus();
+  const fcmConfigured = fcm.configured;
   const klipyConfigured = Boolean(process.env.KLIPY_API_KEY);
 
   let dbConnected = false;
@@ -60,6 +61,7 @@ export default async function handler(req, res) {
     userCount,
     googleConfigured,
     fcmConfigured,
+    fcmProjectId: fcm.projectId,
     klipyConfigured,
     ...(dbError ? { error: dbError } : {}),
   });
