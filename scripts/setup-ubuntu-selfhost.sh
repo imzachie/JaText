@@ -144,6 +144,25 @@ else
   info "$ENV_FILE already exists, keeping your existing credentials untouched."
 fi
 
+# Optional Google Sign-In. Only prompts on an interactive terminal, never when piped.
+if [ -t 0 ] && ! grep -q "^GOOGLE_CLIENT_ID=" "$ENV_FILE" 2>/dev/null; then
+  printf '\n\e[1;36m==> Google Sign-In (optional)\e[0m\n'
+  printf '    Paste your Google OAuth Web client ID, or press Enter to skip: '
+  read -r GOOGLE_CLIENT_ID || true
+  if [ -n "${GOOGLE_CLIENT_ID:-}" ]; then
+    printf '    Paste the matching client secret: '
+    read -r GOOGLE_CLIENT_SECRET || true
+    if [ -n "${GOOGLE_CLIENT_SECRET:-}" ]; then
+      printf 'GOOGLE_CLIENT_ID=%s\nGOOGLE_CLIENT_SECRET=%s\n' \
+        "$GOOGLE_CLIENT_ID" "$GOOGLE_CLIENT_SECRET" >>"$ENV_FILE"
+      info "Google Sign-In enabled."
+      info "Remember to add https://${DOMAIN}/api/oauth-google as an authorized redirect URI in Google Cloud Console."
+    fi
+  else
+    info "Skipped. You can add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to $ENV_FILE later."
+  fi
+fi
+
 log "5/8  Getting the JaText source code"
 if ! gh auth status >/dev/null 2>&1; then
   info "Logging in to GitHub in your browser (private repo, no password typing needed)"

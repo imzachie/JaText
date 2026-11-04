@@ -172,7 +172,34 @@ Note on passkeys: the WebAuthn relying party id changed from `jatext.vercel.app`
 
 ---
 
-## 6. Optional: bring over your old Turso data
+## 6. Enable Google Sign-In (otherwise the app says it is not configured)
+
+The installer asks for these, but you can add them any time. Google Sign-In needs the OAuth client ID and secret in `~/JaText/.env.selfhost`:
+
+1. Open `https://console.cloud.google.com/apis/credentials` and find the OAuth 2.0 **Web application** client used for JaText. The Client ID and Client Secret are both viewable there.
+2. In the same client, add these two:
+   - **Authorized JavaScript origins:** `https://jatext.us.ci`
+   - **Authorized redirect URIs:** `https://jatext.us.ci/api/oauth-google`
+3. Put the values on your laptop:
+
+```bash
+cat >> ~/JaText/.env.selfhost <<'EOF'
+GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-secret
+EOF
+chmod 600 ~/JaText/.env.selfhost
+sudo systemctl restart jatext.service
+```
+
+4. Verify, you want `"configured": true`:
+
+```bash
+curl -sS "https://jatext.us.ci/api/oauth-google?action=config"; echo
+```
+
+If your Android app uses its own Android-type OAuth client, add `GOOGLE_ANDROID_CLIENT_ID=<android-client-id>` as well. In most cases you do not need it, the server already accepts any audience from the same Google Cloud project.
+
+## 7. Optional: bring over your old Turso data
 
 Only possible if your old Turso database still answers reads.
 
@@ -186,7 +213,7 @@ npm run pg:migrate
 
 ---
 
-## 7. Day to day commands
+## 8. Day to day commands
 
 ```bash
 # Live logs
@@ -209,7 +236,7 @@ sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-M
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
@@ -225,7 +252,7 @@ sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-M
 
 ---
 
-## 9. No-DNS fallback: Tailscale Funnel
+## 10. No-DNS fallback: Tailscale Funnel
 
 If your DNS provider will not delegate nameservers, Tailscale Funnel gives you a permanent public HTTPS URL with zero DNS records. You already have Tailscale installed from an earlier step.
 
@@ -243,7 +270,7 @@ The web app works on that URL immediately, because it derives its API origin fro
 3. Push to `main`, GitHub Actions publishes the new signed APK to `apk-latest`.
 4. Update `release-cdn/apk-version.json` so phones see the update.
 
-## 10. If you ever change the domain
+## 11. If you ever change the domain
 
 The domain lives in exactly three places:
 
