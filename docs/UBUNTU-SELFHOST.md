@@ -570,6 +570,19 @@ sudo systemctl stop jatext-autoupdate.timer
 sudo systemctl disable jatext-autoupdate.timer
 ```
 
+The updater prints **nothing at all** when there is nothing new, so an empty journal is the healthy
+state, not a sign that it is not running. Each run takes a second or two and exits. Confirm the timer
+itself is alive with:
+
+```bash
+systemctl status jatext-autoupdate.timer --no-pager
+journalctl -u jatext-autoupdate -n 40 --no-pager
+```
+
+In `systemctl list-timers`, `NEXT` is when it looks again and `LAST` is when it last looked. Neither
+column means a run is in progress or hung. `systemctl list-timers` prints its table and returns
+immediately, it does not follow anything.
+
 ### 15.4 What it refuses to do
 
 - **A failed build never goes live.** The old `dist/` keeps serving, the error is logged, and the next
