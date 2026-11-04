@@ -333,7 +333,7 @@ fun ChatThreadScreen(
         when {
             isCommunity -> state.communityMessages.map { m ->
                 val statusReply = StatusReplyParser.parse(m.body)
-UnifiedThreadItem(
+                UnifiedThreadItem(
                     id = m.id,
                     renderKey = m.renderKey?.takeIf { it.isNotBlank() } ?: m.id,
                     senderId = m.senderId,
@@ -362,7 +362,7 @@ UnifiedThreadItem(
             }
             state.activeGroupId != null -> state.groupMessages.map { m ->
                 val statusReply = StatusReplyParser.parse(m.body)
-UnifiedThreadItem(
+                UnifiedThreadItem(
                     id = m.id,
                     renderKey = m.renderKey?.takeIf { it.isNotBlank() } ?: m.id,
                     senderId = m.senderId,
@@ -392,7 +392,7 @@ UnifiedThreadItem(
             else -> state.dmMessages.map { m ->
                 val mine = m.senderId == me.id
                 val statusReply = StatusReplyParser.parse(m.body)
-UnifiedThreadItem(
+                UnifiedThreadItem(
                     id = m.id,
                     renderKey = m.renderKey?.takeIf { it.isNotBlank() } ?: m.id,
                     senderId = m.senderId,
