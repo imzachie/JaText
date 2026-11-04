@@ -33,25 +33,29 @@ export default async function handler(req, res) {
       dbError = err instanceof Error ? err.message : String(err);
     }
   } else {
-    dbError = "Missing TURSO_DATABASE_URL or TURSO_AUTH_TOKEN in Vercel Environment Variables.";
+    dbError =
+      "Missing DATABASE_URL (PostgreSQL) or POSTGRES_BRIDGE_URL + POSTGRES_BRIDGE_SECRET in Environment Variables.";
   }
 
-  let tursoHost = null;
+  let dbHost = null;
   if (cfg.url) {
     try {
-      tursoHost = cfg.url.startsWith("file:")
+      dbHost = cfg.url.startsWith("file:")
         ? "local-sqlite-file"
         : new URL(cfg.url.replace(/^libsql:\/\//, "https://")).host;
     } catch {
-      tursoHost = "configured";
+      dbHost = "configured";
     }
   }
 
   return res.status(200).json({
     ok: cfg.configured && dbConnected,
     backend: "turso",
+    engine: cfg.engine || "postgresql",
+    mode: cfg.mode || "postgres",
     tursoConfigured: cfg.configured,
-    tursoHost,
+    tursoHost: dbHost,
+    dbHost,
     dbConnected,
     userCount,
     googleConfigured,
