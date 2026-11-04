@@ -14,18 +14,27 @@ export interface StatusReplyParts {
   body: string;
 }
 
-const WITH_CAPTION = /^\[Replied to Status: "([\s\S]*?)"\]\r?\n?/;
-const WITHOUT_CAPTION = /^\[Replied to your Status\]\r?\n?/;
+// The web app writes one prefix, the native Android app writes another. Both
+// have to parse, otherwise a reply sent from a phone renders as raw markup on
+// desktop and the other way round.
+const PREFIXES: RegExp[] = [
+  /^\[Replied to Status: "([\s\S]*?)"\]\r?\n?/,
+  /^\[Status reply: "([\s\S]*?)"\]\r?\n?/,
+];
+const BARE_PREFIXES: RegExp[] = [
+  /^\[Replied to your Status\]\r?\n?/,
+  /^\[Status reply\]\r?\n?/,
+];
 
 export function parseStatusReply(body: unknown): StatusReplyParts {
   const raw = typeof body === "string" ? body : "";
-  const withCaption = WITH_CAPTION.exec(raw);
-  if (withCaption) {
-    return { quote: withCaption[1], body: raw.slice(withCaption[0].length) };
+  for (const pattern of PREFIXES) {
+    const match = pattern.exec(raw);
+    if (match) return { quote: match[1], body: raw.slice(match[0].length) };
   }
-  const withoutCaption = WITHOUT_CAPTION.exec(raw);
-  if (withoutCaption) {
-    return { quote: "", body: raw.slice(withoutCaption[0].length) };
+  for (const pattern of BARE_PREFIXES) {
+    const match = pattern.exec(raw);
+    if (match) return { quote: "", body: raw.slice(match[0].length) };
   }
   return { quote: null, body: raw };
 }

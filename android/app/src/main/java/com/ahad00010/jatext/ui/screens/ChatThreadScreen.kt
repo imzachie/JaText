@@ -189,6 +189,7 @@ import com.ahad00010.jatext.data.ForwardedMessageContext
 import com.ahad00010.jatext.data.GroupSeenReader
 import com.ahad00010.jatext.data.JaUser
 import com.ahad00010.jatext.data.MessageReaction
+import com.ahad00010.jatext.data.StatusReplyParser
 import com.ahad00010.jatext.data.OFFICIAL_COMMUNITY_ID
 import com.ahad00010.jatext.data.PollVoter
 import com.ahad00010.jatext.data.ReplySummary
@@ -203,6 +204,7 @@ import com.ahad00010.jatext.state.SessionUiState
 import com.ahad00010.jatext.ui.components.ALL_BUBBLE_STYLE_SPECS
 import com.ahad00010.jatext.ui.components.BubblePreviewThumbUi
 import com.ahad00010.jatext.ui.components.CallMessageCardUi
+import com.ahad00010.jatext.ui.components.StatusReplyCardUi
 import com.ahad00010.jatext.ui.components.CommunityPollCardUi
 import com.ahad00010.jatext.ui.components.ForwardedContextCardUi
 import com.ahad00010.jatext.ui.components.FullscreenOverlaySlot
@@ -276,6 +278,8 @@ private data class UnifiedThreadItem(
     val replyTo: ReplySummary?,
     val reactions: List<MessageReaction>,
     val forwardedContext: ForwardedMessageContext?,
+    /** Non-null when this message is a reply to a Status post (empty = no caption). */
+    val statusReplyQuote: String? = null,
 )
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -328,7 +332,8 @@ fun ChatThreadScreen(
     ) {
         when {
             isCommunity -> state.communityMessages.map { m ->
-                UnifiedThreadItem(
+                val statusReply = StatusReplyParser.parse(m.body)
+UnifiedThreadItem(
                     id = m.id,
                     renderKey = m.renderKey?.takeIf { it.isNotBlank() } ?: m.id,
                     senderId = m.senderId,
@@ -336,7 +341,8 @@ fun ChatThreadScreen(
                     senderUsername = m.senderUsername,
                     senderAvatarUrl = m.senderAvatarUrl,
                     senderAvatarColor = m.senderAvatarColor,
-                    body = m.body,
+                    body = statusReply.body,
+                    statusReplyQuote = statusReply.quote,
                     bubbleStyle = m.bubbleStyle,
                     attachmentUrl = m.attachmentUrl,
                     attachmentName = m.attachmentName,
@@ -355,7 +361,8 @@ fun ChatThreadScreen(
                 )
             }
             state.activeGroupId != null -> state.groupMessages.map { m ->
-                UnifiedThreadItem(
+                val statusReply = StatusReplyParser.parse(m.body)
+UnifiedThreadItem(
                     id = m.id,
                     renderKey = m.renderKey?.takeIf { it.isNotBlank() } ?: m.id,
                     senderId = m.senderId,
@@ -363,7 +370,8 @@ fun ChatThreadScreen(
                     senderUsername = m.senderUsername,
                     senderAvatarUrl = m.senderAvatarUrl,
                     senderAvatarColor = m.senderAvatarColor,
-                    body = m.body,
+                    body = statusReply.body,
+                    statusReplyQuote = statusReply.quote,
                     bubbleStyle = m.bubbleStyle,
                     attachmentUrl = m.attachmentUrl,
                     attachmentName = m.attachmentName,
@@ -383,7 +391,8 @@ fun ChatThreadScreen(
             }
             else -> state.dmMessages.map { m ->
                 val mine = m.senderId == me.id
-                UnifiedThreadItem(
+                val statusReply = StatusReplyParser.parse(m.body)
+UnifiedThreadItem(
                     id = m.id,
                     renderKey = m.renderKey?.takeIf { it.isNotBlank() } ?: m.id,
                     senderId = m.senderId,
@@ -391,7 +400,8 @@ fun ChatThreadScreen(
                     senderUsername = if (mine) me.username else (activeFriend?.username ?: ""),
                     senderAvatarUrl = if (mine) me.avatarUrl else activeFriend?.avatarUrl,
                     senderAvatarColor = if (mine) me.avatarColor else activeFriend?.avatarColor,
-                    body = m.body,
+                    body = statusReply.body,
+                    statusReplyQuote = statusReply.quote,
                     bubbleStyle = m.bubbleStyle,
                     attachmentUrl = m.attachmentUrl,
                     attachmentName = m.attachmentName,
@@ -4738,6 +4748,9 @@ private fun CommunityAnnouncementPostCard(
                         onJumpToOriginal = onJumpToForwarded,
                     )
                 }
+                msg.statusReplyQuote?.let { quote ->
+                    StatusReplyCardUi(quote = quote, ink = cardInk)
+                }
                 msg.replyTo?.let { rep ->
                     ReplyQuoteBannerUi(
                         reply = rep,
@@ -5066,6 +5079,9 @@ private fun SwipeableMessageRow(
                                             ink = ink,
                                             onJumpToOriginal = onJumpToForwarded,
                                         )
+                                    }
+                                    msg.statusReplyQuote?.let { quote ->
+                                        StatusReplyCardUi(quote = quote, ink = ink)
                                     }
                                     msg.replyTo?.let { rep ->
                                         ReplyQuoteBannerUi(

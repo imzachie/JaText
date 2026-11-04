@@ -55,6 +55,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -118,12 +119,54 @@ private data class BuiltinStatusTrack(
     val durationMs: Int,
 )
 
+/**
+ * The Status music library. The placeholder tones are gone: this is a real
+ * track served by the same origin as the API, and uploading your own clip is
+ * always available as the other option.
+ */
+private const val MELLY_MIKE_URL = "/sounds/melly-mike-young-black-and-rich.mp3"
+
 private val BUILTIN_STATUS_TRACKS = listOf(
     BuiltinStatusTrack("none", "No Music", 0),
-    BuiltinStatusTrack("lofi_night", "Midnight Lo-Fi", 15_000),
-    BuiltinStatusTrack("warm_sunrise", "Sunrise Beat", 15_000),
-    BuiltinStatusTrack("neon_drive", "Neon Pulse", 15_000),
+    BuiltinStatusTrack("melly_mike", "Melly Mike - Young Black & Rich", 24_960),
 )
+
+private fun builtinTrackUrl(id: String): String =
+    if (id == "melly_mike") MELLY_MIKE_URL else ""
+
+@Composable
+private fun StoryMetricRow(views: Int, likes: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        StoryMetric(
+            icon = com.ahad00010.jatext.R.drawable.ic_jt_views,
+            label = "$views views",
+        )
+        Spacer(Modifier.width(18.dp))
+        StoryMetric(
+            icon = com.ahad00010.jatext.R.drawable.ic_jt_likes,
+            label = "$likes likes",
+        )
+    }
+}
+
+@Composable
+private fun StoryMetric(icon: Int, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            painter = androidx.compose.ui.res.painterResource(id = icon),
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(15.dp),
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
 
 private val QUICK_STORY_REACTIONS = listOf("❤️", "🔥", "😂", "😮", "😢", "👏")
 
@@ -780,13 +823,10 @@ fun FullScreenStoryViewerOverlay(
 
     DisposableEffect(currentSeg?.id, currentSeg?.audioUrl) {
         var player: MediaPlayer? = null
-        var tone: ToneGenerator? = null
         val audioUrl = currentSeg?.audioUrl.orEmpty()
         if (audioUrl.startsWith("builtin:")) {
-            runCatching {
-                tone = ToneGenerator(AudioManager.STREAM_MUSIC, 25)
-                tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
-            }
+            // Legacy placeholder tone from before the real music library. There
+            // is nothing to play for those old posts any more.
         } else if (audioUrl.isNotBlank()) {
             runCatching {
                 val resolved = TursoApiClient.resolveAbsoluteMediaUrl(audioUrl)
@@ -800,7 +840,7 @@ fun FullScreenStoryViewerOverlay(
         onDispose {
             runCatching { player?.stop() }
             runCatching { player?.release() }
-            runCatching { tone?.release() }
+            Unit
         }
     }
 
@@ -1084,11 +1124,9 @@ fun FullScreenStoryViewerOverlay(
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                text = "👁 ${currentSeg?.viewCount ?: 0} views   ·   ❤️ ${currentSeg?.likeCount ?: 0} likes",
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
+                            StoryMetricRow(
+                                views = currentSeg?.viewCount ?: 0,
+                                likes = currentSeg?.likeCount ?: 0,
                             )
                         }
                     } else if (replyOpen && currentStack != null) {

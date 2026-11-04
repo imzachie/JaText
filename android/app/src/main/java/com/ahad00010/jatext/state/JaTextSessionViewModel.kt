@@ -5890,9 +5890,17 @@ class JaTextSessionViewModel(app: Application) :
                         resolvedMediaType = "audio"
                     }
                 } else if (builtinAudioId.isNotBlank() && builtinAudioId != "none") {
-                    uploadedAudioUrl = "builtin:$builtinAudioId"
-                    resolvedAudioTitle = builtinAudioTitle
-                    resolvedAudioDur = builtinAudioDurationMs.coerceIn(0, 30_000)
+                    // Real audio file from the music library, not a synthesized tone.
+                    val trackUrl = if (builtinAudioId == "melly_mike") {
+                        "/sounds/melly-mike-young-black-and-rich.mp3"
+                    } else {
+                        ""
+                    }
+                    if (trackUrl.isNotBlank()) {
+                        uploadedAudioUrl = trackUrl
+                        resolvedAudioTitle = builtinAudioTitle
+                        resolvedAudioDur = builtinAudioDurationMs.coerceIn(0, 30_000)
+                    }
                 }
 
                 val res = TursoApiClient.rpc<CreateStatusPostResponse>(
