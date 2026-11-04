@@ -70,6 +70,8 @@ jobs:
 
       - name: Assemble Pure Native Signed Release APK
         working-directory: android
+        env:
+          BUILD_COMMIT: ${{ github.sha }}
         run: |
           set +e
           bash ./gradlew assembleRelease --no-daemon > /tmp/gradle.log 2>&1
