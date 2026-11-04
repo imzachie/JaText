@@ -1396,9 +1396,12 @@ export function CommunityChatView({
             !isAudioNote &&
             (message.attachmentType?.startsWith("video/") ||
               /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
+          // A confirmed message that inherited its pending twin's render key is the
+          // same bubble reconciled, so it must not play the send animation twice.
+          const replacedPending = String(message.renderKey ?? "").startsWith("pending-");
           const isJustArrived =
             message.id.startsWith("pending-") ||
-            Date.now() - message.createdAt < 2_500;
+            (!replacedPending && Date.now() - message.createdAt < 2_500);
           return (
             <SwipeToReply
               key={message.renderKey ?? message.id}

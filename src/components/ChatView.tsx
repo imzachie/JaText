@@ -129,6 +129,8 @@ import { AnimatedMediaImg, Avatar } from "./Avatar";
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
+/** Tolerance used only to reconcile our own optimistic bubbles with their server copy. */
+const PENDING_NEAR_MATCH_WINDOW_MS = 4_000;
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
 function detectDmMentionQuery(
@@ -199,18 +201,39 @@ function getConversationMessages(
 
   for (const message of activeMessages) {
     const isUndecryptedEcho = Boolean(message.e2ee && !message.e2ee.decrypted);
-    const pendingIndex = conversationPendingMessages.findIndex(
-      (pendingMessage) =>
-        pendingMessage.senderId === message.senderId &&
-        pendingMessage.receiverId === message.receiverId &&
-        message.createdAt >= pendingMessage.createdAt - 60_000 &&
-        message.createdAt <= pendingMessage.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS &&
-        (message.unsentAt ||
-          Boolean(message.editedAt) ||
-          isUndecryptedEcho ||
-          (message.body === pendingMessage.body &&
-            message.attachmentName === pendingMessage.attachmentName)),
-    );
+    const candidates: number[] = [];
+    conversationPendingMessages.forEach((pendingMessage, index) => {
+      if (
+        pendingMessage.senderId !== message.senderId ||
+        pendingMessage.receiverId !== message.receiverId ||
+        message.createdAt < pendingMessage.createdAt - 60_000 ||
+        message.createdAt > pendingMessage.createdAt + PENDING_MESSAGE_MATCH_WINDOW_MS
+      ) {
+        return;
+      }
+      const exact =
+        message.unsentAt ||
+        Boolean(message.editedAt) ||
+        isUndecryptedEcho ||
+        (message.body === pendingMessage.body &&
+          message.attachmentName === pendingMessage.attachmentName);
+      if (exact) {
+        candidates.unshift(index);
+        return;
+      }
+      // Fallback for our own messages whose stored body legitimately differs from
+      // what we optimistically rendered (E2EE ciphertext round trips, server side
+      // normalisation). Without this the pending bubble survives next to the real
+      // one and the send animation visibly plays twice.
+      if (
+        myUserId &&
+        message.senderId === myUserId &&
+        Math.abs(message.createdAt - pendingMessage.createdAt) <= PENDING_NEAR_MATCH_WINDOW_MS
+      ) {
+        candidates.push(index);
+      }
+    });
+    const pendingIndex = candidates.length ? candidates[0] : -1;
     if (pendingIndex === -1) {
       // Never flash a transient "Decrypting message…" placeholder for our own freshly-sent message
       if (
@@ -631,9 +654,12 @@ const ChatHistory = memo(function ChatHistory({
           !isAudioNote &&
           (message.attachmentType?.startsWith("video/") ||
             /\.(mp4|m4v|mov|webm|ogg)$/i.test(message.attachmentName ?? ""));
+          // A confirmed message that already inherited its pending twin's render key
+          // must not animate again: it is the same bubble, just reconciled.
+          const replacedPending = String(message.renderKey ?? "").startsWith("pending-");
           const isJustArrived =
             message.id.startsWith("pending-") ||
-            Date.now() - message.createdAt < 2_500;
+            (!replacedPending && Date.now() - message.createdAt < 2_500);
           return (
           <div key={message.renderKey ?? message.id}>
             {showDay && <div className="day-divider">{day}</div>}
