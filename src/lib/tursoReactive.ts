@@ -1322,8 +1322,16 @@ export function useTursoReactiveSession(
       },
 
       klipySearchAction: async (args: { query: string }) => {
-        const res = await tursoRpc<{ results: StickerMedia[] }>("searchKlipy", args, { slotId });
-        return res.results;
+        const res = await tursoRpc<{
+          results: StickerMedia[];
+          configured?: boolean;
+          error?: string | null;
+        }>("searchKlipy", args, { slotId });
+        return {
+          results: Array.isArray(res?.results) ? res.results : [],
+          configured: res?.configured !== false,
+          error: res?.error ?? null,
+        };
       },
 
       saveStickerMut: async (args: {

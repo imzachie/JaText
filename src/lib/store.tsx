@@ -948,9 +948,11 @@ export function DemoStoreProvider({
     [botReply, me, transact],
   );
 
-  const searchKlipy = useCallback<JaTextStore["searchKlipy"]>(async () => {
-    throw new Error("Klipy search needs a live deployment and an API key.");
-  }, []);
+  const searchKlipy = useCallback<JaTextStore["searchKlipy"]>(async () => ({
+    results: [],
+    configured: false,
+    error: "GIF search needs a live deployment and a KLIPY API key.",
+  }), []);
 
   const saveSticker = useCallback<JaTextStore["saveSticker"]>(
     async (file) => {

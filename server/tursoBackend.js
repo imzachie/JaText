@@ -8,6 +8,7 @@ import {
   createPostgresPoolClient,
 } from "./postgresAdapter.js";
 import { getFcmServiceAccount, getFcmStatus } from "./fcmServiceAccount.js";
+import { getKlipyStatus, searchKlipyGifs } from "./klipyClient.js";
 
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -1181,6 +1182,7 @@ export function isFcmConfigured() {
 }
 
 export { getFcmStatus };
+export { getKlipyStatus };
 
 /**
  * Sends one push to every device registered by `userId` and reports per-token
@@ -3655,44 +3657,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
     /* ---------- Stickers & Klipy ---------- */
     case "searchKlipy": {
       await requireMeRow(db, auth);
-      const apiKey = (process.env.KLIPY_API_KEY || "").trim();
-      if (!apiKey) {
-        return { results: [] };
-      }
-      const query = String(args.query || "").trim();
-      const params = new URLSearchParams({
-        key: apiKey,
-        client_key: "jatext",
-        limit: "24",
-        media_filter: "gif,tinygif,mediumgif",
-        locale: "en_US",
-        contentfilter: "high",
-      });
-      if (query) params.set("q", query.slice(0, 100));
-      const endpoint = query ? "search" : "featured";
-      const response = await fetch(`https://api.klipy.com/v2/${endpoint}?${params}`);
-      if (!response.ok) return { results: [] };
-      const payload = await response.json();
-      const items = Array.isArray(payload?.results) ? payload.results : [];
-      const results = items.flatMap((item) => {
-        const formats = item?.media_formats;
-        const url = formats?.mediumgif?.url || formats?.gif?.url;
-        const previewUrl = formats?.tinygif?.url || formats?.gif?.url;
-        if (!url || !previewUrl) return [];
-        return [
-          {
-            key: item.id !== undefined ? `klipy:${item.id}` : `klipy:${url}`,
-            url,
-            previewUrl,
-            name: String(item.title || item.content_description || item.slug || "GIF").trim(),
-            mediaType: "gif",
-            source: "klipy",
-            isFavorite: false,
-            useCount: 0,
-          },
-        ];
-      });
-      return { results };
+      return await searchKlipyGifs(args.query);
     }
 
     case "upsertSticker": {
