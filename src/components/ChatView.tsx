@@ -40,6 +40,8 @@ import {
   parseCallInvite,
   useCall,
 } from "../lib/calling";
+import { parseStatusReply } from "../lib/statusReply";
+import { IosReplyIcon } from "./IosVectorIcons";
 import {
   copyImageUrlToClipboard,
   extractClipboardFile,
@@ -599,6 +601,7 @@ const ChatHistory = memo(function ChatHistory({
             </div>
           );
         }
+        const statusReply = parseStatusReply(message.body);
         const callInvite = parseCallInvite(message.body);
         const viewOnceEnv = !callInvite
           ? parseViewOnceEnvelope(message.body, {
@@ -768,14 +771,25 @@ const ChatHistory = memo(function ChatHistory({
                             <PaperclipIcon size={14} /> {message.attachmentName ?? "Attachment"}
                           </a>
                         ))}
+                      {statusReply.quote !== null && (
+                        <div className={`status-reply-chip ${mine ? "mine" : ""}`}>
+                          <span className="status-reply-chip-icon" aria-hidden="true">
+                            <IosReplyIcon size={13} />
+                          </span>
+                          <span className="status-reply-chip-text">
+                            <strong>Replying to Status</strong>
+                            {statusReply.quote ? <span>{statusReply.quote}</span> : null}
+                          </span>
+                        </div>
+                      )}
                       {message.body && (
                         <>
                           <MessageMarkdown
-                            text={message.body}
+                            text={statusReply.body || message.body}
                             mine={mine}
                             highlightQuery={highlightQuery}
                           />
-                          <MessageLinkEmbeds text={message.body} />
+                          <MessageLinkEmbeds text={statusReply.body || message.body} />
                         </>
                       )}
                     </>
