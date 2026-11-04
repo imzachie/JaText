@@ -194,6 +194,7 @@ sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-M
 
 | Symptom | Fix |
 | --- | --- |
+| `cloudflared.service` fails with `Job for cloudflared.service failed because the control process exited with error code` | The service runs as root and reads `/etc/cloudflared/config.yml`, but `cloudflared tunnel create` saves credentials to your own `~/.cloudflared/<TUNNEL_ID>.json`. Copy them with `sudo cp ~/.cloudflared/<TUNNEL_ID>.json /root/.cloudflared/`, write the config shown in section 3, then `sudo systemctl restart cloudflared` |
 | `curl http://127.0.0.1:8787/api/auth-status` refuses the connection | `sudo systemctl status jatext.service` then `sudo journalctl -u jatext.service -n 80` |
 | `dbConnected: false` | Check PostgreSQL is up: `sudo -u postgres pg_isready`, and confirm `DATABASE_URL` in `~/JaText/.env.selfhost` |
 | Cloudflare shows `1033` or `1034` error | The tunnel service is not connected. `sudo systemctl restart cloudflared` and check `sudo cloudflared tunnel info jatext` |
