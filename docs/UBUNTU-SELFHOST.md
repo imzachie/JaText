@@ -94,6 +94,21 @@ Do this once, in the Cloudflare dashboard.
 
 4. Back on the Cloudflare page, click **Check nameservers**. It can take anywhere from a few minutes to a few hours. You can continue with step 3 while it propagates, the site just will not resolve until it finishes.
 
+> **Why this step is not optional, even though the tunnel already works:** `<TUNNEL_ID>.cfargotunnel.com` has no A records of its own. You can confirm it with `https://dns.google/resolve?name=<TUNNEL_ID>.cfargotunnel.com&type=A`, which returns an SOA and no answer. It is a label that only resolves inside Cloudflare's own DNS. If your registrar's nameservers are still authoritative, lookups follow the CNAME, reach that name, find no IP, and die. Handing the nameservers to Cloudflare completes the chain. Until that propagates, everything else can be perfect and the site still will not load.
+
+### Verify the handover
+
+```bash
+echo "should list *.ns.cloudflare.com"; dig jatext.us.ci NS +short
+echo "should now print Cloudflare IPs"; dig jatext.us.ci +short
+curl -sS https://jatext.us.ci/api/auth-status; echo
+```
+
+While you are in the Cloudflare DNS page for the zone, check two things:
+
+- The `jatext.us.ci` CNAME must be **Proxied** (orange cloud). If it is grey and says DNS only, click it to toggle. A DNS-only tunnel CNAME will not route.
+- If you later see error `525` or `526`, open **SSL/TLS, Overview** and switch the encryption mode from Full (strict) to **Flexible**. Tunnel origins that speak plain HTTP on localhost are fine on any mode, but Flexible removes the strict certificate requirement during setup.
+
 ---
 
 ## 3. Create the permanent Cloudflare Tunnel
