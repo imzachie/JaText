@@ -163,6 +163,22 @@ private fun StoryMetric(icon: Int, label: String) {
 
 private val QUICK_STORY_REACTIONS = listOf("❤️", "🔥", "😂", "😮", "😢", "👏")
 
+/**
+ * The reaction is still sent as the emoji it has always been, so stored
+ * messages and older clients are unaffected. This only decides what the
+ * button looks like, which keeps the row consistent with the rest of the
+ * vector icons instead of depending on the emoji font.
+ */
+private fun storyReactionIcon(emoji: String): Int? = when (emoji) {
+    "❤️" -> com.ahad00010.jatext.R.drawable.ic_jt_likes
+    "🔥" -> com.ahad00010.jatext.R.drawable.ic_jt_flame
+    "😂" -> com.ahad00010.jatext.R.drawable.ic_jt_laugh
+    "😮" -> com.ahad00010.jatext.R.drawable.ic_jt_wow
+    "😢" -> com.ahad00010.jatext.R.drawable.ic_jt_sad
+    "👏" -> com.ahad00010.jatext.R.drawable.ic_jt_clap
+    else -> null
+}
+
 private fun formatRelativeStatusTime(ts: Long): String {
     if (ts <= 0L) return "Just now"
     val diffSec = ((System.currentTimeMillis() - ts) / 1000L).coerceAtLeast(0L)
@@ -1142,7 +1158,17 @@ fun FullScreenStoryViewerOverlay(
                                         }
                                         .padding(8.dp),
                                 ) {
-                                    Text(text = emoji, fontSize = 20.sp)
+                                    val icon = storyReactionIcon(emoji)
+                                    if (icon != null) {
+                                        Icon(
+                                            painter = androidx.compose.ui.res.painterResource(id = icon),
+                                            contentDescription = emoji,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(22.dp),
+                                        )
+                                    } else {
+                                        Text(text = emoji, fontSize = 20.sp)
+                                    }
                                 }
                             }
                         }

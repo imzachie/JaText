@@ -32,6 +32,7 @@ import { useCustomSoundboards } from "../lib/securityClient";
 import { Avatar } from "./Avatar";
 import { MobileScreenShareSheet, SharedMediaPlaybackBar } from "./MobileScreenShareSheet";
 import { DrumIcon, RocketIcon, SoundWaveIcon, SparklesIcon, UsersIcon } from "./UiIcons";
+import { ReactionGlyph } from "./IosVectorIcons";
 
 const CALL_REACTIONS = ["❤️", "😂", "🔥", "👏", "🎉", "👍"];
 const SOUNDBOARD_ITEMS: Array<{ id: SoundboardEffectId; label: string }> = [
@@ -841,7 +842,7 @@ export function CallOverlay() {
               className="call-emoji-pill"
               onClick={() => sendCallReaction(emoji)}
             >
-              {emoji}
+              <ReactionGlyph emoji={emoji} size={20} />
             </button>
           ))}
         </div>

@@ -1,3 +1,5 @@
+import type { ReactElement } from "react";
+
 interface IconProps {
   size?: number;
   strokeWidth?: number;
@@ -238,4 +240,89 @@ export function IosEyeOffIcon({ size = 16, strokeWidth = 2.1, className }: IconP
       <line x1="2" y1="2" x2="22" y2="22" />
     </svg>
   );
+}
+
+export function IosFlameIcon({ size = 16, strokeWidth = 2.1, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5Z" />
+    </svg>
+  );
+}
+
+export function IosLaughIcon({ size = 16, strokeWidth = 2.1, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M18 13a6 6 0 0 1-6 5 6 6 0 0 1-6-5h12Z" />
+      <circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IosWowIcon({ size = 16, strokeWidth = 2.1, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="15.5" r="2" />
+      <circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IosSadIcon({ size = 16, strokeWidth = 2.1, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M16 16.5s-1.5-2-4-2-4 2-4 2" />
+      <path d="M9.3 11.6c.9 1.1 1.4 1.7 1.4 2.3a1.4 1.4 0 0 1-2.8 0c0-.6.5-1.2 1.4-2.3Z" />
+      <circle cx="9" cy="9.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="9.5" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IosClapIcon({ size = 16, strokeWidth = 2.1, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2" />
+      <path d="M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v2" />
+      <path d="M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8" />
+      <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+    </svg>
+  );
+}
+
+export function IosThumbsUpIcon({ size = 16, strokeWidth = 2.1, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M7 10v12" />
+      <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+    </svg>
+  );
+}
+
+/**
+ * Reactions are still sent as the emoji they always were, so older clients and
+ * the stored message bodies are unchanged. These are only what the button
+ * looks like, which keeps the reaction row consistent with the rest of the
+ * vector icon set instead of depending on the emoji font.
+ */
+const REACTION_ICON_BY_EMOJI: Record<string, (props: IconProps) => ReactElement> = {
+  "❤️": IosHeartIcon,
+  "🔥": IosFlameIcon,
+  "😂": IosLaughIcon,
+  "😮": IosWowIcon,
+  "😢": IosSadIcon,
+  "👏": IosClapIcon,
+  "🎉": IosSparklesIcon,
+  "👍": IosThumbsUpIcon,
+};
+
+export function ReactionGlyph({ emoji, size = 20, className }: { emoji: string; size?: number; className?: string }) {
+  const Glyph = REACTION_ICON_BY_EMOJI[emoji];
+  if (!Glyph) return <span className={className}>{emoji}</span>;
+  return <Glyph size={size} strokeWidth={2} className={className} />;
 }
