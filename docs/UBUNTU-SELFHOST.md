@@ -49,7 +49,7 @@ Already have the repo cloned? Just run `cd ~/JaText && git pull --ff-only && bas
 
 The installer does all of this for you, and is safe to re-run:
 
-1. Disables suspend forever, including on lid close (writes `/etc/systemd/logind.conf.d/99-jatext-24-7.conf` and masks the sleep targets).
+1. Disables suspend forever, including on lid close (writes `/etc/systemd/logind.conf.d/99-jatext-24-7.conf` and masks the sleep targets). It deliberately does **not** restart `systemd-logind`, because that kills your running desktop; those settings simply apply on the next reboot.
 2. Installs PostgreSQL, Node 20, GitHub CLI, and cloudflared.
 3. Enables PostgreSQL at boot.
 4. Creates the `jatext` PostgreSQL role and `jatext` database, then writes `~/JaText/.env.selfhost` with a random database password and `AUTH_SECRET`.
@@ -199,7 +199,9 @@ sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-M
 | Cloudflare shows `1033` or `1034` error | The tunnel service is not connected. `sudo systemctl restart cloudflared` and check `sudo cloudflared tunnel info jatext` |
 | Browser shows `ERR_NAME_NOT_RESOLVED` | DNS has not propagated yet, or the CNAME from step 2 Option B is missing or wrong |
 | Site works at home, not on mobile data | Wait for DNS propagation, then `dig jatext.us.ci +short` |
-| Laptop sleeps when the lid closes | Re run step 1, or `sudo systemctl status sleep.target` to confirm it is masked |
+| Laptop sleeps when the lid closes | Re run step 1, or `sudo systemctl status sleep.target` to confirm it is masked. The logind settings apply after a reboot |
+| Login screen freezes after entering your password | Press `Ctrl + Alt + F3`, log in, then run `rm -f ~/.Xauthority ~/.ICEauthority && sudo chown -R $USER:$USER $HOME/.cache $HOME/.config $HOME/.local && sudo reboot`. If it still hangs, pick **Ubuntu on Xorg** from the gear icon on the login screen |
+| You want to undo the no-sleep change | `sudo rm -f /etc/systemd/logind.conf.d/99-jatext-24-7.conf && sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target && sudo systemctl daemon-reload` |
 
 ---
 
