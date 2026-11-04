@@ -33,6 +33,9 @@ command -v sudo >/dev/null 2>&1 || die "sudo is required. Run this on Ubuntu as 
 export DEBIAN_FRONTEND=noninteractive
 APT_LOCK_OPTS=(-o DPkg::Lock::Timeout=180)
 
+if [ "${SKIP_SLEEP:-0}" = "1" ]; then
+  log "1/8  Skipping the never-sleep step (SKIP_SLEEP=1, you already set it up)"
+else
 log "1/8  Keeping Ubuntu awake 24/7 (lid close included)"
 sudo mkdir -p /etc/systemd/logind.conf.d
 sudo tee /etc/systemd/logind.conf.d/99-jatext-24-7.conf >/dev/null <<'EOF'
@@ -57,6 +60,7 @@ if command -v gsettings >/dev/null 2>&1; then
 fi
 info "Lid close and idle will no longer suspend the machine."
 info "The logind part applies on the next reboot (we never restart logind, it would kill your session)."
+fi
 
 log "2/8  Installing system packages (PostgreSQL, Node 20, GitHub CLI, cloudflared)"
 sudo apt-get "${APT_LOCK_OPTS[@]}" update -qq
@@ -167,11 +171,14 @@ info "Web build ready at $APP_DIR/dist"
 log "7/8  Installing the 24/7 systemd service ($SERVICE_NAME)"
 # Remove the older PostgreSQL bridge service if it is still around from a previous setup.
 if systemctl list-unit-files 2>/dev/null | grep -q "jatext-pg-bridge.service"; then
-  info "Disabling the legacy jatext-pg-bridge.service (no longer needed, the app now talks to PostgreSQL directly)"
+  info "Removing the legacy jatext-pg-bridge.service (it squats on port 8787 and only speaks the old SQL bridge protocol)"
   sudo systemctl disable --now jatext-pg-bridge.service >/dev/null 2>&1 || true
   sudo rm -f /etc/systemd/system/jatext-pg-bridge.service
   sudo systemctl daemon-reload
 fi
+sudo pkill -f "server/pgBridgeServer.js" >/dev/null 2>&1 || true
+sudo fuser -k 8787/tcp >/dev/null 2>&1 || true
+sleep 1
 NODE_BIN="$(command -v node)"
 sed -e "s|__JATEXT_USER__|$USER|g" \
     -e "s|__JATEXT_DIR__|$APP_DIR|g" \
