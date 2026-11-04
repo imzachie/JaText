@@ -2202,6 +2202,7 @@ async function getStickersForUser(db, userId) {
               AND (
                 name = '__jatext_e2ee_autosync_v1__'
                 OR name = '__jatext_e2ee_vault_v1__'
+                OR name LIKE '__jatext_pref_bubble_v1__:%'
                 OR name LIKE '__jatext_bubble_style__:%'
               )
             ORDER BY updated_at DESC
