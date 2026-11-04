@@ -79,8 +79,12 @@ Do this once, in the Cloudflare dashboard.
    **Option A, recommended: let Cloudflare run DNS**
    Find the **Nameservers** or **NS** section (sometimes under "Domain settings", "Advanced", or "Delegation") and replace the existing nameservers with the two Cloudflare gave you. Save. Cloudflare then manages DNS for you, issues the TLS certificate automatically, and `cloudflared` can create its own DNS records.
 
+   > **Heads up, this is the important bit:** a CNAME at a third-party DNS host pointing to `<TUNNEL_ID>.cfargotunnel.com` does **not** work. That hostname has no A records of its own, it only resolves once Cloudflare is authoritative for the zone. The other target you will find in docs, `{hostname}.cdn.cloudflare.net`, is the Partial (CNAME) setup, and Cloudflare limits that to Business and Enterprise plans. On the Free plan, full nameserver delegation really is the only way to use your own domain.
+   >
+   > If your DNS host cannot change nameservers, skip to the Tailscale Funnel section at the end instead, it needs no DNS at all.
+
    **Option B: keep dnshe as your DNS host**
-   Only use this if dnshe will not let you change nameservers. Add one record:
+   Only use this if you are on a Business or Enterprise Cloudflare plan. Add one record:
 
    | Type | Name | Value | TTL |
    | --- | --- | --- | --- |
@@ -206,7 +210,25 @@ sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-M
 
 ---
 
-## 9. If you ever change the domain
+## 9. No-DNS fallback: Tailscale Funnel
+
+If your DNS provider will not delegate nameservers, Tailscale Funnel gives you a permanent public HTTPS URL with zero DNS records. You already have Tailscale installed from an earlier step.
+
+```bash
+sudo tailscale funnel --bg http://127.0.0.1:8787
+sudo tailscale funnel status
+```
+
+The first run may print a link to enable Funnel on your tailnet, open it once and run the command again. Copy the `https://zach-dynabook-b55-k.<tailnet>.ts.net` URL it prints.
+
+The web app works on that URL immediately, because it derives its API origin from the browser. The Android APK is pinned to a hostname at build time, so point the build at the new URL and rebuild:
+
+1. Set `API_ORIGIN` in `android/app/build.gradle` to the Funnel URL.
+2. Bump `versionCode` and `versionName`.
+3. Push to `main`, GitHub Actions publishes the new signed APK to `apk-latest`.
+4. Update `release-cdn/apk-version.json` so phones see the update.
+
+## 10. If you ever change the domain
 
 The domain lives in exactly three places:
 
