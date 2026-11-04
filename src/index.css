@@ -13582,6 +13582,27 @@ label,
   font-weight: 700;
 }
 
+.jt-story-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.jt-story-metric svg {
+  flex: none;
+  opacity: 0.92;
+}
+
+.jt-upd-audio-upload-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.jt-upd-audio-upload-label svg {
+  flex: none;
+}
+
 .jt-story-reply-drawer {
   display: flex;
   flex-direction: column;

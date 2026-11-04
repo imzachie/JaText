@@ -237,7 +237,7 @@ async function initSchema(db) {
       attachment_name TEXT,
       attachment_type TEXT,
       sticker_key TEXT,
-      delivery_status TEXT NOT NULL DEFAULT 'sent',
+      delivery_status TEXT NOT NULL DEFAULT 'delivered',
       edited_at INTEGER,
       reply_to_id TEXT,
       forwarded_from_id TEXT,
@@ -1545,7 +1545,7 @@ function hydrateDmMessages(rows, meId, replyLookupMap, favKeys) {
     const senderIdStr = String(r.sender_id);
     const receiverIdStr = String(r.receiver_id);
     const effectiveDelivery =
-      senderIdStr === receiverIdStr ? "read" : String(r.delivery_status || "sent");
+      senderIdStr === receiverIdStr ? "read" : String(r.delivery_status || "delivered");
     result.push({
       id: String(r.id),
       senderId: senderIdStr,
@@ -2620,8 +2620,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           },
           {
             sql: `UPDATE messages
-                  SET delivery_status = 'delivered', updated_at = ?
-                  WHERE receiver_id = ? AND sender_id != ? AND delivery_status = 'sent'`,
+                  SET delivery_status = 'sent', updated_at = ?
+                  WHERE receiver_id = ? AND sender_id != ? AND delivery_status = 'delivered'`,
             args: [now, meId, meId],
           },
         ],
@@ -2829,8 +2829,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
                 },
                 {
                   sql: `UPDATE messages
-                        SET delivery_status = 'delivered', updated_at = ?
-                        WHERE receiver_id = ? AND sender_id != ? AND delivery_status = 'sent'`,
+                        SET delivery_status = 'sent', updated_at = ?
+                        WHERE receiver_id = ? AND sender_id != ? AND delivery_status = 'delivered'`,
                   args: [syncStartedAt, meId, meId],
                 },
               ],
@@ -3379,7 +3379,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         recvPresRes.rows[0] &&
         String(recvUser?.status_preference || "online") !== "offline" &&
         writeAt - Number(recvPresRes.rows[0].last_seen_at || 0) < 35_000;
-      const deliveryStatus = isSelfDm ? "read" : recvOnline ? "delivered" : "sent";
+      // "delivered" = the server holds it, "sent" = the recipient's device pulled it.
+      const deliveryStatus = isSelfDm ? "read" : "delivered";
 
       const msgId = newId();
       const pk = pairKey(meId, receiverId);

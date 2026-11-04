@@ -405,8 +405,8 @@ if (typeof window !== "undefined") {
 
 function rankDeliveryStatus(status?: ChatMessage["deliveryStatus"]): number {
   if (status === "read") return 3;
-  if (status === "delivered") return 2;
-  if (status === "sent") return 1;
+  if (status === "sent") return 2;
+  if (status === "delivered") return 1;
   return 0;
 }
 
