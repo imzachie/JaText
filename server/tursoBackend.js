@@ -3,6 +3,10 @@ import { promisify } from "node:util";
 import { createClient as createWebClient } from "@libsql/client/web";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
+import {
+  createPostgresBridgeClient,
+  createPostgresPoolClient,
+} from "./postgresAdapter.js";
 
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -30,6 +34,44 @@ let schemaReadyForKey = "";
 let schemaInitPromise = null;
 
 export function getTursoConfig() {
+  const bridgeUrl = (
+    process.env.POSTGRES_BRIDGE_URL ||
+    process.env.PG_BRIDGE_URL ||
+    ""
+  ).trim();
+  const bridgeSecret = (
+    process.env.POSTGRES_BRIDGE_SECRET ||
+    process.env.PG_BRIDGE_SECRET ||
+    ""
+  ).trim();
+
+  if (bridgeUrl && bridgeSecret) {
+    return {
+      configured: true,
+      mode: "postgres-bridge",
+      engine: "postgresql",
+      url: bridgeUrl,
+      authToken: bridgeSecret,
+    };
+  }
+
+  const pgUrl = (
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRESQL_URL ||
+    ""
+  ).trim();
+
+  if (/^postgres(ql)?:\/\//i.test(pgUrl)) {
+    return {
+      configured: true,
+      mode: "postgres",
+      engine: "postgresql",
+      url: pgUrl,
+      authToken: pgUrl,
+    };
+  }
+
   const url = (
     process.env.TURSO_DATABASE_URL ||
     process.env.LIBSQL_URL ||
@@ -43,6 +85,8 @@ export function getTursoConfig() {
   ).trim();
   return {
     configured: Boolean(url && (authToken || url.startsWith("file:"))),
+    mode: "turso",
+    engine: "libsql",
     url,
     authToken,
   };
@@ -58,17 +102,33 @@ function getJwtSecret() {
     .digest("hex");
 }
 
+let customDbOverride = null;
+
+export function setCustomDbForTesting(dbClient) {
+  customDbOverride = dbClient;
+}
+
 export async function getDb() {
-  const { configured, url, authToken } = getTursoConfig();
+  if (customDbOverride) {
+    return customDbOverride;
+  }
+  const { configured, mode, url, authToken } = getTursoConfig();
   if (!configured) {
     throw new TursoAppError(
-      "Turso database is not configured yet. Add TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in Vercel Environment Variables.",
+      "Database is not configured yet. Set DATABASE_URL (PostgreSQL) or POSTGRES_BRIDGE_URL + POSTGRES_BRIDGE_SECRET in Environment Variables.",
       503,
     );
   }
-  const key = `${url}|${authToken.slice(0, 12)}`;
+  const key = `${mode}|${url}|${authToken.slice(0, 12)}`;
   if (!cachedClient || cachedClientKey !== key) {
-    if (url.startsWith("file:")) {
+    if (mode === "postgres-bridge") {
+      cachedClient = createPostgresBridgeClient({
+        bridgeUrl: url,
+        bridgeSecret: authToken,
+      });
+    } else if (mode === "postgres") {
+      cachedClient = createPostgresPoolClient(url);
+    } else if (url.startsWith("file:")) {
       const mod = await import("@libsql/client");
       cachedClient = mod.createClient({ url });
     } else {
@@ -89,6 +149,10 @@ export async function getDb() {
     await schemaInitPromise;
   }
   return cachedClient;
+}
+
+export async function initSchemaOnDb(db) {
+  return initSchema(db);
 }
 
 async function initSchema(db) {
@@ -498,7 +562,6 @@ async function initSchema(db) {
     )`,
   ];
 
-  await db.batch(statements, "write");
   const safeAlters = [
     `ALTER TABLE media_blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN totp_secret TEXT`,
@@ -515,11 +578,18 @@ async function initSchema(db) {
     `ALTER TABLE groups ADD COLUMN community_key_seed TEXT`,
     `ALTER TABLE status_posts ADD COLUMN audio_title TEXT NOT NULL DEFAULT ''`,
   ];
+
+  if (db.engine === "postgresql" || db.engine === "postgresql-bridge") {
+    await db.batch([...statements, ...safeAlters], "write");
+    return;
+  }
+
+  await db.batch(statements, "write");
   for (const sql of safeAlters) {
     try {
       await db.execute(sql);
     } catch {
-      // Column already exists on initialized databases
+      // Column already exists on initialized SQLite/LibSQL databases
     }
   }
 }

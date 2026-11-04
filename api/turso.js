@@ -30,6 +30,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       backend: "turso",
+      engine: cfg.engine || "postgresql",
+      mode: cfg.mode || "postgres",
       tursoConfigured: cfg.configured,
       googleConfigured,
     });
