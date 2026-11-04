@@ -985,9 +985,9 @@ fun FullScreenStoryViewerOverlay(
                                 )
                             }
                         }
-                    } else {
+                    } else if (currentSeg.caption.isNotBlank()) {
                         Text(
-                            text = currentSeg.caption.ifBlank { "🎵 ${currentSeg.audioTitle.ifBlank { "Audio Status" }}" },
+                            text = currentSeg.caption,
                             color = Color.White,
                             fontSize = 24.sp,
                             fontWeight = FontWeight.ExtraBold,
@@ -996,6 +996,33 @@ fun FullScreenStoryViewerOverlay(
                             lineHeight = 32.sp,
                             modifier = Modifier.padding(horizontal = 28.dp),
                         )
+                    } else {
+                        // An audio status with no caption used to fall back to
+                        // an emoji note. The track name next to the real icon
+                        // matches the rest of the viewer.
+                        Row(
+                            modifier = Modifier.padding(horizontal = 28.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                painter = androidx.compose.ui.res.painterResource(
+                                    id = com.ahad00010.jatext.R.drawable.ic_jt_music_note,
+                                ),
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = currentSeg.audioTitle.ifBlank { "Audio Status" },
+                                color = Color.White,
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = SfProRoundedFontFamily,
+                                textAlign = TextAlign.Center,
+                                lineHeight = 32.sp,
+                            )
+                        }
                     }
                 }
             }
@@ -1068,7 +1095,7 @@ fun FullScreenStoryViewerOverlay(
                                         text = buildString {
                                             append(formatRelativeStatusTime(currentSeg?.createdAt ?: 0L))
                                             if (!currentSeg?.audioTitle.isNullOrBlank()) {
-                                                append(" · 🎵 ${currentSeg?.audioTitle}")
+                                                append(" · \u266A ${currentSeg?.audioTitle}")
                                             }
                                         },
                                         color = Color.White.copy(alpha = 0.78f),
@@ -1596,7 +1623,7 @@ private fun StatusComposerDialog(
                         )
                     }
                     SmallChoiceChip(
-                        label = if (pickedAudioUri != null) "🎵 Uploaded clip" else "Upload Audio",
+                        label = if (pickedAudioUri != null) "Uploaded clip" else "Upload Audio",
                         selected = pickedAudioUri != null,
                         onClick = { audioLauncher.launch("audio/*") },
                     )

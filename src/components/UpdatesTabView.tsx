@@ -10,7 +10,14 @@ import {
 import { createPortal } from "react-dom";
 import { Avatar } from "./Avatar";
 import { IosEmojiText } from "./IosEmoji";
-import { IosEyeIcon, IosHeartIcon, IosMusicNoteIcon, ReactionGlyph } from "./IosVectorIcons";
+import {
+  IosCloseIcon,
+  IosEyeIcon,
+  IosHeartIcon,
+  IosMusicNoteIcon,
+  IosTrashIcon,
+  ReactionGlyph,
+} from "./IosVectorIcons";
 import { useJaText } from "../lib/store";
 import {
   resolveTursoMediaUrl,
@@ -1662,7 +1669,7 @@ export function FullScreenStoryViewerModal({
                   title="Delete this status"
                   onClick={() => void handleDeleteOwnSegment()}
                 >
-                  🗑
+                  <IosTrashIcon size={17} />
                 </button>
               )}
               <button
@@ -1671,7 +1678,7 @@ export function FullScreenStoryViewerModal({
                 aria-label="Close story viewer"
                 onClick={triggerSmoothDismiss}
               >
-                ✕
+                <IosCloseIcon size={18} strokeWidth={2.4} />
               </button>
             </div>
           </div>
