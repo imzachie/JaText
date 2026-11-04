@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { PUBLIC_APP_HOST } from "../lib/publicOrigin";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { IosDownloadIcon, IosLaptopIcon, IosRefreshIcon } from "./IosVectorIcons";
@@ -1202,7 +1203,7 @@ export function SettingsModal({
                   <div className="settings-pane-head">
                     <h3>Linked devices</h3>
                     <p className="muted small">
-                      Scan a QR code on <strong>jatext.vercel.app/chats</strong> to sign in on your
+                      Scan a QR code on <strong>{PUBLIC_APP_HOST}/chats</strong> to sign in on your
                       computer with zero-knowledge E2EE key sync, or disconnect any session below.
                     </p>
                   </div>

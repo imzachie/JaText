@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { PUBLIC_APP_ORIGIN } from "../lib/publicOrigin";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { JaTextNative, type AppVersionInfo } from "../lib/nativeBridge";
@@ -12,8 +13,8 @@ import {
 
 const WELCOMED_VERSION_KEY = "jatext:welcomed-mobile-build:v1";
 const MANUAL_UPDATE_CHECK_EVENT = "jatext:manual-update-check";
-const PUBLIC_UPDATE_MANIFEST_URL = "https://jatext.vercel.app/apk-version.json";
-const PUBLIC_APK_DOWNLOAD_URL = "https://jatext.vercel.app/downloads/JaText-release.apk";
+const PUBLIC_UPDATE_MANIFEST_URL = `${PUBLIC_APP_ORIGIN}/apk-version.json`;
+const PUBLIC_APK_DOWNLOAD_URL = `${PUBLIC_APP_ORIGIN}/downloads/JaText-release.apk`;
 const GITHUB_RELEASE_API = "https://api.github.com/repos/Ahad00010/JaText/releases/tags/apk-latest";
 const FALLBACK_GITHUB_APK_URL =
   "https://github.com/Ahad00010/JaText/releases/download/apk-latest/JaText-release.apk";

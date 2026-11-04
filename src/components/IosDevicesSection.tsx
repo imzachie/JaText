@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PUBLIC_APP_HOST } from "../lib/publicOrigin";
 import {
   IosCameraIcon,
   IosCheckCircleIcon,
@@ -324,7 +325,7 @@ export function IosDevicesSection({
         <div className="jt-ios-devices-hero-copy">
           <h4>Link JaText Desktop Web</h4>
           <p>
-            Open <strong>jatext.vercel.app/chats</strong> on your computer and scan the QR code to
+            Open <strong>{PUBLIC_APP_HOST}/chats</strong> on your computer and scan the QR code to
             sync your end-to-end encrypted messages, keys, and themes.
           </p>
         </div>
@@ -432,7 +433,7 @@ export function IosDevicesSection({
             <div className="jt-ios-qr-modal-head">
               <div>
                 <h3>Scan Web QR Code</h3>
-                <span>Point your camera at jatext.vercel.app/chats on your computer</span>
+                <span>Point your camera at {PUBLIC_APP_HOST}/chats on your computer</span>
               </div>
               <button
                 type="button"

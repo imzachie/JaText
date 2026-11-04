@@ -1,4 +1,5 @@
 import { Capacitor } from "@capacitor/core";
+import { PUBLIC_APP_ORIGIN } from "./publicOrigin";
 import { JaTextNative } from "./nativeBridge";
 import {
   clearDeadSlotTokensOnAuthFailure,
@@ -10,10 +11,7 @@ import {
 import { ensureValidFileMime } from "./imageUtils";
 import { isPrimaryMobileAppRuntime } from "./iosDetection";
 
-export const PUBLIC_TURSO_API_ORIGIN = (
-  (import.meta.env.VITE_API_ORIGIN as string | undefined)?.trim().replace(/\/+$/, "") ||
-  "https://jatext.vercel.app"
-);
+export const PUBLIC_TURSO_API_ORIGIN = PUBLIC_APP_ORIGIN;
 
 export function getTursoApiBase(): string {
   const explicit = (import.meta.env.VITE_API_ORIGIN as string | undefined)
@@ -403,7 +401,7 @@ export async function fetchMediaBytesSmart(
   let knownSize = hintTotalBytes && hintTotalBytes > 0 ? hintTotalBytes : 0;
   if (!knownSize) {
     try {
-      const u = new URL(mediaUrl, typeof window !== "undefined" ? window.location.origin : "https://jatext.vercel.app");
+      const u = new URL(mediaUrl, PUBLIC_APP_ORIGIN);
       const szParam = Number(u.searchParams.get("sz") || 0);
       if (Number.isFinite(szParam) && szParam > 0) {
         knownSize = szParam;

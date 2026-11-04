@@ -508,7 +508,6 @@ object TursoApiClient {
     suspend fun fetchLatestApkManifest(): ApkVersionManifest? = withContext(Dispatchers.IO) {
         val candidateUrls = listOf(
             "$apiOrigin/apk-version.json?t=${System.currentTimeMillis()}",
-            "https://jatext.vercel.app/apk-version.json?t=${System.currentTimeMillis()}",
         ).distinct()
         for (url in candidateUrls) {
             try {

@@ -1,4 +1,5 @@
 package com.ahad00010.jatext.ui.screens
+import com.ahad00010.jatext.BuildConfig
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -207,7 +208,7 @@ fun QrScannerModal(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "Allow camera access so JaText can scan the QR code displayed on jatext.vercel.app/chats.",
+                        text = "Allow camera access so JaText can scan the QR code displayed on ${BuildConfig.API_ORIGIN.trimEnd('/')}/chats.",
                         color = palette.textSecondary,
                         fontSize = 13.5.sp,
                         textAlign = TextAlign.Center,
@@ -248,7 +249,7 @@ fun QrScannerModal(
                         fontWeight = FontWeight.ExtraBold,
                     )
                     Text(
-                        text = "Open jatext.vercel.app/chats on your computer",
+                        text = "Open ${BuildConfig.API_ORIGIN.trimEnd('/')}/chats on your computer",
                         color = Color.White.copy(alpha = 0.76f),
                         fontSize = 12.5.sp,
                     )

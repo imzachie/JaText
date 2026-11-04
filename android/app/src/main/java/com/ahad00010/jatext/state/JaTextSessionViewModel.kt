@@ -4280,7 +4280,7 @@ class JaTextSessionViewModel(app: Application) :
                     args = mapOf(
                         "sticker" to mapOf(
                             "key" to "pref:bubble:v1",
-                            "url" to "https://jatext.vercel.app/favicon.ico",
+                            "url" to "${BuildConfig.API_ORIGIN.trimEnd('/')}/favicon.ico",
                             "name" to "${JaTextCryptoEngine.E2EE_BUBBLE_PREF_PREFIX}$styleId",
                             "mediaType" to "sticker",
                             "source" to "upload",
@@ -4796,7 +4796,7 @@ class JaTextSessionViewModel(app: Application) :
             _state.update {
                 it.copy(
                     deviceLinkPhase = "error",
-                    deviceLinkError = "Unrecognized QR code. Open jatext.vercel.app/chats on your computer and scan the JaText QR code.",
+                    deviceLinkError = "Unrecognized QR code. Open ${BuildConfig.API_ORIGIN.trimEnd('/')}/chats on your computer and scan the JaText QR code.",
                 )
             }
             return

@@ -50,11 +50,15 @@ function getStateSecret() {
   );
 }
 
+const DEFAULT_PUBLIC_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci")
+  .replace(/^https?:\/\//, "")
+  .replace(/\/+$/, "");
+
 function resolveCallbackOrigin(req) {
   const explicit = (process.env.PUBLIC_APP_ORIGIN || "").trim();
   if (explicit) return explicit.replace(/\/+$/, "");
   const proto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "jatext.vercel.app")
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || DEFAULT_PUBLIC_HOST)
     .split(",")[0]
     .trim();
   return `${proto}://${host}`;

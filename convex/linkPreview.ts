@@ -389,7 +389,7 @@ export const fetchPreview = action({
           redirect: "follow",
           headers: {
             // Discordbot-compatible UA so sites like Discord, GitHub, Reddit, Spotify serve full OG meta tags
-            "User-Agent": "Mozilla/5.0 (compatible; Discordbot/2.0; +https://jatext.vercel.app)",
+            "User-Agent": "Mozilla/5.0 (compatible; Discordbot/2.0; +https://jatext.us.ci)",
             Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
             "Accept-Language": "en-US,en;q=0.9",
           },

@@ -1,0 +1,211 @@
+# JaText 24/7 on your own Ubuntu laptop
+
+This guide takes JaText off Vercel completely and runs the whole thing (web app, API, and PostgreSQL) on your Ubuntu laptop, published at `https://jatext.us.ci` through a free Cloudflare Tunnel.
+
+Why it is built this way:
+
+- The database lives on the laptop, so the app and the database talk over `127.0.0.1`. No remote database, no Turso, no Vercel Postgres.
+- One Node process (`server/standaloneServer.js`) serves the built web app and every `/api/*` endpoint, so there is nothing serverless to configure and no fair use limits.
+- `cloudflared` opens one outbound connection to Cloudflare. That means **no router port forwarding, no public IP, and no problem with ISP CGNAT** (Unifi, Maxis, TIME, mobile hotspots all work).
+
+---
+
+## 0. What you need
+
+| Thing | Notes |
+| --- | --- |
+| Ubuntu laptop | Plugged into wall power, stays on 24/7 |
+| Domain | `jatext.us.ci`, DNS panel at `https://my.dnshe.com` |
+| Cloudflare account | Free signup at `https://dash.cloudflare.com/sign-up` |
+| Google account | Used to sign in to GitHub and Cloudflare in the browser |
+
+---
+
+## 1. Run the automated installer
+
+On the laptop, open Terminal and run:
+
+```bash
+sudo apt-get update
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Ahad00010/JaText/main/scripts/setup-ubuntu-selfhost.sh)"
+```
+
+That private repo means the `curl` above will not work until the repo is public, so use this instead, from any folder:
+
+```bash
+# 1. get GitHub CLI and log in once (browser, no password typing)
+sudo apt-get install -y gh
+gh auth login -h github.com -p https -w
+
+# 2. clone your private repo and run the installer
+gh repo clone Ahad00010/JaText ~/JaText -- -b main
+cd ~/JaText
+chmod +x scripts/setup-ubuntu-selfhost.sh
+bash scripts/setup-ubuntu-selfhost.sh
+```
+
+The installer does all of this for you, and is safe to re-run:
+
+1. Disables suspend forever, including on lid close (writes `/etc/systemd/logind.conf.d/99-jatext-24-7.conf` and masks the sleep targets).
+2. Installs PostgreSQL, Node 20, GitHub CLI, and cloudflared.
+3. Enables PostgreSQL at boot.
+4. Creates the `jatext` PostgreSQL role and `jatext` database, then writes `~/JaText/.env.selfhost` with a random database password and `AUTH_SECRET`.
+5. Clones or updates `~/JaText`.
+6. Runs `npm install` and `npm run build`.
+7. Installs and starts the `jatext.service` systemd unit (auto restarts, starts on boot).
+8. Prints the Cloudflare Tunnel commands for step 3 below.
+
+Verify the local server before continuing:
+
+```bash
+curl http://127.0.0.1:8787/api/auth-status
+```
+
+You want `"dbConnected": true` and `"engine": "postgresql"`. The first request also creates all 28 tables automatically.
+
+---
+
+## 2. Point `jatext.us.ci` at Cloudflare
+
+Do this once, in the Cloudflare dashboard.
+
+1. Sign in at `https://dash.cloudflare.com` and click **Add a domain**, type `jatext.us.ci`, choose the **Free** plan.
+2. Cloudflare shows you two nameservers, for example `betty.ns.cloudflare.com` and `rick.ns.cloudflare.com`. Leave this page open.
+3. Now go to `https://my.dnshe.com`, sign in, and open the DNS settings for `jatext.us.ci`. You have two options:
+
+   **Option A, recommended: let Cloudflare run DNS**
+   Find the **Nameservers** or **NS** section (sometimes under "Domain settings", "Advanced", or "Delegation") and replace the existing nameservers with the two Cloudflare gave you. Save. Cloudflare then manages DNS for you, issues the TLS certificate automatically, and `cloudflared` can create its own DNS records.
+
+   **Option B: keep dnshe as your DNS host**
+   Only use this if dnshe will not let you change nameservers. Add one record:
+
+   | Type | Name | Value | TTL |
+   | --- | --- | --- | --- |
+   | CNAME | `jatext` (or `@` if they allow a root CNAME) | `<TUNNEL_ID>.cfargotunnel.com` | 300 |
+
+   You get `<TUNNEL_ID>` in step 3. With this option Cloudflare cannot auto create records and you do not get the orange cloud proxy, but the tunnel still works.
+
+4. Back on the Cloudflare page, click **Check nameservers**. It can take anywhere from a few minutes to a few hours. You can continue with step 3 while it propagates, the site just will not resolve until it finishes.
+
+---
+
+## 3. Create the permanent Cloudflare Tunnel
+
+Run these on the laptop:
+
+```bash
+# 1. Authorize cloudflared with your Cloudflare account (opens the browser)
+cloudflared tunnel login
+
+# 2. Create the tunnel. Copy the long id it prints, you need it next.
+cloudflared tunnel create jatext
+
+# 3. Publish the hostname. Skip this if you used Option B in step 2.
+cloudflared tunnel route dns jatext jatext.us.ci
+```
+
+Write the tunnel config. Replace `<TUNNEL_ID>` with the id from `cloudflared tunnel create`:
+
+```bash
+sudo mkdir -p /etc/cloudflared
+sudo tee /etc/cloudflared/config.yml >/dev/null <<YML
+url: http://127.0.0.1:8787
+tunnel: jatext
+credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
+YML
+```
+
+Install it as a 24/7 service:
+
+```bash
+sudo cloudflared service install
+sudo systemctl enable --now cloudflared
+sudo systemctl status cloudflared --no-pager
+```
+
+If you prefer the dashboard instead of the CLI: `https://one.dash.cloudflare.com` then **Networks, Tunnels, Create a tunnel, Cloudflared**. Give it a name, copy the token, run `sudo cloudflared service install <TOKEN>`, then add a **Public Hostname** of `jatext.us.ci` pointing at `http://127.0.0.1:8787`.
+
+---
+
+## 4. Go live
+
+```bash
+curl -I https://jatext.us.ci
+curl https://jatext.us.ci/api/auth-status
+```
+
+You should see `"ok": true`, `"dbConnected": true`, `"engine": "postgresql"`. Open `https://jatext.us.ci/chats` and sign in.
+
+---
+
+## 5. Install the new Android APK
+
+Every installed APK from the Vercel era still points at the dead `jatext.vercel.app`, so the new build has to be installed once, manually. After this the in app updater works again.
+
+1. Download the newest signed APK: `https://jatext.us.ci/downloads/JaText-release.apk`
+2. On the phone, allow **Install unknown apps** for your browser, then open the APK.
+3. Sign in. Version 4.3.0 (Build 71) is the first build that talks to `jatext.us.ci`.
+
+Note on passkeys: the WebAuthn relying party id changed from `jatext.vercel.app` to `jatext.us.ci`, so any passkey you registered before has to be registered again. Email and password logins are unaffected.
+
+---
+
+## 6. Optional: bring over your old Turso data
+
+Only possible if your old Turso database still answers reads.
+
+```bash
+cd ~/JaText
+set -a; . .env.selfhost; set +a
+TURSO_DATABASE_URL="libsql://your-old-db.turso.io" \
+TURSO_AUTH_TOKEN="your-old-token" \
+npm run pg:migrate
+```
+
+---
+
+## 7. Day to day commands
+
+```bash
+# Live logs
+sudo journalctl -u jatext.service -f
+sudo journalctl -u cloudflared -f
+
+# Restart everything
+sudo systemctl restart jatext.service
+sudo systemctl restart cloudflared
+
+# Open the database shell
+sudo -u postgres psql -d jatext
+
+# Full database backup
+sudo -u postgres pg_dump -Fc jatext > ~/jatext-backup-$(date +%F).dump
+
+# Restore a backup
+sudo -u postgres pg_restore -d jatext --clean --if-exists ~/jatext-backup-YYYY-MM-DD.dump
+```
+
+---
+
+## 8. Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| `curl http://127.0.0.1:8787/api/auth-status` refuses the connection | `sudo systemctl status jatext.service` then `sudo journalctl -u jatext.service -n 80` |
+| `dbConnected: false` | Check PostgreSQL is up: `sudo -u postgres pg_isready`, and confirm `DATABASE_URL` in `~/JaText/.env.selfhost` |
+| Cloudflare shows `1033` or `1034` error | The tunnel service is not connected. `sudo systemctl restart cloudflared` and check `sudo cloudflared tunnel info jatext` |
+| Browser shows `ERR_NAME_NOT_RESOLVED` | DNS has not propagated yet, or the CNAME from step 2 Option B is missing or wrong |
+| Site works at home, not on mobile data | Wait for DNS propagation, then `dig jatext.us.ci +short` |
+| Laptop sleeps when the lid closes | Re run step 1, or `sudo systemctl status sleep.target` to confirm it is masked |
+
+---
+
+## 9. If you ever change the domain
+
+The domain lives in exactly three places:
+
+1. `PUBLIC_APP_ORIGIN` in `~/JaText/.env.selfhost` (server side origin and passkey id)
+2. `scripts/setup-ubuntu-selfhost.sh` and `scripts/jatext.service` (install defaults)
+3. `API_ORIGIN` in `android/app/build.gradle` (what the APK talks to), which needs an APK rebuild if you change it after building
+
+The web app itself figures out its origin from the browser, so it follows whatever domain you serve it on.

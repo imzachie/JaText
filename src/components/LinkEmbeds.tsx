@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react";
+import { PUBLIC_APP_ORIGIN } from "../lib/publicOrigin";
 import { Capacitor } from "@capacitor/core";
 
 export interface LinkPreviewResult {
@@ -12,7 +13,7 @@ export interface LinkPreviewResult {
 }
 
 const LS_CACHE_KEY = "jatext:link-preview-cache:v3";
-const PUBLIC_PREVIEW_ENDPOINT = "https://jatext.vercel.app/api/link-preview";
+const PUBLIC_PREVIEW_ENDPOINT = `${PUBLIC_APP_ORIGIN}/api/link-preview`;
 const MAX_LOCAL_CACHE_ENTRIES = 160;
 const POSITIVE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const NEGATIVE_TTL_MS = 15 * 60 * 1000;

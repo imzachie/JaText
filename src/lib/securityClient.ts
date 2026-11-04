@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { PUBLIC_APP_HOST } from "./publicOrigin";
 import { bytesToBase64Url, base64UrlToBytes } from "./e2ee/cryptoPrimitives";
 import { resolveTursoMediaUrl, tursoRpc, uploadMediaToTurso } from "./tursoClient";
 import type { JaUser } from "./types";
@@ -186,8 +187,8 @@ function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
 }
 
 function currentWebAuthnRpId(): string {
-  if (typeof window === "undefined") return "jatext.vercel.app";
-  return window.location.hostname || "jatext.vercel.app";
+  if (typeof window === "undefined") return PUBLIC_APP_HOST;
+  return window.location.hostname || PUBLIC_APP_HOST;
 }
 
 export function isWebAuthnSupported(): boolean {
