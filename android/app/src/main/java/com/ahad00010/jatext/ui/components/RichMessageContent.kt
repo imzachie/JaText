@@ -96,6 +96,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -529,6 +530,54 @@ fun buildPreviewAnnotatedWithSpoilers(
             append("  •••••  ")
             pop()
             idx = found + mask.length
+        }
+    }
+}
+
+/**
+ * A reply to a Status post, shown as a proper card instead of leaking the
+ * `[Status reply: "..."]` markup that is stored inside the message body.
+ */
+@Composable
+fun StatusReplyCardUi(
+    quote: String,
+    ink: ResolvedBubbleColors,
+) {
+    val barBg = if (ink.isLightSurface) Color(0x14000000) else Color(0x24000000)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(barBg)
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            imageVector = ImageVector.vectorResource(id = com.ahad00010.jatext.R.drawable.ic_jt_status_reply),
+            contentDescription = null,
+            tint = ink.textColor.copy(alpha = 0.8f),
+            modifier = Modifier.size(14.dp).padding(top = 1.dp),
+        )
+        Spacer(Modifier.width(7.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Replying to Status",
+                color = ink.textColor,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.1.sp,
+            )
+            if (quote.isNotBlank()) {
+                Text(
+                    text = quote,
+                    color = ink.textColor.copy(alpha = 0.82f),
+                    fontSize = 12.5.sp,
+                    lineHeight = 16.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
