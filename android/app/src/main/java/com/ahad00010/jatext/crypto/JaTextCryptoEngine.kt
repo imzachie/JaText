@@ -2837,6 +2837,19 @@ object JaTextCryptoEngine {
             return "Updated chat wallpaper"
         }
         if (isSilentControlPayload(trimmed)) return ""
+        // A status reply carries a machine readable prefix. It stays in the
+        // stored body so it survives a reload, but a chat list row or a
+        // notification should read "Replying to Status", never the markup.
+        val statusReply = com.ahad00010.jatext.data.StatusReplyParser.parse(trimmed)
+        if (statusReply.quote != null) {
+            val label = if (statusReply.quote.isBlank()) {
+                "Replying to Status"
+            } else {
+                "Replying to \"${statusReply.quote}\""
+            }
+            val rest = ViewOnceCodec.maskSpoilersAndMarkdownForPreview(statusReply.body.trim())
+            return if (rest.isBlank()) label else "$label: $rest"
+        }
         val sanitized = ViewOnceCodec.maskSpoilersAndMarkdownForPreview(trimmed)
         return sanitized.ifBlank { "Attachment" }
     }
