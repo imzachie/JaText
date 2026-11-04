@@ -418,3 +418,92 @@ The domain lives in exactly three places:
 3. `API_ORIGIN` in `android/app/build.gradle` (what the APK talks to), which needs an APK rebuild if you change it after building
 
 The web app itself figures out its origin from the browser, so it follows whatever domain you serve it on.
+
+---
+
+## 14. Reach the laptop from anywhere (SSH over Tailscale)
+
+Everything in this guide is a terminal command, so once you can reach the laptop remotely you never
+have to sit in front of it again for config changes. Tailscale gives the laptop a permanent private
+IP that works behind borrowed WiFi with no router access, no port forwarding and no open ports.
+It is free for personal use and it is already installed from an earlier step.
+
+### 14.1 Turn on SSH on the laptop (once, at the laptop)
+
+```bash
+sudo apt-get -o DPkg::Lock::Timeout=180 install -y openssh-server
+sudo systemctl enable --now ssh
+sudo systemctl enable --now tailscaled
+sudo tailscale up
+tailscale ip -4
+```
+
+Expected: `tailscale ip -4` prints one line, your laptop's permanent private address:
+
+```
+100.101.102.103
+```
+
+Keep that address, it never changes unless you delete the device from the Tailscale admin console.
+With MagicDNS on you can also use `zach-dynabook-b55-k` as the hostname instead of the IP.
+
+### 14.2 Put your phone or another computer on the same tailnet
+
+Install the Tailscale app from the Play Store or App Store and sign in with the **same account** you
+used on the laptop. Both devices then show as *Connected* in `https://login.tailscale.com/admin/machines`.
+
+### 14.3 Connect
+
+From any SSH client on the phone (Termius, JuiceSSH, Termux) or from another computer:
+
+- Host: `100.101.102.103` (use the IP, not the MagicDNS name, in third-party phone apps)
+- Port: `22`
+- User: your laptop username, `zach`
+- Auth: your laptop password, or better, an SSH key
+
+From another computer that is also on the tailnet, it is just:
+
+```bash
+ssh zach@100.101.102.103
+```
+
+Optional, identity based login with no keys to manage:
+
+```bash
+sudo tailscale up --ssh
+```
+
+After that Tailscale authenticates the session from your tailnet identity instead of a key.
+
+### 14.4 Everything you can now do from the couch
+
+```bash
+ssh zach@100.101.102.103
+
+# pick up a code change and restart the app
+cd ~/JaText && git pull --ff-only && sudo systemctl restart jatext.service
+
+# change an API key, then restart
+nano ~/JaText/.env.selfhost && sudo systemctl restart jatext.service
+
+# read logs, restart the tunnel, back up the database
+sudo journalctl -u jatext.service -n 100
+sudo systemctl restart cloudflared
+sudo -u postgres pg_dump -Fc jatext > ~/jatext-backup-$(date +%F).dump
+```
+
+### 14.5 What still needs you physically at the laptop
+
+Remote access only works while three things are true: the laptop is powered on, it is awake, and it
+is online. So these still need hands on the device:
+
+- Power cuts, a flat battery, or the charger being unplugged
+- The laptop rebooting and stopping at the login screen (Tailscale only starts after you log in,
+  unless you enable automatic login)
+- The OS not booting at all, or a full disk
+- WiFi dropping, or the borrowed network changing
+- The very first Tailscale sign in, and any time Tailscale logs you out
+
+If you want it to survive a reboot unattended, turn on **Settings > Users > Automatic Login** on the
+laptop. Without that, a reboot means the laptop sits at the login screen with Tailscale down and no
+remote way in.
