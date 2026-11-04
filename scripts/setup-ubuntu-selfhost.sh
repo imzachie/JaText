@@ -43,8 +43,20 @@ HandleLidSwitchDocked=ignore
 IdleAction=ignore
 EOF
 sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null 2>&1 || true
-sudo systemctl restart systemd-logind || true
+sudo systemctl daemon-reload
+# IMPORTANT: never restart systemd-logind here. Doing so tears down the running
+# graphical session and on some laptops the login screen does not come back.
+# The logind config above simply takes effect on the next reboot.
+if command -v gsettings >/dev/null 2>&1; then
+  sudo -u "$USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
+    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing' \
+    >/dev/null 2>&1 || true
+  sudo -u "$USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" \
+    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing' \
+    >/dev/null 2>&1 || true
+fi
 info "Lid close and idle will no longer suspend the machine."
+info "The logind part applies on the next reboot (we never restart logind, it would kill your session)."
 
 log "2/8  Installing system packages (PostgreSQL, Node 20, GitHub CLI, cloudflared)"
 sudo apt-get "${APT_LOCK_OPTS[@]}" update -qq
