@@ -10,7 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { Avatar } from "./Avatar";
 import { IosEmojiText } from "./IosEmoji";
-import { IosEyeIcon, IosHeartIcon, IosMusicNoteIcon } from "./IosVectorIcons";
+import { IosEyeIcon, IosHeartIcon, IosMusicNoteIcon, ReactionGlyph } from "./IosVectorIcons";
 import { useJaText } from "../lib/store";
 import {
   resolveTursoMediaUrl,
@@ -1740,7 +1740,7 @@ export function FullScreenStoryViewerModal({
                     type="button"
                     onClick={() => void sendDirectStoryReply(em)}
                   >
-                    <IosEmojiText text={em} />
+                    <ReactionGlyph emoji={em} size={22} />
                   </button>
                 ))}
               </div>

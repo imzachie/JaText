@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type TouchEvent } from "react";
+import { ReactionGlyph } from "./IosVectorIcons";
 import { Capacitor } from "@capacitor/core";
 import {
   Captions,
@@ -762,7 +763,7 @@ export function GroupCallOverlay() {
               className="call-emoji-pill"
               onClick={() => sendCallReaction(emoji)}
             >
-              {emoji}
+              <ReactionGlyph emoji={emoji} size={20} />
             </button>
           ))}
         </div>
