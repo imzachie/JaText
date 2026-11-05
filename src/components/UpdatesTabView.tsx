@@ -18,6 +18,8 @@ import {
   IosTrashIcon,
   ReactionGlyph,
 } from "./IosVectorIcons";
+import { SongPickerSheet, SongTrimSheet } from "./StatusSongPicker";
+import { findStatusSong, formatClock, type StatusSong } from "../lib/statusSongs";
 import { useJaText } from "../lib/store";
 import {
   resolveTursoMediaUrl,
@@ -41,6 +43,8 @@ export interface StatusSegmentItem {
   audioUrl: string;
   audioTitle: string;
   audioDurationMs: number;
+  /** Where in the track this clip begins, for songs longer than 30 seconds. */
+  audioStartMs?: number;
   privacyType: StatusPrivacyType;
   groupId?: string | null;
   mentionedUserIds: string[];
@@ -109,21 +113,12 @@ const STATUS_BG_SWATCHES = [
 ];
 
 /**
- * The Status music library. Placeholder tones are gone: every entry is a real
- * audio file served from /sounds, and uploading your own clip is always there
- * as the third option.
+ * Posts made before the music library existed stored builtin:melly_mike rather
+ * than a file. Melly Mike is the only built-in that ever shipped, and the song
+ * itself now lives in the library, so those old posts still have something to
+ * play.
  */
-const MELLY_MIKE_URL = "/sounds/melly-mike-young-black-and-rich.mp3?v=1";
-
-const BUILTIN_TRACKS = [
-  { id: "none", title: "No Music", url: "", durationMs: 0 },
-  {
-    id: "melly_mike",
-    title: "Melly Mike - Young Black & Rich",
-    url: MELLY_MIKE_URL,
-    durationMs: 24960,
-  },
-];
+const LEGACY_BUILTIN_AUDIO_URL = "/sounds/melly-mike-young-black-and-rich.mp3?v=1";
 
 const QUICK_STORY_REACTIONS = ["❤️", "🔥", "😂", "😮", "😢", "👏"];
 
@@ -703,9 +698,22 @@ function StatusComposerModal({
   const [bgColor, setBgColor] = useState(STATUS_BG_SWATCHES[0]);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
-  const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [audioDurationMs, setAudioDurationMs] = useState(0);
-  const [selectedBuiltinTrack, setSelectedBuiltinTrack] = useState("none");
+  /**
+   * What the status will play. A song from the library or an uploaded clip,
+   * each with the point inside it the 30 second window starts from.
+   */
+  const [audioPick, setAudioPick] = useState<
+    | { kind: "none" }
+    | { kind: "song"; songId: string; startMs: number; lengthMs: number }
+    | { kind: "upload"; file: File; durationMs: number; startMs: number; lengthMs: number }
+  >({ kind: "none" });
+  const [songSheetOpen, setSongSheetOpen] = useState(false);
+  const [pendingSong, setPendingSong] = useState<StatusSong | null>(null);
+  const [pendingUpload, setPendingUpload] = useState<{
+    file: File;
+    url: string;
+    durationMs: number;
+  } | null>(null);
   const [privacyType, setPrivacyType] = useState<StatusPrivacyType>(
     privacyDefault.privacyType || "MY_CONTACTS",
   );
@@ -742,15 +750,25 @@ function StatusComposerModal({
     const f = e.target.files?.[0];
     if (!f) return;
     const dur = await measureAudioDurationMs(f);
-    if (dur > MAX_AUDIO_DURATION_MS) {
-      setError("Audio clips on Status must be 30 seconds or shorter.");
-      e.target.value = "";
+    e.target.value = "";
+    if (dur <= 0) {
+      setError("That file could not be read as audio.");
       return;
     }
     setError(null);
-    setAudioFile(f);
-    setAudioDurationMs(Math.min(MAX_AUDIO_DURATION_MS, Math.max(1000, dur)));
-    setSelectedBuiltinTrack("none");
+    // Longer clips are fine now, the trimmer picks the 30 seconds to use.
+    setPendingUpload({
+      file: f,
+      url: URL.createObjectURL(f),
+      durationMs: Math.round(dur),
+    });
+  };
+
+  const closeUploadTrim = () => {
+    setPendingUpload((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
   };
 
   const handlePublish = async () => {
@@ -759,7 +777,7 @@ function StatusComposerModal({
       setError("Choose a photo from your device or switch to Text Status.");
       return;
     }
-    if (mode === "text" && !caption.trim() && !audioFile && selectedBuiltinTrack === "none") {
+    if (mode === "text" && !caption.trim() && audioPick.kind === "none") {
       setError("Type a status message first.");
       return;
     }
@@ -780,17 +798,20 @@ function StatusComposerModal({
       let audioUrl = "";
       let audioTitle = "";
       let finalAudioDur = 0;
-      if (audioFile) {
-        audioUrl = await uploadMediaToTurso(audioFile);
-        audioTitle = audioFile.name.replace(/\.[^.]+$/, "").slice(0, 60);
-        finalAudioDur = audioDurationMs;
+      let finalAudioStart = 0;
+      if (audioPick.kind === "upload") {
+        audioUrl = await uploadMediaToTurso(audioPick.file);
+        audioTitle = audioPick.file.name.replace(/\.[^.]+$/, "").slice(0, 60);
+        finalAudioDur = audioPick.lengthMs;
+        finalAudioStart = audioPick.startMs;
         if (!mediaUrl) mediaType = "audio";
-      } else if (selectedBuiltinTrack !== "none") {
-        const track = BUILTIN_TRACKS.find((t) => t.id === selectedBuiltinTrack);
-        if (track?.url) {
-          audioUrl = track.url;
-          audioTitle = track.title;
-          finalAudioDur = track.durationMs;
+      } else if (audioPick.kind === "song") {
+        const song = findStatusSong(audioPick.songId);
+        if (song) {
+          audioUrl = song.audioUrl;
+          audioTitle = `${song.title} · ${song.artist}`.slice(0, 80);
+          finalAudioDur = audioPick.lengthMs;
+          finalAudioStart = audioPick.startMs;
         }
       }
 
@@ -802,6 +823,7 @@ function StatusComposerModal({
         audioUrl,
         audioTitle,
         audioDurationMs: finalAudioDur,
+        audioStartMs: finalAudioStart,
         privacyType,
         excludedUserIds: privacyType === "CONTACTS_EXCEPT" ? excludedIds : [],
         includedUserIds: privacyType === "ONLY_SHARE_WITH" ? includedIds : [],
@@ -820,6 +842,7 @@ function StatusComposerModal({
         audioUrl,
         audioTitle,
         audioDurationMs: finalAudioDur,
+        audioStartMs: finalAudioStart,
         privacyType,
         groupId: privacyType === "GROUP_EXCLUSIVE" ? groupId : null,
         mentionedUserIds: mentionedIds,
@@ -956,21 +979,13 @@ function StatusComposerModal({
         <div className="jt-upd-field-group">
           <label>Music / Audio (optional, max 30s)</label>
           <div className="jt-upd-track-pills">
-            {BUILTIN_TRACKS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={
-                  !audioFile && selectedBuiltinTrack === t.id ? "is-active" : ""
-                }
-                onClick={() => {
-                  setAudioFile(null);
-                  setSelectedBuiltinTrack(t.id);
-                }}
-              >
-                {t.title}
-              </button>
-            ))}
+            <button
+              type="button"
+              className={audioPick.kind === "none" ? "is-active" : ""}
+              onClick={() => setAudioPick({ kind: "none" })}
+            >
+              No Sound
+            </button>
             <label className="jt-upd-audio-upload-pill">
               <input
                 type="file"
@@ -978,14 +993,64 @@ function StatusComposerModal({
                 onChange={(e) => void handleAudioPick(e)}
                 style={{ display: "none" }}
               />
-              <span className="jt-upd-audio-upload-label">
-                {audioFile ? <IosMusicNoteIcon size={14} /> : null}
-                {audioFile
-                  ? audioFile.name.slice(0, 18) + ` (${Math.round(audioDurationMs / 1000)}s)`
-                  : "Upload Audio"}
-              </span>
+              <span className="jt-upd-audio-upload-label">Upload your own!</span>
             </label>
           </div>
+
+          <button
+            type="button"
+            className="jt-upd-discover-songs"
+            onClick={() => setSongSheetOpen(true)}
+          >
+            <IosMusicNoteIcon size={15} />
+            <span>Discover songs...</span>
+          </button>
+
+          {audioPick.kind === "song" ? (() => {
+            const song = findStatusSong(audioPick.songId);
+            if (!song) return null;
+            return (
+              <div className="jt-upd-picked-audio">
+                <img className="jt-upd-picked-cover" src={song.coverUrl} alt="" draggable={false} />
+                <div className="jt-upd-picked-copy">
+                  <strong>{song.title}</strong>
+                  <span>
+                    {song.artist} · starts at {formatClock(audioPick.startMs)}
+                  </span>
+                </div>
+                <button type="button" className="jt-upd-picked-change" onClick={() => setPendingSong(song)}>
+                  Change part
+                </button>
+              </div>
+            );
+          })() : null}
+
+          {audioPick.kind === "upload" ? (
+            <div className="jt-upd-picked-audio">
+              <div className="jt-upd-picked-cover jt-upd-picked-cover-file">
+                <IosMusicNoteIcon size={16} />
+              </div>
+              <div className="jt-upd-picked-copy">
+                <strong>{audioPick.file.name.slice(0, 28)}</strong>
+                <span>
+                  Your clip · starts at {formatClock(audioPick.startMs)}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="jt-upd-picked-change"
+                onClick={() =>
+                  setPendingUpload({
+                    file: audioPick.file,
+                    url: URL.createObjectURL(audioPick.file),
+                    durationMs: audioPick.durationMs,
+                  })
+                }
+              >
+                Change part
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {store.friends.length > 0 && (
@@ -1108,6 +1173,60 @@ function StatusComposerModal({
           </button>
         </div>
       </div>
+
+      <SongPickerSheet
+        open={songSheetOpen}
+        onClose={() => setSongSheetOpen(false)}
+        onPick={(song) => {
+          setSongSheetOpen(false);
+          setPendingSong(song);
+        }}
+      />
+
+      <SongTrimSheet
+        open={pendingSong !== null}
+        title={pendingSong?.title ?? ""}
+        artist={pendingSong?.artist}
+        coverUrl={pendingSong?.coverUrl ?? null}
+        audioUrl={pendingSong?.audioUrl ?? ""}
+        durationMs={pendingSong?.durationMs ?? 0}
+        initialStartMs={pendingSong?.previewStartMs ?? 0}
+        onCancel={() => setPendingSong(null)}
+        onConfirm={(startMs, lengthMs) => {
+          if (pendingSong) {
+            setAudioPick({
+              kind: "song",
+              songId: pendingSong.id,
+              startMs,
+              lengthMs,
+            });
+          }
+          setPendingSong(null);
+        }}
+      />
+
+      <SongTrimSheet
+        open={pendingUpload !== null}
+        title={pendingUpload?.file.name ?? ""}
+        artist="Your clip"
+        coverUrl={null}
+        audioUrl={pendingUpload?.url ?? ""}
+        durationMs={pendingUpload?.durationMs ?? 0}
+        initialStartMs={0}
+        onCancel={closeUploadTrim}
+        onConfirm={(startMs, lengthMs) => {
+          if (pendingUpload) {
+            setAudioPick({
+              kind: "upload",
+              file: pendingUpload.file,
+              durationMs: pendingUpload.durationMs,
+              startMs,
+              lengthMs,
+            });
+          }
+          closeUploadTrim();
+        }}
+      />
     </div>,
     document.body,
   );
@@ -1417,10 +1536,30 @@ export function FullScreenStoryViewerModal({
      * a file path, and Melly Mike is the only built-in that ever shipped. Play
      * the real track for those posts instead of leaving them silent.
      */
-    const audioUrl = rawAudioUrl.startsWith("builtin:") ? MELLY_MIKE_URL : rawAudioUrl;
+    const audioUrl = rawAudioUrl.startsWith("builtin:")
+      ? LEGACY_BUILTIN_AUDIO_URL
+      : rawAudioUrl;
 
     const audio = new Audio(resolveTursoMediaUrl(audioUrl));
     audio.volume = 0.7;
+    /**
+     * Songs in the library are whole tracks, so the poster picked the part they
+     * wanted. Seek there before anything plays, otherwise every status with
+     * music would start from the top of the song.
+     */
+    const clipStartMs = Math.max(0, currentSeg.audioStartMs || 0);
+    const seekToClipStart = () => {
+      if (clipStartMs <= 0) return;
+      try {
+        audio.currentTime = clipStartMs / 1000;
+      } catch {
+        // Some browsers reject a seek before metadata lands, onLoaded covers it.
+      }
+    };
+    if (clipStartMs > 0) {
+      if (audio.readyState >= 1) seekToClipStart();
+      else audio.addEventListener("loadedmetadata", seekToClipStart, { once: true });
+    }
     // "auto" is the default for new Audio(), but being explicit keeps the clip
     // buffering from the moment the story opens instead of after play() is called.
     audio.preload = "auto";

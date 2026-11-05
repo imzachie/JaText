@@ -13862,3 +13862,458 @@ label,
   border-radius: 999px;
   background: #14d990;
 }
+
+/* ==========================================================================
+   Status Music Library (song picker and the "pick the part" trimmer)
+   ========================================================================== */
+
+.jt-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9800;
+  background: rgba(3, 5, 10, 0.62);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: lightbox-fade-in 180ms ease both;
+}
+
+.jt-sheet {
+  width: min(520px, 100vw);
+  max-height: min(84dvh, 760px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-radius: 20px 20px 0 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 -18px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: jt-sheet-in 260ms var(--ease-spring) both;
+}
+
+@keyframes jt-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (min-width: 900px) {
+  .jt-sheet-backdrop {
+    align-items: center;
+  }
+
+  .jt-sheet {
+    border-radius: 20px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  }
+}
+
+.jt-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 16px 10px;
+}
+
+.jt-sheet-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.jt-sheet-head p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.jt-sheet-close {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 160ms var(--ease-spring), background 160ms ease;
+}
+
+.jt-sheet-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: scale(1.06);
+}
+
+.jt-song-list {
+  overflow-y: auto;
+  padding: 4px 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.jt-song-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 14px;
+  transition: background 180ms ease;
+}
+
+.jt-song-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.jt-song-row.is-playing {
+  background: rgba(155, 108, 255, 0.14);
+}
+
+.jt-song-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 12px;
+}
+
+.jt-song-index {
+  width: 18px;
+  flex: none;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.jt-song-cover-wrap {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.jt-song-cover-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.jt-song-cover-veil {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(3, 5, 10, 0.55);
+  color: #fff;
+  animation: lightbox-fade-in 140ms ease both;
+}
+
+.jt-song-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.jt-song-copy strong,
+.jt-song-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jt-song-copy strong {
+  font-size: 13.5px;
+  font-weight: 800;
+}
+
+.jt-song-copy span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.jt-song-duration {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.jt-song-use-btn {
+  flex: none;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-dark);
+  font-weight: 800;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: transform 160ms var(--ease-spring), filter 160ms ease;
+}
+
+.jt-song-use-btn:hover {
+  filter: brightness(1.06);
+  transform: scale(1.04);
+}
+
+.jt-trim-now {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px 14px;
+}
+
+.jt-trim-cover {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: 12px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.jt-trim-cover-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+
+.jt-trim-now-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.jt-trim-now-copy strong {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jt-trim-now-copy span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.jt-trim-preview-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 160ms var(--ease-spring), background 160ms ease;
+}
+
+.jt-trim-preview-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  transform: scale(1.03);
+}
+
+.jt-trim-preview-btn.is-playing {
+  background: var(--accent);
+  color: var(--accent-dark);
+  border-color: transparent;
+}
+
+.jt-trim-timeline {
+  padding: 0 16px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.jt-trim-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.jt-trim-window {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #7c3aed);
+  transition: left 120ms ease, width 120ms ease;
+}
+
+.jt-trim-timeline input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.jt-trim-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.jt-trim-readout {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.jt-sheet-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 12px 16px 16px;
+}
+
+.jt-upd-discover-songs {
+  margin-top: 8px;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(155, 108, 255, 0.5);
+  background: rgba(155, 108, 255, 0.1);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 160ms var(--ease-spring), background 160ms ease;
+}
+
+.jt-upd-discover-songs:hover {
+  background: rgba(155, 108, 255, 0.18);
+  transform: scale(1.01);
+}
+
+.jt-upd-picked-audio {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  animation: jtPickedAudioIn 220ms var(--ease-spring) both;
+}
+
+@keyframes jtPickedAudioIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.jt-upd-picked-cover {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 10px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.jt-upd-picked-cover-file {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+
+.jt-upd-picked-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.jt-upd-picked-copy strong,
+.jt-upd-picked-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jt-upd-picked-copy strong {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.jt-upd-picked-copy span {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.jt-upd-picked-change {
+  flex: none;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms var(--ease-spring);
+}
+
+.jt-upd-picked-change:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: scale(1.03);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jt-sheet-backdrop,
+  .jt-sheet,
+  .jt-upd-picked-audio,
+  .jt-song-cover-veil {
+    animation: none;
+  }
+}

@@ -589,6 +589,7 @@ async function initSchema(db) {
     `ALTER TABLE groups ADD COLUMN avatar_color TEXT NOT NULL DEFAULT 'purple'`,
     `ALTER TABLE groups ADD COLUMN community_key_seed TEXT`,
     `ALTER TABLE status_posts ADD COLUMN audio_title TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE status_posts ADD COLUMN audio_start_ms INTEGER NOT NULL DEFAULT 0`,
   ];
 
   if (db.engine === "postgresql" || db.engine === "postgresql-bridge") {
@@ -6370,6 +6371,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           audioUrl: r.audio_url ? String(r.audio_url) : "",
           audioTitle: r.audio_title ? String(r.audio_title) : "",
           audioDurationMs: Math.min(30000, Math.max(0, Number(r.audio_duration_ms || 0))),
+          audioStartMs: Math.max(0, Math.min(86_400_000, Number(r.audio_start_ms || 0))),
           privacyType: String(r.privacy_mode || "MY_CONTACTS"),
           groupId: r.exclusive_group_id ? String(r.exclusive_group_id) : null,
           mentionedUserIds: authorId === meId ? safeMentions : safeMentions.includes(meId) ? [meId] : [],
@@ -6503,6 +6505,13 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         0,
         Math.min(30000, Math.round(Number(args.audioDurationMs || 0))),
       );
+      // Where in the track the clip begins. Songs in the music library are far
+      // longer than the 30 seconds a Status is allowed, so the poster picks the
+      // part they want and the viewer seeks to it.
+      const audioStartMs = Math.max(
+        0,
+        Math.min(86_400_000, Math.round(Number(args.audioStartMs || 0))),
+      );
       const caption = String(args.caption || "").trim().slice(0, 700);
       const bgColor = String(args.bgColor || "#0f766e").trim().slice(0, 32);
       const textStyle = String(args.textStyle || "bold").trim().slice(0, 24);
@@ -6551,10 +6560,11 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const expiresAt = now + 24 * 60 * 60 * 1000;
       await db.execute({
         sql: `INSERT INTO status_posts (
-                id, author_id, media_url, media_type, media_source, audio_url, audio_title, audio_duration_ms,
-                caption, bg_color, text_style, privacy_mode, privacy_target_ids_json,
+                id, author_id, media_url, media_type, media_source, audio_url, audio_title,
+                audio_duration_ms, audio_start_ms, caption, bg_color, text_style, privacy_mode,
+                privacy_target_ids_json,
                 exclusive_group_id, mentioned_user_ids_json, created_at, expires_at
-              ) VALUES (?, ?, ?, ?, 'camera_roll', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ) VALUES (?, ?, ?, ?, 'camera_roll', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           id,
           meId,
@@ -6563,6 +6573,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           audioUrl,
           audioTitle,
           audioDurationMs,
+          audioStartMs,
           caption,
           bgColor,
           textStyle,
@@ -6597,6 +6608,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           audioUrl: audioUrl || "",
           audioTitle,
           audioDurationMs,
+          audioStartMs,
           privacyType: privacyMode,
           groupId: exclusiveGroupId,
           mentionedUserIds,
