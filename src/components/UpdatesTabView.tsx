@@ -113,12 +113,14 @@ const STATUS_BG_SWATCHES = [
  * audio file served from /sounds, and uploading your own clip is always there
  * as the third option.
  */
+const MELLY_MIKE_URL = "/sounds/melly-mike-young-black-and-rich.mp3?v=1";
+
 const BUILTIN_TRACKS = [
   { id: "none", title: "No Music", url: "", durationMs: 0 },
   {
     id: "melly_mike",
     title: "Melly Mike - Young Black & Rich",
-    url: "/sounds/melly-mike-young-black-and-rich.mp3?v=1",
+    url: MELLY_MIKE_URL,
     durationMs: 24960,
   },
 ];
@@ -1409,13 +1411,15 @@ export function FullScreenStoryViewerModal({
     }
     if (!currentSeg?.audioUrl) return;
 
-    if (currentSeg.audioUrl.startsWith("builtin:")) {
-      // Legacy placeholder tone from before the real music library existed.
-      // There is no oscillator to play any more, those old posts are silent.
-      return;
-    }
+    const rawAudioUrl = currentSeg.audioUrl;
+    /**
+     * Older picks from the music library were stored as builtin:<id> instead of
+     * a file path, and Melly Mike is the only built-in that ever shipped. Play
+     * the real track for those posts instead of leaving them silent.
+     */
+    const audioUrl = rawAudioUrl.startsWith("builtin:") ? MELLY_MIKE_URL : rawAudioUrl;
 
-    const audio = new Audio(resolveTursoMediaUrl(currentSeg.audioUrl));
+    const audio = new Audio(resolveTursoMediaUrl(audioUrl));
     audio.volume = 0.7;
     // "auto" is the default for new Audio(), but being explicit keeps the clip
     // buffering from the moment the story opens instead of after play() is called.

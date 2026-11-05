@@ -12848,6 +12848,24 @@ label,
   gap: 4px;
   white-space: nowrap;
   min-width: 0;
+  overflow: hidden;
+}
+
+/* Chats, Updates and Communities share one narrow row. The buttons are
+   allowed to shrink, so without clipping the longest label runs straight out
+   of its own button and paints over the tab beside it instead of truncating. */
+.sidebar-tabs button > svg {
+  flex: none;
+}
+
+.sidebar-tabs button > span:not(.badge) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-tabs button > .badge {
+  flex: none;
 }
 
 /* Desktop: the Updates tab lives inside the 376-432px sidebar, so the mobile
@@ -13451,6 +13469,49 @@ label,
   cursor: default;
 }
 
+/* The story viewer and the media lightbox both animate with these names, but
+   the keyframes themselves were never written, so opening a status popped in
+   with no transition at all. */
+@keyframes lightbox-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lightbox-stage-in {
+  from {
+    opacity: 0;
+    transform: scale(0.945) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes jt-vo-backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes jt-vo-frame-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
 /* Full-Screen Story Viewer */
 .jt-story-viewer-overlay {
   position: fixed;
@@ -13467,6 +13528,19 @@ label,
 
 .jt-story-viewer-overlay.is-closing {
   animation: jt-vo-backdrop-out 210ms ease forwards;
+}
+
+.jt-story-viewer-overlay.is-closing .jt-story-viewer-frame {
+  animation: jt-vo-frame-out 210ms ease forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jt-story-viewer-overlay,
+  .jt-story-viewer-frame,
+  .jt-story-viewer-overlay.is-closing,
+  .jt-story-viewer-overlay.is-closing .jt-story-viewer-frame {
+    animation: none;
+  }
 }
 
 .jt-story-viewer-frame {

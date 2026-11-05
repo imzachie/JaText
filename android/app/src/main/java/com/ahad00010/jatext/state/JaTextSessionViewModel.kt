@@ -102,6 +102,12 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+/**
+ * The one real track in the Status music library. It lives here because both
+ * the composer that stores it and the viewer that plays it need the same
+ * value, and older posts referenced it as builtin:melly_mike instead.
+ */
+const val MELLY_MIKE_URL = "/sounds/melly-mike-young-black-and-rich.mp3"
 
 data class DeletedForMeUndoBanner(
     val messageId: String,
@@ -5892,7 +5898,7 @@ class JaTextSessionViewModel(app: Application) :
                 } else if (builtinAudioId.isNotBlank() && builtinAudioId != "none") {
                     // Real audio file from the music library, not a synthesized tone.
                     val trackUrl = if (builtinAudioId == "melly_mike") {
-                        "/sounds/melly-mike-young-black-and-rich.mp3"
+                        MELLY_MIKE_URL
                     } else {
                         ""
                     }

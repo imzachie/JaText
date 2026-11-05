@@ -832,11 +832,16 @@ fun FullScreenStoryViewerOverlay(
 
     DisposableEffect(currentSeg?.id, currentSeg?.audioUrl) {
         var player: MediaPlayer? = null
-        val audioUrl = currentSeg?.audioUrl.orEmpty()
-        if (audioUrl.startsWith("builtin:")) {
-            // Legacy placeholder tone from before the real music library. There
-            // is nothing to play for those old posts any more.
-        } else if (audioUrl.isNotBlank()) {
+        val rawAudioUrl = currentSeg?.audioUrl.orEmpty()
+        // Older picks from the music library were stored as builtin:<id> rather
+        // than a file path. Melly Mike is the only built-in that ever shipped,
+        // so those posts play the real track instead of staying silent.
+        val audioUrl = if (rawAudioUrl.startsWith("builtin:")) {
+            com.ahad00010.jatext.state.MELLY_MIKE_URL
+        } else {
+            rawAudioUrl
+        }
+        if (audioUrl.isNotBlank()) {
             runCatching {
                 val resolved = TursoApiClient.resolveAbsoluteMediaUrl(audioUrl)
                 player = MediaPlayer().apply {
