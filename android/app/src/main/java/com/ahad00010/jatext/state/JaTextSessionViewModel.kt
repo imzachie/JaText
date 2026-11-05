@@ -2363,11 +2363,11 @@ class JaTextSessionViewModel(app: Application) :
         isSpoiler: Boolean = false,
     ): Job? {
         val st = _state.value
-        val me = st.me ?: return
-        val token = currentAuthToken() ?: return
+        val me = st.me ?: return null
+        val token = currentAuthToken() ?: return null
         val bubble = st.outgoingBubbleStyle
         val cleanText = text.trim()
-        if (cleanText.isEmpty() && attachmentUri == null && localVoiceFile == null) return
+        if (cleanText.isEmpty() && attachmentUri == null && localVoiceFile == null) return null
 
         // Optimistic instant bubble (zero "Decrypting message" flash!)
         val tempId = "opt-${UUID.randomUUID()}"
