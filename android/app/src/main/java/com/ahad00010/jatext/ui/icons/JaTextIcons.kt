@@ -521,6 +521,7 @@ enum class WebUiIconKind {
     Link,
     Transcript,
     Search,
+    Check,
 }
 
 @Composable
@@ -699,6 +700,9 @@ fun WebUiSvgIcon(
                 drawLine(tint, Offset(7f * s, 9f * s), Offset(17f * s, 9f * s), strokeWidth = sw, cap = StrokeCap.Round)
                 drawLine(tint, Offset(7f * s, 13f * s), Offset(17f * s, 13f * s), strokeWidth = sw, cap = StrokeCap.Round)
                 drawLine(tint, Offset(7f * s, 16.5f * s), Offset(12.5f * s, 16.5f * s), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            WebUiIconKind.Check -> {
+                strokeSvgPath("M20 6 9 17l-5-5")
             }
             WebUiIconKind.Search -> {
                 drawCircle(

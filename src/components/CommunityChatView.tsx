@@ -493,6 +493,9 @@ export function CommunityChatView({
     }
   }
   const [forwardMessage, setForwardMessage] = useState<CommunityMessage | null>(null);
+  const [bulkForwardIds, setBulkForwardIds] = useState<string[] | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [forwardSearch, setForwardSearch] = useState("");
   const [forwardClosing, setForwardClosing] = useState(false);
   const [pendingMessages, setPendingMessages] = useState<CommunityMessage[]>([]);
@@ -1104,6 +1107,71 @@ export function CommunityChatView({
     setComposerSeed((prev) => ({ nonce: prev.nonce + 1, text: "" }));
     closeMessageMenu();
   }
+  const toggleSelectedId = useCallback((messageId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }, []);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const selectedMessages = useMemo(
+    () =>
+      displayedMessages
+        .filter((message) => selectedIds.has(message.id) && !message.id.startsWith("pending-"))
+        .sort((a, b) => a.createdAt - b.createdAt),
+    [displayedMessages, selectedIds],
+  );
+
+  async function copySelectedMessages() {
+    const text = selectedMessages
+      .map((message) =>
+        message.unsentAt
+          ? "This message was unsent"
+          : message.body || message.attachmentUrl || "",
+      )
+      .filter(Boolean)
+      .join("\n");
+    exitSelectionMode();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      setError(friendlyError(err, "Couldn't copy the posts."));
+    }
+  }
+
+  async function deleteSelectedForMe() {
+    const targets = selectedMessages;
+    exitSelectionMode();
+    for (const message of targets) {
+      setLocallyHiddenIds((prev) => ({
+        ...prev,
+        [message.id]: true,
+        ...(message.renderKey ? { [message.renderKey]: true } : {}),
+      }));
+      try {
+        await store.deleteCommunityMessageForMe(message.id);
+      } catch (err) {
+        setError(friendlyError(err, "Couldn't delete one of the posts."));
+      }
+    }
+  }
+
+  function forwardSelectedMessages() {
+    const targets = selectedMessages;
+    if (targets.length === 0) return;
+    setBulkForwardIds(targets.map((message) => message.id));
+    setForwardMessage(targets[0]);
+    exitSelectionMode();
+  }
+
   async function copyMessage(message: CommunityMessage) {
     try {
       await navigator.clipboard.writeText(message.unsentAt ? "This message was unsent" : message.body || message.attachmentName || message.stickerName || "");
@@ -1224,8 +1292,12 @@ export function CommunityChatView({
   }
   async function forwardToFriend(receiverId: string) {
     if (!forwardMessage) return;
+    const forwardIds = bulkForwardIds ?? [forwardMessage.id];
     try {
-      await store.forwardCommunityMessage(forwardMessage.id, { userId: receiverId });
+      for (const id of forwardIds) {
+        await store.forwardCommunityMessage(id, { userId: receiverId });
+      }
+      setBulkForwardIds(null);
       closeForwardDialog();
       closeMessageMenu();
     } catch (err) {
@@ -1235,7 +1307,10 @@ export function CommunityChatView({
   async function forwardToGroup(targetGroupId: string) {
     if (!forwardMessage) return;
     try {
-      await store.forwardCommunityMessage(forwardMessage.id, { groupId: targetGroupId });
+      for (const id of bulkForwardIds ?? [forwardMessage.id]) {
+        await store.forwardCommunityMessage(id, { groupId: targetGroupId });
+      }
+      setBulkForwardIds(null);
       closeForwardDialog();
       closeMessageMenu();
     } catch (err) {
@@ -1359,6 +1434,39 @@ export function CommunityChatView({
         </div>
       )}
 
+      {selectionMode && (
+        <div className="bulk-select-bar" role="toolbar" aria-label="Selected posts">
+          <span className="bulk-select-count">{selectedIds.size} selected</span>
+          <button
+            type="button"
+            className="bulk-select-action"
+            disabled={selectedIds.size === 0}
+            onClick={() => void copySelectedMessages()}
+          >
+            <CopyIcon size={14} /> Copy
+          </button>
+          <button
+            type="button"
+            className="bulk-select-action"
+            disabled={selectedIds.size === 0}
+            onClick={forwardSelectedMessages}
+          >
+            <ForwardIcon size={14} /> Forward
+          </button>
+          <button
+            type="button"
+            className="bulk-select-action danger"
+            disabled={selectedIds.size === 0}
+            onClick={() => void deleteSelectedForMe()}
+          >
+            <TrashIcon size={14} /> Delete
+          </button>
+          <button type="button" className="bulk-select-close" onClick={exitSelectionMode}>
+            <CloseIcon size={15} />
+          </button>
+        </div>
+      )}
+
       <div
         className="messages community-messages"
         ref={messagesElement}
@@ -1443,14 +1551,39 @@ export function CommunityChatView({
                   isJustArrived ? "msg-just-arrived" : ""
                 } ${
                   highlightedCommunityJumpId === message.id ? "jump-highlight-pulse" : ""
+                } ${
+                  selectionMode ? "is-selectable" : ""
+                } ${
+                  selectionMode && selectedIds.has(message.id) ? "is-selected" : ""
                 }`}
                 id={`community-message-${message.id}`}
+                onClick={
+                  selectionMode && !message.id.startsWith("pending-")
+                    ? () => toggleSelectedId(message.id)
+                    : undefined
+                }
                 onContextMenu={(e) => openMessageMenu(e, message)}
                 onPointerDown={(e) => startPostPointerHold(e, message)}
                 onPointerMove={movePostPointerHold}
                 onPointerUp={cancelPostTouchHold}
                 onPointerCancel={cancelPostTouchHold}
               >
+              {selectionMode && (
+                <button
+                  type="button"
+                  className={`msg-select-box${
+                    selectedIds.has(message.id) ? " is-selected" : ""
+                  }`}
+                  aria-label={selectedIds.has(message.id) ? "Deselect post" : "Select post"}
+                  aria-pressed={selectedIds.has(message.id)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleSelectedId(message.id);
+                  }}
+                >
+                  {selectedIds.has(message.id) ? <CheckIcon size={13} /> : null}
+                </button>
+              )}
               <div className="community-post-header">
                 <Avatar
                   user={{
@@ -1839,6 +1972,19 @@ export function CommunityChatView({
       {messageMenu && (
         <ContextMenu x={messageMenu.x} y={messageMenu.y} label="Message actions" className={`message-context-menu ${messageMenuClosing ? "closing" : ""}`} onClose={closeMessageMenu}>
           <button type="button" role="menuitem" onClick={() => replyToMessage(messageMenu.message)}><span><ReplyIcon size={15} /></span> Reply</button>
+          {!messageMenu.message.id.startsWith("pending-") && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setSelectionMode(true);
+                setSelectedIds(new Set([messageMenu.message.id]));
+                closeMessageMenu();
+              }}
+            >
+              <span><CheckIcon size={15} /></span> Select
+            </button>
+          )}
           {!messageMenu.message.unsentAt &&
             messageMenu.message.senderId === store.me?.id && (
               <button

@@ -339,6 +339,9 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onReactToMessage,
   onOpenReactionPicker,
   onSwipeReply,
+  selectionMode = false,
+  selectedIds,
+  onToggleSelect,
   onJoinGroupCall,
   activeCallId,
   groupCallStatesById,
@@ -369,6 +372,9 @@ const GroupChatHistory = memo(function GroupChatHistory({
   onReactToMessage: (message: GroupMessage, emoji: string) => void;
   onOpenReactionPicker: (x: number, y: number, message: GroupMessage) => void;
   onSwipeReply: (message: GroupMessage) => void;
+  selectionMode?: boolean;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (messageId: string) => void;
   onJoinGroupCall: (invite: NonNullable<ReturnType<typeof parseGroupCallInvite>>, messageId: string) => void;
   activeCallId: string | null;
   groupCallStatesById: Record<string, { isEnded: boolean; durationSec?: number }>;
@@ -698,9 +704,34 @@ const GroupChatHistory = memo(function GroupChatHistory({
                 highlightedJumpId === message.id || activeSearchMatchId === message.id
                   ? "jump-highlight-pulse"
                   : ""
+              } ${selectionMode ? "is-selectable" : ""} ${
+                selectionMode && selectedIds?.has(message.id) ? "is-selected" : ""
               }`}
               id={`group-message-${message.id}`}
+              onClick={
+                selectionMode && !message.id.startsWith("pending-")
+                  ? () => onToggleSelect?.(message.id)
+                  : undefined
+              }
             >
+              {selectionMode && (
+                <button
+                  type="button"
+                  className={`msg-select-box${
+                    selectedIds?.has(message.id) ? " is-selected" : ""
+                  }`}
+                  aria-label={
+                    selectedIds?.has(message.id) ? "Deselect message" : "Select message"
+                  }
+                  aria-pressed={Boolean(selectedIds?.has(message.id))}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleSelect?.(message.id);
+                  }}
+                >
+                  {selectedIds?.has(message.id) ? <CheckIcon size={13} /> : null}
+                </button>
+              )}
               <div className={`msg-col group-msg-col ${mine ? "mine" : "theirs"}`}>
                 {!mine && (
                   <div className="group-sender-meta">
@@ -1503,6 +1534,9 @@ export function GroupChatView({
     message: GroupMessage;
   } | null>(null);
   const [forwardMessage, setForwardMessageState] = useState<GroupMessage | null>(null);
+  const [bulkForwardIds, setBulkForwardIds] = useState<string[] | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [forwardClosing, setForwardClosing] = useState(false);
   const [pendingMessages, setPendingMessages] = useState<GroupMessage[]>([]);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -1903,6 +1937,83 @@ export function GroupChatView({
     visibleRawDisplayedMessages,
     `group:${groupId ?? ""}`,
   );
+  const toggleSelectedId = useCallback((messageId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }, []);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const selectedMessages = useMemo(
+    () =>
+      displayedMessages
+        .filter((message) => selectedIds.has(message.id) && !message.id.startsWith("pending-"))
+        .sort((a, b) => a.createdAt - b.createdAt),
+    [displayedMessages, selectedIds],
+  );
+
+  async function copySelectedMessages() {
+    const text = selectedMessages
+      .map((message) =>
+        message.unsentAt
+          ? "This message was unsent"
+          : message.body || message.attachmentUrl || message.stickerUrl || "",
+      )
+      .filter(Boolean)
+      .join("\n");
+    exitSelectionMode();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      setError(friendlyError(err, "Couldn't copy the messages."));
+    }
+  }
+
+  async function deleteSelectedForMe() {
+    const targets = selectedMessages;
+    exitSelectionMode();
+    for (const message of targets) {
+      setLocallyHiddenIds((prev) => ({
+        ...prev,
+        [message.id]: true,
+        ...(message.renderKey ? { [message.renderKey]: true } : {}),
+      }));
+      setPendingMessages((cur) =>
+        cur.filter(
+          (m) =>
+            m.id !== message.id &&
+            m.id !== message.renderKey &&
+            !(
+              m.senderId === message.senderId &&
+              m.body === message.body &&
+              Math.abs(m.createdAt - message.createdAt) < 60_000
+            ),
+        ),
+      );
+      try {
+        await store.deleteGroupMessageForMe(message.id);
+      } catch (err) {
+        setError(friendlyError(err, "Couldn't delete one of the messages."));
+      }
+    }
+  }
+
+  function forwardSelectedMessages() {
+    const targets = selectedMessages;
+    if (targets.length === 0) return;
+    setBulkForwardIds(targets.map((message) => message.id));
+    setForwardMessageState(targets[0]);
+    exitSelectionMode();
+  }
+
   const searchMatchIds = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!searchOpen || !q) return [];
@@ -2779,7 +2890,10 @@ export function GroupChatView({
   async function forwardToFriend(receiverId: string) {
     if (!forwardMessage) return;
     try {
-      await store.forwardGroupMessage(forwardMessage.id, { userId: receiverId });
+      for (const id of bulkForwardIds ?? [forwardMessage.id]) {
+        await store.forwardGroupMessage(id, { userId: receiverId });
+      }
+      setBulkForwardIds(null);
       closeForwardDialog();
       closeMessageMenu();
     } catch (err) {
@@ -2790,7 +2904,10 @@ export function GroupChatView({
   async function forwardToGroup(targetGroupId: string) {
     if (!forwardMessage) return;
     try {
-      await store.forwardGroupMessage(forwardMessage.id, { groupId: targetGroupId });
+      for (const id of bulkForwardIds ?? [forwardMessage.id]) {
+        await store.forwardGroupMessage(id, { groupId: targetGroupId });
+      }
+      setBulkForwardIds(null);
       closeForwardDialog();
       closeMessageMenu();
     } catch (err) {
@@ -3289,6 +3406,39 @@ export function GroupChatView({
         </div>
       )}
 
+      {selectionMode && (
+        <div className="bulk-select-bar" role="toolbar" aria-label="Selected messages">
+          <span className="bulk-select-count">{selectedIds.size} selected</span>
+          <button
+            type="button"
+            className="bulk-select-action"
+            disabled={selectedIds.size === 0}
+            onClick={() => void copySelectedMessages()}
+          >
+            <CopyIcon size={14} /> Copy
+          </button>
+          <button
+            type="button"
+            className="bulk-select-action"
+            disabled={selectedIds.size === 0}
+            onClick={forwardSelectedMessages}
+          >
+            <ForwardIcon size={14} /> Forward
+          </button>
+          <button
+            type="button"
+            className="bulk-select-action danger"
+            disabled={selectedIds.size === 0}
+            onClick={() => void deleteSelectedForMe()}
+          >
+            <TrashIcon size={14} /> Delete
+          </button>
+          <button type="button" className="bulk-select-close" onClick={exitSelectionMode}>
+            <CloseIcon size={15} />
+          </button>
+        </div>
+      )}
+
       <GroupChatHistory
         key={groupId ?? "group"}
         messages={displayedMessages}
@@ -3313,6 +3463,9 @@ export function GroupChatView({
         onReactToMessage={reactToMessage}
         onOpenReactionPicker={handleOpenReactionPicker}
         onSwipeReply={handleSwipeReply}
+        selectionMode={selectionMode}
+        selectedIds={selectedIds}
+        onToggleSelect={toggleSelectedId}
         onJoinGroupCall={handleJoinGroupCall}
         activeCallId={activeGroupCallId}
         groupCallStatesById={groupCallStatesById}
@@ -3482,6 +3635,22 @@ export function GroupChatView({
             </span>{" "}
             Reply
           </button>
+          {!messageMenu.message.id.startsWith("pending-") && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setSelectionMode(true);
+                setSelectedIds(new Set([messageMenu.message.id]));
+                closeMessageMenu();
+              }}
+            >
+              <span>
+                <CheckIcon size={15} />
+              </span>{" "}
+              Select
+            </button>
+          )}
           {!messageMenu.message.unsentAt && groupId && (
             <button
               type="button"

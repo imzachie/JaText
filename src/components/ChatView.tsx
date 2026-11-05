@@ -303,6 +303,9 @@ const ChatHistory = memo(function ChatHistory({
   onReactToMessage,
   onOpenReactionPicker,
   onSwipeReply,
+  selectionMode = false,
+  selectedIds,
+  onToggleSelect,
 }: {
   messages: ChatMessage[];
   friend: JaUser;
@@ -324,6 +327,9 @@ const ChatHistory = memo(function ChatHistory({
   onReactToMessage: (message: ChatMessage, emoji: string) => void;
   onOpenReactionPicker: (x: number, y: number, message: ChatMessage) => void;
   onSwipeReply: (message: ChatMessage) => void;
+  selectionMode?: boolean;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (messageId: string) => void;
 }) {
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -684,9 +690,34 @@ const ChatHistory = memo(function ChatHistory({
                 highlightedJumpId === message.id || activeSearchMatchId === message.id
                   ? "jump-highlight-pulse"
                   : ""
+              } ${selectionMode ? "is-selectable" : ""} ${
+                selectionMode && selectedIds?.has(message.id) ? "is-selected" : ""
               }`}
               id={`message-${message.id}`}
+              onClick={
+                selectionMode && !message.id.startsWith("pending-")
+                  ? () => onToggleSelect?.(message.id)
+                  : undefined
+              }
             >
+              {selectionMode && (
+                <button
+                  type="button"
+                  className={`msg-select-box${
+                    selectedIds?.has(message.id) ? " is-selected" : ""
+                  }`}
+                  aria-label={
+                    selectedIds?.has(message.id) ? "Deselect message" : "Select message"
+                  }
+                  aria-pressed={Boolean(selectedIds?.has(message.id))}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleSelect?.(message.id);
+                  }}
+                >
+                  {selectedIds?.has(message.id) ? <CheckIcon size={13} /> : null}
+                </button>
+              )}
               {!mine && (
                 <Avatar user={friend} size={30} ringWidth={2} onClick={handleOpenFriendProfile} />
               )}
@@ -1324,6 +1355,9 @@ export function ChatView({
   const peerE2EE = e2ee.peerKeys[friend.id];
   const isMobileWallpaper = useIsMobileWallpaperSupported();
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
+  const [bulkForwardIds, setBulkForwardIds] = useState<string[] | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [forwardClosing, setForwardClosing] = useState(false);
   const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -1380,6 +1414,87 @@ export function ChatView({
     [locallyHiddenIds, rawDisplayedMessages],
   );
   const displayedMessages = useUnsendThanosWatcher(visibleRawDisplayedMessages, `dm:${friend.id}`);
+
+  const toggleSelectedId = useCallback((messageId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }, []);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const selectedMessages = useMemo(
+    () =>
+      displayedMessages
+        .filter((message) => selectedIds.has(message.id) && !message.id.startsWith("pending-"))
+        .sort((a, b) => a.createdAt - b.createdAt),
+    [displayedMessages, selectedIds],
+  );
+
+  async function copySelectedMessages() {
+    const text = selectedMessages
+      .map((message) =>
+        message.unsentAt
+          ? "This message was unsent"
+          : formatPreviewMessageText(message.body) ||
+              message.attachmentName ||
+              message.attachmentUrl ||
+              "",
+      )
+      .filter(Boolean)
+      .join("\n");
+    exitSelectionMode();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (copyError) {
+      setError(friendlyError(copyError, "Couldn't copy the messages."));
+    }
+  }
+
+  async function deleteSelectedForMe() {
+    const targets = selectedMessages;
+    exitSelectionMode();
+    for (const message of targets) {
+      deletedSnapshotRef.current.set(message.id, message);
+      setLocallyHiddenIds((prev) => ({
+        ...prev,
+        [message.id]: true,
+        ...(message.renderKey ? { [message.renderKey]: true } : {}),
+      }));
+      setPendingMessages((cur) =>
+        cur.filter(
+          (m) =>
+            m.id !== message.id &&
+            m.id !== message.renderKey &&
+            !(
+              m.senderId === message.senderId &&
+              m.body === message.body &&
+              Math.abs(m.createdAt - message.createdAt) < 60_000
+            ),
+        ),
+      );
+      try {
+        await store.deleteMessageForMe(message.id);
+      } catch (actionError) {
+        setError(friendlyError(actionError, "Couldn't delete one of the messages."));
+      }
+    }
+  }
+
+  function forwardSelectedMessages() {
+    const targets = selectedMessages;
+    if (targets.length === 0) return;
+    setBulkForwardIds(targets.map((message) => message.id));
+    setForwardMessage(targets[0]);
+    exitSelectionMode();
+  }
   const searchMatchIds = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!searchOpen || !q) return [];
@@ -2239,11 +2354,15 @@ export function ChatView({
   async function forwardToFriend(receiverId: string) {
     if (!forwardMessage) return;
     try {
-      if (store.forwardDmToTarget) {
-        await store.forwardDmToTarget(forwardMessage.id, { userId: receiverId });
-      } else {
-        await store.forwardMessage(forwardMessage.id, receiverId);
+      const ids = bulkForwardIds ?? [forwardMessage.id];
+      for (const id of ids) {
+        if (store.forwardDmToTarget) {
+          await store.forwardDmToTarget(id, { userId: receiverId });
+        } else {
+          await store.forwardMessage(id, receiverId);
+        }
       }
+      setBulkForwardIds(null);
       closeForwardDialog();
       closeMessageMenu();
     } catch (actionError) {
@@ -2254,7 +2373,10 @@ export function ChatView({
   async function forwardToGroup(groupId: string) {
     if (!forwardMessage || !store.forwardDmToTarget) return;
     try {
-      await store.forwardDmToTarget(forwardMessage.id, { groupId });
+      for (const id of bulkForwardIds ?? [forwardMessage.id]) {
+        await store.forwardDmToTarget(id, { groupId });
+      }
+      setBulkForwardIds(null);
       closeForwardDialog();
       closeMessageMenu();
     } catch (actionError) {
@@ -2502,6 +2624,41 @@ export function ChatView({
         </div>
       )}
 
+      {selectionMode && (
+        <div className="bulk-select-bar" role="toolbar" aria-label="Selected messages">
+          <span className="bulk-select-count">
+            {selectedIds.size} selected
+          </span>
+          <button
+            type="button"
+            className="bulk-select-action"
+            disabled={selectedIds.size === 0}
+            onClick={() => void copySelectedMessages()}
+          >
+            <CopyIcon size={14} /> Copy
+          </button>
+          <button
+            type="button"
+            className="bulk-select-action"
+            disabled={selectedIds.size === 0}
+            onClick={forwardSelectedMessages}
+          >
+            <ForwardIcon size={14} /> Forward
+          </button>
+          <button
+            type="button"
+            className="bulk-select-action danger"
+            disabled={selectedIds.size === 0}
+            onClick={() => void deleteSelectedForMe()}
+          >
+            <TrashIcon size={14} /> Delete
+          </button>
+          <button type="button" className="bulk-select-close" onClick={exitSelectionMode}>
+            <CloseIcon size={15} />
+          </button>
+        </div>
+      )}
+
       <ChatHistory
         messages={displayedMessages}
         friend={friend}
@@ -2523,6 +2680,9 @@ export function ChatView({
         onReactToMessage={reactToMessage}
         onOpenReactionPicker={handleOpenReactionPicker}
         onSwipeReply={handleSwipeReply}
+        selectionMode={selectionMode}
+        selectedIds={selectedIds}
+        onToggleSelect={toggleSelectedId}
       />
 
       {error && <div className="error-box chat-error">{error}</div>}
@@ -2649,6 +2809,22 @@ export function ChatView({
             </span>{" "}
             Reply
           </button>
+          {!messageMenu.message.id.startsWith("pending-") && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setSelectionMode(true);
+                setSelectedIds(new Set([messageMenu.message.id]));
+                closeMessageMenu();
+              }}
+            >
+              <span>
+                <CheckIcon size={15} />
+              </span>{" "}
+              Select
+            </button>
+          )}
           {!messageMenu.message.unsentAt && (
             <button
               type="button"

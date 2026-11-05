@@ -19,8 +19,8 @@ interface ApkVersionManifest {
 }
 
 const FALLBACK_APK_VERSION: ApkVersionManifest = {
-  versionName: "4.4.1",
-  versionCode: 82,
+  versionName: "4.5.0",
+  versionCode: 84,
 };
 
 function usePublishedApkVersion(): ApkVersionManifest {
