@@ -2588,7 +2588,14 @@ fun ChatThreadScreen(
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
                                     .clickable {
-                                        vm.forwardMessageWithContext(item.body, sourceContext, targetCommunity = true)
+                                        vm.forwardMessageWithContext(
+                                            item.body,
+                                            sourceContext,
+                                            attachmentUrl = item.attachmentUrl,
+                                            attachmentName = item.attachmentName,
+                                            attachmentType = item.attachmentType,
+                                            targetCommunity = true,
+                                        )
                                         forwardingItem = null
                                     }
                                     .padding(vertical = 10.dp, horizontal = 6.dp),
@@ -2612,7 +2619,14 @@ fun ChatThreadScreen(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
                                 .clickable {
-                                    vm.forwardMessageWithContext(item.body, sourceContext, targetGroupId = grp.id)
+                                    vm.forwardMessageWithContext(
+                                        item.body,
+                                        sourceContext,
+                                        attachmentUrl = item.attachmentUrl,
+                                        attachmentName = item.attachmentName,
+                                        attachmentType = item.attachmentType,
+                                        targetGroupId = grp.id,
+                                    )
                                     forwardingItem = null
                                 }
                                 .padding(vertical = 10.dp, horizontal = 6.dp),
@@ -2629,7 +2643,14 @@ fun ChatThreadScreen(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
                                 .clickable {
-                                    vm.forwardMessageWithContext(item.body, sourceContext, targetFriendId = fr.id)
+                                    vm.forwardMessageWithContext(
+                                        item.body,
+                                        sourceContext,
+                                        attachmentUrl = item.attachmentUrl,
+                                        attachmentName = item.attachmentName,
+                                        attachmentType = item.attachmentType,
+                                        targetFriendId = fr.id,
+                                    )
                                     forwardingItem = null
                                 }
                                 .padding(vertical = 10.dp, horizontal = 6.dp),

@@ -258,6 +258,25 @@ async function checkNativeFirebaseConfigured(): Promise<boolean> {
 /* Google OAuth + email/password providers.                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A forwarded attachment already lives on this server, so the new message can
+ * point at the same bytes instead of downloading and re-uploading them. Used
+ * as the fallback when the re-upload does not happen, which used to drop the
+ * file and forward the text alone.
+ */
+function forwardedAttachmentFallback(
+  url: string | null | undefined,
+  name: string | null | undefined,
+  type: string | null | undefined,
+): { attachmentId: string; attachmentName: string; attachmentType: string } | undefined {
+  if (!url) return undefined;
+  return {
+    attachmentId: url,
+    attachmentName: name || "forwarded",
+    attachmentType: type || "application/octet-stream",
+  };
+}
+
 export function TursoStoreProvider({ children }: { children: ReactNode }) {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeGroupId, setActiveGroupIdState] = useState<string | null>(null);
@@ -1679,6 +1698,11 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
         await sendCommunityTextMut({
           body: fwdText,
           forwardedFromId: messageId,
+          ...(forwardedAttachmentFallback(
+            src.attachmentUrl ?? src.stickerUrl,
+            src.attachmentName || src.stickerName,
+            src.attachmentType,
+          ) ?? {}),
         });
         return;
       }
@@ -1712,6 +1736,13 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      const fwdPassthrough = fwdFile || klipySticker
+        ? undefined
+        : forwardedAttachmentFallback(
+            mediaUrl,
+            src.attachmentName || src.stickerName,
+            src.attachmentType,
+          );
       if (target.userId) {
         const enc = await prepareOutgoingDmEncrypted({
           receiverId: target.userId,
@@ -1730,7 +1761,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
                   attachmentName: enc.attachmentName,
                   attachmentType: enc.attachmentType,
                 }
-              : {}),
+              : (fwdPassthrough ?? {})),
           });
           return;
         }
@@ -1754,7 +1785,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
                   attachmentName: enc.attachmentName,
                   attachmentType: enc.attachmentType,
                 }
-              : {}),
+              : (fwdPassthrough ?? {})),
           });
           return;
         }
@@ -2168,6 +2199,13 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      const fwdPassthrough = fwdFile || klipySticker
+        ? undefined
+        : forwardedAttachmentFallback(
+            mediaUrl,
+            src.attachmentName || src.stickerName,
+            src.attachmentType,
+          );
       if (target.userId) {
         const enc = await prepareOutgoingDmEncrypted({
           receiverId: target.userId,
@@ -2186,7 +2224,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
                   attachmentName: enc.attachmentName,
                   attachmentType: enc.attachmentType,
                 }
-              : {}),
+              : (fwdPassthrough ?? {})),
           });
           return;
         }
@@ -2210,7 +2248,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
                   attachmentName: enc.attachmentName,
                   attachmentType: enc.attachmentType,
                 }
-              : {}),
+              : (fwdPassthrough ?? {})),
           });
           return;
         }
@@ -2897,6 +2935,9 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
             }
           }
         }
+        const fwdPassthrough = fwdFile || klipySticker
+          ? undefined
+          : forwardedAttachmentFallback(src.attachmentUrl, src.attachmentName, src.attachmentType);
         const senderUser =
           src.senderId === me?.id
             ? me
@@ -2933,7 +2974,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
                     attachmentName: enc.attachmentName,
                     attachmentType: enc.attachmentType,
                   }
-                : {}),
+                : (fwdPassthrough ?? {})),
             });
             return;
           }
@@ -2956,7 +2997,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
                     attachmentName: enc.attachmentName,
                     attachmentType: enc.attachmentType,
                   }
-                : {}),
+                : (fwdPassthrough ?? {})),
             });
             return;
           }
