@@ -38,6 +38,10 @@ export function ChatVideoPlayer({ src, name }: ChatVideoPlayerProps) {
   const [scrubFraction, setScrubFraction] = useState(0);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  // A video can load, play its sound and still have nothing to show, which is
+  // what a codec the browser cannot decode looks like. Saying so beats a
+  // black rectangle.
+  const [playbackBroken, setPlaybackBroken] = useState(false);
 
   const activeVideo = useCallback((): HTMLVideoElement | null => {
     return fullscreenOpen ? modalVideoRef.current : inlineVideoRef.current;
@@ -303,6 +307,12 @@ export function ChatVideoPlayer({ src, name }: ChatVideoPlayerProps) {
             if (Number.isFinite(d) && d > 0) setDuration(d);
             syncSettingsToVideo(e.currentTarget);
           }}
+          onLoadedData={(e) => {
+            if (e.currentTarget.videoWidth === 0 || e.currentTarget.videoHeight === 0) {
+              setPlaybackBroken(true);
+            }
+          }}
+          onError={() => setPlaybackBroken(true)}
           onTimeUpdate={(e) => {
             if (!fullscreenOpen && !isScrubbing) {
               setCurrentTime(e.currentTarget.currentTime);
@@ -323,6 +333,15 @@ export function ChatVideoPlayer({ src, name }: ChatVideoPlayerProps) {
             }
           }}
         />
+
+        {playbackBroken && (
+          <div className="ja-video-unplayable" onClick={(e) => e.stopPropagation()}>
+            <p>This video plays sound but its format cannot be shown here.</p>
+            <a href={src} target="_blank" rel="noreferrer">
+              Open it in a new tab
+            </a>
+          </div>
+        )}
 
         <div className={`ja-video-overlay${showOverlay ? " is-visible" : ""}`}>
           <div className="ja-video-top-row" onClick={(e) => e.stopPropagation()}>

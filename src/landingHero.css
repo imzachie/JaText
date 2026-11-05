@@ -430,6 +430,13 @@ html.jatext-landing-route *::-webkit-scrollbar-thumb:hover {
   margin-bottom: 24px;
 }
 
+.jt-hero-apk-note {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+  color: var(--sk-muted, #6b7280);
+}
+
 .jt-hero-handnote {
   display: flex;
   align-items: center;

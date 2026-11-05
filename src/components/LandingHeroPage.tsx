@@ -7,6 +7,60 @@ import "../landingHero.css";
 
 type SketchTab = "chat" | "calls" | "e2ee";
 
+/**
+ * What the release pipeline writes for every signed build. The page reads it
+ * so the version and the download button follow the APK instead of being
+ * typed in by hand and left behind.
+ */
+interface ApkVersionManifest {
+  versionName?: string;
+  versionCode?: number;
+  publishedAt?: string;
+}
+
+const FALLBACK_APK_VERSION: ApkVersionManifest = {
+  versionName: "4.4.1",
+  versionCode: 82,
+};
+
+function usePublishedApkVersion(): ApkVersionManifest {
+  const [manifest, setManifest] = useState<ApkVersionManifest>(FALLBACK_APK_VERSION);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/apk-version.json?t=${Date.now()}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as ApkVersionManifest;
+        if (cancelled || !json?.versionName) return;
+        setManifest({
+          versionName: json.versionName,
+          versionCode: json.versionCode,
+          publishedAt: json.publishedAt,
+        });
+      } catch {
+        // Keep the fallback, the page should never show an empty version.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return manifest;
+}
+
+function formatPublishedDate(iso?: string): string | null {
+  if (!iso) return null;
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 interface FeatureItem {
   index: string;
   title: string;
@@ -131,10 +185,30 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v4.4.1",
+    date: "November 5, 2026",
+    headline: "One Send Animation, Videos That Stream, Calmer Bulk Uploads",
+    latest: true,
+    bullets: [
+      "Sent messages stopped animating twice. One to one chats were the only place the delivered copy did not inherit the optimistic bubble's identity, so the row was rebuilt and the entrance animation ran a second time.",
+      "Videos on Android now stream from the server instead of being downloaded whole before the first frame, which is what left them spinning forever.",
+      "The songs sheet no longer hangs off the bottom of the screen, sending a batch of files no longer crashes the app, one send carries up to ten files, and attachments may be up to 5 GB with a queue that keeps the server calm.",
+    ],
+  },
+  {
+    version: "v4.4.0",
+    date: "November 5, 2026",
+    headline: "Songs Hosted Locally, Clickable Song Sheet, Spoilers, Update Downloads That Survive A Screen Lock",
+    bullets: [
+      "The three status songs and their covers moved off GitHub and onto our own server, so they start like any other file the app serves instead of taking forever to load.",
+      "The songs picker on Android gets its own window so it is no longer stuck behind the status composer, spoiler covers now show for everyone including the sender, and an opened spoiler stays open.",
+      "Update downloads resume from the bytes already on disk instead of resetting when the screen locks, large attachments no longer crash with an out of memory error, and tall photos open fully visible in the fullscreen viewer.",
+    ],
+  },
+  {
     version: "v4.2.1",
     date: "November 3, 2026",
     headline: "Updates Tab on Desktop & Mobile, Instant Status Posting, Full SF Pro Weights & Smooth Transitions",
-    latest: true,
     bullets: [
       "Launched the clean Updates tab across Desktop, Mobile Web, and Android APK with 24-hour Status stories, live Camera Roll photo previews, segmented unread/read avatar rings, 5-second full-screen Story Viewer with hold-to-pause and swipe replies, and per-post privacy controls.",
       "Restored the top JaText brand header above Updates on Mobile, restored all 29 Apple SF Pro font weights and italics alongside iOS 26.4 emojis on Android, preserved encrypted attachments when editing captions, fixed Light theme text cursors, and added parallax back and lightbox spring animations.",
@@ -483,6 +557,9 @@ export function LandingHeroPage() {
   const [isIosVisitor] = useState<boolean>(() => isGenuineIosDevice());
   const [showIosGate, setShowIosGate] = useState<boolean>(() => isGenuineIosDevice());
   const chatsHref = isIosVisitor ? "/ios/chats" : "/chats";
+  const apkVersion = usePublishedApkVersion();
+  const apkVersionLabel = `v${apkVersion.versionName} (Build ${apkVersion.versionCode})`;
+  const apkPublishedLabel = formatPublishedDate(apkVersion.publishedAt);
 
   useEffect(() => {
     document.documentElement.classList.add("jatext-landing-route");
@@ -645,9 +722,12 @@ export function LandingHeroPage() {
                         <polyline points="7 10 12 15 17 10" />
                         <line x1="12" y1="15" x2="12" y2="3" />
                       </svg>
-                      Download Android APK
+                      Download Android APK {apkVersionLabel}
                     </a>
                   )}
+                {!isIosVisitor && apkPublishedLabel && (
+                  <p className="jt-hero-apk-note">Signed and published {apkPublishedLabel}</p>
+                )}
                 </div>
 
                 <div className="jt-hero-handnote">
@@ -679,7 +759,7 @@ export function LandingHeroPage() {
                     <span>IndexedDB local cache</span>
                   </div>
                   <div className="jt-stat-chip">
-                    <strong>v4.2.1 (Build 70)</strong>
+                    <strong>{apkVersionLabel}</strong>
                     <span>{isIosVisitor ? "iOS Web & Liquid Glass PWA" : "Web & Signed APK"}</span>
                   </div>
                 </div>
