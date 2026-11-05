@@ -129,6 +129,25 @@ jobs:
           VERSION_NAME=$(grep -oP 'versionName\s*=?\s*"\K[^"]+' android/app/build.gradle | head -n 1)
           cp JaText-release.apk /tmp/JaText-release.apk
           BLOB_SHA=$(git hash-object /tmp/JaText-release.apk)
+
+          # Only publish when the native app actually changed. A web only merge
+          # rebuilds an identical APK, and because the updater also compares
+          # commit shas, publishing it would prompt every phone to install a
+          # build that differs in no way at all.
+          git fetch origin main || true
+          PREV_SHA=$(git show origin/main:release-cdn/apk-version.json 2>/dev/null | jq -r '.commitSha // empty')
+          APK_CHANGED=1
+          if [ -n "${PREV_SHA}" ] && git cat-file -e "${PREV_SHA}^{commit}" 2>/dev/null; then
+            CHANGED_FILES=$(git diff --name-only "${PREV_SHA}" "${GITHUB_SHA}" -- android/ || true)
+            if [ -z "${CHANGED_FILES}" ]; then
+              APK_CHANGED=0
+            fi
+          fi
+          if [ "${APK_CHANGED}" != "1" ]; then
+            echo "No android/ changes since ${PREV_SHA:-the last release}, leaving the published APK alone."
+            exit 0
+          fi
+
           gh release delete apk-latest --cleanup-tag --yes || true
           gh release create apk-latest /tmp/JaText-release.apk \
             --title "JaText v${VERSION_NAME} (build ${VERSION_CODE})" \
