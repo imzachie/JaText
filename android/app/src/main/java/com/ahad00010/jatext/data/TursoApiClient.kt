@@ -561,18 +561,27 @@ object TursoApiClient {
         onProgress: (Float) -> Unit,
     ): File = withContext(Dispatchers.IO) {
         val url = resolveAbsoluteMediaUrl(downloadUrl)
-        val req = Request.Builder().url(url).get().build()
-        httpClient.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) {
+        destFile.parentFile?.mkdirs()
+        // Whatever is already there is the part that downloaded before the
+        // screen locked, the network dropped or the app was pushed out of
+        // memory. Ask for the rest of it rather than starting again.
+        val alreadyHave = if (destFile.exists()) destFile.length() else 0L
+        val req = Request.Builder().url(url).get()
+        if (alreadyHave > 0L) req.header("Range", "bytes=$alreadyHave-")
+        httpClient.newCall(req.build()).execute().use { resp ->
+            // 206 means the server is sending the remainder, anything else is
+            // a full body and the partial file has to be thrown away.
+            val resumed = resp.code == 206 && alreadyHave > 0L
+            if (!resumed && !resp.isSuccessful) {
                 throw TursoApiException("APK download failed (${resp.code})", resp.code)
             }
             val body = resp.body ?: throw TursoApiException("Empty APK response", 500)
-            val total = body.contentLength()
-            destFile.parentFile?.mkdirs()
+            val remaining = body.contentLength()
+            val total = if (resumed) alreadyHave + remaining else remaining
             body.byteStream().use { input ->
-                FileOutputStream(destFile, false).use { output ->
-                    val buf = ByteArray(16 * 1024)
-                    var downloaded = 0L
+                FileOutputStream(destFile, resumed).use { output ->
+                    val buf = ByteArray(64 * 1024)
+                    var downloaded = alreadyHave
                     while (true) {
                         val n = input.read(buf)
                         if (n <= 0) break

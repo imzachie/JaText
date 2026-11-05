@@ -2,6 +2,8 @@ package com.ahad00010.jatext.state
 
 import android.app.Activity
 import android.app.Application
+import android.content.Context
+import android.os.PowerManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -89,6 +91,7 @@ import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -108,6 +111,14 @@ import kotlinx.serialization.json.jsonPrimitive
  * value, and older posts referenced it as builtin:melly_mike instead.
  */
 const val MELLY_MIKE_URL = "/sounds/melly-mike-young-black-and-rich.mp3"
+
+/**
+ * Largest attachment the app will read. Sending keeps the file and its
+ * encrypted copy in memory at once, and the budget Android hands an app is
+ * around 256 MB, so anything past this used to take the whole app down with
+ * an out of memory error instead of sending.
+ */
+private const val MAX_ATTACHMENT_BYTES = 48 * 1024 * 1024
 
 data class DeletedForMeUndoBanner(
     val messageId: String,
@@ -294,6 +305,7 @@ class JaTextSessionViewModel(app: Application) :
 
     private var lastUpdateCheckAtMs: Long = 0L
     private var pendingReadyApkFile: File? = null
+    private var apkDownloadJob: kotlinx.coroutines.Job? = null
     private var scheduledFlushJob: Job? = null
     private var typingIdleJob: Job? = null
     private var activeTypingThreadKey: String? = null
@@ -4488,6 +4500,7 @@ class JaTextSessionViewModel(app: Application) :
                     !remoteSha.equals(localSha, ignoreCase = true)
             if (manifest.versionCode > BuildConfig.VERSION_CODE || isSameCodeRebuild) {
                 _state.update { it.copy(availableUpdate = manifest) }
+                resumePendingApkDownloadIfAny()
             } else if (manual) {
                 showToast("You are on the latest JaText v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})")
             }
@@ -4514,33 +4527,110 @@ class JaTextSessionViewModel(app: Application) :
     fun downloadAndInstallApkUpdate(activity: Activity) {
         val manifest = _state.value.availableUpdate ?: return
         if (_state.value.updateDownloading) return
+        // A previous attempt may have finished downloading before the screen
+        // locked. Installing what is already there beats downloading again.
+        val readyFile = pendingReadyApkFile
+        if (readyFile != null && readyFile.exists() && readyFile.length() > 0L) {
+            launchApkInstallFlow(activity, readyFile)
+            return
+        }
+        startApkDownload(manifest, activity, autoResume = false)
+    }
+
+    /**
+     * Picks an interrupted update back up on its own. Only ever resumes a
+     * download the user had already started, it never starts a new one.
+     */
+    fun resumePendingApkDownloadIfAny() {
+        val pending = cache.getPendingApkDownload() ?: return
+        val manifest = _state.value.availableUpdate ?: return
+        if (!manifest.downloadUrl.equals(pending.first, ignoreCase = true)) return
+        if (_state.value.updateDownloading) return
+        val readyFile = pendingReadyApkFile
+        if (readyFile != null && readyFile.exists() && readyFile.length() > 0L) return
+        startApkDownload(manifest, null, autoResume = true)
+    }
+
+    private fun startApkDownload(
+        manifest: ApkVersionManifest,
+        activity: Activity?,
+        autoResume: Boolean,
+    ) {
         _state.update { it.copy(updateDownloading = true, updateProgress = 0.02f) }
-        viewModelScope.launch {
+        cache.setPendingApkDownload(manifest.downloadUrl, manifest.versionCode)
+        apkDownloadJob?.cancel()
+        apkDownloadJob = viewModelScope.launch {
+            // Without these the system parks the CPU and lets Wi-Fi doze as
+            // soon as the screen turns off, which is what used to stall the
+            // download until the user unlocked the phone again.
+            val wakeLock = runCatching {
+                val pm = appCtx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "JaText:ApkUpdate")?.also {
+                    it.acquire(20 * 60 * 1000L)
+                }
+            }.getOrNull()
+            val wifiLock = runCatching {
+                val wm = appCtx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                wm?.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "JaText:ApkUpdate")
+                    ?.also { it.acquire() }
+            }.getOrNull()
             try {
                 val outFile = File(appCtx.cacheDir, "updates/JaText-update.apk")
-                TursoApiClient.downloadApkFile(manifest.downloadUrl, outFile) { p ->
-                    _state.update { it.copy(updateProgress = p) }
+                var failure: Throwable? = null
+                for (attempt in 0 until 4) {
+                    try {
+                        TursoApiClient.downloadApkFile(manifest.downloadUrl, outFile) { p ->
+                            _state.update { it.copy(updateProgress = p, updateDownloading = true) }
+                        }
+                        failure = null
+                        break
+                    } catch (e: Throwable) {
+                        if (!isActive) return@launch
+                        failure = e
+                        // Anything already written is kept, so the retry only
+                        // fetches the missing tail instead of the whole file.
+                        if (attempt < 3) delay(1_500L * (attempt + 1))
+                    }
                 }
-                _state.update { it.copy(updateDownloading = false, availableUpdate = null) }
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
-                    !activity.packageManager.canRequestPackageInstalls()
-                ) {
-                    pendingReadyApkFile = outFile
-                    showToast("Allow 'Install unknown apps' for JaText to finish updating")
-                    val permIntent = Intent(
-                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${activity.packageName}")
-                    )
-                    activity.startActivity(permIntent)
+                if (failure != null) {
+                    _state.update { it.copy(updateDownloading = false) }
+                    if (!autoResume) showToast(failure.message ?: "Update download failed")
                     return@launch
                 }
-                pendingReadyApkFile = null
-                launchApkInstallerIntent(activity, outFile)
-            } catch (e: Throwable) {
-                _state.update { it.copy(updateDownloading = false) }
-                showToast(e.message ?: "Update download failed")
+                cache.clearPendingApkDownload()
+                _state.update { it.copy(updateDownloading = false, updateProgress = 1f) }
+                val target = activity
+                if (target == null) {
+                    // No screen to install from, hold the file for the next
+                    // time the user taps update.
+                    pendingReadyApkFile = outFile
+                    return@launch
+                }
+                launchApkInstallFlow(target, outFile)
+            } finally {
+                runCatching { wifiLock?.release() }
+                runCatching { wakeLock?.release() }
             }
         }
+    }
+
+    private fun launchApkInstallFlow(activity: Activity, apkFile: File) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+            !activity.packageManager.canRequestPackageInstalls()
+        ) {
+            pendingReadyApkFile = apkFile
+            showToast("Allow 'Install unknown apps' for JaText to finish updating")
+            val permIntent = Intent(
+                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:${activity.packageName}")
+            )
+            activity.startActivity(permIntent)
+            return
+        }
+        pendingReadyApkFile = null
+        cache.clearPendingApkDownload()
+        _state.update { it.copy(updateDownloading = false, availableUpdate = null) }
+        launchApkInstallerIntent(activity, apkFile)
     }
 
     private fun checkPostUpdateWelcome() {
@@ -4721,9 +4811,40 @@ class JaTextSessionViewModel(app: Application) :
         val localFile: File?,
     )
 
+    private fun queryUriSize(uri: Uri): Long {
+        return try {
+            appCtx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(OpenableColumns.SIZE)
+                if (idx >= 0 && c.moveToFirst()) c.getLong(idx) else -1L
+            } ?: -1L
+        } catch (_: Throwable) {
+            -1L
+        }
+    }
+
+    /**
+     * Reads a file without the doubling that readBytes() does. A 48 MB video
+     * read with readBytes() briefly needs room for the half grown buffer and
+     * the full one, which is how a single large attachment was taking the
+     * whole app down before it ever reached the upload.
+     */
+    private fun readUriIntoArray(uri: Uri, size: Long): ByteArray {
+        val out = ByteArray(size.toInt())
+        appCtx.contentResolver.openInputStream(uri)?.use { input ->
+            var offset = 0
+            while (offset < out.size) {
+                val read = input.read(out, offset, out.size - offset)
+                if (read < 0) break
+                offset += read
+            }
+        }
+        return out
+    }
+
     private suspend fun readAttachmentBytes(uri: Uri?, voiceFile: File?): AttachmentInputData? =
         withContext(Dispatchers.IO) {
             if (voiceFile != null && voiceFile.exists()) {
+                if (voiceFile.length() > MAX_ATTACHMENT_BYTES) throw tooLargeToSend(voiceFile.length())
                 return@withContext AttachmentInputData(
                     bytes = voiceFile.readBytes(),
                     fileName = voiceFile.name,
@@ -4732,7 +4853,14 @@ class JaTextSessionViewModel(app: Application) :
                 )
             }
             if (uri == null) return@withContext null
-            val rawBytes = appCtx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
+            val declaredSize = queryUriSize(uri)
+            if (declaredSize > MAX_ATTACHMENT_BYTES) throw tooLargeToSend(declaredSize)
+            val rawBytes = if (declaredSize > 0) {
+                readUriIntoArray(uri, declaredSize)
+            } else {
+                appCtx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
+            }
+            if (rawBytes.size > MAX_ATTACHMENT_BYTES) throw tooLargeToSend(rawBytes.size.toLong())
             val isGif = JaTextCryptoEngine.isGifBytes(rawBytes)
             val bytes = if (isGif) JaTextCryptoEngine.ensureInfiniteLoopGifBytes(rawBytes) else rawBytes
             val mime = if (isGif) "image/gif" else resolveMime(uri)
@@ -4746,6 +4874,18 @@ class JaTextSessionViewModel(app: Application) :
             val cached = File(cacheDir, "out_${System.currentTimeMillis()}_$name").also { it.writeBytes(bytes) }
             AttachmentInputData(bytes, name, mime, cached)
         }
+
+    /**
+     * A file this size cannot survive being read and encrypted inside the
+     * budget Android gives an app, so say so plainly instead of crashing.
+     */
+    private fun tooLargeToSend(sizeBytes: Long): IllegalStateException {
+        val mb = (sizeBytes / (1024.0 * 1024.0))
+        val shown = if (mb >= 10) Math.round(mb).toString() else String.format("%.1f", mb)
+        return IllegalStateException(
+            "This file is ${shown} MB. Attachments must be under ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB.",
+        )
+    }
 
     private fun resolveMime(uri: Uri): String =
         appCtx.contentResolver.getType(uri) ?: "application/octet-stream"

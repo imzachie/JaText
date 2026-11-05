@@ -5,7 +5,6 @@ import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -151,12 +150,15 @@ fun FullscreenOverlayStage(
         contentKey = { it?.id ?: "__none__" },
         transitionSpec = {
             if (targetState != null) {
-                (fadeIn(animationSpec = tween(210)) +
+                // A spring here spent most of its time creeping through the
+                // last few percent of the scale, which read as the viewer
+                // taking ages to open. A short tween lands and stops.
+                (fadeIn(animationSpec = tween(150)) +
                     scaleIn(
-                        initialScale = 0.89f,
-                        animationSpec = spring(dampingRatio = 0.82f, stiffness = 520f),
+                        initialScale = 0.94f,
+                        animationSpec = tween(170, easing = FastOutSlowInEasing),
                     )).togetherWith(
-                    fadeOut(animationSpec = tween(170)),
+                    fadeOut(animationSpec = tween(140)),
                 )
             } else {
                 fadeIn(animationSpec = tween(140)).togetherWith(

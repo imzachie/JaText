@@ -959,6 +959,13 @@ fun NativeVoiceNoteBubblePlayer(
     }
 }
 
+/**
+ * Message ids whose spoiler has already been revealed. Held outside the
+ * composable so a revealed attachment stays revealed while its row scrolls
+ * away and comes back.
+ */
+val revealedSpoilerIds = androidx.compose.runtime.mutableStateListOf<String>()
+
 /* ==================== Inline Native Video Attachment Player + Fullscreen ==================== */
 
 @Composable
@@ -1904,13 +1911,12 @@ fun MessageMediaAttachmentView(
     onHideTranscript: (() -> Unit)? = null,
     onLongPressMessage: (() -> Unit)? = null,
     isSpoiler: Boolean = false,
-    isMine: Boolean = false,
+    spoilerKey: String = "",
 ) {
     val context = LocalContext.current
 
-    var revealed by remember(attachmentUrl) { mutableStateOf(false) }
-    // Whoever sent it knows what is under there, so only the reader hides it.
-    if (isSpoiler && !isMine && !revealed) {
+    val revealed = spoilerKey.isNotBlank() && revealedSpoilerIds.contains(spoilerKey)
+    if (isSpoiler && !revealed) {
         // Hidden until the reader asks for it. The media is covered rather
         // than blurred on purpose: Modifier.blur only draws on Android 12 and
         // up, and a spoiler that quietly shows the photo on older phones is
@@ -1923,7 +1929,7 @@ fun MessageMediaAttachmentView(
                 .clip(RoundedCornerShape(14.dp))
                 .background(ink.voiceNoteInkColor.copy(alpha = 0.16f))
                 .border(1.dp, ink.voiceNoteInkColor.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
-                .clickable { revealed = true }
+                .clickable { if (spoilerKey.isNotBlank()) revealedSpoilerIds.add(spoilerKey) }
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) {

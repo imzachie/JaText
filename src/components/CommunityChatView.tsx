@@ -73,6 +73,7 @@ import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
+const PENDING_NEAR_MATCH_WINDOW_MS = 30_000;
 
 interface MessageMenuState {
   x: number;
@@ -230,11 +231,15 @@ function CommunityTypingStatus() {
   );
 }
 
-function getCommunityPendingMessages(pending: CommunityMessage[], real: CommunityMessage[]) {
+function getCommunityPendingMessages(
+  pending: CommunityMessage[],
+  real: CommunityMessage[],
+  myUserId?: string,
+) {
   const pendingCopy = [...pending];
   const matchedIds = new Set<string>();
   const confirmed = real.map((message) => {
-    const idx = pendingCopy.findIndex(
+    let idx = pendingCopy.findIndex(
       (p) =>
         p.senderId === message.senderId &&
         message.createdAt >= p.createdAt - 60_000 &&
@@ -243,6 +248,16 @@ function getCommunityPendingMessages(pending: CommunityMessage[], real: Communit
           Boolean(message.editedAt) ||
           (message.body === p.body && message.attachmentName === p.attachmentName)),
     );
+    // Same fallback as the group view: our own message may come back with a
+    // body that differs from what we rendered, and then the bubble we already
+    // saw would sit next to the delivered one.
+    if (idx === -1 && myUserId && message.senderId === myUserId) {
+      idx = pendingCopy.findIndex(
+        (p) =>
+          p.senderId === message.senderId &&
+          Math.abs(message.createdAt - p.createdAt) <= PENDING_NEAR_MATCH_WINDOW_MS,
+      );
+    }
     if (idx === -1) return message;
     const [pm] = pendingCopy.splice(idx, 1);
     matchedIds.add(pm.id);
@@ -517,7 +532,11 @@ export function CommunityChatView({
       );
     });
 
-  const pendingMerged = getCommunityPendingMessages(pendingMessages, store.communityMessages);
+  const pendingMerged = getCommunityPendingMessages(
+    pendingMessages,
+    store.communityMessages,
+    store.me?.id,
+  );
   const visiblePendingMerged = useMemo(
     () =>
       pendingMerged.messages.filter(
@@ -1538,9 +1557,8 @@ export function CommunityChatView({
                           />
                         ) : isImage ? (
                           <SpoilerFrame
-                            active={
-                              Boolean(message.isSpoiler) && message.senderId !== store.me?.id
-                            }
+                            active={Boolean(message.isSpoiler)}
+                            spoilerKey={message.id}
                           >
                             <button type="button" className="image-message-button" onClick={() => openImagePreview(message.attachmentUrl!)} aria-label="Open image viewer">
                               <ChatAttachmentImage className="msg-image" src={message.attachmentUrl} alt={message.attachmentName ?? "attachment"} maxWidth={420} maxHeight={420} />
@@ -1548,9 +1566,8 @@ export function CommunityChatView({
                           </SpoilerFrame>
                         ) : isVideo ? (
                           <SpoilerFrame
-                            active={
-                              Boolean(message.isSpoiler) && message.senderId !== store.me?.id
-                            }
+                            active={Boolean(message.isSpoiler)}
+                            spoilerKey={message.id}
                           >
                             <ChatVideoPlayer
                               src={message.attachmentUrl}

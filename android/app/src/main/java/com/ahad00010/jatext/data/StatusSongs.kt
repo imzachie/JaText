@@ -7,9 +7,11 @@ package com.ahad00010.jatext.data
  * tracks, so every entry carries the full length plus the timestamp a preview
  * starts from, and whoever posts picks the part they want.
  *
- * The files live in the JaText-Essential-Stuff repo rather than being bundled
- * into the app: three full songs plus cover art would add several megabytes to
- * every install for something most people never open.
+ * The files are served by the self hosted server, so a song starts as quickly
+ * as any other request instead of waiting on a public file host that answers
+ * in seconds. They are not bundled into the app either: three full songs plus
+ * cover art would add several megabytes to every install for something most
+ * people never open.
  */
 data class StatusSong(
     val id: String,
@@ -26,18 +28,15 @@ object StatusSongs {
 
     const val MAX_STATUS_AUDIO_MS = 30_000
 
-    private const val ESSENTIAL_RAW =
-        "https://raw.githubusercontent.com/Ahad00010/JaText-Essential-Stuff/refs/heads/main"
-    private const val ESSENTIAL_FILE =
-        "https://github.com/Ahad00010/JaText-Essential-Stuff/raw/refs/heads/main"
+    private const val SONGS_BASE = "https://jatext.us.ci/songs"
 
     val all: List<StatusSong> = listOf(
         StatusSong(
             id = "young_black_and_rich",
             title = "Young Black & Rich",
             artist = "Melly Mike",
-            coverUrl = "$ESSENTIAL_RAW/Young%20Black.jpg",
-            audioUrl = "$ESSENTIAL_FILE/Young%20Black%20&%20Rich.mp3",
+            coverUrl = "$SONGS_BASE/young-black.jpg",
+            audioUrl = "$SONGS_BASE/young-black-and-rich.mp3",
             durationMs = 155_000,
             previewStartMs = 70_000,
         ),
@@ -45,8 +44,8 @@ object StatusSongs {
             id = "boss_bitch",
             title = "Boss Bitch",
             artist = "Doja Cat",
-            coverUrl = "$ESSENTIAL_RAW/Boss%20Bitch.jpg",
-            audioUrl = "$ESSENTIAL_FILE/Boss%20Bitch.mp3",
+            coverUrl = "$SONGS_BASE/boss-bitch.jpg",
+            audioUrl = "$SONGS_BASE/boss-bitch.mp3",
             durationMs = 134_000,
             previewStartMs = 83_000,
         ),
@@ -54,8 +53,8 @@ object StatusSongs {
             id = "sara_perche_ti_amo",
             title = "Sarà perché ti amo",
             artist = "Ricchi e Poveri",
-            coverUrl = "$ESSENTIAL_RAW/Sar%C3%A0%20perch%C3%A9%20ti%20amo.jpg",
-            audioUrl = "$ESSENTIAL_FILE/Sar%C3%A0%20perch%C3%A9%20ti%20amo.mp3",
+            coverUrl = "$SONGS_BASE/sara-perche-ti-amo.jpg",
+            audioUrl = "$SONGS_BASE/sara-perche-ti-amo.mp3",
             durationMs = 191_000,
             previewStartMs = 127_000,
         ),

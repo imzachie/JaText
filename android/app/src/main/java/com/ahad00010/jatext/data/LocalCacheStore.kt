@@ -399,6 +399,31 @@ class LocalCacheStore(private val appContext: Context) :
     fun getRingtoneUri(): String =
         JaTextE2EEDecryptor.prefs(appContext).getString("ringtone_uri", "") ?: ""
 
+    /**
+     * An update download that was started and never finished. Kept so the
+     * download can pick up where it stopped instead of starting again, which
+     * is what used to happen every time the screen locked mid download.
+     */
+    fun getPendingApkDownload(): Pair<String, Int>? {
+        val url = prefs.getString("pending_apk_url", null)
+        val code = prefs.getInt("pending_apk_code", 0)
+        return if (!url.isNullOrBlank() && code > 0) url to code else null
+    }
+
+    fun setPendingApkDownload(url: String, versionCode: Int) {
+        prefs.edit()
+            .putString("pending_apk_url", url)
+            .putInt("pending_apk_code", versionCode)
+            .apply()
+    }
+
+    fun clearPendingApkDownload() {
+        prefs.edit()
+            .remove("pending_apk_url")
+            .remove("pending_apk_code")
+            .apply()
+    }
+
     fun getLastSeenVersionCode(): Int = prefs.getInt("last_seen_version_code", 0)
     fun setLastSeenVersionCode(code: Int) {
         prefs.edit().putInt("last_seen_version_code", code).apply()

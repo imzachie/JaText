@@ -5165,7 +5165,7 @@ private fun SwipeableMessageRow(
                                                 attachmentType = msg.attachmentType,
                                                 encryptedAttachment = msg.encryptedAttachment,
                                                 isSpoiler = msg.isSpoiler,
-                                                isMine = isMine,
+                                                spoilerKey = msg.id,
                                                 ink = ink,
                                                 onOpenImageFullscreen = onOpenFullscreenImage,
                                                 showTranscript = showTranscript,
