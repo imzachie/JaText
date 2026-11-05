@@ -245,16 +245,82 @@ async function resolveStaticFile(pathname) {
   return null;
 }
 
+/**
+ * Byte range support. Without it, audio cannot be seeked and some players
+ * refuse to start a stream at all, which is what made the status music look
+ * broken. A request without a Range header behaves exactly as before.
+ */
+function parseRangeHeader(rangeHeader, size) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(String(rangeHeader || "").trim());
+  if (!match) return null;
+
+  const rawStart = match[1];
+  const rawEnd = match[2];
+
+  let start;
+  let end;
+  if (rawStart === "") {
+    // Suffix range: the last N bytes.
+    if (rawEnd === "") return null;
+    const suffixLength = Number(rawEnd);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null;
+    start = Math.max(0, size - suffixLength);
+    end = size - 1;
+  } else {
+    start = Number(rawStart);
+    end = rawEnd === "" ? size - 1 : Number(rawEnd);
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  if (start > end || start >= size) return null;
+  return { start, end: Math.min(end, size - 1) };
+}
+
 async function serveStaticFile(req, res, filePath, size) {
   const ext = path.extname(filePath).toLowerCase();
   const type = MIME_TYPES[ext] || "application/octet-stream";
+  const range = req.headers.range ? parseRangeHeader(req.headers.range, size) : null;
 
-  if (req.method === "HEAD") {
-    res.writeHead(200, { "Content-Type": type, "Content-Length": size });
+  if (req.headers.range && !range) {
+    res.writeHead(416, {
+      "Content-Type": type,
+      "Content-Range": `bytes */${size}`,
+      "Accept-Ranges": "bytes",
+    });
     return res.end();
   }
 
-  res.writeHead(200, { "Content-Type": type, "Content-Length": size });
+  if (range) {
+    const length = range.end - range.start + 1;
+    res.writeHead(206, {
+      "Content-Type": type,
+      "Content-Length": length,
+      "Accept-Ranges": "bytes",
+      "Content-Range": `bytes ${range.start}-${range.end}/${size}`,
+    });
+    if (req.method === "HEAD") return res.end();
+    const stream = createReadStream(filePath, { start: range.start, end: range.end });
+    stream.on("error", () => {
+      res.end();
+    });
+    stream.pipe(res);
+    return;
+  }
+
+  if (req.method === "HEAD") {
+    res.writeHead(200, {
+      "Content-Type": type,
+      "Content-Length": size,
+      "Accept-Ranges": "bytes",
+    });
+    return res.end();
+  }
+
+  res.writeHead(200, {
+    "Content-Type": type,
+    "Content-Length": size,
+    "Accept-Ranges": "bytes",
+  });
   const stream = createReadStream(filePath);
   stream.on("error", () => {
     res.end();
