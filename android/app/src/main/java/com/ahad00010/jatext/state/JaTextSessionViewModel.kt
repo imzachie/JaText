@@ -120,6 +120,13 @@ const val MELLY_MIKE_URL = "/sounds/melly-mike-young-black-and-rich.mp3"
  */
 private const val MAX_ATTACHMENT_BYTES = 48 * 1024 * 1024
 
+/**
+ * How many files one send may carry. Reading, encrypting and uploading them
+ * all at once is what crashed the app, so the batch is both capped here and
+ * sent one file at a time.
+ */
+private const val MAX_BULK_ATTACHMENTS = 10
+
 data class DeletedForMeUndoBanner(
     val messageId: String,
     val nonce: Long,
@@ -2354,7 +2361,7 @@ class JaTextSessionViewModel(app: Application) :
         attachmentUri: Uri? = null,
         localVoiceFile: File? = null,
         isSpoiler: Boolean = false,
-    ) {
+    ): Job? {
         val st = _state.value
         val me = st.me ?: return
         val token = currentAuthToken() ?: return
@@ -2410,7 +2417,7 @@ class JaTextSessionViewModel(app: Application) :
                 )
             }
 
-            viewModelScope.launch {
+            return viewModelScope.launch {
                 try {
                     var uploadedUrl: String? = null
                     var attDesc = null as com.ahad00010.jatext.data.EncryptedBlobDescriptor?
@@ -2464,7 +2471,11 @@ class JaTextSessionViewModel(app: Application) :
                         JaTextJson.decodeFromJsonElement(ChatMessage.serializer(), it)
                     }
                     if (serverMsg != null) {
+                        // Keeping the optimistic key means the row is the same
+                        // row, so the bubble does not animate a second time
+                        // when the delivered copy replaces it.
                         val hydrated = JaTextCryptoEngine.hydrateDmMessages(appCtx, me.id, listOf(serverMsg), token)
+                            .map { m -> if (m.id == serverMsg.id) m.copy(renderKey = tempId) else m }
                         _state.update { cur ->
                             val withoutOpt = cur.dmMessages.filterNot { m -> m.id == tempId }
                             cur.copy(dmMessages = mergeDmMessages(withoutOpt, hydrated))
@@ -2521,7 +2532,7 @@ class JaTextSessionViewModel(app: Application) :
                 )
             }
 
-            viewModelScope.launch {
+            return viewModelScope.launch {
                 try {
                     val memberIds = _state.value.groupDetails?.members?.map { it.id }.orEmpty()
                     var uploadedUrl: String? = null
@@ -2590,7 +2601,7 @@ class JaTextSessionViewModel(app: Application) :
             )
             _state.update { it.copy(communityMessages = it.communityMessages + optMsg) }
 
-            viewModelScope.launch {
+            return viewModelScope.launch {
                 try {
                     val rawBytesAndMeta = readAttachmentBytes(attachmentUri, localVoiceFile)
                     var uploadedUrl: String? = null
@@ -2633,6 +2644,7 @@ class JaTextSessionViewModel(app: Application) :
                 }
             }
         }
+        return null
     }
 
     fun sendSticker(sticker: StickerMedia) {
@@ -5417,13 +5429,23 @@ class JaTextSessionViewModel(app: Application) :
         spoilerUris: Set<Uri> = emptySet(),
     ) {
         if (uris.isEmpty()) return
-        uris.forEachIndexed { idx, uri ->
-            sendChatMessage(
-                text = if (idx == 0) caption else "",
-                replyTo = if (idx == 0) replyTo else null,
-                attachmentUri = uri,
-                isSpoiler = uri in spoilerUris,
-            )
+        // Every file used to be read, encrypted and uploaded at the same
+        // time, so a batch of photos or videos tried to hold all of them in
+        // memory at once and took the app down. They go one after another
+        // now, and the batch is capped so one tap cannot queue a hundred.
+        val batch = uris.take(MAX_BULK_ATTACHMENTS)
+        if (uris.size > batch.size) {
+            showToast("Sending the first ${batch.size} of ${uris.size} files")
+        }
+        viewModelScope.launch {
+            batch.forEachIndexed { idx, uri ->
+                sendChatMessage(
+                    text = if (idx == 0) caption else "",
+                    replyTo = if (idx == 0) replyTo else null,
+                    attachmentUri = uri,
+                    isSpoiler = uri in spoilerUris,
+                )?.join()
+            }
         }
     }
 
@@ -5533,6 +5555,7 @@ class JaTextSessionViewModel(app: Application) :
                     }
                     if (serverMsg != null) {
                         val hydrated = JaTextCryptoEngine.hydrateDmMessages(appCtx, me.id, listOf(serverMsg), token)
+                            .map { m -> if (m.id == serverMsg.id) m.copy(renderKey = tempId) else m }
                         _state.update { cur ->
                             val withoutOpt = cur.dmMessages.filterNot { m -> m.id == tempId }
                             cur.copy(dmMessages = mergeDmMessages(withoutOpt, hydrated))
@@ -5623,6 +5646,7 @@ class JaTextSessionViewModel(app: Application) :
                     }
                     if (serverMsg != null) {
                         val hydrated = JaTextCryptoEngine.hydrateGroupMessages(appCtx, me.id, groupId, listOf(serverMsg))
+                            .map { m -> if (m.id == serverMsg.id) m.copy(renderKey = tempId) else m }
                         _state.update { cur ->
                             val withoutOpt = cur.groupMessages.filterNot { m -> m.id == tempId }
                             cur.copy(groupMessages = mergeGroupMessages(withoutOpt, hydrated))

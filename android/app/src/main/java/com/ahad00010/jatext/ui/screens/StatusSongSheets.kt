@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -150,7 +152,13 @@ private fun SheetShell(
                     color = Color(0xFF14141D),
                     modifier = Modifier
                         .fillMaxWidth()
+                        // Draws edge to edge behind the system bars, so without
+                        // the navigation padding the sheet hangs off the bottom
+                        // of the screen, and without the height cap it can grow
+                        // past it on a short phone.
+                        .fillMaxHeight(0.92f)
                         .heightIn(max = 620.dp)
+                        .navigationBarsPadding()
                         .clickable(enabled = false) {},
                 ) {
                     Column(modifier = Modifier.padding(bottom = 10.dp)) {

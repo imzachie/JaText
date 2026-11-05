@@ -217,7 +217,28 @@ export async function tursoRpc<T = unknown>(
 
 const CLIENT_MEDIA_CHUNK_BYTES = 768 * 1024; // 768 KB per chunk (matches api/media.js)
 const CLIENT_CHUNK_UPLOAD_THRESHOLD = 700 * 1024; // Use chunked upload above 700 KB
-const CLIENT_MAX_UPLOAD_BYTES = 64 * 1024 * 1024; // 64 MB max video/audio attachment
+const CLIENT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB max attachment
+/**
+ * How many chunks may be in flight at once for the whole app. Uploads used to
+ * fire four chunks per file with no ceiling on how many files could be going
+ * at the same time, so ten attachments meant forty requests hammering the
+ * server at once. Two at a time keeps the server calm and the queue moving.
+ */
+const UPLOAD_CONCURRENCY = 2;
+let inFlightUploads = 0;
+const uploadWaiters: Array<() => void> = [];
+async function withUploadSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (inFlightUploads >= UPLOAD_CONCURRENCY) {
+    await new Promise<void>((resolve) => uploadWaiters.push(resolve));
+  }
+  inFlightUploads += 1;
+  try {
+    return await task();
+  } finally {
+    inFlightUploads -= 1;
+    uploadWaiters.shift()?.();
+  }
+}
 const CLIENT_RANGE_SLICE_BYTES = 3 * 1024 * 1024; // 3 MB per Range GET (< Vercel 4.5 MB cap)
 
 async function postWithRetry(
@@ -272,7 +293,7 @@ export async function uploadMediaToTurso(
     throw new Error("Selected file is empty.");
   }
   if (file.size > CLIENT_MAX_UPLOAD_BYTES) {
-    throw new Error("Attachment exceeds the 64 MB size limit.");
+    throw new Error("Attachment exceeds the 5 GB size limit.");
   }
 
   const baseMime = (file.type || "application/octet-stream").split(";")[0].trim();
@@ -354,7 +375,7 @@ export async function uploadMediaToTurso(
   const chunkBytes = initJson.chunkSize || CLIENT_MEDIA_CHUNK_BYTES;
   const totalChunks = Math.ceil(file.size / chunkBytes);
   let nextIdx = 0;
-  const concurrency = Math.min(4, totalChunks);
+  const concurrency = Math.min(UPLOAD_CONCURRENCY, totalChunks);
 
   const worker = async () => {
     while (nextIdx < totalChunks) {
@@ -362,17 +383,19 @@ export async function uploadMediaToTurso(
       const start = idx * chunkBytes;
       const end = Math.min(file.size, start + chunkBytes);
       const sliceBuf = await file.slice(start, end).arrayBuffer();
-      const chunkRes = await postWithRetry(
-        `${base}/api/media?action=chunk&id=${encodeURIComponent(mediaId)}&index=${idx}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/octet-stream",
-            "X-JaText-Chunk-Index": String(idx),
+      const chunkRes = await withUploadSlot(() =>
+        postWithRetry(
+          `${base}/api/media?action=chunk&id=${encodeURIComponent(mediaId)}&index=${idx}`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/octet-stream",
+              "X-JaText-Chunk-Index": String(idx),
+            },
+            body: sliceBuf,
           },
-          body: sliceBuf,
-        },
+        ),
       );
       if (!chunkRes.ok) {
         let errJson: { error?: string } | null = null;

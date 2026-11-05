@@ -130,8 +130,16 @@ import { AnimatedMediaImg, Avatar } from "./Avatar";
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
+// Ten files per send. Each one is read, encrypted and uploaded, so a bigger
+// batch only queues up work the phone cannot keep in memory.
+const MAX_STAGED_FILES = 10;
 /** Tolerance used only to reconcile our own optimistic bubbles with their server copy. */
 const PENDING_NEAR_MATCH_WINDOW_MS = 4_000;
+// The bubble is normally dropped the moment the delivered copy replaces it.
+// This is only the backstop for a send whose echo never arrives. It used to
+// be 1.5s, which was shorter than a slow round trip, so the bubble vanished
+// and the delivered copy animated in a second time.
+const PENDING_FALLBACK_DROP_MS = 20_000;
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
 function detectDmMentionQuery(
@@ -1787,11 +1795,11 @@ export function ChatView({
 
   const handleAddFiles = useCallback((incoming: File[]) => {
     if (incoming.length === 0) return;
-    setFiles((prev) => [...prev, ...incoming].slice(0, 20));
+    setFiles((prev) => [...prev, ...incoming].slice(0, MAX_STAGED_FILES));
   }, []);
 
   const handlePastedChatFile = useCallback((pasted: File) => {
-    setFiles((prev) => [...prev, pasted].slice(0, 20));
+    setFiles((prev) => [...prev, pasted].slice(0, MAX_STAGED_FILES));
     window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
   }, []);
 
@@ -1923,7 +1931,7 @@ export function ChatView({
             item.replyId,
             item.spoiler,
           );
-          window.setTimeout(() => removePendingMessage(pendingId), 1500);
+          window.setTimeout(() => removePendingMessage(pendingId), PENDING_FALLBACK_DROP_MS);
         }
         if (soundsEnabled) playMessageSound("sent");
         setSpoilerFiles(new Set());
@@ -2055,7 +2063,7 @@ export function ChatView({
     try {
       await sendMessage(friend.id, "", voiceFile, sentReply?.id);
       if (soundsEnabled) playMessageSound("sent");
-      window.setTimeout(() => removePendingMessage(pendingId), 1500);
+      window.setTimeout(() => removePendingMessage(pendingId), PENDING_FALLBACK_DROP_MS);
     } catch (err) {
       removePendingMessage(pendingId);
       setError(friendlyError(err, "Couldn't send the voice note. Please try again."));

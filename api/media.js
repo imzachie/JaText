@@ -14,7 +14,11 @@ const DEFAULT_PUBLIC_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us
 const MAX_SINGLE_SHOT_BYTES = 768 * 1024; // > 768 KB splits into media_chunks
 const MAX_SERVE_BYTES = 3 * 1024 * 1024; // 3 MB max per HTTP Range slice (< Vercel 4.5 MB cap)
 const MAX_INLINE_IMAGE_SERVE_BYTES = 4 * 1024 * 1024; // 4 MB max full 200 OK image (< Vercel 4.5 MB cap)
-const MAX_TOTAL_UPLOAD_BYTES = 64 * 1024 * 1024; // 64 MB max video/audio attachment
+// Attachments arrive in 768 KB chunks and are written a chunk at a time, so
+// the ceiling is about willingness rather than memory. It is still one file
+// per upload, and every chunk is a separate request, so a very large file
+// takes a while rather than taking the server down.
+const MAX_TOTAL_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB max attachment
 
 const NETSCAPE_INFINITE_LOOP_EXT = Buffer.from([
   0x21, 0xff, 0x0b,
@@ -338,7 +342,7 @@ export default async function handler(req, res) {
       const action = String(req.query?.action || urlObj.searchParams.get("action") || "").trim();
       const origin = resolvePublicOrigin(req);
 
-      // 1. Initialize multi-chunk upload for video / audio / large files (up to 64 MB)
+      // 1. Initialize multi-chunk upload for video / audio / large files (up to 5 GB)
       if (action === "init") {
         const raw = await readRawBuffer(req, 64 * 1024);
         const parsed = JSON.parse(raw.toString("utf8") || "{}");
@@ -346,7 +350,7 @@ export default async function handler(req, res) {
         if (!Number.isFinite(byteSize) || byteSize <= 0 || byteSize > MAX_TOTAL_UPLOAD_BYTES) {
           return res.status(413).json({
             ok: false,
-            error: "Attachment exceeds the 64 MB maximum upload size.",
+            error: "Attachment exceeds the 5 GB maximum upload size.",
           });
         }
         const mimeType = String(parsed.mimeType || "application/octet-stream")
