@@ -54,8 +54,18 @@ git --no-pager log --oneline "$LOCAL..$REMOTE" | sed 's/^/    /'
 DEPS_BEFORE="$(git hash-object package.json package-lock.json 2>/dev/null | tr '\n' ' ')"
 
 if ! git pull --ff-only origin "$BRANCH"; then
-  log "git pull --ff-only failed, the live site keeps running the previous version"
-  exit 1
+  # A fast-forward pull fails when this checkout diverged from main, for
+  # example after a rebase or a commit made by hand on the machine. The tree
+  # was verified clean above, and everything that actually matters here,
+  # .env.selfhost and the database, is untracked or gitignored, so resetting
+  # to main loses nothing and is the difference between updating and silently
+  # serving an old build forever.
+  log "fast-forward pull failed, falling back to a clean reset to origin/$BRANCH"
+  if ! git reset --hard "refs/remotes/origin/$BRANCH"; then
+    log "reset failed, the live site keeps running the previous version"
+    exit 1
+  fi
+  git checkout -- package-lock.json 2>/dev/null || true
 fi
 
 DEPS_AFTER="$(git hash-object package.json package-lock.json 2>/dev/null | tr '\n' ' ')"
