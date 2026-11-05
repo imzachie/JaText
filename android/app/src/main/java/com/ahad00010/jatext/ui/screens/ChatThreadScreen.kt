@@ -502,6 +502,12 @@ fun ChatThreadScreen(
     var inChatSearchCursor by remember(activeThreadDraftKey) { mutableIntStateOf(0) }
     var activePinnedCursor by remember(activeThreadDraftKey) { mutableIntStateOf(0) }
     var contextMenuMessage by remember { mutableStateOf<UnifiedThreadItem?>(null) }
+    var selectionMode by remember { mutableStateOf(false) }
+    val selectedMessageIds = remember { androidx.compose.runtime.mutableStateListOf<String>() }
+    fun exitSelectionMode() {
+        selectionMode = false
+        selectedMessageIds.clear()
+    }
     var emojiPickerTargetMessageId by remember { mutableStateOf<String?>(null) }
     var forwardingItem by remember { mutableStateOf<UnifiedThreadItem?>(null) }
     var fullscreenImageModel by remember { mutableStateOf<Any?>(null) }
@@ -1335,6 +1341,75 @@ fun ChatThreadScreen(
 
             /* ==================== Message Thread ==================== */
             val animatedSendKeys = remember(threadScopeKey) { HashSet<String>() }
+            if (selectionMode) {
+                val selectedText = remember(selectedMessageIds.size, reversedItems) {
+                    reversedItems
+                        .filter { selectedMessageIds.contains(it.renderKey.ifBlank { it.id }) }
+                        .sortedBy { it.createdAt }
+                        .joinToString("\n") { it.body.trim() }
+                        .trim()
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(palette.surface)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "${selectedMessageIds.size} selected",
+                        color = palette.textPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = "Copy",
+                        color = palette.accent,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .border(1.dp, palette.border, RoundedCornerShape(999.dp))
+                            .clickable {
+                                if (selectedText.isBlank()) {
+                                    vm.showToast("Nothing to copy")
+                                    return@clickable
+                                }
+                                val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                cb?.setPrimaryClip(ClipData.newPlainText("JaText messages", selectedText))
+                                vm.showToast("Copied ${selectedMessageIds.size} messages")
+                                exitSelectionMode()
+                            }
+                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                    )
+                    Text(
+                        text = "Delete",
+                        color = palette.danger,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .border(1.dp, palette.border, RoundedCornerShape(999.dp))
+                            .clickable {
+                                val targets = selectedMessageIds.toList()
+                                exitSelectionMode()
+                                for (id in targets) vm.deleteMessageForMe(id)
+                            }
+                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                    )
+                    IconButton(onClick = { exitSelectionMode() }, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Cancel selection",
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+                HorizontalDivider(color = palette.border)
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -1389,7 +1464,54 @@ fun ChatThreadScreen(
                         } else {
                             Modifier
                         }
-                        Box(modifier = rowEntranceMod) {
+                        val rowSelected = selectionMode && selectedMessageIds.contains(stableKey)
+                        Box(
+                            modifier = rowEntranceMod.then(
+                                if (selectionMode) {
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            if (rowSelected) palette.accentSoft else Color.Transparent
+                                        )
+                                        .clickable {
+                                            if (selectedMessageIds.contains(stableKey)) {
+                                                selectedMessageIds.remove(stableKey)
+                                            } else {
+                                                selectedMessageIds.add(stableKey)
+                                            }
+                                        }
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                        ) {
+                        if (selectionMode) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .padding(start = 4.dp)
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .border(1.5.dp, palette.border, CircleShape)
+                                    .background(if (rowSelected) palette.accent else Color.Transparent)
+                                    .clickable {
+                                        if (selectedMessageIds.contains(stableKey)) {
+                                            selectedMessageIds.remove(stableKey)
+                                        } else {
+                                            selectedMessageIds.add(stableKey)
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (rowSelected) {
+                                    WebUiSvgIcon(
+                                        kind = WebUiIconKind.Check,
+                                        tint = Color.White,
+                                        size = 13.dp,
+                                    )
+                                }
+                            }
+                        }
                         if (isCommunity) {
                             CommunityAnnouncementPostCard(
                                 msg = msg,
@@ -2499,6 +2621,11 @@ fun ChatThreadScreen(
                 }
                 MessageSheetAction(WebUiIconKind.Trash, "Delete for me", tint = palette.danger) {
                     vm.deleteMessageForMe(msg.id)
+                    contextMenuMessage = null
+                }
+                MessageSheetAction(WebUiIconKind.Check, "Select messages") {
+                    selectionMode = true
+                    if (!selectedMessageIds.contains(msg.id)) selectedMessageIds.add(msg.id)
                     contextMenuMessage = null
                 }
                 Spacer(Modifier.height(12.dp))
