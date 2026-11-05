@@ -37,6 +37,12 @@ class TwoFactorRequiredException(
 object TursoApiClient {
     val apiOrigin: String = BuildConfig.API_ORIGIN.trimEnd('/')
 
+    /** Where the newest published build always lives, whatever the server state. */
+    private const val GITHUB_APK_MANIFEST_URL =
+        "https://raw.githubusercontent.com/Ahad00010/JaText/main/release-cdn/apk-version.json"
+    private const val GITHUB_APK_DOWNLOAD_URL =
+        "https://github.com/Ahad00010/JaText/releases/download/apk-latest/JaText-release.apk"
+
     private const val MEDIA_CHUNK_BYTES = 768 * 1024
     private const val CHUNK_UPLOAD_THRESHOLD = 700 * 1024
     private const val MAX_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -505,11 +511,25 @@ object TursoApiClient {
         }
     }
 
+    /**
+     * The manifest is published in the repo and copied into the web build, so a
+     * self hosted server only ever advertises the build it last rebuilt, which
+     * goes stale the moment its updater misses a run. GitHub is checked too and
+     * the newest one wins, so a phone is still offered the latest build when the
+     * server has fallen behind.
+     *
+     * The download follows whichever manifest won: the apk a stale server still
+     * has on disk can be several builds older than the manifest it copied at the
+     * same time, so the GitHub manifest pairs with the GitHub release asset.
+     */
     suspend fun fetchLatestApkManifest(): ApkVersionManifest? = withContext(Dispatchers.IO) {
-        val candidateUrls = listOf(
-            "$apiOrigin/apk-version.json?t=${System.currentTimeMillis()}",
-        ).distinct()
-        for (url in candidateUrls) {
+        val stamp = System.currentTimeMillis()
+        val candidates = listOf(
+            "$apiOrigin/apk-version.json?t=$stamp" to null,
+            "$GITHUB_APK_MANIFEST_URL?t=$stamp" to GITHUB_APK_DOWNLOAD_URL,
+        )
+        var best: ApkVersionManifest? = null
+        for ((url, downloadOverride) in candidates) {
             try {
                 val req = Request.Builder()
                     .url(url)
@@ -521,11 +541,18 @@ object TursoApiClient {
                     if (!resp.isSuccessful) null
                     else JaTextJson.decodeFromString<ApkVersionManifest>(resp.body?.string().orEmpty())
                 }
-                if (parsed != null && parsed.versionCode > 0) return@withContext parsed
+                if (parsed == null || parsed.versionCode <= 0) continue
+                val resolved =
+                    if (downloadOverride != null) parsed.copy(downloadUrl = downloadOverride)
+                    else parsed
+                val current = best
+                if (current == null || resolved.versionCode > current.versionCode) {
+                    best = resolved
+                }
             } catch (_: Throwable) {
             }
         }
-        null
+        best
     }
 
     suspend fun downloadApkFile(
