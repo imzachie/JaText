@@ -6,9 +6,9 @@
  * starts from, and whoever posts picks the part they want. Both clients use
  * this same list so a song picked on a phone reads correctly on desktop.
  *
- * The files are hosted in the JaText-Essential-Stuff repo rather than bundled
- * here: three full songs plus cover art would add several megabytes to every
- * clone and to the web build, and none of it is needed by the app itself.
+ * The files are served by this app from public/songs, so a song starts as
+ * quickly as any other page asset instead of waiting on a file host that
+ * answers in seconds.
  */
 
 export interface StatusSong {
@@ -22,10 +22,7 @@ export interface StatusSong {
   previewStartMs: number;
 }
 
-const ESSENTIAL_RAW =
-  "https://raw.githubusercontent.com/Ahad00010/JaText-Essential-Stuff/refs/heads/main";
-const ESSENTIAL_FILE =
-  "https://github.com/Ahad00010/JaText-Essential-Stuff/raw/refs/heads/main";
+const SONGS_BASE = "/songs";
 
 export const MAX_STATUS_AUDIO_MS = 30_000;
 
@@ -34,8 +31,8 @@ export const STATUS_SONGS: StatusSong[] = [
     id: "young_black_and_rich",
     title: "Young Black & Rich",
     artist: "Melly Mike",
-    coverUrl: `${ESSENTIAL_RAW}/Young%20Black.jpg`,
-    audioUrl: `${ESSENTIAL_FILE}/Young%20Black%20&%20Rich.mp3`,
+    coverUrl: `${SONGS_BASE}/young-black.jpg`,
+    audioUrl: `${SONGS_BASE}/young-black-and-rich.mp3`,
     durationMs: 155_000,
     previewStartMs: 70_000,
   },
@@ -43,8 +40,8 @@ export const STATUS_SONGS: StatusSong[] = [
     id: "boss_bitch",
     title: "Boss Bitch",
     artist: "Doja Cat",
-    coverUrl: `${ESSENTIAL_RAW}/Boss%20Bitch.jpg`,
-    audioUrl: `${ESSENTIAL_FILE}/Boss%20Bitch.mp3`,
+    coverUrl: `${SONGS_BASE}/boss-bitch.jpg`,
+    audioUrl: `${SONGS_BASE}/boss-bitch.mp3`,
     durationMs: 134_000,
     previewStartMs: 83_000,
   },
@@ -52,8 +49,8 @@ export const STATUS_SONGS: StatusSong[] = [
     id: "sara_perche_ti_amo",
     title: "Sarà perché ti amo",
     artist: "Ricchi e Poveri",
-    coverUrl: `${ESSENTIAL_RAW}/Sar%C3%A0%20perch%C3%A9%20ti%20amo.jpg`,
-    audioUrl: `${ESSENTIAL_FILE}/Sar%C3%A0%20perch%C3%A9%20ti%20amo.mp3`,
+    coverUrl: `${SONGS_BASE}/sara-perche-ti-amo.jpg`,
+    audioUrl: `${SONGS_BASE}/sara-perche-ti-amo.mp3`,
     durationMs: 191_000,
     previewStartMs: 127_000,
   },
@@ -78,16 +75,15 @@ export function maxStartMs(durationMs: number): number {
 
 /**
  * The window that actually plays. A Status never runs longer than 30 seconds,
- * and it never runs past the end of the track.
+ * and never runs past the end of the track.
  */
-export function playWindow(
-  startMs: number,
-  durationMs: number,
-): { startMs: number; lengthMs: number } {
+export function playWindow(startMs: number, durationMs: number): { startMs: number; lengthMs: number } {
   if (durationMs <= MAX_STATUS_AUDIO_MS) {
     return { startMs: 0, lengthMs: Math.max(0, durationMs) };
   }
   const limit = maxStartMs(durationMs);
-  const start = Math.min(Math.max(0, Math.round(startMs)), limit);
-  return { startMs: start, lengthMs: MAX_STATUS_AUDIO_MS };
+  return {
+    startMs: Math.min(Math.max(startMs, 0), limit),
+    lengthMs: MAX_STATUS_AUDIO_MS,
+  };
 }

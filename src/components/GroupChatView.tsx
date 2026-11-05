@@ -842,7 +842,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                               }
                             />
                           ) : isImage ? (
-                            <SpoilerFrame active={Boolean(message.isSpoiler) && !mine}>
+                            <SpoilerFrame active={Boolean(message.isSpoiler)} spoilerKey={message.id}>
                               <button
                                 type="button"
                                 className="image-message-button"
@@ -860,7 +860,7 @@ const GroupChatHistory = memo(function GroupChatHistory({
                               </button>
                             </SpoilerFrame>
                           ) : isVideo ? (
-                            <SpoilerFrame active={Boolean(message.isSpoiler) && !mine}>
+                            <SpoilerFrame active={Boolean(message.isSpoiler)} spoilerKey={message.id}>
                               <ChatVideoPlayer
                                 src={message.attachmentUrl}
                                 name={message.attachmentName}

@@ -762,7 +762,7 @@ const ChatHistory = memo(function ChatHistory({
                             }
                           />
                         ) : isImage ? (
-                          <SpoilerFrame active={Boolean(message.isSpoiler) && !mine}>
+                          <SpoilerFrame active={Boolean(message.isSpoiler)} spoilerKey={message.id}>
                             <button
                               type="button"
                               className="image-message-button"
@@ -785,7 +785,7 @@ const ChatHistory = memo(function ChatHistory({
                             </button>
                           </SpoilerFrame>
                         ) : isVideo ? (
-                          <SpoilerFrame active={Boolean(message.isSpoiler) && !mine}>
+                          <SpoilerFrame active={Boolean(message.isSpoiler)} spoilerKey={message.id}>
                             <ChatVideoPlayer
                               src={message.attachmentUrl}
                               name={message.attachmentName}

@@ -2,6 +2,12 @@ import { useState, type ReactNode } from "react";
 import { IosEyeOffIcon } from "./IosVectorIcons";
 
 /**
+ * Ids already revealed in this session. Kept outside the component so a
+ * revealed attachment stays revealed when the list re-renders.
+ */
+const revealedSpoilers = new Set<string>();
+
+/**
  * Hides an attachment behind a blur until the reader chooses to see it.
  *
  * The media is rendered underneath from the start, blurred rather than
@@ -11,12 +17,18 @@ import { IosEyeOffIcon } from "./IosVectorIcons";
  */
 export function SpoilerFrame({
   active,
+  spoilerKey,
   children,
 }: {
   active: boolean;
+  spoilerKey: string;
   children: ReactNode;
 }) {
-  const [revealed, setRevealed] = useState(false);
+  const [revealed, setRevealed] = useState(() => revealedSpoilers.has(spoilerKey));
+  const reveal = () => {
+    revealedSpoilers.add(spoilerKey);
+    setRevealed(true);
+  };
   if (!active || revealed) return <>{children}</>;
   return (
     <div
@@ -24,11 +36,11 @@ export function SpoilerFrame({
       role="button"
       tabIndex={0}
       aria-label="Reveal spoiler"
-      onClick={() => setRevealed(true)}
+      onClick={reveal}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          setRevealed(true);
+          reveal();
         }
       }}
     >

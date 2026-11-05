@@ -1898,12 +1898,18 @@ html[data-jt-mode="light"] .logo-full {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
+  /* A percentage height here is measured against the stage itself, which is
+     sized by the image, so it was ignored and tall photos opened bigger than
+     the screen. A viewport height always resolves. */
+  height: calc(100dvh - 108px);
   max-width: 100%;
-  max-height: 100%;
   animation: jtLightboxStageIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
   will-change: transform, opacity;
 }
 .media-lightbox img {
+  width: auto;
+  height: auto;
   max-width: min(100%, 1200px);
   max-height: 100%;
   object-fit: contain;

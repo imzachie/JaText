@@ -1538,9 +1538,8 @@ export function CommunityChatView({
                           />
                         ) : isImage ? (
                           <SpoilerFrame
-                            active={
-                              Boolean(message.isSpoiler) && message.senderId !== store.me?.id
-                            }
+                            active={Boolean(message.isSpoiler)}
+                            spoilerKey={message.id}
                           >
                             <button type="button" className="image-message-button" onClick={() => openImagePreview(message.attachmentUrl!)} aria-label="Open image viewer">
                               <ChatAttachmentImage className="msg-image" src={message.attachmentUrl} alt={message.attachmentName ?? "attachment"} maxWidth={420} maxHeight={420} />
@@ -1548,9 +1547,8 @@ export function CommunityChatView({
                           </SpoilerFrame>
                         ) : isVideo ? (
                           <SpoilerFrame
-                            active={
-                              Boolean(message.isSpoiler) && message.senderId !== store.me?.id
-                            }
+                            active={Boolean(message.isSpoiler)}
+                            spoilerKey={message.id}
                           >
                             <ChatVideoPlayer
                               src={message.attachmentUrl}

@@ -51,6 +51,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import android.content.Context
 import coil.compose.AsyncImage
 import com.ahad00010.jatext.data.StatusSong
@@ -122,56 +124,66 @@ private fun SheetShell(
     subtitle: String,
     content: @Composable () -> Unit,
 ) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn() + slideInVertically { it / 8 },
-        exit = fadeOut() + slideOutVertically { it / 8 },
+    if (!visible) return
+    // Its own window, otherwise it lands behind the composer dialog it was
+    // opened from and there is no way to touch it.
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xB3000000))
-                .clickable { onDismiss() },
-            contentAlignment = Alignment.BottomCenter,
+        AnimatedVisibility(
+            visible = true,
+            enter = fadeIn() + slideInVertically { it / 8 },
         ) {
-            Surface(
-                shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-                color = Color(0xFF14141D),
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 620.dp)
-                    .clickable(enabled = false) {},
+                    .fillMaxSize()
+                    .background(Color(0xB3000000))
+                    .clickable { onDismiss() },
+                contentAlignment = Alignment.BottomCenter,
             ) {
-                Column(modifier = Modifier.padding(bottom = 10.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = title,
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                            )
-                            Text(
-                                text = subtitle,
-                                color = Color.White.copy(alpha = 0.6f),
-                                fontSize = 12.sp,
-                            )
+                Surface(
+                    shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                    color = Color(0xFF14141D),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 620.dp)
+                        .clickable(enabled = false) {},
+                ) {
+                    Column(modifier = Modifier.padding(bottom = 10.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = title,
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                )
+                                Text(
+                                    text = subtitle,
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "Close",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
-                        IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                            Icon(
-                                imageVector = Icons.Rounded.Close,
-                                contentDescription = "Close",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
+                        content()
                     }
-                    content()
                 }
             }
         }
