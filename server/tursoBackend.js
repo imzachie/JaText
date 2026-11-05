@@ -590,6 +590,9 @@ async function initSchema(db) {
     `ALTER TABLE groups ADD COLUMN community_key_seed TEXT`,
     `ALTER TABLE status_posts ADD COLUMN audio_title TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE status_posts ADD COLUMN audio_start_ms INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE messages ADD COLUMN is_spoiler INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE group_messages ADD COLUMN is_spoiler INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE community_messages ADD COLUMN is_spoiler INTEGER NOT NULL DEFAULT 0`,
   ];
 
   if (db.engine === "postgresql" || db.engine === "postgresql-bridge") {
@@ -1555,6 +1558,7 @@ function hydrateDmMessages(rows, meId, replyLookupMap, favKeys) {
       ...(unsentAt || !r.attachment_url ? {} : { attachmentUrl: String(r.attachment_url) }),
       ...(unsentAt || !r.attachment_name ? {} : { attachmentName: String(r.attachment_name) }),
       ...(unsentAt || !r.attachment_type ? {} : { attachmentType: String(r.attachment_type) }),
+      ...(unsentAt || !r.attachment_url ? {} : { isSpoiler: Number(r.is_spoiler || 0) === 1 }),
       ...(mediaKey ? { stickerKey: mediaKey, isStickerFavorite: favKeys.has(mediaKey) } : {}),
       deliveryStatus: effectiveDelivery,
       ...(r.edited_at != null ? { editedAt: Number(r.edited_at) } : {}),
@@ -1650,6 +1654,9 @@ async function hydrateGroupMessages(db, rows, meId, clearedAt = 0) {
       ...(unsentAt || !r.sticker_url ? {} : { stickerUrl: String(r.sticker_url) }),
       ...(unsentAt || !r.sticker_name ? {} : { stickerName: String(r.sticker_name) }),
       ...(mediaKey ? { stickerKey: mediaKey, isStickerFavorite: favKeys.has(mediaKey) } : {}),
+      ...(unsentAt || (!r.attachment_url && !r.sticker_url)
+        ? {}
+        : { isSpoiler: Number(r.is_spoiler || 0) === 1 }),
       ...(r.forwarded_from_name || fwdSender
         ? {
             forwardedFromName: String(
@@ -1769,6 +1776,9 @@ async function hydrateCommunityMessages(db, rows, meRow, role) {
       ...(isHardDeleted || unsentAt || !r.sticker_url
         ? {}
         : { stickerUrl: String(r.sticker_url) }),
+      ...(isHardDeleted || unsentAt || (!r.attachment_url && !r.sticker_url)
+        ? {}
+        : { isSpoiler: Number(r.is_spoiler || 0) === 1 }),
       ...(isHardDeleted || unsentAt || !r.sticker_name
         ? {}
         : { stickerName: String(r.sticker_name) }),
@@ -3345,6 +3355,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const meId = String(meRow.id);
       const receiverId = String(args.receiverId || "");
       const body = String(args.body || "");
+      const isSpoiler = args.isSpoiler ? 1 : 0;
       if (!receiverId) throw new TursoAppError("Recipient is required.");
       if (!body.trim() && !args.attachmentUrl) {
         throw new TursoAppError("Cannot send an empty message.");
@@ -3396,8 +3407,8 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           sql: `INSERT INTO messages (
                   id, sender_id, receiver_id, pair_key, body, attachment_url, attachment_name,
                   attachment_type, sticker_key, delivery_status, reply_to_id, forwarded_from_id,
-                  created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  is_spoiler, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           args: [
             msgId,
             meId,
@@ -3411,6 +3422,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
             deliveryStatus,
             args.replyToId ? String(args.replyToId) : null,
             args.forwardedFromId ? String(args.forwardedFromId) : null,
+            isSpoiler,
             writeAt,
             writeAt,
           ],
@@ -3784,14 +3796,15 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const type = ["text", "poll", "sticker"].includes(args.type) ? args.type : "text";
       const body = String(args.body || "");
       const pollOptions = Array.isArray(args.pollOptions) ? args.pollOptions.map(String) : [];
+      const isSpoiler = args.isSpoiler ? 1 : 0;
       const writeAt = Date.now();
 
       await db.execute({
         sql: `INSERT INTO community_messages (
                 id, sender_id, body, type, poll_options_json, sticker_url, sticker_name,
-                sticker_key, attachment_url, attachment_name, attachment_type, reply_to_id,
-                forwarded_from_name, forwarded_from_id, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                sticker_key, attachment_url, attachment_name, attachment_type, is_spoiler,
+                reply_to_id, forwarded_from_name, forwarded_from_id, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           msgId,
           meId,
@@ -3804,6 +3817,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           args.attachmentUrl ? String(args.attachmentUrl) : null,
           args.attachmentName ? String(args.attachmentName) : null,
           args.attachmentType ? String(args.attachmentType) : null,
+          isSpoiler,
           args.replyToId ? String(args.replyToId) : null,
           args.forwardedFromName ? String(args.forwardedFromName) : null,
           args.forwardedFromId ? String(args.forwardedFromId) : null,
@@ -4309,6 +4323,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const meId = String(meRow.id);
       const groupId = String(args.groupId || "");
       const body = String(args.body || "");
+      const isSpoiler = args.isSpoiler ? 1 : 0;
 
       const [grpRes, memRes] = await Promise.all([
         db.execute({ sql: `SELECT * FROM groups WHERE id = ? LIMIT 1`, args: [groupId] }),
@@ -4346,9 +4361,9 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
             sql: `INSERT INTO group_messages (
                     id, group_id, sender_id, body, reply_to_id, forwarded_from_name,
                     forwarded_from_id, sticker_url, sticker_name, sticker_key,
-                    attachment_url, attachment_name, attachment_type,
+                    attachment_url, attachment_name, attachment_type, is_spoiler,
                     mentions_everyone, mentioned_user_ids_json, created_at, updated_at
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             args: [
               msgId,
               groupId,
@@ -4363,6 +4378,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
               args.attachmentUrl ? String(args.attachmentUrl) : null,
               args.attachmentName ? String(args.attachmentName) : null,
               args.attachmentType ? String(args.attachmentType) : null,
+              isSpoiler,
               mentionsEveryone ? 1 : 0,
               JSON.stringify(mentionedUserIds),
               writeAt,

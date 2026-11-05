@@ -25,6 +25,7 @@ import { ChatAttachmentImage } from "./ChatAttachmentImage";
 import { ChatVideoPlayer } from "./ChatVideoPlayer";
 import { ComposerPlusMenu } from "./ComposerPlusMenu";
 import { ForwardedMessageCard } from "./ForwardedMessageCard";
+import { SpoilerFrame } from "./SpoilerFrame";
 import { MessageLinkEmbeds } from "./LinkEmbeds";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
@@ -1536,14 +1537,26 @@ export function CommunityChatView({
                             }
                           />
                         ) : isImage ? (
-                          <button type="button" className="image-message-button" onClick={() => openImagePreview(message.attachmentUrl!)} aria-label="Open image viewer">
-                            <ChatAttachmentImage className="msg-image" src={message.attachmentUrl} alt={message.attachmentName ?? "attachment"} maxWidth={420} maxHeight={420} />
-                          </button>
+                          <SpoilerFrame
+                            active={
+                              Boolean(message.isSpoiler) && message.senderId !== store.me?.id
+                            }
+                          >
+                            <button type="button" className="image-message-button" onClick={() => openImagePreview(message.attachmentUrl!)} aria-label="Open image viewer">
+                              <ChatAttachmentImage className="msg-image" src={message.attachmentUrl} alt={message.attachmentName ?? "attachment"} maxWidth={420} maxHeight={420} />
+                            </button>
+                          </SpoilerFrame>
                         ) : isVideo ? (
-                          <ChatVideoPlayer
-                            src={message.attachmentUrl}
-                            name={message.attachmentName}
-                          />
+                          <SpoilerFrame
+                            active={
+                              Boolean(message.isSpoiler) && message.senderId !== store.me?.id
+                            }
+                          >
+                            <ChatVideoPlayer
+                              src={message.attachmentUrl}
+                              name={message.attachmentName}
+                            />
+                          </SpoilerFrame>
                         ) : (
                           <a className="file-chip" href={message.attachmentUrl} download={message.attachmentName ?? "file"} target="_blank" rel="noreferrer">
                             <PaperclipIcon size={14} /> {message.attachmentName ?? "Attachment"}

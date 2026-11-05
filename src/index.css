@@ -14317,3 +14317,95 @@ label,
     animation: none;
   }
 }
+
+/* ==========================================================================
+   Spoiler attachments, hidden until the reader taps them
+   ========================================================================== */
+
+.spoiler-frame {
+  position: relative;
+  display: block;
+  border-radius: 14px;
+  overflow: hidden;
+  cursor: pointer;
+  isolation: isolate;
+}
+
+.spoiler-frame:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.spoiler-frame-media {
+  filter: blur(26px) saturate(0.75);
+  transform: scale(1.04);
+  pointer-events: none;
+  user-select: none;
+  transition: filter 220ms ease;
+}
+
+.spoiler-frame-media img,
+.spoiler-frame-media video {
+  max-height: 320px;
+  object-fit: cover;
+}
+
+.spoiler-frame-veil {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: rgba(6, 8, 14, 0.42);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  animation: lightbox-fade-in 180ms ease both;
+}
+
+.spoiler-frame-veil span:first-of-type {
+  font-size: 13.5px;
+}
+
+.spoiler-frame-hint {
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.spoiler-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 160ms var(--ease-spring);
+}
+
+.spoiler-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  transform: scale(1.04);
+}
+
+.spoiler-toggle.is-on {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-dark);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spoiler-frame-veil {
+    animation: none;
+  }
+}

@@ -1101,6 +1101,7 @@ export function useTursoReactiveSession(
         attachmentName?: string;
         attachmentType?: string;
         replyToId?: string;
+        isSpoiler?: boolean;
       }) => {
         const res = await tursoRpc<{ message: ChatMessage }>(
           "sendMessage",
@@ -1111,6 +1112,7 @@ export function useTursoReactiveSession(
             ...(args.attachmentName ? { attachmentName: args.attachmentName } : {}),
             ...(args.attachmentType ? { attachmentType: args.attachmentType } : {}),
             ...(args.replyToId ? { replyToId: args.replyToId } : {}),
+            ...(args.isSpoiler ? { isSpoiler: true } : {}),
           },
           { slotId },
         );
@@ -1543,6 +1545,7 @@ export function useTursoReactiveSession(
         attachmentType?: string;
         replyToId?: string;
         forwardedFromId?: string;
+        isSpoiler?: boolean;
       }) => {
         const res = await tursoRpc<{ message: CommunityMessage }>(
           "sendCommunityMessage",
@@ -1554,6 +1557,7 @@ export function useTursoReactiveSession(
             ...(args.attachmentType ? { attachmentType: args.attachmentType } : {}),
             ...(args.replyToId ? { replyToId: args.replyToId } : {}),
             ...(args.forwardedFromId ? { forwardedFromId: args.forwardedFromId } : {}),
+            ...(args.isSpoiler ? { isSpoiler: true } : {}),
           },
           { slotId },
         );
@@ -1868,6 +1872,7 @@ export function useTursoReactiveSession(
         replyToId?: string;
         forwardedFromId?: string;
         forwardedFromName?: string;
+        isSpoiler?: boolean;
       }) => {
         const res = await tursoRpc<{ message: GroupMessage }>(
           "sendGroupMessage",
@@ -1885,6 +1890,7 @@ export function useTursoReactiveSession(
             ...(args.replyToId ? { replyToId: args.replyToId } : {}),
             ...(args.forwardedFromId ? { forwardedFromId: args.forwardedFromId } : {}),
             ...(args.forwardedFromName ? { forwardedFromName: args.forwardedFromName } : {}),
+            ...(args.isSpoiler ? { isSpoiler: true } : {}),
           },
           { slotId },
         );

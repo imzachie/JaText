@@ -218,6 +218,8 @@ data class ChatMessage(
     val attachmentUrl: String? = null,
     val attachmentName: String? = null,
     val attachmentType: String? = null,
+    /** Blurred until the reader taps it. */
+    val isSpoiler: Boolean = false,
     val stickerKey: String? = null,
     val explicitStickerUrl: String? = null,
     val isStickerFavorite: Boolean? = false,
@@ -366,6 +368,8 @@ data class CommunityMessage(
     val attachmentUrl: String? = null,
     val attachmentName: String? = null,
     val attachmentType: String? = null,
+    /** Blurred until the reader taps it. */
+    val isSpoiler: Boolean = false,
     val stickerUrl: String? = null,
     val stickerName: String? = null,
     val stickerKey: String? = null,
@@ -519,6 +523,8 @@ data class GroupMessage(
     val attachmentUrl: String? = null,
     val attachmentName: String? = null,
     val attachmentType: String? = null,
+    /** Blurred until the reader taps it. */
+    val isSpoiler: Boolean = false,
     val stickerUrl: String? = null,
     val stickerName: String? = null,
     val stickerKey: String? = null,

@@ -2341,6 +2341,7 @@ class JaTextSessionViewModel(app: Application) :
         replyTo: ReplySummary? = null,
         attachmentUri: Uri? = null,
         localVoiceFile: File? = null,
+        isSpoiler: Boolean = false,
     ) {
         val st = _state.value
         val me = st.me ?: return
@@ -2367,6 +2368,7 @@ class JaTextSessionViewModel(app: Application) :
                 attachmentUrl = localVoiceFile?.let { Uri.fromFile(it).toString() } ?: attachmentUri?.toString(),
                 attachmentName = localVoiceFile?.name ?: attachmentUri?.let { resolveDisplayName(it) },
                 attachmentType = if (localVoiceFile != null) "audio/mp4" else attachmentUri?.let { resolveMime(it) },
+                isSpoiler = isSpoiler,
                 deliveryStatus = if (isSelf) "read" else "sent",
                 createdAt = now,
                 replyTo = safeReplyTo,
@@ -2443,6 +2445,7 @@ class JaTextSessionViewModel(app: Application) :
                         args["attachmentType"] = if (wire != null) "application/octet-stream" else plainMime
                     }
                     if (replyTo != null) args["replyToId"] = replyTo.id
+                    if (isSpoiler) args["isSpoiler"] = true
 
                     val root = TursoApiClient.rpcRaw("sendMessage", args, token).jsonObject
                     val serverMsg = root["message"]?.let {
@@ -2476,6 +2479,7 @@ class JaTextSessionViewModel(app: Application) :
                 attachmentUrl = localVoiceFile?.let { Uri.fromFile(it).toString() } ?: attachmentUri?.toString(),
                 attachmentName = localVoiceFile?.name ?: attachmentUri?.let { resolveDisplayName(it) },
                 attachmentType = if (localVoiceFile != null) "audio/mp4" else attachmentUri?.let { resolveMime(it) },
+                isSpoiler = isSpoiler,
                 createdAt = now,
                 replyTo = safeReplyTo,
             )
@@ -2536,6 +2540,7 @@ class JaTextSessionViewModel(app: Application) :
                         args["attachmentType"] = "application/octet-stream"
                     }
                     if (replyTo != null) args["replyToId"] = replyTo.id
+                    if (isSpoiler) args["isSpoiler"] = true
 
                     val root = TursoApiClient.rpcRaw("sendGroupMessage", args, token).jsonObject
                     val serverMsg = root["message"]?.let {
@@ -2567,6 +2572,7 @@ class JaTextSessionViewModel(app: Application) :
                 body = cleanText,
                 bubbleStyle = bubble,
                 type = "text",
+                isSpoiler = isSpoiler,
                 createdAt = now,
                 replyTo = replyTo,
             )
@@ -2594,6 +2600,7 @@ class JaTextSessionViewModel(app: Application) :
                         args["attachmentType"] = fMime
                     }
                     if (replyTo != null) args["replyToId"] = replyTo.id
+                    if (isSpoiler) args["isSpoiler"] = true
 
                     val root = TursoApiClient.rpcRaw("sendCommunityMessage", args, token).jsonObject
                     val serverMsg = root["message"]?.let {
@@ -5267,6 +5274,7 @@ class JaTextSessionViewModel(app: Application) :
         uris: List<Uri>,
         caption: String = "",
         replyTo: ReplySummary? = null,
+        spoilerUris: Set<Uri> = emptySet(),
     ) {
         if (uris.isEmpty()) return
         uris.forEachIndexed { idx, uri ->
@@ -5274,6 +5282,7 @@ class JaTextSessionViewModel(app: Application) :
                 text = if (idx == 0) caption else "",
                 replyTo = if (idx == 0) replyTo else null,
                 attachmentUri = uri,
+                isSpoiler = uri in spoilerUris,
             )
         }
     }

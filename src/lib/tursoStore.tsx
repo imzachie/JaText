@@ -1367,7 +1367,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     [setCommunityModeratorsMut],
   );
   const sendCommunityText = useCallback<JaTextStore["sendCommunityText"]>(
-    async (body, file, replyToId, forwardedFromId) => {
+    async (body, file, replyToId, forwardedFromId, isSpoiler) => {
       const trimmed = body.trim();
       const style = isControlPayload(trimmed) ? "default" : getSavedOutgoingBubbleStyle();
       const wireBody = style === "default" ? trimmed : attachBubbleStyleToOutgoing(trimmed, style);
@@ -1379,6 +1379,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
           ? { attachmentId, attachmentName: wireFile!.name, attachmentType: wireFile!.type }
           : {}),
         ...(replyToId ? { replyToId: replyToId } : {}),
+        ...(isSpoiler ? { isSpoiler: true } : {}),
         ...(forwardedFromId ? { forwardedFromId: forwardedFromId } : {}),
       });
     },
@@ -1847,7 +1848,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     [addGroupMembersMut, distributeGroupEpochToMembers, ensureGroupEpochReadyForSend],
   );
   const sendGroupMessage = useCallback<JaTextStore["sendGroupMessage"]>(
-    async (groupId, body, file, replyToId, forwardedFromId) => {
+    async (groupId, body, file, replyToId, forwardedFromId, isSpoiler) => {
       const trimmed = body.trim();
       const targetGroupRole =
         (activeGroupId === groupId ? groupDetails?.role : undefined) ??
@@ -1890,6 +1891,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
                 }
               : {}),
             ...(replyToId ? { replyToId: replyToId } : {}),
+            ...(isSpoiler ? { isSpoiler: true } : {}),
             ...(forwardedFromId ? { forwardedFromId: forwardedFromId } : {}),
           });
           return;
@@ -1904,6 +1906,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
           ? { attachmentId, attachmentName: wireFile!.name, attachmentType: wireFile!.type }
           : {}),
         ...(replyToId ? { replyToId: replyToId } : {}),
+        ...(isSpoiler ? { isSpoiler: true } : {}),
         ...(forwardedFromId ? { forwardedFromId: forwardedFromId } : {}),
       });
     },
@@ -2733,7 +2736,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
   );
 
   const sendMessage = useCallback<JaTextStore["sendMessage"]>(
-    async (receiverId, body, file, replyToId) => {
+    async (receiverId, body, file, replyToId, isSpoiler) => {
       const trimmed = body.trim();
       const style = isControlPayload(trimmed) ? "default" : getSavedOutgoingBubbleStyle();
       const wireBody = style === "default" ? trimmed : attachBubbleStyleToOutgoing(trimmed, style);
@@ -2764,6 +2767,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
                 }
               : {}),
             ...(replyToId ? { replyToId: replyToId } : {}),
+            ...(isSpoiler ? { isSpoiler: true } : {}),
           });
           return;
         }
@@ -2777,6 +2781,7 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
           ? { attachmentId, attachmentName: wireFile!.name, attachmentType: wireFile!.type }
           : {}),
         ...(replyToId ? { replyToId: replyToId } : {}),
+        ...(isSpoiler ? { isSpoiler: true } : {}),
       });
     },
     [sendMessageMut, upload],
