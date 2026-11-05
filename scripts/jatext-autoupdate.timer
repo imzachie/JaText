@@ -1,10 +1,12 @@
 [Unit]
-Description=Check for JaText code updates every 10 minutes
+Description=Check for JaText code updates every 2 minutes
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=10min
-RandomizedDelaySec=60
+OnBootSec=90s
+OnUnitActiveSec=2min
+# Small delay so every machine does not hit GitHub on the same second. It is
+# 20s rather than 60s so a 2 minute cadence still feels like 2 minutes.
+RandomizedDelaySec=20
 # Catch up on a run that was missed while the machine was asleep or off.
 # Without this a laptop that spends most of the day suspended quietly stops
 # receiving updates and there is nothing on the site to show it happened.
