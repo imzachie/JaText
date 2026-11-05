@@ -153,6 +153,9 @@ import type { FriendActivity, GroupMember, GroupMessage, JaUser, StickerMedia } 
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
+// A send can take much longer than this on a phone, so the optimistic bubble
+// has to stay matchable for as long as the real one is allowed to arrive.
+const PENDING_NEAR_MATCH_WINDOW_MS = 30_000;
 const EMPTY_GROUP_MESSAGES: GroupMessage[] = [];
 const EMPTY_GROUP_MEMBERS: GroupMember[] = [];
 
@@ -245,7 +248,7 @@ function getConversationMessages(
 
   for (const message of activeMessages) {
     const isUndecryptedEcho = Boolean(message.e2ee && !message.e2ee.decrypted);
-    const pendingIndex = conversationPendingMessages.findIndex(
+    let pendingIndex = conversationPendingMessages.findIndex(
       (pendingMessage) =>
         pendingMessage.senderId === message.senderId &&
         message.createdAt >= pendingMessage.createdAt - 60_000 &&
@@ -256,6 +259,17 @@ function getConversationMessages(
           (message.body === pendingMessage.body &&
             message.attachmentName === pendingMessage.attachmentName)),
     );
+    // Fallback for our own messages whose stored body legitimately differs from
+    // what we optimistically rendered. Without it the bubble stays on screen
+    // next to the delivered one and the send animation visibly plays twice.
+    if (pendingIndex === -1 && myUserId && message.senderId === myUserId) {
+      pendingIndex = conversationPendingMessages.findIndex(
+        (pendingMessage) =>
+          pendingMessage.senderId === message.senderId &&
+          Math.abs(message.createdAt - pendingMessage.createdAt) <=
+            PENDING_NEAR_MATCH_WINDOW_MS,
+      );
+    }
     if (pendingIndex === -1) {
       if (
         isUndecryptedEcho &&
