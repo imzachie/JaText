@@ -977,6 +977,7 @@ fun InlineVideoAttachmentPlayer(
 ) {
     val context = LocalContext.current
     var resolvedFile by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf<File?>(null) }
+    var streamingUri by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf<String?>(null) }
     var loading by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf(true) }
     var thumbBitmap by remember(attachmentUrl, encryptedAttachment?.h) { mutableStateOf<Bitmap?>(null) }
     var durationSec by remember(attachmentUrl, encryptedAttachment?.h) { mutableIntStateOf(0) }
@@ -1002,6 +1003,13 @@ fun InlineVideoAttachmentPlayer(
                 } catch (_: Throwable) {
                     null
                 }
+            }
+            // Nothing to decrypt, so let the player fetch it in ranges while
+            // it plays instead of pulling the whole clip down up front, which
+            // is what left the card spinning on anything but a tiny video.
+            encryptedAttachment == null && attachmentUrl.startsWith("http") -> {
+                streamingUri = TursoApiClient.resolveAbsoluteMediaUrl(attachmentUrl)
+                null
             }
             else -> JaTextCryptoEngine.resolveOrDecryptAttachmentToFile(
                 context,
@@ -1043,9 +1051,10 @@ fun InlineVideoAttachmentPlayer(
                     modifier = Modifier.size(26.dp),
                 )
             }
-            resolvedFile != null && playingInline && !fullscreenOpen -> {
+            (resolvedFile != null || streamingUri != null) && playingInline && !fullscreenOpen -> {
                 JaTextControlledVideoSurface(
-                    videoFile = resolvedFile!!,
+                    videoFile = resolvedFile,
+                    videoUri = streamingUri,
                     title = attachmentName ?: encryptedAttachment?.n,
                     initialDurationSec = durationSec,
                     initialPositionMs = savedPositionMs,
@@ -1066,7 +1075,7 @@ fun InlineVideoAttachmentPlayer(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            resolvedFile != null -> {
+            resolvedFile != null || streamingUri != null -> {
                 thumbBitmap?.let { bmp ->
                     Image(
                         bitmap = bmp.asImageBitmap(),
@@ -1199,8 +1208,8 @@ fun InlineVideoAttachmentPlayer(
         }
     }
 
-    if (fullscreenOpen && resolvedFile != null) {
-        val file = resolvedFile!!
+    if (fullscreenOpen && (resolvedFile != null || streamingUri != null)) {
+        val file = resolvedFile
         Dialog(
             onDismissRequest = { fullscreenOpen = false },
             properties = DialogProperties(
@@ -1210,6 +1219,7 @@ fun InlineVideoAttachmentPlayer(
         ) {
             JaTextControlledVideoSurface(
                 videoFile = file,
+                videoUri = if (file == null) streamingUri else null,
                 title = attachmentName ?: encryptedAttachment?.n,
                 initialDurationSec = durationSec,
                 initialPositionMs = savedPositionMs,
@@ -1267,7 +1277,8 @@ private fun formatVideoClockMs(ms: Int): String {
 
 @Composable
 private fun JaTextControlledVideoSurface(
-    videoFile: File,
+    videoFile: File?,
+    videoUri: String? = null,
     title: String?,
     initialDurationSec: Int,
     initialPositionMs: Int,
@@ -1387,7 +1398,7 @@ private fun JaTextControlledVideoSurface(
         }
     }
 
-    DisposableEffect(videoFile.absolutePath) {
+    DisposableEffect(videoFile?.absolutePath ?: videoUri ?: "") {
         onDispose {
             try {
                 val cur = videoViewRef?.currentPosition ?: positionMs
@@ -1431,7 +1442,14 @@ private fun JaTextControlledVideoSurface(
             factory = { ctx ->
                 VideoView(ctx).apply {
                     videoViewRef = this
-                    setVideoPath(videoFile.absolutePath)
+                    // VideoView streams an http source itself, so an attachment
+                    // that is not encrypted never has to be downloaded whole
+                    // before the first frame shows up.
+                    if (videoFile != null) {
+                        setVideoPath(videoFile.absolutePath)
+                    } else if (!videoUri.isNullOrBlank()) {
+                        setVideoURI(android.net.Uri.parse(videoUri))
+                    }
                     setOnPreparedListener { mp ->
                         mediaPlayerRef = mp
                         mp.isLooping = false

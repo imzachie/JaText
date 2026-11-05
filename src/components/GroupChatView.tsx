@@ -153,6 +153,9 @@ import type { FriendActivity, GroupMember, GroupMessage, JaUser, StickerMedia } 
 
 const UNSEND_WINDOW_MS = 60 * 60 * 1000;
 const PENDING_MESSAGE_MATCH_WINDOW_MS = 30_000;
+// Ten files per send. Each one is read, encrypted and uploaded, so a bigger
+// batch only queues up work the phone cannot keep in memory.
+const MAX_STAGED_FILES = 10;
 // A send can take much longer than this on a phone, so the optimistic bubble
 // has to stay matchable for as long as the real one is allowed to arrive.
 const PENDING_NEAR_MATCH_WINDOW_MS = 30_000;
@@ -2290,11 +2293,11 @@ export function GroupChatView({
 
   const handleAddFiles = useCallback((incoming: File[]) => {
     if (incoming.length === 0) return;
-    setFiles((prev) => [...prev, ...incoming].slice(0, 20));
+    setFiles((prev) => [...prev, ...incoming].slice(0, MAX_STAGED_FILES));
   }, []);
 
   const handlePastedGroupFile = useCallback((pasted: File) => {
-    setFiles((prev) => [...prev, pasted].slice(0, 20));
+    setFiles((prev) => [...prev, pasted].slice(0, MAX_STAGED_FILES));
     window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
   }, []);
 
