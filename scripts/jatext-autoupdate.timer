@@ -5,7 +5,10 @@ Description=Check for JaText code updates every 10 minutes
 OnBootSec=5min
 OnUnitActiveSec=10min
 RandomizedDelaySec=60
-Persistent=false
+# Catch up on a run that was missed while the machine was asleep or off.
+# Without this a laptop that spends most of the day suspended quietly stops
+# receiving updates and there is nothing on the site to show it happened.
+Persistent=true
 
 [Install]
 WantedBy=timers.target
