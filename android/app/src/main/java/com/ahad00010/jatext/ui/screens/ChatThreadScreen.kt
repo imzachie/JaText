@@ -267,6 +267,7 @@ private data class UnifiedThreadItem(
     val attachmentUrl: String?,
     val attachmentName: String?,
     val attachmentType: String?,
+    val isSpoiler: Boolean = false,
     val encryptedAttachment: EncryptedBlobDescriptor?,
     val stickerUrl: String?,
     val poll: CommunityPoll?,
@@ -347,6 +348,7 @@ fun ChatThreadScreen(
                     attachmentUrl = m.attachmentUrl,
                     attachmentName = m.attachmentName,
                     attachmentType = m.attachmentType,
+                    isSpoiler = m.isSpoiler,
                     encryptedAttachment = null,
                     stickerUrl = m.stickerUrl?.takeIf { it.isNotBlank() }?.let { TursoApiClient.resolveAbsoluteMediaUrl(it) },
                     poll = m.poll,
@@ -376,6 +378,7 @@ fun ChatThreadScreen(
                     attachmentUrl = m.attachmentUrl,
                     attachmentName = m.attachmentName,
                     attachmentType = m.attachmentType,
+                    isSpoiler = m.isSpoiler,
                     encryptedAttachment = m.encryptedAttachment,
                     stickerUrl = m.explicitStickerUrl?.takeIf { it.isNotBlank() }?.let { TursoApiClient.resolveAbsoluteMediaUrl(it) },
                     poll = null,
@@ -406,6 +409,7 @@ fun ChatThreadScreen(
                     attachmentUrl = m.attachmentUrl,
                     attachmentName = m.attachmentName,
                     attachmentType = m.attachmentType,
+                    isSpoiler = m.isSpoiler,
                     encryptedAttachment = m.encryptedAttachment,
                     stickerUrl = m.explicitStickerUrl?.takeIf { it.isNotBlank() }?.let { TursoApiClient.resolveAbsoluteMediaUrl(it) },
                     poll = null,
@@ -489,6 +493,9 @@ fun ChatThreadScreen(
     var replyingTo by remember(activeThreadDraftKey) { mutableStateOf<ReplySummary?>(null) }
     var editingTarget by remember(activeThreadDraftKey) { mutableStateOf<UnifiedThreadItem?>(null) }
     val pendingAttachmentUris = remember(activeThreadDraftKey) { mutableStateListOf<Uri>() }
+    // Which staged files should arrive blurred. Keyed by the uri itself, so
+    // removing one file never shifts another file's choice.
+    val spoilerAttachmentUris = remember(activeThreadDraftKey) { mutableStateListOf<Uri>() }
     var viewOnceMode by remember(activeThreadDraftKey) { mutableStateOf(false) }
     var showInChatSearch by remember(activeThreadDraftKey) { mutableStateOf(false) }
     var inChatSearchQuery by remember(activeThreadDraftKey) { mutableStateOf("") }
@@ -1642,6 +1649,27 @@ fun ChatThreadScreen(
                                         fontWeight = FontWeight.SemiBold,
                                         maxLines = 1,
                                     )
+                                    val isSpoiler = spoilerAttachmentUris.contains(uri)
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(
+                                                if (isSpoiler) palette.accent
+                                                else palette.accentSoft,
+                                            )
+                                            .clickable {
+                                                if (isSpoiler) spoilerAttachmentUris.remove(uri)
+                                                else spoilerAttachmentUris.add(uri)
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                                    ) {
+                                        Text(
+                                            text = "Spoiler",
+                                            color = if (isSpoiler) palette.onAccent else palette.accent,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
                                     Icon(
                                         imageVector = Icons.Rounded.Close,
                                         contentDescription = "Remove file",
@@ -2163,8 +2191,10 @@ fun ChatThreadScreen(
                                     } else {
                                         vm.updateChatDraft(activeThreadDraftKey, "")
                                         val stagedList = pendingAttachmentUris.toList()
+                                        val spoilerSnapshot = spoilerAttachmentUris.toSet()
                                         val rep = replyingTo
                                         pendingAttachmentUris.clear()
+                                        spoilerAttachmentUris.clear()
                                         replyingTo = null
                                         if (viewOnceMode && !isCommunity) {
                                             viewOnceMode = false
@@ -2187,12 +2217,14 @@ fun ChatThreadScreen(
                                                 uris = stagedList,
                                                 caption = textToSend,
                                                 replyTo = rep,
+                                                spoilerUris = spoilerSnapshot,
                                             )
                                         } else {
                                             vm.sendChatMessage(
                                                 text = textToSend,
                                                 replyTo = rep,
                                                 attachmentUri = stagedList.firstOrNull(),
+                                                isSpoiler = stagedList.firstOrNull()?.let { it in spoilerSnapshot } == true,
                                             )
                                         }
                                     }
@@ -5132,6 +5164,8 @@ private fun SwipeableMessageRow(
                                                 attachmentName = msg.attachmentName,
                                                 attachmentType = msg.attachmentType,
                                                 encryptedAttachment = msg.encryptedAttachment,
+                                                isSpoiler = msg.isSpoiler,
+                                                isMine = isMine,
                                                 ink = ink,
                                                 onOpenImageFullscreen = onOpenFullscreenImage,
                                                 showTranscript = showTranscript,

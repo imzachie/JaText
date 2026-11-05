@@ -1903,8 +1903,49 @@ fun MessageMediaAttachmentView(
     showTranscript: Boolean = false,
     onHideTranscript: (() -> Unit)? = null,
     onLongPressMessage: (() -> Unit)? = null,
+    isSpoiler: Boolean = false,
+    isMine: Boolean = false,
 ) {
     val context = LocalContext.current
+
+    var revealed by remember(attachmentUrl) { mutableStateOf(false) }
+    // Whoever sent it knows what is under there, so only the reader hides it.
+    if (isSpoiler && !isMine && !revealed) {
+        // Hidden until the reader asks for it. The media is covered rather
+        // than blurred on purpose: Modifier.blur only draws on Android 12 and
+        // up, and a spoiler that quietly shows the photo on older phones is
+        // worse than one that simply hides it.
+        Box(
+            modifier = Modifier
+                .padding(bottom = 4.dp)
+                .widthIn(min = 160.dp, max = 265.dp)
+                .heightIn(min = 96.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(ink.voiceNoteInkColor.copy(alpha = 0.16f))
+                .border(1.dp, ink.voiceNoteInkColor.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
+                .clickable { revealed = true }
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "Spoiler",
+                    color = ink.textColor,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = "Tap to reveal",
+                    color = ink.subTextColor,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+        return
+    }
+
     val rawMime = (encryptedAttachment?.mt ?: attachmentType.orEmpty()).lowercase()
     val cleanMime = rawMime.substringBefore(";").trim()
     val nameAndUrlHint = "${encryptedAttachment?.n.orEmpty()} ${attachmentName.orEmpty()} $attachmentUrl"

@@ -71,6 +71,8 @@ export interface ChatMessage {
   attachmentUrl?: string;
   attachmentName?: string;
   attachmentType?: string;
+  /** Blurred until the reader taps it. */
+  isSpoiler?: boolean;
   stickerKey?: string;
   isStickerFavorite?: boolean;
   deliveryStatus?: MessageDeliveryStatus;
@@ -148,6 +150,8 @@ export interface CommunityMessage {
   attachmentUrl?: string;
   attachmentName?: string;
   attachmentType?: string;
+  /** Blurred until the reader taps it. */
+  isSpoiler?: boolean;
   stickerUrl?: string;
   stickerName?: string;
   stickerKey?: string;
@@ -252,6 +256,8 @@ export interface GroupMessage {
   attachmentUrl?: string;
   attachmentName?: string;
   attachmentType?: string;
+  /** Blurred until the reader taps it. */
+  isSpoiler?: boolean;
   stickerUrl?: string;
   stickerName?: string;
   stickerKey?: string;
@@ -381,7 +387,13 @@ export interface JaTextStore {
   respondRequest: (requestId: string, accept: boolean) => Promise<void>;
   removeFriend: (friendId: string) => Promise<void>;
 
-  sendMessage: (receiverId: string, body: string, file?: File, replyToId?: string) => Promise<void>;
+  sendMessage: (
+    receiverId: string,
+    body: string,
+    file?: File,
+    replyToId?: string,
+    isSpoiler?: boolean,
+  ) => Promise<void>;
   fetchMessagesWithUser: (otherId: string, options?: FetchMessagesOptions) => Promise<ChatMessage[]>;
   forwardMessage: (messageId: string, receiverId: string) => Promise<void>;
   forwardDmToTarget?: (messageId: string, target: { userId?: string; groupId?: string }) => Promise<void>;
@@ -405,7 +417,13 @@ export interface JaTextStore {
   setActivity: (status: StatusPreference, customStatus: string) => Promise<void>;
   setTyping: (receiverId: string, isTyping: boolean) => Promise<void>;
   setCommunityModerators: (userIds: string[]) => Promise<void>;
-  sendCommunityText: (body: string, file?: File, replyToId?: string, forwardedFromId?: string) => Promise<void>;
+  sendCommunityText: (
+    body: string,
+    file?: File,
+    replyToId?: string,
+    forwardedFromId?: string,
+    isSpoiler?: boolean,
+  ) => Promise<void>;
   sendCommunitySticker: (sticker: StickerMedia, replyToId?: string) => Promise<void>;
   setCommunityTyping: (isTyping: boolean) => Promise<void>;
   createCommunityPoll: (question: string, options: string[]) => Promise<void>;
@@ -421,7 +439,14 @@ export interface JaTextStore {
   favoriteCommunityStickerFromMessage: (messageId: string) => Promise<void>;
   createGroup: (name: string, memberIds: string[]) => Promise<string>;
   addGroupMembers: (groupId: string, memberIds: string[]) => Promise<void>;
-  sendGroupMessage: (groupId: string, body: string, file?: File, replyToId?: string, forwardedFromId?: string) => Promise<void>;
+  sendGroupMessage: (
+    groupId: string,
+    body: string,
+    file?: File,
+    replyToId?: string,
+    forwardedFromId?: string,
+    isSpoiler?: boolean,
+  ) => Promise<void>;
   fetchGroupMessages: (groupId: string, options?: FetchMessagesOptions) => Promise<GroupMessage[]>;
   fetchGroupDetails: (groupId: string) => Promise<GroupDetails | null>;
   sendGroupSticker: (groupId: string, sticker: StickerMedia, replyToId?: string) => Promise<void>;

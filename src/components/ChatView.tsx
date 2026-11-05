@@ -67,6 +67,7 @@ import { ChatVideoPlayer } from "./ChatVideoPlayer";
 import { CallMessageCard } from "./CallMessageCard";
 import { ContextMenu } from "./ContextMenu";
 import { ForwardedMessageCard } from "./ForwardedMessageCard";
+import { SpoilerFrame, SpoilerToggle } from "./SpoilerFrame";
 import { MessageLinkEmbeds } from "./LinkEmbeds";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { ReactionEmojiPicker } from "./ReactionEmojiPicker";
@@ -761,31 +762,35 @@ const ChatHistory = memo(function ChatHistory({
                             }
                           />
                         ) : isImage ? (
-                          <button
-                            type="button"
-                            className="image-message-button"
-                            onClick={() => onOpenImage(message.attachmentUrl!)}
-                            aria-label="Open image viewer"
-                          >
-                            <ChatAttachmentImage
-                              className="msg-image"
-                              src={message.attachmentUrl}
-                              alt={message.attachmentName ?? "attachment"}
-                              maxWidth={420}
-                              maxHeight={420}
-                              onLoad={() => {
-                                if (initialScrollAllowedRef.current) {
-                                  const container = messagesRef.current;
-                                  if (container) container.scrollTop = container.scrollHeight;
-                                }
-                              }}
-                            />
-                          </button>
+                          <SpoilerFrame active={Boolean(message.isSpoiler) && !mine}>
+                            <button
+                              type="button"
+                              className="image-message-button"
+                              onClick={() => onOpenImage(message.attachmentUrl!)}
+                              aria-label="Open image viewer"
+                            >
+                              <ChatAttachmentImage
+                                className="msg-image"
+                                src={message.attachmentUrl}
+                                alt={message.attachmentName ?? "attachment"}
+                                maxWidth={420}
+                                maxHeight={420}
+                                onLoad={() => {
+                                  if (initialScrollAllowedRef.current) {
+                                    const container = messagesRef.current;
+                                    if (container) container.scrollTop = container.scrollHeight;
+                                  }
+                                }}
+                              />
+                            </button>
+                          </SpoilerFrame>
                         ) : isVideo ? (
-                          <ChatVideoPlayer
-                            src={message.attachmentUrl}
-                            name={message.attachmentName}
-                          />
+                          <SpoilerFrame active={Boolean(message.isSpoiler) && !mine}>
+                            <ChatVideoPlayer
+                              src={message.attachmentUrl}
+                              name={message.attachmentName}
+                            />
+                          </SpoilerFrame>
                         ) : (
                           <a
                             className="file-chip"
@@ -1275,6 +1280,9 @@ export function ChatView({
   } = store;
   const [composerSeed, setComposerSeed] = useState({ nonce: 0, text: "" });
   const [files, setFiles] = useState<File[]>([]);
+  // Which staged files should arrive blurred. Keyed by the File itself, so
+  // removing a file from the tray never shifts another file's choice.
+  const [spoilerFiles, setSpoilerFiles] = useState<Set<File>>(new Set());
   const [viewOnceActive, setViewOnceActive] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1862,13 +1870,19 @@ export function ChatView({
         publishTyping(false);
       }
 
-      const batches: Array<{ body: string; file: File | null; replyId?: string }> =
+      const batches: Array<{
+        body: string;
+        file: File | null;
+        replyId?: string;
+        spoiler: boolean;
+      }> =
         queuedFiles.length === 0
-          ? [{ body: sentBody, file: null, replyId: sentReply?.id }]
+          ? [{ body: sentBody, file: null, replyId: sentReply?.id, spoiler: false }]
           : queuedFiles.map((f, idx) => ({
               body: idx === 0 ? sentBody : "",
               file: f,
               replyId: idx === 0 ? sentReply?.id : undefined,
+              spoiler: spoilerFiles.has(f),
             }));
 
       const createdPendingIds: string[] = [];
@@ -1890,6 +1904,7 @@ export function ChatView({
             attachmentUrl,
             attachmentName: item.file?.name,
             attachmentType: item.file?.type,
+            isSpoiler: item.spoiler,
             createdAt: sentAt,
             deliveryStatus: "delivered",
           },
@@ -1901,10 +1916,17 @@ export function ChatView({
         for (let i = 0; i < batches.length; i++) {
           const item = batches[i];
           const pendingId = createdPendingIds[i];
-          await sendMessage(friend.id, item.body, item.file ?? undefined, item.replyId);
+          await sendMessage(
+            friend.id,
+            item.body,
+            item.file ?? undefined,
+            item.replyId,
+            item.spoiler,
+          );
           window.setTimeout(() => removePendingMessage(pendingId), 1500);
         }
         if (soundsEnabled) playMessageSound("sent");
+        setSpoilerFiles(new Set());
       } catch (err) {
         for (const pid of createdPendingIds) removePendingMessage(pid);
         if (sentBody) {
@@ -1927,6 +1949,7 @@ export function ChatView({
       scrollToBottom,
       sendMessage,
       soundsEnabled,
+      spoilerFiles,
       viewOnceActive,
     ],
   );
@@ -2507,6 +2530,18 @@ export function ChatView({
             <span className="attach-preview-chip" key={`${item.name}-${item.size}-${idx}`}>
               <PaperclipIcon size={13} />
               <span className="attach-preview-chip-name">{item.name}</span>
+              <SpoilerToggle
+                active={spoilerFiles.has(item)}
+                onToggle={() =>
+                  setSpoilerFiles((current) => {
+                    const next = new Set(current);
+                    if (next.has(item)) next.delete(item);
+                    else next.add(item);
+                    return next;
+                  })
+                }
+                name={item.name}
+              />
               <button
                 type="button"
                 className="attach-preview-chip-remove"
