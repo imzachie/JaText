@@ -91,6 +91,7 @@ import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -1399,6 +1400,9 @@ fun SettingsModalScreen(
 
                             "encryption" -> {
                                 var copiedFp by remember { mutableStateOf(false) }
+                                var showRestoreVault by remember { mutableStateOf(false) }
+                                var restoreSecret by remember { mutableStateOf("") }
+                                var restoreUseRecoveryKey by remember { mutableStateOf(false) }
                                 val activity = context as? Activity
                                 LaunchedEffect(Unit) { vm.refreshSecuritySettings() }
 
@@ -1853,6 +1857,117 @@ fun SettingsModalScreen(
                                                 fontSize = 13.5.sp,
                                                 fontWeight = FontWeight.Bold,
                                             )
+                                        }
+                                    }
+
+                                    // Messages sealed to an older key stay
+                                    // unreadable until that key is back on the
+                                    // device, and until now there was nowhere
+                                    // in the app to bring it back.
+                                    LiquidButton(
+                                        onClick = { showRestoreVault = true },
+                                        backdrop = settingsBackdrop,
+                                        isDark = palette.isDark,
+                                        tint = Color.Unspecified,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(
+                                            text = "Restore old messages",
+                                            color = palette.textPrimary,
+                                            fontSize = 13.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                    if (showRestoreVault) {
+                                        Dialog(onDismissRequest = { showRestoreVault = false }) {
+                                            Column(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(20.dp))
+                                                    .background(palette.surface)
+                                                    .border(1.dp, palette.border, RoundedCornerShape(20.dp))
+                                                    .padding(18.dp),
+                                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                            ) {
+                                                Text(
+                                                    text = "Restore old messages",
+                                                    color = palette.textPrimary,
+                                                    fontSize = 16.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                )
+                                                Text(
+                                                    text = if (restoreUseRecoveryKey) {
+                                                        "Enter the 24 character recovery key you saved when you set up encryption."
+                                                    } else {
+                                                        "Enter your E2EE Vault PIN. Older messages were sealed with keys this device does not have yet."
+                                                    },
+                                                    color = palette.textSecondary,
+                                                    fontSize = 12.5.sp,
+                                                    lineHeight = 17.sp,
+                                                )
+                                                BasicTextField(
+                                                    value = restoreSecret,
+                                                    onValueChange = { restoreSecret = it },
+                                                    singleLine = true,
+                                                    cursorBrush = SolidColor(if (palette.isDark) Color.White else Color(0xFF111318)),
+                                                    textStyle = TextStyle(
+                                                        color = palette.textPrimary,
+                                                        fontSize = 15.sp,
+                                                        fontFamily = SfProTextFontFamily,
+                                                    ),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .background(palette.bgSecondary)
+                                                        .border(1.dp, palette.border, RoundedCornerShape(12.dp))
+                                                        .padding(horizontal = 12.dp, vertical = 12.dp),
+                                                )
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Checkbox(
+                                                        checked = restoreUseRecoveryKey,
+                                                        onCheckedChange = { restoreUseRecoveryKey = it },
+                                                    )
+                                                    Text(
+                                                        text = "Use recovery key instead",
+                                                        color = palette.textSecondary,
+                                                        fontSize = 12.5.sp,
+                                                    )
+                                                }
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.End,
+                                                ) {
+                                                    Text(
+                                                        text = "Cancel",
+                                                        color = palette.textSecondary,
+                                                        fontSize = 13.5.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier
+                                                            .clickable { showRestoreVault = false }
+                                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                    )
+                                                    Text(
+                                                        text = if (state.isSyncingKeysAndMessages) "Restoring\u2026" else "Restore",
+                                                        color = palette.accent,
+                                                        fontSize = 13.5.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier
+                                                            .clickable(enabled = !state.isSyncingKeysAndMessages) {
+                                                                vm.restoreE2EEVault(
+                                                                    secretInput = restoreSecret,
+                                                                    useRecoveryKey = restoreUseRecoveryKey,
+                                                                    onSuccess = {
+                                                                        showRestoreVault = false
+                                                                        restoreSecret = ""
+                                                                    },
+                                                                )
+                                                            }
+                                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
