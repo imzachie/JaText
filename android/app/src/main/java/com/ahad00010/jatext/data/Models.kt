@@ -1098,6 +1098,8 @@ data class StatusSegmentItem(
     val audioUrl: String = "",
     val audioTitle: String = "",
     val audioDurationMs: Int = 0,
+    /** Where in the track the clip starts, for songs longer than 30 seconds. */
+    val audioStartMs: Int = 0,
     val mediaSource: String = "camera_roll",
     val privacyType: String = "MY_CONTACTS",
     val groupId: String? = null,
