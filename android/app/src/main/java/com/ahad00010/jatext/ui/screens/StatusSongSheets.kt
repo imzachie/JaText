@@ -477,17 +477,17 @@ fun StatusSongTrimSheet(
                 val width = widthFraction.coerceIn(0f, 1f - before)
                 val after = (1f - before - width).coerceAtLeast(0f)
                 if (before > 0f) {
-                    Spacer(Modifier.fillMaxHeight().weight(before))
+                    Spacer(Modifier.weight(before))
                 }
                 Box(
                     modifier = Modifier
-                        .fillMaxHeight()
                         .weight(width.coerceAtLeast(0.001f))
+                        .height(8.dp)
                         .clip(RoundedCornerShape(999.dp))
                         .background(Color(0xFF9B6CFF)),
                 )
                 if (after > 0f) {
-                    Spacer(Modifier.fillMaxHeight().weight(after))
+                    Spacer(Modifier.weight(after))
                 }
             }
 

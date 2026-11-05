@@ -3254,6 +3254,9 @@ class JaTextSessionViewModel(app: Application) :
     fun forwardMessageWithContext(
         plainBody: String,
         contextCard: ForwardedMessageContext,
+        attachmentUrl: String? = null,
+        attachmentName: String? = null,
+        attachmentType: String? = null,
         targetFriendId: String? = null,
         targetGroupId: String? = null,
         targetCommunity: Boolean = false,
@@ -3270,11 +3273,18 @@ class JaTextSessionViewModel(app: Application) :
                         val wire = JaTextCryptoEngine.encryptDmMessage(appCtx, me.id, targetFriendId, payload, token) ?: encodedBody
                         TursoApiClient.rpcRaw(
                             "sendMessage",
-                            mapOf(
-                                "receiverId" to targetFriendId,
-                                "body" to wire,
-                                "forwardedFromId" to contextCard.originalSenderId,
-                            ),
+                            buildMap {
+                                put("receiverId", targetFriendId)
+                                put("body", wire)
+                                put("forwardedFromId", contextCard.originalSenderId)
+                                // The file is already stored, forward the same
+                                // bytes rather than only the text around them.
+                                if (!attachmentUrl.isNullOrBlank()) {
+                                    put("attachmentUrl", attachmentUrl)
+                                    put("attachmentName", attachmentName ?: "forwarded")
+                                    put("attachmentType", attachmentType ?: "application/octet-stream")
+                                }
+                            },
                             token
                         )
                     }
@@ -3289,24 +3299,34 @@ class JaTextSessionViewModel(app: Application) :
                         val wire = JaTextCryptoEngine.encryptGroupMessage(appCtx, me.id, targetGroupId, memberIds, payload, token)
                         TursoApiClient.rpcRaw(
                             "sendGroupMessage",
-                            mapOf(
-                                "groupId" to targetGroupId,
-                                "body" to wire,
-                                "forwardedFromId" to contextCard.originalSenderId,
-                                "forwardedFromName" to contextCard.originalSenderName,
-                            ),
+                            buildMap {
+                                put("groupId", targetGroupId)
+                                put("body", wire)
+                                put("forwardedFromId", contextCard.originalSenderId)
+                                put("forwardedFromName", contextCard.originalSenderName)
+                                if (!attachmentUrl.isNullOrBlank()) {
+                                    put("attachmentUrl", attachmentUrl)
+                                    put("attachmentName", attachmentName ?: "forwarded")
+                                    put("attachmentType", attachmentType ?: "application/octet-stream")
+                                }
+                            },
                             token
                         )
                     }
                     targetCommunity -> {
                         TursoApiClient.rpcRaw(
                             "sendCommunityMessage",
-                            mapOf(
-                                "type" to "text",
-                                "body" to encodedBody,
-                                "forwardedFromId" to contextCard.originalSenderId,
-                                "forwardedFromName" to contextCard.originalSenderName,
-                            ),
+                            buildMap {
+                                put("type", "text")
+                                put("body", encodedBody)
+                                put("forwardedFromId", contextCard.originalSenderId)
+                                put("forwardedFromName", contextCard.originalSenderName)
+                                if (!attachmentUrl.isNullOrBlank()) {
+                                    put("attachmentUrl", attachmentUrl)
+                                    put("attachmentName", attachmentName ?: "forwarded")
+                                    put("attachmentType", attachmentType ?: "application/octet-stream")
+                                }
+                            },
                             token
                         )
                     }
