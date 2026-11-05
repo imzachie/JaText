@@ -5835,6 +5835,8 @@ class JaTextSessionViewModel(app: Application) :
         builtinAudioId: String,
         builtinAudioTitle: String,
         builtinAudioDurationMs: Int,
+        /** Where the clip starts inside the track, for songs over 30 seconds. */
+        audioStartMs: Int = 0,
         caption: String,
         bgColor: String,
         privacyType: String,
@@ -5896,16 +5898,15 @@ class JaTextSessionViewModel(app: Application) :
                         resolvedMediaType = "audio"
                     }
                 } else if (builtinAudioId.isNotBlank() && builtinAudioId != "none") {
-                    // Real audio file from the music library, not a synthesized tone.
-                    val trackUrl = if (builtinAudioId == "melly_mike") {
-                        MELLY_MIKE_URL
-                    } else {
-                        ""
-                    }
-                    if (trackUrl.isNotBlank()) {
-                        uploadedAudioUrl = trackUrl
-                        resolvedAudioTitle = builtinAudioTitle
-                        resolvedAudioDur = builtinAudioDurationMs.coerceIn(0, 30_000)
+                    // A song from the Status music library. The whole track is
+                    // stored, only the 30 second window the poster chose plays.
+                    val song = com.ahad00010.jatext.data.StatusSongs.find(builtinAudioId)
+                    if (song != null) {
+                        uploadedAudioUrl = song.audioUrl
+                        resolvedAudioTitle = "${song.title} \u00b7 ${song.artist}".take(80)
+                        resolvedAudioDur = com.ahad00010.jatext.data.StatusSongs
+                            .playWindow(audioStartMs, song.durationMs)
+                            .second
                     }
                 }
 
@@ -5919,6 +5920,7 @@ class JaTextSessionViewModel(app: Application) :
                         "audioUrl" to uploadedAudioUrl,
                         "audioTitle" to resolvedAudioTitle,
                         "audioDurationMs" to resolvedAudioDur,
+                        "audioStartMs" to audioStartMs.coerceAtLeast(0),
                         "privacyType" to privacyType,
                         "excludedUserIds" to if (privacyType == "CONTACTS_EXCEPT") excludedIds else emptyList<String>(),
                         "includedUserIds" to if (privacyType == "ONLY_SHARE_WITH") includedIds else emptyList<String>(),
@@ -5940,6 +5942,7 @@ class JaTextSessionViewModel(app: Application) :
                     audioUrl = uploadedAudioUrl,
                     audioTitle = resolvedAudioTitle,
                     audioDurationMs = resolvedAudioDur,
+                    audioStartMs = audioStartMs.coerceAtLeast(0),
                     privacyType = privacyType,
                     groupId = if (privacyType == "GROUP_EXCLUSIVE") groupId else null,
                     mentionedUserIds = mentionedIds,

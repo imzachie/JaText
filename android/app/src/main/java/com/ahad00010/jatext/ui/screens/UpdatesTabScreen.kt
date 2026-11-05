@@ -69,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -86,6 +87,8 @@ import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.ahad00010.jatext.data.ContactStatusStack
 import com.ahad00010.jatext.data.StatusPrivacyDefaultState
+import com.ahad00010.jatext.data.StatusSong
+import com.ahad00010.jatext.data.StatusSongs
 import com.ahad00010.jatext.data.TursoApiClient
 import com.ahad00010.jatext.state.JaTextSessionViewModel
 import com.ahad00010.jatext.state.SessionUiState
@@ -109,22 +112,6 @@ private val STATUS_BG_COLORS = listOf(
     "#111827",
     "#047857",
     "#9333ea",
-)
-
-private data class BuiltinStatusTrack(
-    val id: String,
-    val title: String,
-    val durationMs: Int,
-)
-
-/**
- * The Status music library. The placeholder tones are gone: this is a real
- * track served by the same origin as the API, and uploading your own clip is
- * always available as the other option.
- */
-private val BUILTIN_STATUS_TRACKS = listOf(
-    BuiltinStatusTrack("none", "No Music", 0),
-    BuiltinStatusTrack("melly_mike", "Melly Mike - Young Black & Rich", 24_960),
 )
 
 @Composable
@@ -844,9 +831,17 @@ fun FullScreenStoryViewerOverlay(
         if (audioUrl.isNotBlank()) {
             runCatching {
                 val resolved = TursoApiClient.resolveAbsoluteMediaUrl(audioUrl)
+                // Songs in the library are whole tracks, so the poster picked
+                // the part they wanted. Seek there before playing.
+                val clipStartMs = (currentSeg?.audioStartMs ?: 0).coerceAtLeast(0)
                 player = MediaPlayer().apply {
                     setDataSource(resolved)
-                    setOnPreparedListener { mp -> runCatching { mp.start() } }
+                    setOnPreparedListener { mp ->
+                        runCatching {
+                            if (clipStartMs > 0) mp.seekTo(clipStartMs)
+                            mp.start()
+                        }
+                    }
                     prepareAsync()
                 }
             }
@@ -1337,6 +1332,21 @@ private fun StoryProgressBarCell(
     }
 }
 
+/**
+ * What a status will play. Either a song from the library or an uploaded clip,
+ * each with the point inside it the 30 second window starts from.
+ */
+private sealed class StatusAudioPick {
+    object None : StatusAudioPick()
+    data class Song(val songId: String, val startMs: Int, val lengthMs: Int) : StatusAudioPick()
+    data class Upload(
+        val uri: Uri,
+        val durationMs: Int,
+        val startMs: Int,
+        val lengthMs: Int,
+    ) : StatusAudioPick()
+}
+
 /* ==========================================================================
    Status Composer Dialog (Photo / Camera Roll with Live Image Preview + Text + <=30s Audio + Privacy)
    ========================================================================== */
@@ -1350,12 +1360,15 @@ private fun StatusComposerDialog(
     onDismiss: () -> Unit,
 ) {
     val palette = LocalJaTextPalette.current
+    val context = LocalContext.current
     var textOnlyMode by remember { mutableStateOf(initialTextMode) }
     var caption by remember { mutableStateOf("") }
     var bgHex by remember { mutableStateOf(STATUS_BG_COLORS.first()) }
     var pickedImageUri by remember { mutableStateOf<Uri?>(null) }
-    var pickedAudioUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedTrack by remember { mutableStateOf(BUILTIN_STATUS_TRACKS.first()) }
+    var audioPick by remember { mutableStateOf<StatusAudioPick>(StatusAudioPick.None) }
+    var songSheetOpen by remember { mutableStateOf(false) }
+    var pendingSong by remember { mutableStateOf<StatusSong?>(null) }
+    var pendingUpload by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
 
     var privacyType by remember { mutableStateOf(privacyDefault.privacyType.ifBlank { "MY_CONTACTS" }) }
     val excludedIds = remember { mutableStateListOf<String>().apply { addAll(privacyDefault.excludedIds) } }
@@ -1375,8 +1388,18 @@ private fun StatusComposerDialog(
     }
     val audioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            pickedAudioUri = uri
-            selectedTrack = BUILTIN_STATUS_TRACKS.first()
+            val durationMs = runCatching {
+                val retriever = android.media.MediaMetadataRetriever()
+                retriever.setDataSource(context, uri)
+                val raw = retriever.extractMetadata(
+                    android.media.MediaMetadataRetriever.METADATA_KEY_DURATION,
+                )?.toLongOrNull() ?: 0L
+                retriever.release()
+                raw.toInt()
+            }.getOrDefault(0)
+            // Clips longer than 30 seconds are allowed, the trimmer picks the part.
+            pendingUpload = uri to durationMs.coerceAtLeast(1000)
+            pendingSong = null
             errorMsg = null
         }
     }
@@ -1616,22 +1639,70 @@ private fun StatusComposerDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                 ) {
-                    BUILTIN_STATUS_TRACKS.forEach { tr ->
-                        val active = pickedAudioUri == null && selectedTrack.id == tr.id
-                        SmallChoiceChip(
-                            label = tr.title,
-                            selected = active,
-                            onClick = {
-                                pickedAudioUri = null
-                                selectedTrack = tr
-                            },
-                        )
-                    }
                     SmallChoiceChip(
-                        label = if (pickedAudioUri != null) "Uploaded clip" else "Upload Audio",
-                        selected = pickedAudioUri != null,
+                        label = "No Sound",
+                        selected = audioPick is StatusAudioPick.None,
+                        onClick = { audioPick = StatusAudioPick.None },
+                    )
+                    SmallChoiceChip(
+                        label = "Upload your own!",
+                        selected = audioPick is StatusAudioPick.Upload,
                         onClick = { audioLauncher.launch("audio/*") },
                     )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x149B6CFF))
+                        .border(1.dp, Color(0x809B6CFF), RoundedCornerShape(12.dp))
+                        .clickable { songSheetOpen = true }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            painter = androidx.compose.ui.res.painterResource(
+                                id = com.ahad00010.jatext.R.drawable.ic_jt_music_note,
+                            ),
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Discover songs...",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+
+                when (val pick = audioPick) {
+                    is StatusAudioPick.Song -> {
+                        val song = StatusSongs.find(pick.songId)
+                        if (song != null) {
+                            StatusPickedAudioCard(
+                                coverUrl = song.coverUrl,
+                                title = song.title,
+                                subtitle = "${song.artist} \u00b7 starts at ${StatusSongs.formatClock(pick.startMs)}",
+                                onChange = { pendingSong = song },
+                            )
+                        }
+                    }
+                    is StatusAudioPick.Upload -> {
+                        StatusPickedAudioCard(
+                            coverUrl = null,
+                            title = "Your clip",
+                            subtitle = "Starts at ${StatusSongs.formatClock(pick.startMs)}",
+                            onChange = { pendingUpload = pick.uri to pick.durationMs },
+                        )
+                    }
+                    else -> Unit
                 }
 
                 /* Optional @mentions */
@@ -1758,7 +1829,7 @@ private fun StatusComposerDialog(
                                     errorMsg = "Choose a photo from Camera Roll or switch to Text Status."
                                     return@clickable
                                 }
-                                if (textOnlyMode && caption.isBlank() && pickedAudioUri == null && selectedTrack.id == "none") {
+                                if (textOnlyMode && caption.isBlank() && audioPick is StatusAudioPick.None) {
                                     errorMsg = "Write a status message first."
                                     return@clickable
                                 }
@@ -1768,12 +1839,20 @@ private fun StatusComposerDialog(
                                 }
                                 submitting = true
                                 errorMsg = null
+                                val pickedSong = (audioPick as? StatusAudioPick.Song)
+                                    ?.let { StatusSongs.find(it.songId) }
+                                val clipStart = when (val pick = audioPick) {
+                                    is StatusAudioPick.Song -> pick.startMs
+                                    is StatusAudioPick.Upload -> pick.startMs
+                                    else -> 0
+                                }
                                 vm.publishStatusPost(
                                     imageUri = effectiveImage,
-                                    audioUri = pickedAudioUri,
-                                    builtinAudioId = selectedTrack.id,
-                                    builtinAudioTitle = selectedTrack.title,
-                                    builtinAudioDurationMs = selectedTrack.durationMs,
+                                    audioUri = (audioPick as? StatusAudioPick.Upload)?.uri,
+                                    builtinAudioId = pickedSong?.id ?: "none",
+                                    builtinAudioTitle = pickedSong?.title ?: "",
+                                    builtinAudioDurationMs = pickedSong?.durationMs ?: 0,
+                                    audioStartMs = clipStart,
                                     caption = caption,
                                     bgColor = bgHex,
                                     privacyType = privacyType,
@@ -1803,6 +1882,51 @@ private fun StatusComposerDialog(
             }
         }
     }
+
+    // Outside the Dialog on purpose, otherwise the sheets would be boxed into
+    // its window instead of rising from the bottom of the screen.
+    StatusSongPickerSheet(
+        open = songSheetOpen,
+        onClose = { songSheetOpen = false },
+        onPick = { song ->
+            songSheetOpen = false
+            pendingSong = song
+        },
+    )
+
+    StatusSongTrimSheet(
+        open = pendingSong != null,
+        title = pendingSong?.title ?: "",
+        artist = pendingSong?.artist ?: "",
+        coverUrl = pendingSong?.coverUrl,
+        audioUrl = pendingSong?.audioUrl ?: "",
+        durationMs = pendingSong?.durationMs ?: 0,
+        initialStartMs = (audioPick as? StatusAudioPick.Song)?.startMs
+            ?: pendingSong?.previewStartMs
+            ?: 0,
+        onCancel = { pendingSong = null },
+        onConfirm = { startMs, lengthMs ->
+            pendingSong?.let { audioPick = StatusAudioPick.Song(it.id, startMs, lengthMs) }
+            pendingSong = null
+        },
+    )
+
+    StatusSongTrimSheet(
+        open = pendingUpload != null,
+        title = "Your clip",
+        artist = "Uploaded audio",
+        coverUrl = null,
+        audioUrl = pendingUpload?.first?.toString() ?: "",
+        durationMs = pendingUpload?.second ?: 0,
+        initialStartMs = (audioPick as? StatusAudioPick.Upload)?.startMs ?: 0,
+        onCancel = { pendingUpload = null },
+        onConfirm = { startMs, lengthMs ->
+            pendingUpload?.let {
+                audioPick = StatusAudioPick.Upload(it.first, it.second, startMs, lengthMs)
+            }
+            pendingUpload = null
+        },
+    )
 }
 
 @Composable
