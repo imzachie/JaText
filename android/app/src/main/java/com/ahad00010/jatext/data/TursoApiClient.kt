@@ -562,20 +562,36 @@ object TursoApiClient {
     ): File = withContext(Dispatchers.IO) {
         val url = resolveAbsoluteMediaUrl(downloadUrl)
         destFile.parentFile?.mkdirs()
+
+        fun openFrom(offset: Long): okhttp3.Response {
+            val builder = Request.Builder().url(url).get()
+            if (offset > 0L) builder.header("Range", "bytes=$offset-")
+            return httpClient.newCall(builder.build()).execute()
+        }
+
         // Whatever is already there is the part that downloaded before the
         // screen locked, the network dropped or the app was pushed out of
         // memory. Ask for the rest of it rather than starting again.
-        val alreadyHave = if (destFile.exists()) destFile.length() else 0L
-        val req = Request.Builder().url(url).get()
-        if (alreadyHave > 0L) req.header("Range", "bytes=$alreadyHave-")
-        httpClient.newCall(req.build()).execute().use { resp ->
+        var alreadyHave = if (destFile.exists()) destFile.length() else 0L
+        var resp = openFrom(alreadyHave)
+        // 416 means the part on disk runs past the end of what the server is
+        // serving, which happens when a newer APK was published while an older
+        // download was half finished. The stale part is worthless, so drop it
+        // and fetch the whole thing instead of failing the update.
+        if (resp.code == 416 && alreadyHave > 0L) {
+            resp.close()
+            destFile.delete()
+            alreadyHave = 0L
+            resp = openFrom(0L)
+        }
+        resp.use { response ->
             // 206 means the server is sending the remainder, anything else is
             // a full body and the partial file has to be thrown away.
-            val resumed = resp.code == 206 && alreadyHave > 0L
-            if (!resumed && !resp.isSuccessful) {
-                throw TursoApiException("APK download failed (${resp.code})", resp.code)
+            val resumed = response.code == 206 && alreadyHave > 0L
+            if (!resumed && !response.isSuccessful) {
+                throw TursoApiException("APK download failed (${response.code})", response.code)
             }
-            val body = resp.body ?: throw TursoApiException("Empty APK response", 500)
+            val body = response.body ?: throw TursoApiException("Empty APK response", 500)
             val remaining = body.contentLength()
             val total = if (resumed) alreadyHave + remaining else remaining
             body.byteStream().use { input ->
@@ -593,6 +609,19 @@ object TursoApiClient {
                     }
                     output.flush()
                 }
+            }
+            // Guard against being handed a short or mangled file. An APK is a
+            // zip, so if it does not start with PK it is not something we can
+            // install, and keeping it would fail every later attempt too.
+            if (total > 0L && destFile.length() != total) {
+                destFile.delete()
+                throw TursoApiException("APK download was cut short, trying again", 500)
+            }
+            val head = ByteArray(2)
+            destFile.inputStream().use { it.read(head) }
+            if (head[0] != 0x50.toByte() || head[1] != 0x4B.toByte()) {
+                destFile.delete()
+                throw TursoApiException("Downloaded APK is not a valid package", 500)
             }
         }
         onProgress(1f)
