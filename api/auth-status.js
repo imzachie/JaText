@@ -13,10 +13,15 @@ export default async function handler(req, res) {
   }
 
   const cfg = getTursoConfig();
-  const googleConfigured = Boolean(
-    (process.env.GOOGLE_CLIENT_ID || process.env.AUTH_GOOGLE_ID) &&
-      (process.env.GOOGLE_CLIENT_SECRET || process.env.AUTH_GOOGLE_SECRET),
-  );
+  // Google sign-in is switched off (see api/oauth-google.js), so the status page has
+  // to say false even while the old credentials are still sitting in the secret
+  // store. Otherwise a reader sees "configured" and hunts for a bug that is not there.
+  const googleConfigured =
+    process.env.JATEXT_GOOGLE_DISABLED !== "0" &&
+    Boolean(
+      (process.env.GOOGLE_CLIENT_ID || process.env.AUTH_GOOGLE_ID) &&
+        (process.env.GOOGLE_CLIENT_SECRET || process.env.AUTH_GOOGLE_SECRET),
+    );
   const fcm = getFcmStatus();
   const fcmConfigured = fcm.configured;
   const klipyConfigured = Boolean(process.env.KLIPY_API_KEY);

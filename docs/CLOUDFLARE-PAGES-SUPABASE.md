@@ -148,6 +148,21 @@ ever removed, new uploads go back to the database, and a file already in the buc
 answers with a 503 naming that secret instead of a blank thumbnail clients would cache
 forever.
 
+## Sign in with Google: removed
+
+The Google button is gone from the iOS PWA login page and from the Android login
+screen, and `api/oauth-google.js` answers before doing anything else: `?action=config`
+reports `configured: false` (which is what makes an installed app show a message
+instead of opening a browser tab that can never finish), `POST` returns 410, and
+`?action=start` 302s back into the app with a readable `authError`. The flow behind that
+check is untouched, so setting the edge secret `JATEXT_GOOGLE_DISABLED` to `0` brings it
+straight back, keys and all. `api/auth-status.js` keeps `googleConfigured` false while the
+switch is on, so the status page cannot send a reader looking for a bug that is not there.
+
+Accounts already created through Google keep working: they sign in with their password,
+and `google_sub` on the row is left alone. Nobody was ever signed in only through Google
+on this server (`userCount: 0` when it was switched off), so there was nothing to migrate.
+
 ## Why there is no domain
 
 `jatextapp.pages.dev` is the public origin on purpose. A `*.pages.dev` hostname is
