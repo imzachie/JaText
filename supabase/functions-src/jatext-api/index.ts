@@ -82,6 +82,7 @@ const ROUTES: Record<string, () => Promise<{ default: (req: unknown, res: unknow
   "/api/link-preview": () => import("../../../api/link-preview.js"),
   "/api/push-test": () => import("../../../api/push-test.js"),
   "/api/klipy-test": () => import("../../../api/klipy-test.js"),
+  "/api/email-test": () => import("../../../api/email-test.js"),
   "/api/ios-404": () => import("../../../api/ios-404.js"),
 };
 
