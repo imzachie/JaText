@@ -268,11 +268,17 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "GET" && action === "config") {
+    // redirectUri is the exact string that has to appear under Authorized redirect
+    // URIs in the Google console. Handing it back here means a phone can long-press
+    // and copy it instead of typing a path from memory, which is where this setup
+    // used to fail: everything else works and Google refuses the callback.
+    const callbackOrigin = resolveCallbackOrigin(req);
     return res.status(200).json({
       ok: true,
       configured: Boolean(clientId),
       clientId,
       androidClientConfigured,
+      redirectUri: `${callbackOrigin}/api/oauth-google`,
     });
   }
 
