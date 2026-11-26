@@ -84,6 +84,15 @@ message carries the Postgres error; the usual cause is the network path to port
 5432, in which case switch `DATABASE_URL` to the session pooler host
 `aws-0-ap-southeast-2.pool.supabase.com:5432` and username `jatext_api`.
 
+## The APK download
+
+A signed release APK is about 50 MB and **Pages refuses any single asset over
+25 MB**, so the binary is not part of the site. `scripts/build.mjs` copies only
+`release-cdn/apk-version.json` into `dist/`, and the `downloadUrl` inside it points
+at the `apk-latest` GitHub Release that the same workflow publishes.
+`/downloads/JaText-release.apk` is a 302 to that release, kept so install links
+printed before the move still work.
+
 ## Attachments
 
 Uploads are stored in Postgres (`media_blobs`, `media_chunks`), which counts against

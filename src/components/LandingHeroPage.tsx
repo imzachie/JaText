@@ -16,15 +16,29 @@ interface ApkVersionManifest {
   versionName?: string;
   versionCode?: number;
   publishedAt?: string;
+  /** Where the signed APK is published. Absent on very old manifests. */
+  downloadUrl?: string;
 }
 
 /** Where CI publishes the release notes for the newest signed APK. */
 const GITHUB_APK_MANIFEST_URL =
   "https://raw.githubusercontent.com/imzachie/JaText/main/release-cdn/apk-version.json";
 
+/**
+ * Where the APK binary itself lives.
+ *
+ * It used to be copied beside the website, but Cloudflare Pages refuses any asset
+ * over 25 MB and a signed release APK is about 50 MB, so the download now points at
+ * the GitHub Release the same workflow publishes. The old address keeps working
+ * through a redirect in public/_redirects for anyone who bookmarked it.
+ */
+const GITHUB_APK_DOWNLOAD_URL =
+  "https://github.com/imzachie/JaText/releases/download/apk-latest/JaText-release.apk";
+
 const FALLBACK_APK_VERSION: ApkVersionManifest = {
-  versionName: "4.5.1",
-  versionCode: 85,
+  versionName: "4.5.2",
+  versionCode: 86,
+  downloadUrl: GITHUB_APK_DOWNLOAD_URL,
 };
 
 function usePublishedApkVersion(): ApkVersionManifest {
@@ -54,6 +68,7 @@ function usePublishedApkVersion(): ApkVersionManifest {
             versionName: json.versionName,
             versionCode: json.versionCode,
             publishedAt: json.publishedAt,
+            downloadUrl: json.downloadUrl || GITHUB_APK_DOWNLOAD_URL,
           });
           return;
         } catch {
@@ -204,10 +219,20 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v4.5.2",
+    date: "November 26, 2026",
+    headline: "The Server Moved Into the Database",
+    latest: true,
+    bullets: [
+      "There is no separate API host any more. The backend runs inside Supabase next to the database it talks to, so a push to GitHub is the entire deployment: no server, no tunnel, nothing that can be switched off.",
+      "The APK is downloaded from the release page instead of the website, because static hosting refuses files larger than 25 MB. Old links to /downloads/JaText-release.apk still work.",
+      "Signing in, sending a message and receiving a push all use the same accounts and the same encryption as before. Nothing you had set up needed redoing.",
+    ],
+  },
+  {
     version: "v4.5.1",
     date: "November 26, 2026",
     headline: "No Laptop Needed, and the App Can Still Update Itself",
-    latest: true,
     bullets: [
       "The site can now be hosted on a static host with Supabase for the database. The public address stays the same, so nothing in the app has to be reconfigured.",
       "The font suite the Android build downloads from a separate repository is now part of this repository. When that repository became unreachable, every build failed over a font; it cannot any more.",
@@ -606,6 +631,7 @@ export function LandingHeroPage() {
   const chatsHref = isIosVisitor ? "/ios/chats" : "/chats";
   const apkVersion = usePublishedApkVersion();
   const apkVersionLabel = `v${apkVersion.versionName} (Build ${apkVersion.versionCode})`;
+  const apkDownloadUrl = apkVersion.downloadUrl || GITHUB_APK_DOWNLOAD_URL;
   const apkPublishedLabel = formatPublishedDate(apkVersion.publishedAt);
 
   useEffect(() => {
@@ -678,7 +704,7 @@ export function LandingHeroPage() {
                 Open Web App (/ios/chats)
               </a>
             ) : (
-              <a href="/downloads/JaText-release.apk">Android APK</a>
+              <a href={apkDownloadUrl}>Android APK</a>
             )}
           </div>
 
@@ -761,7 +787,7 @@ export function LandingHeroPage() {
                     </a>
                   ) : (
                     <a
-                      href="/downloads/JaText-release.apk"
+                      href={apkDownloadUrl}
                       className="jt-btn-secondary jt-btn-lg"
                     >
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -1215,7 +1241,7 @@ export function LandingHeroPage() {
                 </a>
               ) : (
                 <a
-                  href="/downloads/JaText-release.apk"
+                  href={apkDownloadUrl}
                   className="jt-btn-secondary jt-btn-lg"
                 >
                   Get Android APK v{apkVersion.versionName}
@@ -1241,7 +1267,7 @@ export function LandingHeroPage() {
             <a href="#features">Features</a>
             <a href="#security">Security</a>
             <a href="#updates">Update Logs</a>
-            {!isIosVisitor && <a href="/downloads/JaText-release.apk">Download APK</a>}
+            {!isIosVisitor && <a href={apkDownloadUrl}>Download APK</a>}
           </div>
         </div>
       </footer>

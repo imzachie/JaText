@@ -169,17 +169,20 @@ jobs:
             git fetch origin main
             git checkout -B main origin/main
             mkdir -p release-cdn
-            cp /tmp/JaText-release.apk release-cdn/JaText-release.apk
+            # The binary stays out of the repository: Pages refuses assets over
+            # 25 MB, so serving it from the site failed the whole deployment. The
+            # GitHub Release above is the download, and the manifest beside the
+            # site only has to say where it is.
             PUBLISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
             jq -n \
               --arg vn "${VERSION_NAME}" \
               --argjson vc "${VERSION_CODE}" \
-              --arg url "https://jatext.us.ci/downloads/JaText-release.apk" \
+              --arg url "https://github.com/imzachie/JaText/releases/download/apk-latest/JaText-release.apk" \
               --arg sha "${GITHUB_SHA}" \
               --arg at "${PUBLISHED_AT}" \
               '{versionName: $vn, versionCode: $vc, downloadUrl: $url, commitSha: $sha, publishedAt: $at}' \
               > release-cdn/apk-version.json
-            git add -f release-cdn/apk-version.json release-cdn/JaText-release.apk
+            git add -f release-cdn/apk-version.json
             if ! git diff --cached --quiet; then
               git commit -m "Publish signed Release APK v${VERSION_NAME} (build ${VERSION_CODE}) to public CDN"
               git push origin HEAD:main || true
