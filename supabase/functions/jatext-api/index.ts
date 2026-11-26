@@ -539,43 +539,374 @@ var init_runtimeCompat = __esm({
   }
 });
 
+// server/smtpClient.js
+import net from "node:net";
+import tls from "node:tls";
+function b64(value) {
+  return Buffer.from(String(value), "utf8").toString("base64");
+}
+function encodeHeaderValue(value) {
+  const text = String(value || "");
+  if (/^[\x20-\x7e]*$/.test(text)) return text;
+  const encoded = Buffer.from(text, "utf8").toString("base64");
+  return `=?UTF-8?B?${encoded}?=`;
+}
+function readReady(reader) {
+  return reader();
+}
+function createReplyReader(socket) {
+  let buffer = "";
+  const queued = [];
+  const waiting = [];
+  let failure = null;
+  const push = (line) => {
+    const resolve = waiting.shift();
+    if (resolve) resolve(line);
+    else queued.push(line);
+  };
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    buffer += String(chunk);
+    let idx = buffer.indexOf("\n");
+    while (idx >= 0) {
+      const line = buffer.slice(0, idx).replace(/\r$/, "");
+      buffer = buffer.slice(idx + 1);
+      push(line);
+      idx = buffer.indexOf("\n");
+    }
+  });
+  socket.on("error", (err) => {
+    failure = err instanceof Error ? err : new Error(String(err));
+    while (waiting.length) waiting.shift()(null);
+  });
+  socket.on("close", () => {
+    if (!failure) failure = new Error("the mail server closed the connection");
+    while (waiting.length) waiting.shift()(null);
+  });
+  return async function nextReply() {
+    const lines = [];
+    for (; ; ) {
+      let line = queued.shift() ?? null;
+      if (!line) {
+        if (failure) throw new SmtpError(`Could not talk to the mail server: ${failure.message}`);
+        line = await new Promise((resolve) => waiting.push(resolve));
+        if (line == null) {
+          throw new SmtpError(`Could not talk to the mail server: ${failure?.message || "connection lost"}`);
+        }
+      }
+      const code = Number(line.slice(0, 3));
+      lines.push(line.slice(3).replace(/^[-\s]/, "").trim());
+      if (line[3] !== "-") {
+        return { code, text: lines.join(" ") };
+      }
+    }
+  };
+}
+function expect(reply, codes, phase) {
+  if (!codes.includes(reply.code)) {
+    throw new SmtpError(reply.text || `The mail server answered ${reply.code}`, { code: reply.code, phase });
+  }
+  return reply;
+}
+function connectSocket({ host, port, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ host, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new SmtpError(`The mail server at ${host}:${port} did not answer within ${Math.round(timeoutMs / 1e3)} seconds.`));
+    }, timeoutMs);
+    socket.once("error", (err) => {
+      clearTimeout(timer);
+      reject(new SmtpError(`Could not open a connection to ${host}:${port}: ${err?.message || err}`));
+    });
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      resolve(socket);
+    });
+  });
+}
+function upgradeToTls(socket, host) {
+  return new Promise((resolve, reject) => {
+    const secure = tls.connect({ socket, servername: host, ALPNProtocols: [] });
+    const timer = setTimeout(() => {
+      secure.destroy();
+      reject(new SmtpError("The mail server did not finish the TLS handshake in time."));
+    }, 15e3);
+    secure.once("error", (err) => {
+      clearTimeout(timer);
+      reject(new SmtpError(`The TLS upgrade failed: ${err?.message || err}`));
+    });
+    secure.once("secureConnect", () => {
+      clearTimeout(timer);
+      resolve(secure);
+    });
+  });
+}
+function buildMimeMessage({ from, fromName, to, subject, text, html, headers = {} }) {
+  const boundary = `----=_ Jatext_${Date.now().toString(36)}`;
+  const b642 = (value) => Buffer.from(String(value || ""), "utf8").toString("base64").replace(/(.{76})/g, "$1\r\n");
+  const parts = [];
+  parts.push(`--${boundary}`, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64", "", b642(text), "");
+  if (html) {
+    parts.push(
+      `--${boundary}`,
+      "Content-Type: text/html; charset=utf-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      b642(html),
+      ""
+    );
+  }
+  parts.push(`--${boundary}--`, "");
+  const fromLine = fromName ? `${encodeHeaderValue(fromName)} <${from}>` : `<${from}>`;
+  const headerLines = [
+    `From: ${fromLine}`,
+    `To: <${to}>`,
+    `Subject: ${encodeHeaderValue(subject)}`,
+    `Date: ${(/* @__PURE__ */ new Date()).toUTCString()}`,
+    `Message-ID: <${Date.now().toString(36)}-${b642(from + to).replace(/[^a-z0-9]/gi, "").slice(0, 18).toLowerCase()}@jatext>`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`
+  ];
+  for (const [name, value] of Object.entries(headers)) {
+    headerLines.push(`${name}: ${encodeHeaderValue(value)}`);
+  }
+  return `${headerLines.join(EOL)}${EOL}${EOL}${parts.join(EOL)}`;
+}
+async function smtpSendMail(options) {
+  const {
+    host,
+    port = 587,
+    user = "",
+    pass = "",
+    secure = false,
+    from,
+    fromName = "",
+    to,
+    subject,
+    text,
+    html = "",
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    requireTls = true,
+    probeMode = "send"
+  } = options;
+  if (!host) throw new SmtpError("No SMTP host is configured.");
+  if (!from) throw new SmtpError("No sender address is configured.");
+  let socket = await connectSocket({ host, port, timeoutMs });
+  const deadline = setTimeout(() => {
+    try {
+      socket.destroy();
+    } catch {
+    }
+  }, timeoutMs);
+  const clear = () => clearTimeout(deadline);
+  try {
+    let reader = createReplyReader(socket);
+    let caps = "";
+    expect(await reader(), [220], "greeting");
+    socket.write(`EHLO jatext${EOL}`);
+    const hello = expect(await reader(), [250], "ehlo");
+    caps = hello.text.toUpperCase();
+    if (!secure) {
+      if (caps.includes("STARTTLS")) {
+        socket.write(`STARTTLS${EOL}`);
+        expect(await reader(), [220], "starttls");
+        const upgraded = await upgradeToTls(socket, host);
+        socket = upgraded;
+        reader = createReplyReader(socket);
+        socket.write(`EHLO jatext${EOL}`);
+        const afterTls = expect(await reader(), [250], "ehlo-after-tls");
+        caps = afterTls.text.toUpperCase();
+      } else if (requireTls) {
+        throw new SmtpError(
+          `${host}:${port} is not offering STARTTLS, and sending a password over a plain connection is not on.`,
+          { phase: "starttls" }
+        );
+      }
+    }
+    if (user || pass) {
+      if (!caps.includes("AUTH")) {
+        throw new SmtpError(`${host}:${port} did not offer AUTH, so there is no way to log in.`, { phase: "auth" });
+      }
+      socket.write(`AUTH LOGIN${EOL}`);
+      expect(await reader(), [334], "auth-request-user");
+      socket.write(`${b64(user)}${EOL}`);
+      expect(await reader(), [334], "auth-request-pass");
+      socket.write(`${b64(pass)}${EOL}`);
+      expect(await reader(), [235], "auth-login");
+    }
+    socket.write(`MAIL FROM:<${from}>${EOL}`);
+    expect(await reader(), [250], "mail-from");
+    socket.write(`RCPT TO:<${to}>${EOL}`);
+    expect(await reader(), [250, 251], "rcpt-to");
+    if (probeMode === "envelope") {
+      socket.write(`RSET${EOL}`);
+      await readReady(reader).catch(() => null);
+      socket.write(`QUIT${EOL}`);
+      await readReady(reader).catch(() => null);
+      return { sent: false, transport: "smtp", response: "sender and recipient accepted", senderAccepted: true };
+    }
+    socket.write(`DATA${EOL}`);
+    expect(await reader(), [354], "data");
+    const message = buildMimeMessage({ from, fromName, to, subject, text, html });
+    const stuffed = message.replace(/^\./g, "..");
+    socket.write(`${stuffed}${EOL}.${EOL}`);
+    const accepted = expect(await reader(), [250], "queue");
+    socket.write(`QUIT${EOL}`);
+    await readReady(reader).catch(() => null);
+    return { sent: true, transport: "smtp", response: accepted.text || "accepted" };
+  } finally {
+    clear();
+    try {
+      socket.destroy();
+    } catch {
+    }
+  }
+}
+async function probeSmtpLogin({ host, port = 587, user = "", pass = "", from = "", requireTls = true, timeoutMs = 15e3 }) {
+  if (!host) return { ok: false, error: "No SMTP host is configured." };
+  try {
+    const result = await smtpSendMail({
+      host,
+      port,
+      user,
+      pass,
+      from: from || user || "probe@localhost",
+      to: from || user || "probe@localhost",
+      subject: "probe",
+      text: "probe",
+      requireTls,
+      timeoutMs,
+      probeMode: "envelope"
+    });
+    return { ok: true, note: result.response || "smtp login accepted", sender: from || user };
+  } catch (err) {
+    const phase = String(err?.phase || "");
+    if (err?.code === 535) {
+      return { ok: false, status: 535, note: err.message, phase };
+    }
+    if (phase === "mail-from" || phase === "rcpt-to") {
+      return {
+        ok: false,
+        status: Number(err?.code || 0) || 0,
+        phase,
+        note: `${phase === "mail-from" ? "The relay refused this sender" : "The relay refused this recipient"}: ${err.message}. A "sender not verified" here means the address has to be confirmed in Brevo's Senders list first.`
+      };
+    }
+    return { ok: false, status: Number(err?.code || 0) || 0, note: err?.message || String(err), phase };
+  }
+}
+var EOL, DEFAULT_TIMEOUT_MS, SmtpError;
+var init_smtpClient = __esm({
+  "server/smtpClient.js"() {
+    EOL = "\r\n";
+    DEFAULT_TIMEOUT_MS = 2e4;
+    SmtpError = class extends Error {
+      constructor(message, { code = 0, phase = "" } = {}) {
+        super(message);
+        this.name = "SmtpError";
+        this.code = Number(code || 0);
+        this.phase = phase;
+      }
+    };
+  }
+});
+
 // server/emailSender.js
 import crypto2 from "node:crypto";
 function env(name) {
   return String(process.env[name] || "").trim();
 }
+function flag(name, fallback) {
+  const raw = env(name).toLowerCase();
+  if (!raw) return fallback;
+  return !/^(0|false|no|off)$/.test(raw);
+}
 function shortHash(value) {
-  const hex = crypto2.createHash("sha256").update(String(value || "")).digest("hex");
-  return hex.slice(0, 12);
+  return crypto2.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 12);
 }
 function emailSenderConfig() {
   const apiKey = env("BREVO_API_KEY");
   const fromEmail = env("BREVO_SENDER_EMAIL") || env("BREVO_FROM_EMAIL");
   const base = (env("BREVO_API_BASE") || DEFAULT_API_BASE).replace(/\/+$/, "");
+  const port = Number(env("BREVO_SMTP_PORT") || env("SMTP_PORT") || "587") || 587;
+  const smtp = {
+    host: env("BREVO_SMTP_HOST") || env("SMTP_HOST"),
+    port,
+    user: env("BREVO_SMTP_USER") || env("SMTP_USER"),
+    pass: env("BREVO_SMTP_PASS") || env("SMTP_PASS"),
+    // 465 is implicit TLS, 587 is STARTTLS. Which one is in use is stated, not guessed.
+    // 465 is implicit TLS, 587 is STARTTLS: the port says which, and only an explicit
+    // switch overrides it. A wrong default here means a password shouted at the wrong
+    // kind of socket, so neither half is left to a guess.
+    secure: flag("BREVO_SMTP_SSL", false) || port === 465,
+    // A local test relay can be plain; a real one may not be, with a password in it.
+    requireTls: flag("SMTP_REQUIRE_TLS", true)
+  };
+  const smtpReady = Boolean(smtp.host && smtp.user && smtp.pass);
+  const kind = smtpReady ? "smtp" : apiKey ? "brevo-api" : "none";
   let warning = "";
-  if (apiKey && !BREVO_KEY_SHAPE.test(apiKey)) {
+  if (kind === "brevo-api" && apiKey && !BREVO_KEY_SHAPE.test(apiKey)) {
     warning = `BREVO_API_KEY does not look like a Brevo API key (expected "xkeysib-" plus 64 hex characters plus a 16 character suffix, 89 in all; this one is ${apiKey.length}). A key copied short is the usual reason, and Brevo answers it with 401.`;
   }
   return {
-    enabled: Boolean(apiKey && fromEmail && base),
+    enabled: Boolean(fromEmail && (smtpReady || apiKey)),
+    kind,
+    smtpReady,
+    smtp,
     apiKey,
     fromEmail,
     base,
     fromName: env("BREVO_SENDER_NAME") || "JaText",
     warning,
-    reason: !apiKey ? "No BREVO_API_KEY is set" : !fromEmail ? "No BREVO_SENDER_EMAIL is set, which has to be an address Brevo has verified" : ""
+    reason: fromEmail ? !smtpReady && !apiKey ? "Neither the SMTP relay nor an API key is configured, so nothing can be sent" : "" : "No BREVO_SENDER_EMAIL is set, which has to be an address Brevo has verified"
   };
 }
 function isEmailSenderConfigured() {
   return emailSenderConfig().enabled;
 }
-async function sendEmail({ to, subject, text, html }) {
+function isUnreachable(err) {
+  const text = String(err?.message || err || "");
+  return !Number(err?.code) && /could not open|did not answer|closed|tls|handshake|econn|enotfound|eai_again/i.test(text);
+}
+function asSendError(err, fallback) {
+  const wrapped = new Error(err?.message || fallback);
+  wrapped.code = Number(err?.code) ? "email_rejected" : "email_unreachable";
+  wrapped.smtpPhase = err?.phase || "";
+  return wrapped;
+}
+async function sendEmail(message) {
   const cfg = emailSenderConfig();
   if (!cfg.enabled) {
-    const err = new Error(`Email is not configured: ${cfg.reason}.`);
+    const err = new Error(`Email is not configured: ${cfg.reason || "no sender address and no transport"}.`);
     err.code = "email_unconfigured";
     throw err;
   }
+  if (cfg.kind === "smtp") {
+    try {
+      return await smtpSendMail({
+        ...cfg.smtp,
+        from: cfg.fromEmail,
+        fromName: cfg.fromName,
+        to: message.to,
+        subject: message.subject,
+        text: message.text,
+        html: message.html
+      });
+    } catch (err) {
+      if (cfg.apiKey && isUnreachable(err)) {
+        const apiErr = await sendViaBrevoApi(cfg, message).catch((inner) => inner);
+        if (apiErr instanceof Error && !apiErr.code) throw asSendError(apiErr, "Could not send the email.");
+        if (!(apiErr instanceof Error)) return { sent: true, transport: "smtp-then-api" };
+        apiErr.message = `${apiErr.message} (the SMTP relay was unreachable first: ${err.message})`;
+        throw apiErr;
+      }
+      throw asSendError(err, "Could not send the email through the SMTP relay.");
+    }
+  }
+  return await sendViaBrevoApi(cfg, message);
+}
+async function sendViaBrevoApi(cfg, { to, subject, text, html }) {
   const body = {
     sender: { name: cfg.fromName, email: cfg.fromEmail },
     to: [{ email: String(to) }],
@@ -610,24 +941,29 @@ async function sendEmail({ to, subject, text, html }) {
     parsed = null;
   }
   if (!response.ok) {
-    const detail = String(parsed?.message || raw || "").slice(0, 200);
-    const err = new Error(
-      response.status === 401 ? "Brevo rejected the API key." : `Brevo refused the email (HTTP ${response.status})${detail ? `: ${detail}` : ""}`
-    );
+    const detail = String(parsed?.message || raw || "").slice(0, 240);
+    const ipRestricted = /unrecogni[sz]ed ip|whitelist|allow.?list|ip address/i.test(detail);
+    const message = !response.ok && response.status !== 401 ? `Brevo refused the email (HTTP ${response.status})${detail ? `: ${detail}` : ""}` : ipRestricted ? `Brevo only accepts API calls from addresses on its allow-list, and this function has no fixed one to add (${detail}). Set the SMTP relay variables instead - the relay is not IP restricted.` : `Brevo rejected the API key${detail ? `: ${detail}` : ""}`;
+    const err = new Error(message);
     err.code = "email_rejected";
     err.status = response.status;
     throw err;
   }
-  return { sent: true, messageId: String(parsed?.messageId || "") };
+  return { sent: true, transport: "brevo-api", messageId: String(parsed?.messageId || "") };
 }
 function emailSenderDiagnostics() {
   const cfg = emailSenderConfig();
   return {
     configured: cfg.enabled,
+    transport: cfg.kind,
     reason: cfg.reason || "",
     warning: cfg.warning || "",
     keyLength: cfg.apiKey.length,
     keyFingerprint: cfg.apiKey ? shortHash(cfg.apiKey) : "",
+    smtpHost: cfg.smtp.host || "",
+    smtpPort: cfg.smtp.host ? cfg.smtp.port : 0,
+    smtpUser: cfg.smtp.user ? `${cfg.smtp.user.split("@")[0]}@${cfg.smtp.user.split("@")[1] || ""}` : "",
+    smtpPassLength: cfg.smtp.pass.length,
     senderEmail: cfg.fromEmail,
     senderName: cfg.fromName,
     apiBase: cfg.base
@@ -637,28 +973,38 @@ async function probeEmailSender({ force = false } = {}) {
   const cfg = emailSenderConfig();
   const now = Date.now();
   if (!force && now - lastProbeAt < PROBE_COOLDOWN_MS && lastProbeResult) {
-    return { ...lastProbeResult, cached: true, retryAfterSec: Math.ceil((PROBE_COOLDOWN_MS - (now - lastProbeAt)) / 1e3) };
-  }
-  if (!cfg.apiKey) {
-    return { ok: false, skipped: true, error: "No BREVO_API_KEY is set." };
+    return {
+      ...lastProbeResult,
+      cached: true,
+      retryAfterSec: Math.ceil((PROBE_COOLDOWN_MS - (now - lastProbeAt)) / 1e3)
+    };
   }
   let result;
-  try {
-    const response = await fetch(`${cfg.base}/v3/contacts/lists?page=0&limit=1`, {
-      method: "GET",
-      headers: { "api-key": cfg.apiKey, accept: "application/json" },
-      signal: AbortSignal.timeout ? AbortSignal.timeout(12e3) : void 0
-    });
-    const raw = await response.text().catch(() => "");
-    result = {
-      ok: response.ok,
-      status: response.status,
-      // The count on a good day, Brevo's own sentence on a bad one, and nothing else:
-      // the body of this endpoint is written by a third party and is not trusted text.
-      note: response.ok ? "credential accepted" : raw.slice(0, 160)
-    };
-  } catch (err) {
-    result = { ok: false, status: 0, error: `Could not reach ${cfg.base}: ${err?.message || err}` };
+  if (cfg.kind === "smtp") {
+    result = await probeSmtpLogin({ ...cfg.smtp, from: cfg.fromEmail });
+    result.transport = "smtp";
+    result.sender = cfg.fromEmail;
+  } else if (cfg.apiKey) {
+    try {
+      const response = await fetch(`${cfg.base}/v3/contacts/lists?page=0&limit=1`, {
+        method: "GET",
+        headers: { "api-key": cfg.apiKey, accept: "application/json" },
+        signal: AbortSignal.timeout ? AbortSignal.timeout(12e3) : void 0
+      });
+      const raw = await response.text().catch(() => "");
+      result = {
+        ok: response.ok,
+        status: response.status,
+        transport: "brevo-api",
+        // The status on a good day, Brevo's own sentence on a bad one, and nothing else:
+        // this body is written by a third party and is not trusted text.
+        note: response.ok ? "credential accepted" : raw.slice(0, 240)
+      };
+    } catch (err) {
+      result = { ok: false, status: 0, transport: "brevo-api", error: `Could not reach ${cfg.base}: ${err?.message || err}` };
+    }
+  } else {
+    return { ok: false, skipped: true, error: "No BREVO_API_KEY and no SMTP relay are set." };
   }
   lastProbeAt = Date.now();
   lastProbeResult = result;
@@ -667,6 +1013,7 @@ async function probeEmailSender({ force = false } = {}) {
 var DEFAULT_API_BASE, BREVO_KEY_SHAPE, PROBE_COOLDOWN_MS, lastProbeAt, lastProbeResult;
 var init_emailSender = __esm({
   "server/emailSender.js"() {
+    init_smtpClient();
     DEFAULT_API_BASE = "https://api.brevo.com";
     BREVO_KEY_SHAPE = /^xkeysib-[0-9a-f]{64}-[A-Za-z0-9]{16}$/;
     PROBE_COOLDOWN_MS = 5 * 6e4;
@@ -1889,9 +2236,9 @@ function base64UrlEncode(buf) {
   return Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 function base64UrlDecode(str) {
-  const b64 = str.replace(/-/g, "+").replace(/_/g, "/");
-  const pad = "=".repeat((4 - b64.length % 4) % 4);
-  return Buffer.from(b64 + pad, "base64");
+  const b642 = str.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = "=".repeat((4 - b642.length % 4) % 4);
+  return Buffer.from(b642 + pad, "base64");
 }
 function createAuthToken(userId, email, extraClaims = null) {
   const now = Date.now();
@@ -9506,9 +9853,9 @@ async function handler8(req, res) {
     verificationRequired: isEmailVerificationRequired(),
     ...diagnostics,
     probe,
-    // Which of the two failures this is, said out loud, because the app can only report
-    // the one sentence it got back from a send.
-    hint: !diagnostics.configured ? diagnostics.reason : diagnostics.warning ? diagnostics.warning : probe.ok === false ? "Brevo refused the stored key. Replace it with the value shown on Brevo's own API page, then redeploy this function: a secret is only read when the function is published." : "Mail is configured and Brevo accepts the key. A code that never arrives is then the recipient's spam folder, not this server."
+    // Which failure this is, said out loud, because a signup can only report the one
+    // sentence it got back from a send.
+    hint: !diagnostics.configured ? diagnostics.reason : diagnostics.warning ? diagnostics.warning : probe.ok === false ? diagnostics.transport === "smtp" ? "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published." : "Brevo refused the stored API key - or the address it is called from. This runtime has no fixed egress IP for Brevo's allow-list, so set the BREVO_SMTP_* variables and use the relay, which is not IP restricted. Then redeploy this function: a secret is only read when the function is published." : "Mail is configured and the provider accepts it. A code that never arrives is then the recipient's spam folder, not this server."
   });
 }
 var init_email_test = __esm({
