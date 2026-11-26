@@ -542,6 +542,72 @@ export function subscribePendingTwoFactorChallenge(fn: () => void): () => void {
   return () => twoFactorChallengeListeners.delete(fn);
 }
 
+/**
+ * A signup, or a sign-in to an address that was never confirmed, that cannot continue
+ * until the person types the code sitting in their inbox. Thrown rather than returned so
+ * every caller of signIn/signUp keeps treating "no session yet" as the default outcome.
+ */
+export class EmailVerificationRequiredError extends Error {
+  readonly challengeToken: string;
+  readonly maskedEmail: string;
+  readonly retryAfterSec: number;
+
+  constructor(challengeToken: string, maskedEmail = "", retryAfterSec = 0) {
+    super("Enter the code we emailed you to finish setting up JaText.");
+    this.name = "EmailVerificationRequiredError";
+    this.challengeToken = challengeToken;
+    this.maskedEmail = maskedEmail;
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
+export type PendingEmailVerification = { token: string; maskedEmail: string };
+
+const EMAIL_VERIFY_STORAGE_KEY = "jatext:email-verify-challenge:v1";
+
+function readPendingEmailVerification(): PendingEmailVerification | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(EMAIL_VERIFY_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PendingEmailVerification> | null;
+    const token = String(parsed?.token || "");
+    return token ? { token, maskedEmail: String(parsed?.maskedEmail || "") } : null;
+  } catch {
+    return null;
+  }
+}
+
+const emailVerificationListeners = new Set<() => void>();
+
+// Kept in sessionStorage so a reload in the middle of the code box returns to the same
+// challenge instead of dumping the person back on a sign-in form that refuses them.
+let pendingEmailVerification: PendingEmailVerification | null = readPendingEmailVerification();
+
+export function getPendingEmailVerificationChallenge(): PendingEmailVerification | null {
+  return pendingEmailVerification;
+}
+
+export function setPendingEmailVerificationChallenge(next: PendingEmailVerification | null): void {
+  pendingEmailVerification = next?.token ? { token: next.token, maskedEmail: next.maskedEmail || "" } : null;
+  try {
+    if (pendingEmailVerification) {
+      window.sessionStorage.setItem(EMAIL_VERIFY_STORAGE_KEY, JSON.stringify(pendingEmailVerification));
+    } else {
+      window.sessionStorage.removeItem(EMAIL_VERIFY_STORAGE_KEY);
+    }
+  } catch {
+    // Storage can be switched off (private mode); the panel still works for as long as
+    // the page itself lives, and signing in again mints a fresh code.
+  }
+  for (const fn of emailVerificationListeners) fn();
+}
+
+export function subscribePendingEmailVerificationChallenge(fn: () => void): () => void {
+  emailVerificationListeners.add(fn);
+  return () => emailVerificationListeners.delete(fn);
+}
+
 export async function captureUrlOAuthCallbackIfPresent(
   slotId = getActiveAccountSlotId(),
 ): Promise<boolean> {

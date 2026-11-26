@@ -82,6 +82,10 @@ export type TranslationKey =
   | "soundboards"
   | "add_soundboard"
   | "two_factor_title"
+  | "verify_email_title"
+  | "email_code_sent"
+  | "enter_email_code"
+  | "resend_email_code"
   | "setup_2fa"
   | "enter_auth_code"
   | "passkeys"
@@ -128,6 +132,10 @@ const EN_DICT: Record<TranslationKey, string> = {
   add_soundboard: "Add custom sound",
   two_factor_title: "2FA",
   setup_2fa: "Set up 2FA authentication",
+  verify_email_title: "Confirm your email",
+  email_code_sent: "We sent a 6-digit code to",
+  enter_email_code: "Enter the code from your email",
+  resend_email_code: "Send a new code",
   enter_auth_code: "Enter your authentication code",
   passkeys: "Passkeys",
   add_passkey: "Create a passkey",
@@ -175,6 +183,10 @@ const TRANSLATIONS: Record<AppLanguageCode, Partial<Record<TranslationKey, strin
     soundboards: "Papan Bunyi",
     add_soundboard: "Tambah bunyi tersuai",
     two_factor_title: "2FA",
+    verify_email_title: "Sahkan e-mel anda",
+    email_code_sent: "Kami telah hantar kod 6 angka ke",
+    enter_email_code: "Masukkan kod daripada e-mel anda",
+    resend_email_code: "Hantar kod baharu",
     setup_2fa: "Sediakan pengesahan 2FA",
     enter_auth_code: "Masukkan kod pengesahan anda",
     passkeys: "Kunci Laluan (Passkey)",
@@ -220,6 +232,10 @@ const TRANSLATIONS: Record<AppLanguageCode, Partial<Record<TranslationKey, strin
     soundboards: "Papan Suara",
     add_soundboard: "Tambah suara kustom",
     two_factor_title: "2FA",
+    verify_email_title: "Konfirmasi email Anda",
+    email_code_sent: "Kami telah mengirim kode 6 digit ke",
+    enter_email_code: "Masukkan kode dari email Anda",
+    resend_email_code: "Kirim kode baru",
     setup_2fa: "Atur autentikasi 2FA",
     enter_auth_code: "Masukkan kode autentikasi Anda",
     passkeys: "Kunci Sandi (Passkey)",
@@ -265,6 +281,10 @@ const TRANSLATIONS: Record<AppLanguageCode, Partial<Record<TranslationKey, strin
     soundboards: "音效板",
     add_soundboard: "添加自定义音效",
     two_factor_title: "双重验证 (2FA)",
+    verify_email_title: "验证您的邮箱",
+    email_code_sent: "我们已向以下邮箱发送 6 位验证码：",
+    enter_email_code: "请输入邮箱中的验证码",
+    resend_email_code: "重新发送验证码",
     setup_2fa: "设置 2FA 双重验证",
     enter_auth_code: "请输入身份验证器验证码",
     passkeys: "通行密钥 (Passkey)",
@@ -310,6 +330,10 @@ const TRANSLATIONS: Record<AppLanguageCode, Partial<Record<TranslationKey, strin
     soundboards: "音效板",
     add_soundboard: "新增自訂音效",
     two_factor_title: "雙重驗證 (2FA)",
+    verify_email_title: "驗證您的電子信箱",
+    email_code_sent: "我們已將 6 位數驗證碼發送至",
+    enter_email_code: "請輸入電子郵件中的驗證碼",
+    resend_email_code: "重新傳送驗證碼",
     setup_2fa: "設定 2FA 雙重驗證",
     enter_auth_code: "輸入你的驗證碼",
     passkeys: "通行密鑰 (Passkey)",

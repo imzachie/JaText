@@ -539,6 +539,84 @@ var init_runtimeCompat = __esm({
   }
 });
 
+// server/emailSender.js
+function env(name) {
+  return String(process.env[name] || "").trim();
+}
+function emailSenderConfig() {
+  const apiKey = env("BREVO_API_KEY");
+  const fromEmail = env("BREVO_SENDER_EMAIL") || env("BREVO_FROM_EMAIL");
+  const base = (env("BREVO_API_BASE") || DEFAULT_API_BASE).replace(/\/+$/, "");
+  return {
+    enabled: Boolean(apiKey && fromEmail && base),
+    apiKey,
+    fromEmail,
+    base,
+    fromName: env("BREVO_SENDER_NAME") || "JaText",
+    reason: !apiKey ? "No BREVO_API_KEY is set" : !fromEmail ? "No BREVO_SENDER_EMAIL is set, which has to be an address Brevo has verified" : ""
+  };
+}
+function isEmailSenderConfigured() {
+  return emailSenderConfig().enabled;
+}
+async function sendEmail({ to, subject, text, html }) {
+  const cfg = emailSenderConfig();
+  if (!cfg.enabled) {
+    const err = new Error(`Email is not configured: ${cfg.reason}.`);
+    err.code = "email_unconfigured";
+    throw err;
+  }
+  const body = {
+    sender: { name: cfg.fromName, email: cfg.fromEmail },
+    to: [{ email: String(to) }],
+    subject: String(subject),
+    textContent: String(text),
+    ...html ? { htmlContent: String(html) } : {}
+  };
+  let response;
+  try {
+    response = await fetch(`${cfg.base}/v3/smtp/email`, {
+      method: "POST",
+      headers: {
+        "api-key": cfg.apiKey,
+        "content-type": "application/json",
+        accept: "application/json"
+      },
+      body: JSON.stringify(body),
+      // An email provider that hangs must not hang the request that called it: the
+      // signup would look like a dead button rather than an unverified account.
+      signal: AbortSignal.timeout ? AbortSignal.timeout(12e3) : void 0
+    });
+  } catch (err) {
+    const wrapped = new Error(`Could not reach Brevo: ${err?.message || err}`);
+    wrapped.code = "email_unreachable";
+    throw wrapped;
+  }
+  const raw = await response.text().catch(() => "");
+  let parsed = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!response.ok) {
+    const detail = String(parsed?.message || raw || "").slice(0, 200);
+    const err = new Error(
+      response.status === 401 ? "Brevo rejected the API key." : `Brevo refused the email (HTTP ${response.status})${detail ? `: ${detail}` : ""}`
+    );
+    err.code = "email_rejected";
+    err.status = response.status;
+    throw err;
+  }
+  return { sent: true, messageId: String(parsed?.messageId || "") };
+}
+var DEFAULT_API_BASE;
+var init_emailSender = __esm({
+  "server/emailSender.js"() {
+    DEFAULT_API_BASE = "https://api.brevo.com";
+  }
+});
+
 // server/fcmRestClient.js
 function b64url(bytes) {
   let binary = "";
@@ -1568,6 +1646,13 @@ async function initSchema(db) {
       storage_key TEXT,
       created_at INTEGER NOT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS email_verifications (
+      user_id TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      sent_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS media_chunks (
       media_id TEXT NOT NULL,
       chunk_index INTEGER NOT NULL,
@@ -1691,6 +1776,17 @@ async function initSchema(db) {
   ];
   const safeAlters = [
     `ALTER TABLE media_blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0`,
+    // DEFAULT 1, not 0: the people already on the server did not ask to be locked out
+    // the day verification ships. New sign-ups write 0 explicitly.
+    `ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1`,
+    // SQLite needs the table to exist before the first signup tries to write a code.
+    `CREATE TABLE IF NOT EXISTS email_verifications (
+      user_id TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      sent_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`,
     // Attachments live in Supabase Storage and the row keeps only a pointer; the
     // column is nullable so every row written before the move still serves from data.
     `ALTER TABLE media_blobs ADD COLUMN storage_key TEXT`,
@@ -2158,6 +2254,10 @@ function mapUserRow(row, includePrivate = false) {
     ...syncedTheme ? { syncedTheme } : {},
     ...includePrivate ? {
       totpEnabled: Boolean(Number(row.totp_enabled || 0)),
+      // Rows written before this column existed are treated as confirmed: the
+      // column is added with DEFAULT 1 precisely so an existing account is never
+      // locked out of its own chats by a migration.
+      emailVerified: Number(row.email_verified ?? 1) === 1,
       isOwner: isJaTextOwnerRow(row)
     } : {}
   };
@@ -3231,11 +3331,167 @@ async function consumeMobileOAuthHandoff(sessionId) {
     error: row.error ? String(row.error) : null
   };
 }
+function isEmailVerificationRequired() {
+  return process.env.JATEXT_REQUIRE_EMAIL_VERIFICATION === "1" && isEmailSenderConfigured();
+}
+function newNumericCode() {
+  const bytes = nodeLikeCrypto.randomBytes(3);
+  const value = (bytes[0] << 16 | bytes[1] << 8 | bytes[2]) % 9e5;
+  return String(1e5 + value);
+}
+function hashEmailCode(code) {
+  return base64UrlEncode(
+    nodeLikeCrypto.createHmac("sha256", getJwtSecret()).update(`email-code:${code}`).digest()
+  );
+}
+function maskEmail(email) {
+  const value = String(email || "");
+  const at = value.indexOf("@");
+  if (at <= 0) return value;
+  const name = value.slice(0, at);
+  return `${name.slice(0, 1)}${"*".repeat(Math.max(1, name.length - 1))}${value.slice(at)}`;
+}
+function createEmailVerificationChallengeToken(userId, email) {
+  const now = Date.now();
+  const header = base64UrlEncode(JSON.stringify({ alg: "HS256", typ: "JEMV" }));
+  const payload = base64UrlEncode(
+    JSON.stringify({
+      typ: "email_verify_challenge",
+      sub: String(userId),
+      email: String(email || ""),
+      iat: Math.floor(now / 1e3),
+      exp: Math.floor((now + 15 * 6e4) / 1e3)
+    })
+  );
+  const sig = base64UrlEncode(
+    nodeLikeCrypto.createHmac("sha256", getJwtSecret()).update(`${header}.${payload}`).digest()
+  );
+  return `${header}.${payload}.${sig}`;
+}
+function verifyEmailVerificationChallengeToken(token) {
+  if (!token || typeof token !== "string") return null;
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) return null;
+  const [header, payload, sig] = parts;
+  const expected = base64UrlEncode(
+    nodeLikeCrypto.createHmac("sha256", getJwtSecret()).update(`${header}.${payload}`).digest()
+  );
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !nodeLikeCrypto.timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(base64UrlDecode(payload).toString("utf8"));
+    if (parsed?.typ !== "email_verify_challenge" || !parsed?.sub || !parsed?.exp || Number(parsed.exp) * 1e3 < Date.now()) {
+      return null;
+    }
+    return { userId: String(parsed.sub), email: String(parsed.email || "") };
+  } catch {
+    return null;
+  }
+}
+async function issueEmailVerificationCode(db, userId, email) {
+  const now = Date.now();
+  const prev = await db.execute({
+    sql: `SELECT sent_at FROM email_verifications WHERE user_id = ? LIMIT 1`,
+    args: [userId]
+  });
+  const lastSent = Number(prev.rows[0]?.sent_at || 0);
+  if (lastSent && now - lastSent < EMAIL_CODE_RESEND_COOLDOWN_MS) {
+    const waitSec = Math.ceil((EMAIL_CODE_RESEND_COOLDOWN_MS - (now - lastSent)) / 1e3);
+    throw new TursoAppError(`Please wait ${waitSec} more seconds before asking for another code.`, 429);
+  }
+  const code = newNumericCode();
+  await db.execute({
+    sql: `INSERT INTO email_verifications (user_id, code_hash, attempts, sent_at, expires_at)
+          VALUES (?, ?, 0, ?, ?)
+          ON CONFLICT(user_id) DO UPDATE SET
+            code_hash = excluded.code_hash,
+            attempts = 0,
+            sent_at = excluded.sent_at,
+            expires_at = excluded.expires_at`,
+    args: [userId, hashEmailCode(code), now, now + EMAIL_CODE_TTL_MS]
+  });
+  try {
+    await sendEmail({
+      to: email,
+      subject: `${code} is your JaText verification code`,
+      text: `Your JaText verification code is ${code}.
+
+It expires in ${Math.round(EMAIL_CODE_TTL_MS / 6e4)} minutes. If you did not just create or open a JaText account, you can ignore this email and nothing will happen.`,
+      html: `<div style="font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#141417"><p style="margin:0 0 14px">Your JaText verification code is</p><p style="margin:0 0 14px;font-size:30px;letter-spacing:6px;font-weight:700">${code}</p><p style="margin:0 0 14px;color:#6b6b73">It expires in ${Math.round(EMAIL_CODE_TTL_MS / 6e4)} minutes. If you did not just create or open a JaText account, ignore this email and nothing will happen.</p></div>`
+    });
+  } catch (err) {
+    await db.execute({ sql: `DELETE FROM email_verifications WHERE user_id = ?`, args: [userId] }).catch(() => void 0);
+    throw new TursoAppError(
+      `${err instanceof Error ? err.message : "Could not send the verification email."} Please try again in a moment.`,
+      502
+    );
+  }
+  return {
+    maskedEmail: maskEmail(email),
+    resendAfterSec: Math.ceil(EMAIL_CODE_RESEND_COOLDOWN_MS / 1e3),
+    expiresInSec: Math.floor(EMAIL_CODE_TTL_MS / 1e3)
+  };
+}
+async function confirmEmailVerificationCode(db, userId, rawCode) {
+  const code = String(rawCode || "").replace(/[^0-9]/g, "");
+  const now = Date.now();
+  const rowRes = await db.execute({
+    sql: `SELECT code_hash, attempts, expires_at FROM email_verifications WHERE user_id = ? LIMIT 1`,
+    args: [userId]
+  });
+  const row = rowRes.rows[0];
+  if (!row) {
+    throw new TursoAppError("Ask for a code first, then type it here.", 400);
+  }
+  const clear = () => db.execute({ sql: `DELETE FROM email_verifications WHERE user_id = ?`, args: [userId] }).catch(() => void 0);
+  if (Number(row.expires_at || 0) < now) {
+    await clear();
+    throw new TursoAppError("That code expired. Ask for a new one.", 410);
+  }
+  if (Number(row.attempts || 0) >= EMAIL_CODE_MAX_ATTEMPTS) {
+    await clear();
+    throw new TursoAppError("Too many wrong tries. Ask for a new code.", 429);
+  }
+  if (code.length !== 6 || hashEmailCode(code) !== String(row.code_hash || "")) {
+    await db.execute({
+      sql: `UPDATE email_verifications SET attempts = attempts + 1 WHERE user_id = ?`,
+      args: [userId]
+    }).catch(() => void 0);
+    throw new TursoAppError("That code is not right. Check the email and try again.", 401);
+  }
+  await clear();
+  await db.execute({
+    sql: `UPDATE users SET email_verified = 1, updated_at = ? WHERE id = ?`,
+    args: [now, userId]
+  });
+  return { verified: true };
+}
+async function resolveEmailVerificationSubject(db, args, auth) {
+  if (auth?.userId) {
+    return { userId: String(auth.userId), email: String(auth.email || "") };
+  }
+  const fromChallenge = verifyEmailVerificationChallengeToken(String(args.challengeToken || "").trim());
+  if (fromChallenge) return fromChallenge;
+  throw new TursoAppError("Please sign in again.", 401);
+}
 async function handleTursoRpc(op, args = {}, authHeader = "") {
   const rawToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   const auth = rawToken ? verifyAuthToken(rawToken) : null;
   const db = await getDb();
   const now = Date.now();
+  if (auth?.userId && EMAIL_VERIFICATION_GATED_OPS.has(op) && isEmailVerificationRequired()) {
+    const flagRes = await db.execute({
+      sql: `SELECT email_verified FROM users WHERE id = ? LIMIT 1`,
+      args: [String(auth.userId)]
+    });
+    if (Number(flagRes.rows[0]?.email_verified ?? 1) === 0) {
+      throw new TursoAppError(
+        "Confirm your email address before you can message anyone. The code is in your inbox.",
+        403
+      );
+    }
+  }
   switch (op) {
     /* ---------- Public / Auth ---------- */
     case "signUpEmail": {
@@ -3255,7 +3511,7 @@ async function handleTursoRpc(op, args = {}, authHeader = "") {
         const row = existing.rows[0];
         if (!row.password_hash) {
           throw new TursoAppError(
-            "This email is already registered with Google. Tap 'Continue with Google' above."
+            "An account already exists for this email. It was created with Google sign-in, which has since been removed from JaText, so it has no password to sign in with yet."
           );
         }
         throw new TursoAppError("An account with this email already exists. Switch to 'Sign in'.");
@@ -3263,16 +3519,83 @@ async function handleTursoRpc(op, args = {}, authHeader = "") {
       const uid = newId();
       const pwHash = await hashPassword(password);
       const defaultDisplay = email.split("@")[0].slice(0, 40);
+      const requireVerification = isEmailVerificationRequired();
       await db.execute({
-        sql: `INSERT INTO users (id, email, password_hash, display_name, avatar_color, onboarding_complete, status_preference, created_at, updated_at)
-              VALUES (?, ?, ?, ?, 'black', 0, 'online', ?, ?)`,
-        args: [uid, email, pwHash, defaultDisplay, now, now]
+        sql: `INSERT INTO users (id, email, password_hash, display_name, avatar_color, onboarding_complete, status_preference, email_verified, created_at, updated_at)
+              VALUES (?, ?, ?, ?, 'black', 0, 'online', ?, ?, ?)`,
+        args: [uid, email, pwHash, defaultDisplay, requireVerification ? 0 : 1, now, now]
       });
       await terminateAllLinkedDevicesForUser(db, uid);
+      if (requireVerification) {
+        try {
+          const sent = await issueEmailVerificationCode(db, uid, email);
+          return {
+            ok: true,
+            requiresEmailVerification: true,
+            ...sent,
+            challengeToken: createEmailVerificationChallengeToken(uid, email)
+          };
+        } catch (err) {
+          await db.execute({ sql: `DELETE FROM users WHERE id = ?`, args: [uid] }).catch(() => void 0);
+          throw new TursoAppError(
+            `${err instanceof Error ? err.message : "Could not send the verification email."} No account was created, so you can try again.`
+          );
+        }
+      }
       const created = await db.execute({ sql: `SELECT * FROM users WHERE id = ?`, args: [uid] });
       return {
         token: createAuthToken(uid, email),
         me: mapUserRow(created.rows[0], true)
+      };
+    }
+    case "getEmailVerification": {
+      const subject = await resolveEmailVerificationSubject(db, args, auth);
+      const [userRes, pendingRes] = await Promise.all([
+        db.execute({ sql: `SELECT email_verified, email FROM users WHERE id = ? LIMIT 1`, args: [subject.userId] }),
+        db.execute({
+          sql: `SELECT sent_at, expires_at, attempts FROM email_verifications WHERE user_id = ? LIMIT 1`,
+          args: [subject.userId]
+        })
+      ]);
+      const row = userRes.rows[0] || {};
+      const pending = pendingRes.rows[0];
+      const nowTs = Date.now();
+      return {
+        ok: true,
+        verified: Number(row.email_verified ?? 1) === 1,
+        required: isEmailVerificationRequired(),
+        maskedEmail: maskEmail(row.email || subject.email),
+        ...pending ? {
+          retryAfterSec: Math.max(
+            0,
+            Math.ceil((Number(pending.sent_at || 0) + EMAIL_CODE_RESEND_COOLDOWN_MS - nowTs) / 1e3)
+          ),
+          expiresInSec: Math.max(0, Math.ceil((Number(pending.expires_at || 0) - nowTs) / 1e3)),
+          attemptsLeft: Math.max(0, EMAIL_CODE_MAX_ATTEMPTS - Number(pending.attempts || 0))
+        } : {}
+      };
+    }
+    case "sendEmailVerification": {
+      const subject = await resolveEmailVerificationSubject(db, args, auth);
+      const sent = await issueEmailVerificationCode(db, subject.userId, subject.email);
+      return {
+        ok: true,
+        sent: true,
+        // The countdown the button has to respect, from the number that decides it.
+        retryAfterSec: Math.round(EMAIL_CODE_RESEND_COOLDOWN_MS / 1e3),
+        ...sent
+      };
+    }
+    case "verifyEmailCode": {
+      const subject = await resolveEmailVerificationSubject(db, args, auth);
+      await confirmEmailVerificationCode(db, subject.userId, String(args.code || ""));
+      const userRes = await db.execute({ sql: `SELECT * FROM users WHERE id = ? LIMIT 1`, args: [subject.userId] });
+      const email = String(userRes.rows[0]?.email || subject.email || "");
+      return {
+        ok: true,
+        verified: true,
+        token: createAuthToken(subject.userId, email),
+        me: mapUserRow(userRes.rows[0], true)
       };
     }
     case "signInEmail": {
@@ -3291,7 +3614,7 @@ async function handleTursoRpc(op, args = {}, authHeader = "") {
       }
       if (!user.password_hash) {
         throw new TursoAppError(
-          "This account signs in with Google. Tap 'Continue with Google' above."
+          "This account was created with Google sign-in, which has been removed from JaText, so there is no password to check. Create a new account with this email, or ask the app owner to reset it."
         );
       }
       const valid = await verifyPassword(password, String(user.password_hash));
@@ -3299,6 +3622,14 @@ async function handleTursoRpc(op, args = {}, authHeader = "") {
         throw new TursoAppError("Incorrect email or password.");
       }
       const uid = String(user.id);
+      if (Number(user.email_verified ?? 1) === 0 && isEmailVerificationRequired()) {
+        const resend = await issueEmailVerificationCode(db, uid, email).catch(() => null);
+        return {
+          requiresEmailVerification: true,
+          challengeToken: createEmailVerificationChallengeToken(uid, email),
+          ...resend || {}
+        };
+      }
       if (Number(user.totp_enabled || 0) === 1 && user.totp_secret) {
         return {
           requiresTwoFactor: true,
@@ -7175,10 +7506,11 @@ async function flushDueScheduledMessages(db, force = false) {
   }
   return dispatchedCount;
 }
-var scryptAsync, FOURTEEN_DAYS_MS, UNSEND_WINDOW_MS, TOKEN_TTL_MS, TOKEN_RENEW_THRESHOLD_MS, MAX_LINKED_DEVICES, LINK_SESSION_TTL_MS, USERNAME_REGEX, OWNER_EMAIL, OWNER_USERNAME, TursoAppError, cachedClient, cachedClientKey, schemaReadyForKey, schemaInitPromise, customDbOverride, CORE_SCHEMA_TABLES, BASE32_ALPHABET, ANDROID_CERT_SHA256_HEX, ANDROID_PASSKEY_ORIGIN, lastScheduledSweepAt, lastUpdatesSweepAt;
+var scryptAsync, FOURTEEN_DAYS_MS, UNSEND_WINDOW_MS, TOKEN_TTL_MS, TOKEN_RENEW_THRESHOLD_MS, MAX_LINKED_DEVICES, LINK_SESSION_TTL_MS, USERNAME_REGEX, OWNER_EMAIL, OWNER_USERNAME, TursoAppError, cachedClient, cachedClientKey, schemaReadyForKey, schemaInitPromise, customDbOverride, CORE_SCHEMA_TABLES, BASE32_ALPHABET, ANDROID_CERT_SHA256_HEX, ANDROID_PASSKEY_ORIGIN, EMAIL_CODE_TTL_MS, EMAIL_CODE_RESEND_COOLDOWN_MS, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_VERIFICATION_GATED_OPS, lastScheduledSweepAt, lastUpdatesSweepAt;
 var init_tursoBackend = __esm({
   "server/tursoBackend.js"() {
     init_runtimeCompat();
+    init_emailSender();
     init_fcmRestClient();
     init_postgresAdapter();
     init_fcmServiceAccount();
@@ -7211,6 +7543,21 @@ var init_tursoBackend = __esm({
     ANDROID_PASSKEY_ORIGIN = `android:apk-key-hash:${base64UrlEncode(
       Buffer.from(ANDROID_CERT_SHA256_HEX, "hex")
     )}`;
+    EMAIL_CODE_TTL_MS = 10 * 6e4;
+    EMAIL_CODE_RESEND_COOLDOWN_MS = 45e3;
+    EMAIL_CODE_MAX_ATTEMPTS = 6;
+    EMAIL_VERIFICATION_GATED_OPS = /* @__PURE__ */ new Set([
+      "sendMessage",
+      "sendGroupMessage",
+      "sendCommunityMessage",
+      "sendFriendRequest",
+      "createGroup",
+      "createCommunity",
+      // Linking a second device is how an account becomes usable somewhere else, so an
+      // address that has not been confirmed cannot spread itself to another screen first.
+      "createDeviceLinkSession",
+      "approveDeviceLinkSession"
+    ]);
     lastScheduledSweepAt = 0;
     lastUpdatesSweepAt = 0;
   }
@@ -7300,6 +7647,9 @@ function resolveRpcRateTier(op) {
     case "signInEmail":
     case "signUpEmail":
     case "verifyTwoFactorLogin":
+    case "verifyEmailCode":
+    case "sendEmailVerification":
+    case "getEmailVerification":
     case "beginPasskeyLogin":
     case "finishPasskeyLogin":
       return { tier: "auth", limit: 25, windowMs: 6e4 };
@@ -8651,6 +9001,7 @@ async function handler4(req, res) {
     fcmConfigured,
     fcmProjectId: fcm.projectId,
     klipyConfigured,
+    emailVerificationRequired: isEmailVerificationRequired(),
     mediaStorage: storage.enabled ? "supabase" : "database",
     mediaBucket: storage.enabled ? storage.bucket : null,
     ...dbError ? { error: dbError } : {}
@@ -9178,7 +9529,7 @@ var init_ios_404 = __esm({
 // supabase/functions-src/jatext-api/index.ts
 import { Buffer as NodeBuffer } from "node:buffer";
 if (!globalThis.Buffer) globalThis.Buffer = NodeBuffer;
-var env = Deno.env;
+var env2 = Deno.env;
 for (const key of [
   "DATABASE_URL",
   "POSTGRES_URL",
@@ -9204,7 +9555,7 @@ for (const key of [
   "WEBAUTHN_EXTRA_ORIGINS",
   "WEBAUTHN_ANDROID_ORIGINS"
 ]) {
-  const value = env?.get?.(key);
+  const value = env2?.get?.(key);
   if (value && !process.env[key]) process.env[key] = value;
 }
 var FUNCTION_SLUG = "jatext-api";

@@ -33,7 +33,12 @@ import {
   signInWithPasskeyInBrowser,
   type CustomSoundboardClip,
 } from "./securityClient";
-import { setPendingTwoFactorChallenge, TwoFactorRequiredError } from "./tursoClient";
+import {
+  EmailVerificationRequiredError,
+  setPendingEmailVerificationChallenge,
+  setPendingTwoFactorChallenge,
+  TwoFactorRequiredError,
+} from "./tursoClient";
 import { ingestServerOpenedViewOnceIds } from "./viewOnce";
 import { OAUTH_RETURN_CHATS_FLAG, OAUTH_RETURN_IOS_CHATS_FLAG } from "./webRoute";
 import { OFFICIAL_COMMUNITY_ID } from "./types";
@@ -938,7 +943,10 @@ export function useTursoReactiveSession(
     async (email: string, password: string) => {
       const res = await tursoRpc<{
         requiresTwoFactor?: boolean;
+        requiresEmailVerification?: boolean;
         challengeToken?: string;
+        maskedEmail?: string;
+        retryAfterSec?: number;
         email?: string;
         token?: string;
         me?: JaUser;
@@ -946,6 +954,19 @@ export function useTursoReactiveSession(
       if (res.requiresTwoFactor && res.challengeToken) {
         setPendingTwoFactorChallenge(res.challengeToken);
         throw new TwoFactorRequiredError(res.challengeToken, res.email || email);
+      }
+      // Checked before the password is of any use: an account whose address has never
+      // been confirmed has no session to hand out yet, whichever device asks.
+      if (res.requiresEmailVerification && res.challengeToken) {
+        setPendingEmailVerificationChallenge({
+          token: res.challengeToken,
+          maskedEmail: res.maskedEmail || "",
+        });
+        throw new EmailVerificationRequiredError(
+          res.challengeToken,
+          res.maskedEmail || "",
+          Number(res.retryAfterSec || 0),
+        );
       }
       if (!res.token || !res.me) {
         throw new Error("Sign-in did not return an active session.");
@@ -957,6 +978,36 @@ export function useTursoReactiveSession(
       await runBootstrap(slotId);
     },
     [runBootstrap, slotId],
+  );
+
+  const authVerifyEmailCode = useCallback(
+    async (challengeToken: string, code: string) => {
+      const res = await tursoRpc<{ token: string; me: JaUser }>(
+        "verifyEmailCode",
+        { challengeToken: challengeToken.trim(), code: code.trim() },
+        { slotId, skipAuthClear: true },
+      );
+      setPendingEmailVerificationChallenge(null);
+      await setTursoTokenForSlot(slotId, res.token, PUBLIC_TURSO_API_ORIGIN);
+      setMeQuery(res.me);
+      setIsAuthenticated(true);
+      setAuthLoading(false);
+      await runBootstrap(slotId);
+    },
+    [runBootstrap, slotId],
+  );
+
+  const authResendEmailCode = useCallback(
+    async (challengeToken: string) => {
+      const res = await tursoRpc<{ sent?: boolean; retryAfterSec?: number }>(
+        "sendEmailVerification",
+        { challengeToken: challengeToken.trim() },
+        { slotId, skipAuthClear: true },
+      );
+      // Handed back so the button counts down the number the server actually enforces.
+      return { retryAfterSec: Number(res?.retryAfterSec || 0) };
+    },
+    [slotId],
   );
 
   const authCompleteTwoFactorLogin = useCallback(
@@ -991,11 +1042,30 @@ export function useTursoReactiveSession(
 
   const authSignUpEmail = useCallback(
     async (email: string, password: string) => {
-      const res = await tursoRpc<{ token: string; me: JaUser }>(
-        "signUpEmail",
-        { email: email.trim().toLowerCase(), password },
-        { slotId },
-      );
+      const res = await tursoRpc<{
+        token?: string;
+        me?: JaUser;
+        requiresEmailVerification?: boolean;
+        challengeToken?: string;
+        maskedEmail?: string;
+        retryAfterSec?: number;
+      }>("signUpEmail", { email: email.trim().toLowerCase(), password }, { slotId });
+      // The account exists but is not handed over: onboarding, chats and settings all
+      // wait behind the code, which is the point of asking for it.
+      if (res.requiresEmailVerification && res.challengeToken) {
+        setPendingEmailVerificationChallenge({
+          token: res.challengeToken,
+          maskedEmail: res.maskedEmail || "",
+        });
+        throw new EmailVerificationRequiredError(
+          res.challengeToken,
+          res.maskedEmail || "",
+          Number(res.retryAfterSec || 0),
+        );
+      }
+      if (!res.token || !res.me) {
+        throw new Error("Sign-up did not return an active session.");
+      }
       await setTursoTokenForSlot(slotId, res.token, PUBLIC_TURSO_API_ORIGIN);
       setMeQuery(res.me);
       setIsAuthenticated(true);
@@ -2381,6 +2451,8 @@ export function useTursoReactiveSession(
     authSignUpEmail,
     authSignInGoogle,
     authCompleteTwoFactorLogin,
+    authVerifyEmailCode,
+    authResendEmailCode,
     authSignInPasskey,
     authSignOut,
     upload,

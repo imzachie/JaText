@@ -14,11 +14,16 @@ import { isWebAuthnSupported } from "../lib/securityClient";
 import { useJaText } from "../lib/store";
 import {
   PUBLIC_TURSO_API_ORIGIN,
+  EmailVerificationRequiredError,
   TwoFactorRequiredError,
   consumePendingOAuthError,
+  getPendingEmailVerificationChallenge,
   getPendingTwoFactorChallenge,
+  setPendingEmailVerificationChallenge,
   setPendingTwoFactorChallenge,
+  subscribePendingEmailVerificationChallenge,
   subscribePendingTwoFactorChallenge,
+  type PendingEmailVerification,
 } from "../lib/tursoClient";
 import { KeyIcon } from "./UiIcons";
 
@@ -37,6 +42,11 @@ export function IosMobileLoginPage() {
     getPendingTwoFactorChallenge(),
   );
   const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [emailChallenge, setEmailChallenge] = useState<PendingEmailVerification | null>(() =>
+    getPendingEmailVerificationChallenge(),
+  );
+  const [emailCode, setEmailCode] = useState("");
+  const [resendInSec, setResendInSec] = useState(0);
   const [error, setError] = useState<string>(() => consumePendingOAuthError() ?? "");
 
   useEffect(() => {
@@ -44,6 +54,21 @@ export function IosMobileLoginPage() {
       setTwoFactorToken(getPendingTwoFactorChallenge());
     });
   }, []);
+
+  useEffect(() => {
+    return subscribePendingEmailVerificationChallenge(() => {
+      setEmailChallenge(getPendingEmailVerificationChallenge());
+    });
+  }, []);
+
+  // The server answers a too-early resend with the exact number of seconds left, so this
+  // countdown is only the courtesy version of that: it keeps the button honest without
+  // trusting the client to know the cooldown.
+  useEffect(() => {
+    if (resendInSec <= 0) return;
+    const id = window.setTimeout(() => setResendInSec((sec) => Math.max(0, sec - 1)), 1000);
+    return () => window.clearTimeout(id);
+  }, [resendInSec]);
 
   const returnAccount = returnToSlotId
     ? accounts.find((a) => a.slotId === returnToSlotId)
@@ -77,7 +102,13 @@ export function IosMobileLoginPage() {
         await store.signInEmail(cleanEmail, password);
       }
     } catch (err) {
-      if (err instanceof TwoFactorRequiredError) {
+      if (err instanceof EmailVerificationRequiredError) {
+        setPendingEmailVerificationChallenge({ token: err.challengeToken, maskedEmail: err.maskedEmail });
+        setEmailChallenge({ token: err.challengeToken, maskedEmail: err.maskedEmail });
+        setEmailCode("");
+        setResendInSec(Math.max(0, Number(err.retryAfterSec || 0)));
+        setError("");
+      } else if (err instanceof TwoFactorRequiredError) {
         setPendingTwoFactorChallenge(err.challengeToken);
         setTwoFactorToken(err.challengeToken);
         setTwoFactorCode("");
@@ -109,6 +140,42 @@ export function IosMobileLoginPage() {
     }
   };
 
+  const handleEmailCodeVerify = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!emailChallenge?.token || !store.verifyEmailCode || busy) return;
+    const clean = emailCode.replace(/[^0-9]/g, "");
+    if (clean.length !== 6) {
+      setError("Enter the 6-digit code from the email.");
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await store.verifyEmailCode(emailChallenge.token, clean);
+      setPendingEmailVerificationChallenge(null);
+      setEmailChallenge(null);
+      setEmailCode("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That code did not work.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleEmailCodeResend = async () => {
+    if (!emailChallenge?.token || !store.resendEmailCode || busy || resendInSec > 0) return;
+    setError("");
+    setBusy(true);
+    try {
+      const next = await store.resendEmailCode(emailChallenge.token);
+      setResendInSec(Math.max(0, Number(next?.retryAfterSec || 45)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send another code.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleTwoFactorVerify = async (e: FormEvent) => {
     e.preventDefault();
     if (!twoFactorToken || !store.completeTwoFactorLogin || busy) return;
@@ -130,6 +197,84 @@ export function IosMobileLoginPage() {
       setBusy(false);
     }
   };
+
+  if (emailChallenge?.token) {
+    return (
+      <div className="jt-ios-login-screen">
+        <div className="jt-ios-login-orb jt-ios-login-orb-1" aria-hidden="true" />
+        <div className="jt-ios-login-orb jt-ios-login-orb-2" aria-hidden="true" />
+        <div className="jt-ios-login-scroll">
+          <div className="jt-ios-login-card">
+            <button
+              type="button"
+              className="jt-ios-login-back-slot"
+              onClick={() => {
+                setPendingEmailVerificationChallenge(null);
+                setEmailChallenge(null);
+                setEmailCode("");
+                setError("");
+              }}
+            >
+              <IosArrowLeftIcon size={15} />
+              <span>Back to Sign In</span>
+            </button>
+
+            <div className="jt-ios-login-header">
+              <div className="jt-ios-login-logo-shell">
+                <img src="/jatext-logo-icon.png" alt="JaText" width={62} height={62} />
+              </div>
+              <span className="jt-ios-login-badge">{t("verify_email_title")}</span>
+              <h1>{t("verify_email_title")}</h1>
+              <p>
+                {t("email_code_sent")}
+                {emailChallenge.maskedEmail ? <b> {emailChallenge.maskedEmail}</b> : null}
+              </p>
+            </div>
+
+            {error && (
+              <div className="jt-ios-login-error" role="alert">
+                {error}
+              </div>
+            )}
+
+            <form className="jt-ios-login-form" onSubmit={handleEmailCodeVerify}>
+              <label className="jt-ios-input-group">
+                <span className="jt-ios-input-label">{t("enter_email_code")}</span>
+                <div className="jt-ios-input-wrap">
+                  <IosLockIcon size={16} className="jt-ios-input-icon" />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={12}
+                    placeholder="123456"
+                    value={emailCode}
+                    onChange={(e) => setEmailCode(e.target.value)}
+                    autoFocus
+                    required
+                  />
+                </div>
+              </label>
+
+              <button type="submit" className="jt-ios-submit-btn" disabled={busy}>
+                {busy ? "Verifying..." : "Verify & Continue"}
+              </button>
+              <button
+                type="button"
+                className="jt-ios-resend-code-btn"
+                disabled={busy || resendInSec > 0}
+                onClick={() => void handleEmailCodeResend()}
+              >
+                {resendInSec > 0
+                  ? `${t("resend_email_code")} (${resendInSec}s)`
+                  : t("resend_email_code")}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (twoFactorToken) {
     return (

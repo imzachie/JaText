@@ -206,6 +206,10 @@ data class SessionUiState(
     val soundboards: List<SoundboardClip> = emptyList(),
     val pendingTwoFactorChallengeToken: String? = null,
     val pendingTwoFactorEmail: String = "",
+    /** Held while the emailed code is still outstanding: no session, nothing to show. */
+    val pendingEmailVerifyChallengeToken: String? = null,
+    val pendingEmailVerifyMasked: String = "",
+    val pendingEmailVerifyWaitSec: Int = 0,
     val securitySettings: SecuritySettingsResponse = SecuritySettingsResponse(),
     val blockedUsersList: List<JaUser> = emptyList(),
     val exploreCommunities: List<ExploreCommunitySummary> = emptyList(),
@@ -659,6 +663,9 @@ class JaTextSessionViewModel(app: Application) :
                 addingAccountReturnSlotId = null,
                 pendingTwoFactorChallengeToken = null,
                 pendingTwoFactorEmail = "",
+                pendingEmailVerifyChallengeToken = null,
+                pendingEmailVerifyMasked = "",
+                pendingEmailVerifyWaitSec = 0,
                 accounts = cache.getAccounts(),
                 me = boot.me,
                 friends = boot.friends,
@@ -1629,6 +1636,16 @@ class JaTextSessionViewModel(app: Application) :
             op = "signInEmail",
             args = mapOf("email" to cleanEmail, "password" to password),
         ).jsonObject
+        val requiresEmailVerify = root["requiresEmailVerification"]?.jsonPrimitive?.booleanOrNull == true
+        val emailChallenge = root["challengeToken"]?.jsonPrimitive?.contentOrNull
+        if (requiresEmailVerify && !emailChallenge.isNullOrBlank()) {
+            promptEmailVerification(
+                emailChallenge,
+                root["maskedEmail"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                root["retryAfterSec"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0,
+            )
+            return
+        }
         val requiresTwoFactor = root["requiresTwoFactor"]?.jsonPrimitive?.booleanOrNull == true
         val challengeToken = root["challengeToken"]?.jsonPrimitive?.contentOrNull
         if (requiresTwoFactor && !challengeToken.isNullOrBlank()) {
@@ -1690,6 +1707,84 @@ class JaTextSessionViewModel(app: Application) :
         bootstrapActiveSlot(effectiveSlot, initialUser = me)
     }
 
+    /**
+     * Holds an account whose emailed code has not been entered yet: no token, so the app
+     * stays on this screen instead of opening onto an account nobody can reach. The
+     * exchange token lives in this state and never in the session store, so force-closing
+     * the app costs nothing: signing in again mints a fresh code, and the server is the
+     * one that says how long the wait between two of them has to be.
+     */
+    fun promptEmailVerification(challengeToken: String, maskedEmail: String = "", retryAfterSec: Int = 0) {
+        mobileOAuthPollJob?.cancel()
+        activeMobileOAuthSessionId = null
+        _state.update {
+            it.copy(
+                googleSignInInFlight = false,
+                authError = null,
+                pendingTwoFactorChallengeToken = null,
+                pendingTwoFactorEmail = "",
+                pendingEmailVerifyChallengeToken = challengeToken.trim(),
+                pendingEmailVerifyMasked = maskedEmail.trim(),
+                pendingEmailVerifyWaitSec = retryAfterSec.coerceAtLeast(0),
+            )
+        }
+    }
+
+    fun cancelEmailVerification() {
+        _state.update {
+            it.copy(
+                pendingEmailVerifyChallengeToken = null,
+                pendingEmailVerifyMasked = "",
+                pendingEmailVerifyWaitSec = 0,
+                authError = null,
+            )
+        }
+    }
+
+    /** The server decides how long the next request has to wait and says so in the reply. */
+    suspend fun resendEmailVerificationCode() {
+        val challengeToken = _state.value.pendingEmailVerifyChallengeToken
+            ?: throw IllegalStateException("Please sign in again.")
+        val root = TursoApiClient.rpcRaw(
+            op = "sendEmailVerification",
+            args = mapOf("challengeToken" to challengeToken.trim()),
+        ).jsonObject
+        _state.update {
+            it.copy(
+                authError = null,
+                pendingEmailVerifyWaitSec =
+                    (root["retryAfterSec"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0).coerceAtLeast(0),
+            )
+        }
+    }
+
+    suspend fun verifyEmailCode(code: String) {
+        val challengeToken = _state.value.pendingEmailVerifyChallengeToken
+            ?: throw IllegalStateException("Please sign in again.")
+        val slot = _state.value.slotId
+        val clean = code.filter { it.isDigit() }
+        if (clean.length != 6) {
+            throw IllegalStateException("Enter the 6-digit code from the email.")
+        }
+        val root = TursoApiClient.rpcRaw(
+            op = "verifyEmailCode",
+            args = mapOf("challengeToken" to challengeToken.trim(), "code" to clean),
+        ).jsonObject
+        val token = root["token"]?.jsonPrimitive?.contentOrNull
+            ?: throw IllegalStateException("That code did not work.")
+        val me = JaTextJson.decodeFromJsonElement(JaUser.serializer(), root["me"]!!)
+        _state.update {
+            it.copy(
+                pendingEmailVerifyChallengeToken = null,
+                pendingEmailVerifyMasked = "",
+                pendingEmailVerifyWaitSec = 0,
+                authError = null,
+            )
+        }
+        val effectiveSlot = cache.upsertSlotSession(slot, token, me)
+        bootstrapActiveSlot(effectiveSlot, initialUser = me)
+    }
+
     fun startPasskeySignIn(activity: Activity, emailHint: String? = null) {
         _state.update { it.copy(authError = null) }
         viewModelScope.launch {
@@ -1713,6 +1808,18 @@ class JaTextSessionViewModel(app: Application) :
             op = "signUpEmail",
             args = mapOf("email" to email.trim().lowercase(), "password" to password),
         ).jsonObject
+        // The account was made, but it is not handed over yet: onboarding, chats and
+        // settings all wait behind the code that is on its way to that inbox.
+        val requiresEmailVerify = root["requiresEmailVerification"]?.jsonPrimitive?.booleanOrNull == true
+        val emailChallenge = root["challengeToken"]?.jsonPrimitive?.contentOrNull
+        if (requiresEmailVerify && !emailChallenge.isNullOrBlank()) {
+            promptEmailVerification(
+                emailChallenge,
+                root["maskedEmail"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                root["retryAfterSec"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0,
+            )
+            return
+        }
         val token = root["token"]?.jsonPrimitive?.contentOrNull
             ?: throw IllegalStateException("Server did not return an auth token.")
         val me = JaTextJson.decodeFromJsonElement(JaUser.serializer(), root["me"]!!)

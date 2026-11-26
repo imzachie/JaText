@@ -373,6 +373,13 @@ export interface JaTextStore {
 
   signInEmail: (email: string, password: string) => Promise<void>;
   signUpEmail: (email: string, password: string) => Promise<void>;
+  /**
+   * Trade the code from the verification email for a session. Optional because only the
+   * server-backed stores can answer it; the demo store has nothing to verify.
+   */
+  verifyEmailCode?: (challengeToken: string, code: string) => Promise<void>;
+  /** Ask for another code, e.g. after a typo or an expiry. */
+  resendEmailCode?: (challengeToken: string) => Promise<{ retryAfterSec?: number } | void>;
   signInGoogle: (demoProfile?: { name: string; email: string }) => Promise<void>;
   completeTwoFactorLogin?: (challengeToken: string, code: string) => Promise<void>;
   signInWithPasskey?: (emailHint?: string) => Promise<void>;

@@ -72,12 +72,14 @@ Add, replace, or delete there and the next request picks it up.
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google | redirect URI `https://jatextapp.pages.dev/api/oauth-google`, and the consent screen must be **In production** (or the address added under **Test users**) or Google answers `403 access_denied`. `GET /api/oauth-google?action=config` is what the APK polls; when it returns the `clientId`, the button works, no new build needed |
 | `FCM_SERVICE_ACCOUNT_JSON` | Android push | the whole `service_account` JSON, base64 or raw |
 | `KLIPY_API_KEY` | song search | |
+| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL` | the signup code email | the key starts with `xkeysib-`; the address must be one Brevo has already verified under **Senders & IPs**, or every send comes back as `sender not verified`. `BREVO_SENDER_NAME` is optional (default `JaText`), `BREVO_API_BASE` only exists for tests |
+| `JATEXT_REQUIRE_EMAIL_VERIFICATION` | turning the signup code on | `1` = every new account must type the emailed code before it can message anyone; anything else, or a missing `BREVO_API_KEY`, and sign-up behaves exactly as it always did |
 | `SUPABASE_SERVICE_ROLE_KEY` | attachments in Storage | without it, uploads keep going into Postgres; `SUPABASE_URL` is not needed, the ref is read from `DATABASE_URL` |
 
 ## Checks worth doing after the first deploy
 
 ```
-https://jatextapp.pages.dev/api/auth-status        → "engine":"postgresql","dbConnected":true,"mediaStorage":"supabase"
+https://jatextapp.pages.dev/api/auth-status        → "engine":"postgresql","dbConnected":true,"mediaStorage":"supabase","emailVerificationRequired":false
 https://jatextapp.pages.dev/api/health             → the function's own router answers this
 ```
 
@@ -147,6 +149,48 @@ keep using `/api/media?id=…`; the redirect happens in front of them. If the se
 ever removed, new uploads go back to the database, and a file already in the bucket
 answers with a 503 naming that secret instead of a blank thumbnail clients would cache
 forever.
+
+## Signing up: the email code
+
+`signUpEmail` can now refuse to hand out a session until the address in it has been
+proved. The whole thing sits behind two conditions, both of which have to hold:
+`JATEXT_REQUIRE_EMAIL_VERIFICATION` is `1`, and Brevo is configured. With either
+missing, nothing about sign-up changes, and existing accounts are untouched: the
+`email_verified` column was added with `DEFAULT 1`, so nobody was ever locked out by
+the migration.
+
+What a new person sees: the account is created, a 6-digit code is mailed, and the app
+shows one box and nothing else. Onboarding, chats, settings and every other screen are
+behind it, because no session token is issued at all. `handleTursoRpc` also checks the
+flag before `sendMessage`, `sendGroupMessage`, `sendCommunityMessage`,
+`sendFriendRequest`, `createGroup`, `createCommunity`, `createDeviceLinkSession` and
+`approveDeviceLinkSession`, so a token that arrived some other way (an older build, a
+linked device) still cannot reach anybody until the code is entered.
+
+Details worth knowing before changing it:
+
+* The code is never stored. `email_verifications.code_hash` is an HMAC-SHA256 of
+  `email-code:<code>` keyed with `AUTH_SECRET`, so a database read cannot hand out
+  working codes, and rotating `AUTH_SECRET` invalidates every outstanding code (which
+  is fine: asking for another one is one click).
+* 10 minutes to live, six wrong tries then the code is burned, 45 seconds between two
+  sends. All three numbers are only enforced server-side, and the resend answer carries
+  `retryAfterSec` so the client counts down the number the server actually used.
+* Before the password is checked for a second time: signing in to an unverified account
+  refuses the session and sends a fresh code, so the code cannot be skipped by choosing
+  a different device.
+* If Brevo refuses the send, the signup is rolled back and the error comes from
+  the request itself, with Brevo's own words in it. A half-made account would squat on
+  the address forever and turn "try again" into "an account already exists for this
+  email".
+* `GET /api/auth-status` prints `emailVerificationRequired`, which is the only way to
+  tell "this feature is on" from outside the app. It reads the same two conditions, so it
+  cannot advertise a gate that `handleTursoRpc` is not actually enforcing.
+
+To turn it on, two secrets in Supabase (the same place, same two clicks):
+`BREVO_SENDER_EMAIL` set to the verified address, then `JATEXT_REQUIRE_EMAIL_VERIFICATION`
+set to `1`. To turn it off, set the second one to `0`; accounts already sitting
+unverified keep their flag, so verifying them later still works.
 
 ## Sign in with Google: removed
 

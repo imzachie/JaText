@@ -318,6 +318,8 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     authSignUpEmail,
     authSignInGoogle,
     authCompleteTwoFactorLogin,
+    authVerifyEmailCode,
+    authResendEmailCode,
     authSignInPasskey,
     authSignOut,
     upload,
@@ -2546,6 +2548,20 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
     [authCompleteTwoFactorLogin],
   );
 
+  const verifyEmailCode = useCallback<NonNullable<JaTextStore["verifyEmailCode"]>>(
+    async (challengeToken, code) => {
+      await authVerifyEmailCode(challengeToken, code);
+    },
+    [authVerifyEmailCode],
+  );
+
+  const resendEmailCode = useCallback<NonNullable<JaTextStore["resendEmailCode"]>>(
+    async (challengeToken) => {
+      return await authResendEmailCode(challengeToken);
+    },
+    [authResendEmailCode],
+  );
+
   const signInWithPasskey = useCallback<NonNullable<JaTextStore["signInWithPasskey"]>>(
     async (emailHint) => {
       await authSignInPasskey(emailHint);
@@ -4558,11 +4574,15 @@ export function TursoStoreProvider({ children }: { children: ReactNode }) {
       deleteScheduledMessage,
       flushScheduledMessages,
       completeTwoFactorLogin,
+      verifyEmailCode,
+      resendEmailCode,
       signInWithPasskey,
     }),
     [
       activeChatId,
       completeTwoFactorLogin,
+      verifyEmailCode,
+      resendEmailCode,
       signInWithPasskey,
       activeDeviceSyncCode,
       activeGroupId,
