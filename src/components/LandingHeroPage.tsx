@@ -18,6 +18,10 @@ interface ApkVersionManifest {
   publishedAt?: string;
 }
 
+/** Where CI publishes the release notes for the newest signed APK. */
+const GITHUB_APK_MANIFEST_URL =
+  "https://raw.githubusercontent.com/Ahad00010/JaText/main/release-cdn/apk-version.json";
+
 const FALLBACK_APK_VERSION: ApkVersionManifest = {
   versionName: "4.5.0",
   versionCode: 84,
@@ -28,18 +32,33 @@ function usePublishedApkVersion(): ApkVersionManifest {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      try {
-        const res = await fetch(`/apk-version.json?t=${Date.now()}`, { cache: "no-store" });
-        if (!res.ok) return;
-        const json = (await res.json()) as ApkVersionManifest;
-        if (cancelled || !json?.versionName) return;
-        setManifest({
-          versionName: json.versionName,
-          versionCode: json.versionCode,
-          publishedAt: json.publishedAt,
-        });
-      } catch {
-        // Keep the fallback, the page should never show an empty version.
+      // The self hosted server serves the manifest beside the APK. When the
+      // site is hosted on a static host with no server of its own, the copy
+      // published to GitHub says the same thing, so try both.
+      const sources = [
+        `/apk-version.json?t=${Date.now()}`,
+        GITHUB_APK_MANIFEST_URL,
+      ];
+      for (const source of sources) {
+        try {
+          const res = await fetch(source, { cache: "no-store" });
+          if (!res.ok) continue;
+          // The SPA fallback answers with the page shell for a missing file,
+          // and GitHub raw serves JSON as plain text, so only the shell is
+          // rejected outright.
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("text/html")) continue;
+          const json = (await res.json()) as ApkVersionManifest;
+          if (cancelled || !json?.versionName) continue;
+          setManifest({
+            versionName: json.versionName,
+            versionCode: json.versionCode,
+            publishedAt: json.publishedAt,
+          });
+          return;
+        } catch {
+          // Try the next source, the page should never show an empty version.
+        }
       }
     };
     void load();
@@ -617,7 +636,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v4.2.1 · Live
+                v{apkVersion.versionName} · Live
               </span>
             </span>
           </a>
@@ -1141,7 +1160,7 @@ export function LandingHeroPage() {
                   <>
                     Launch the full JaText web app at{" "}
                     <strong>{PUBLIC_APP_HOST}/chats</strong> or grab the latest signed Android
-                    Release APK (v4.2.1).
+                    Release APK (v{apkVersion.versionName}).
                   </>
                 )}
               </p>
@@ -1171,7 +1190,7 @@ export function LandingHeroPage() {
                   href="/downloads/JaText-release.apk"
                   className="jt-btn-secondary jt-btn-lg"
                 >
-                  Get Android APK (v4.2.1)
+                  Get Android APK v{apkVersion.versionName}
                 </a>
               )}
             </div>
@@ -1184,7 +1203,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v4.2.1</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v{apkVersion.versionName}</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">
