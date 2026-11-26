@@ -65,6 +65,18 @@ function serveBrevo() {
       req.on("data", (c) => chunks.push(c));
       req.on("end", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+        if (req.method === "GET" && req.url.startsWith("/v3/contacts/lists")) {
+          // What the probe route asks. Brevo answers an unusable key with a 401 here,
+          // and a usable one with an empty list of contacts.
+          if (mode === "reject") {
+            res.writeHead(401, { "Content-Type": "application/json" }).end(
+              JSON.stringify({ message: "Invalid API key" }),
+            );
+            return;
+          }
+          res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ count: 0, lists: [] }));
+          return;
+        }
         if (req.method === "POST" && req.url === "/v3/smtp/email") {
           if (mode === "reject") {
             res.writeHead(400, { "Content-Type": "application/json" }).end(
@@ -256,6 +268,45 @@ async function main() {
   console.log("email verification: signup has to prove the address");
   const cfg = sender.emailSenderConfig();
   check("the sender reports itself configured", cfg.enabled && cfg.fromEmail === "hello@jatext.example");
+
+  /* ---------- the shape of the stored key, and what the probe is allowed to say ---------- */
+  const diag = sender.emailSenderDiagnostics();
+  check(
+    "a key that is not shaped like a Brevo key is named as the problem",
+    /does not look like a Brevo API key/.test(diag.warning) && /this one is 16/.test(diag.warning),
+    diag.warning,
+  );
+  const expected = "xkeysib-" + "a".repeat(64) + "-Abcd1234Efgh5678";
+  process.env.BREVO_API_KEY = expected;
+  const goodCfg = sender.emailSenderConfig();
+  check("a well formed key raises no complaint", goodCfg.warning === "" && goodCfg.enabled, goodCfg.warning);
+  const goodDiag = sender.emailSenderDiagnostics();
+  check(
+    "and the diagnostics describe it without repeating it",
+    goodDiag.keyLength === expected.length &&
+      goodDiag.keyFingerprint.length === 12 &&
+      !JSON.stringify(goodDiag).includes(expected),
+    JSON.stringify(goodDiag),
+  );
+  process.env.BREVO_API_KEY = "xkeysib-stub-key";
+
+  brevo.mode = "reject";
+  const refusedProbe = await sender.probeEmailSender({ force: true });
+  check(
+    "the probe reports the refusal instead of hiding it",
+    refusedProbe.status === 401 && /invalid api key/i.test(refusedProbe.note || "") && !JSON.stringify(refusedProbe).includes("xkeysib"),
+    JSON.stringify(refusedProbe),
+  );
+  const secondProbe = await sender.probeEmailSender();
+  check("a second probe is answered from the cache, so this cannot be used to hammer Brevo", secondProbe.cached === true, JSON.stringify(secondProbe));
+  check("and the cached answer carries how long to wait", Number(secondProbe.retryAfterSec) > 0, String(secondProbe.retryAfterSec));
+  brevo.mode = "ok";
+  const goodProbe = await sender.probeEmailSender({ force: true });
+  check(
+    "and says so plainly once the credential works",
+    goodProbe.ok === true && goodProbe.note === "credential accepted",
+    JSON.stringify(goodProbe),
+  );
 
   /* ---------- 1-6: the happy path and its abuse limits ---------- */
   let db = makeStubDb();

@@ -540,19 +540,29 @@ var init_runtimeCompat = __esm({
 });
 
 // server/emailSender.js
+import crypto2 from "node:crypto";
 function env(name) {
   return String(process.env[name] || "").trim();
+}
+function shortHash(value) {
+  const hex = crypto2.createHash("sha256").update(String(value || "")).digest("hex");
+  return hex.slice(0, 12);
 }
 function emailSenderConfig() {
   const apiKey = env("BREVO_API_KEY");
   const fromEmail = env("BREVO_SENDER_EMAIL") || env("BREVO_FROM_EMAIL");
   const base = (env("BREVO_API_BASE") || DEFAULT_API_BASE).replace(/\/+$/, "");
+  let warning = "";
+  if (apiKey && !BREVO_KEY_SHAPE.test(apiKey)) {
+    warning = `BREVO_API_KEY does not look like a Brevo API key (expected "xkeysib-" plus 64 hex characters plus a 16 character suffix, 89 in all; this one is ${apiKey.length}). A key copied short is the usual reason, and Brevo answers it with 401.`;
+  }
   return {
     enabled: Boolean(apiKey && fromEmail && base),
     apiKey,
     fromEmail,
     base,
     fromName: env("BREVO_SENDER_NAME") || "JaText",
+    warning,
     reason: !apiKey ? "No BREVO_API_KEY is set" : !fromEmail ? "No BREVO_SENDER_EMAIL is set, which has to be an address Brevo has verified" : ""
   };
 }
@@ -610,10 +620,58 @@ async function sendEmail({ to, subject, text, html }) {
   }
   return { sent: true, messageId: String(parsed?.messageId || "") };
 }
-var DEFAULT_API_BASE;
+function emailSenderDiagnostics() {
+  const cfg = emailSenderConfig();
+  return {
+    configured: cfg.enabled,
+    reason: cfg.reason || "",
+    warning: cfg.warning || "",
+    keyLength: cfg.apiKey.length,
+    keyFingerprint: cfg.apiKey ? shortHash(cfg.apiKey) : "",
+    senderEmail: cfg.fromEmail,
+    senderName: cfg.fromName,
+    apiBase: cfg.base
+  };
+}
+async function probeEmailSender({ force = false } = {}) {
+  const cfg = emailSenderConfig();
+  const now = Date.now();
+  if (!force && now - lastProbeAt < PROBE_COOLDOWN_MS && lastProbeResult) {
+    return { ...lastProbeResult, cached: true, retryAfterSec: Math.ceil((PROBE_COOLDOWN_MS - (now - lastProbeAt)) / 1e3) };
+  }
+  if (!cfg.apiKey) {
+    return { ok: false, skipped: true, error: "No BREVO_API_KEY is set." };
+  }
+  let result;
+  try {
+    const response = await fetch(`${cfg.base}/v3/contacts/lists?page=0&limit=1`, {
+      method: "GET",
+      headers: { "api-key": cfg.apiKey, accept: "application/json" },
+      signal: AbortSignal.timeout ? AbortSignal.timeout(12e3) : void 0
+    });
+    const raw = await response.text().catch(() => "");
+    result = {
+      ok: response.ok,
+      status: response.status,
+      // The count on a good day, Brevo's own sentence on a bad one, and nothing else:
+      // the body of this endpoint is written by a third party and is not trusted text.
+      note: response.ok ? "credential accepted" : raw.slice(0, 160)
+    };
+  } catch (err) {
+    result = { ok: false, status: 0, error: `Could not reach ${cfg.base}: ${err?.message || err}` };
+  }
+  lastProbeAt = Date.now();
+  lastProbeResult = result;
+  return { ...result, cached: false };
+}
+var DEFAULT_API_BASE, BREVO_KEY_SHAPE, PROBE_COOLDOWN_MS, lastProbeAt, lastProbeResult;
 var init_emailSender = __esm({
   "server/emailSender.js"() {
     DEFAULT_API_BASE = "https://api.brevo.com";
+    BREVO_KEY_SHAPE = /^xkeysib-[0-9a-f]{64}-[A-Za-z0-9]{16}$/;
+    PROBE_COOLDOWN_MS = 5 * 6e4;
+    lastProbeAt = 0;
+    lastProbeResult = null;
   }
 });
 
@@ -9416,12 +9474,57 @@ var init_klipy_test = __esm({
   }
 });
 
+// api/email-test.js
+var email_test_exports = {};
+__export(email_test_exports, {
+  default: () => handler8
+});
+async function handler8(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Cache-Control", "no-store");
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+  if (req.method !== "GET") {
+    return res.status(405).json({ ok: false, error: "Only GET is supported." });
+  }
+  if (enforceHttpRateLimit(req, res, { scope: "email_test", limit: 20, windowMs: 6e4 })) {
+    return;
+  }
+  let wantProbe = true;
+  try {
+    const url = new URL(req.url || "/", "http://localhost");
+    wantProbe = url.searchParams.get("probe") !== "0";
+  } catch {
+    wantProbe = true;
+  }
+  const diagnostics = emailSenderDiagnostics();
+  const probe = wantProbe ? await probeEmailSender() : { skipped: true };
+  return res.status(200).json({
+    ok: diagnostics.configured && (probe.skipped || probe.ok !== false),
+    verificationRequired: isEmailVerificationRequired(),
+    ...diagnostics,
+    probe,
+    // Which of the two failures this is, said out loud, because the app can only report
+    // the one sentence it got back from a send.
+    hint: !diagnostics.configured ? diagnostics.reason : diagnostics.warning ? diagnostics.warning : probe.ok === false ? "Brevo refused the stored key. Replace it with the value shown on Brevo's own API page, then redeploy this function: a secret is only read when the function is published." : "Mail is configured and Brevo accepts the key. A code that never arrives is then the recipient's spam folder, not this server."
+  });
+}
+var init_email_test = __esm({
+  "api/email-test.js"() {
+    init_emailSender();
+    init_tursoBackend();
+    init_rateLimiter();
+  }
+});
+
 // api/ios-404.js
 var ios_404_exports = {};
 __export(ios_404_exports, {
-  default: () => handler8
+  default: () => handler9
 });
-function handler8(_req, res) {
+function handler9(_req, res) {
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -9582,6 +9685,7 @@ var ROUTES = {
   "/api/link-preview": () => Promise.resolve().then(() => (init_link_preview(), link_preview_exports)),
   "/api/push-test": () => Promise.resolve().then(() => (init_push_test(), push_test_exports)),
   "/api/klipy-test": () => Promise.resolve().then(() => (init_klipy_test(), klipy_test_exports)),
+  "/api/email-test": () => Promise.resolve().then(() => (init_email_test(), email_test_exports)),
   "/api/ios-404": () => Promise.resolve().then(() => (init_ios_404(), ios_404_exports))
 };
 async function toReq(request, overridePath) {
@@ -9723,10 +9827,10 @@ Deno.serve(async (request) => {
   }
 });
 async function invoke(load, request, overridePath) {
-  const handler9 = (await load()).default;
+  const handler10 = (await load()).default;
   const req = await toReq(request, overridePath);
   const { res, finish } = toRes();
-  await handler9(req, res);
+  await handler10(req, res);
   return finish();
 }
 async function statusResponse(request) {
