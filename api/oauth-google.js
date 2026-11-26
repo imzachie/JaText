@@ -256,6 +256,36 @@ export default async function handler(req, res) {
   const { clientId, clientSecret, androidClientConfigured, configured } = credentials;
   const action = String(req.query?.action || "");
 
+  // Google sign-in was removed from JaText. Everything below stays so the flow is
+  // one env variable away from working again, but every route answers as if it had
+  // never existed. Installed apps ask this endpoint before opening a browser tab at
+  // Google, so a blank client id is what makes them print a message instead of
+  // stranding a person on a callback that can never finish.
+  if (process.env.JATEXT_GOOGLE_DISABLED !== "0") {
+    if (action === "config") {
+      return res.status(200).json({
+        ok: true,
+        configured: false,
+        clientId: "",
+        androidClientConfigured: false,
+        removed: true,
+      });
+    }
+    if (req.method === "POST") {
+      return res.status(410).json({
+        ok: false,
+        error: "Google sign-in has been removed from JaText. Sign in with your email address and password.",
+      });
+    }
+    return redirectWithError(
+      res,
+      String(req.query?.platform || "") === "android" ? "android" : "web",
+      resolveCallbackOrigin(req),
+      "Google sign-in has been removed from JaText. Sign in with your email address instead.",
+      "",
+    );
+  }
+
   const oauthLimit = action === "poll" || action === "config" ? 90 : 20;
   if (
     enforceHttpRateLimit(req, res, {

@@ -8338,6 +8338,30 @@ async function handler3(req, res) {
   const credentials = getGoogleCredentials();
   const { clientId, clientSecret, androidClientConfigured, configured } = credentials;
   const action = String(req.query?.action || "");
+  if (process.env.JATEXT_GOOGLE_DISABLED !== "0") {
+    if (action === "config") {
+      return res.status(200).json({
+        ok: true,
+        configured: false,
+        clientId: "",
+        androidClientConfigured: false,
+        removed: true
+      });
+    }
+    if (req.method === "POST") {
+      return res.status(410).json({
+        ok: false,
+        error: "Google sign-in has been removed from JaText. Sign in with your email address and password."
+      });
+    }
+    return redirectWithError(
+      res,
+      String(req.query?.platform || "") === "android" ? "android" : "web",
+      resolveCallbackOrigin(req),
+      "Google sign-in has been removed from JaText. Sign in with your email address instead.",
+      ""
+    );
+  }
   const oauthLimit = action === "poll" || action === "config" ? 90 : 20;
   if (enforceHttpRateLimit(req, res, {
     scope: `oauth_${action || req.method}`,
@@ -8559,7 +8583,7 @@ async function handler4(req, res) {
     return;
   }
   const cfg = getTursoConfig();
-  const googleConfigured = Boolean(
+  const googleConfigured = process.env.JATEXT_GOOGLE_DISABLED !== "0" && Boolean(
     (process.env.GOOGLE_CLIENT_ID || process.env.AUTH_GOOGLE_ID) && (process.env.GOOGLE_CLIENT_SECRET || process.env.AUTH_GOOGLE_SECRET)
   );
   const fcm = getFcmStatus();

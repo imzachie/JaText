@@ -90,7 +90,6 @@ import com.ahad00010.jatext.ui.components.JaWebIconButton
 import com.ahad00010.jatext.ui.components.JaWebInput
 import com.ahad00010.jatext.ui.components.JaWebPrimaryButton
 import com.ahad00010.jatext.ui.components.JaWebTabs
-import com.ahad00010.jatext.ui.icons.GoogleBrandVectorIcon
 import com.ahad00010.jatext.ui.theme.AVATAR_COLOR_SPECS
 import com.ahad00010.jatext.ui.theme.JaTextPalette
 import com.ahad00010.jatext.ui.theme.JaTextThemeManager
@@ -477,40 +476,6 @@ fun NativeLoginScreen(
                         fontWeight = FontWeight.ExtraBold,
                         fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
                     )
-
-                    /* ==================== .google-btn (999px white pill) ==================== */
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(Color.White)
-                            .clickable(enabled = !googleBusy && !busy && activity != null) {
-                                val act = activity ?: return@clickable
-                                errorMsg = null
-                                vm.clearAuthError()
-                                vm.startGoogleSignIn(act)
-                            }
-                            .padding(horizontal = 20.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (googleBusy) {
-                            CircularProgressIndicator(
-                                color = Color(0xFF1F1F1F),
-                                strokeWidth = 2.2.dp,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        } else {
-                            GoogleBrandVectorIcon(size = 20.dp)
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                text = "Continue with Google",
-                                color = Color(0xFF1F1F1F),
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                    }
 
                     /* ==================== Passkey Sign-In Pill ==================== */
                     Row(

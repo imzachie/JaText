@@ -17,8 +17,8 @@ android {
         applicationId "com.ahad00010.jatext"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 87
-        versionName "4.5.3"
+        versionCode 88
+        versionName "4.5.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "API_ORIGIN", "\"https://jatextapp.pages.dev\""
         // Set by CI from GITHUB_SHA. Lets the OTA updater detect a rebuild that
