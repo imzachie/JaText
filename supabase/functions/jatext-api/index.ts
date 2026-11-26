@@ -9002,6 +9002,12 @@ async function handler4(req, res) {
     fcmProjectId: fcm.projectId,
     klipyConfigured,
     emailVerificationRequired: isEmailVerificationRequired(),
+    // Both halves of the switch, printed separately on purpose. The gate needs the flag
+    // AND a usable mailer, so a status page that only said "required: true" would be
+    // lying the moment someone sets the flag before the sender address is verified:
+    // sign-up would quietly skip the code and the page would still read as if it were on.
+    emailSenderConfigured: emailSenderConfig().enabled,
+    emailSenderReason: emailSenderConfig().enabled ? "" : emailSenderConfig().reason,
     mediaStorage: storage.enabled ? "supabase" : "database",
     mediaBucket: storage.enabled ? storage.bucket : null,
     ...dbError ? { error: dbError } : {}
@@ -9010,6 +9016,7 @@ async function handler4(req, res) {
 var init_auth_status = __esm({
   "api/auth-status.js"() {
     init_tursoBackend();
+    init_emailSender();
     init_supabaseStorage();
     init_rateLimiter();
   }
