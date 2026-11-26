@@ -1,0 +1,53 @@
+name: Smoke test signup email verification
+
+# Dispatch-only on purpose. It creates a real account on the API it points at and asks
+# the live mail provider to send a message, so it must never be wired to a push.
+#
+# Why it lives in CI at all: the sandbox this repo is developed in can only reach
+# GitHub, npm and PyPI, so it cannot call the deployed API, and the one thing that
+# cannot be proven by a unit test is whether Brevo accepts the verified sender. Here
+# the request goes out from a runner with the real secrets behind the real URL. The
+# mailbox is never read, and it does not need to be: the code going unopened is the
+# proof the gate holds.
+on:
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: API origin to test
+        required: false
+        default: https://jatextapp.pages.dev
+      email:
+        description: Address to sign up with. Use a plus-alias of your own inbox (you@x.com+smoke) so the send cannot bounce.
+        required: true
+
+permissions: {}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The address goes in through the environment rather than the command line,
+      # because a dispatch input is a string someone typed.
+      - name: Run the signup gate end to end
+        env:
+          SMOKE_ORIGIN: ${{ inputs.origin }}
+          SMOKE_EMAIL: ${{ inputs.email }}
+        run: |
+          set -o pipefail
+          node scripts/smoke-email-verification.mjs "$SMOKE_ORIGIN" "$SMOKE_EMAIL" | tee /tmp/smoke.log
+          status=$?
+          {
+            echo '```'
+            cat /tmp/smoke.log
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit $status
