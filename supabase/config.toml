@@ -1,0 +1,11 @@
+# Supabase project this repo deploys against.
+#
+# `project_id` is what lets `supabase functions deploy` run from CI with only an
+# access token: there is no local `supabase link`, and publishing a function does
+# not need the database password.
+project_id = "nroosqwxyhkavdokxahn"
+
+# The API is called by the browser through Cloudflare Pages, which cannot attach a
+# Supabase JWT. Sign-in is handled by JaText's own tokens, so verify_jwt is off.
+[functions."jatext-api"]
+verify_jwt = false

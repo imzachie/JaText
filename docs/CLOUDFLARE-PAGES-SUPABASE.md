@@ -1,150 +1,97 @@
-# JaText with no laptop: Cloudflare Pages + Vercel + Supabase
+# JaText on Cloudflare Pages + Supabase (no laptop involved)
 
-This replaces the Ubuntu laptop completely. Nothing on your machine has to stay
-on, and every piece deploys itself from the GitHub repo.
+Everything below runs from two dashboards and one `git push`. There is no server to
+log into, no systemd unit, no cloudflared, and no Vercel.
 
-| Piece | Where it lives | What it does |
+## The shape of it
+
+```
+browser / APK
+    │  https://jatext.us.ci
+    ▼
+Cloudflare Pages ──► static site (dist/)
+    │
+    └─ functions/api/[[path]].js  forwards every /api/* call
+              │
+              ▼
+Supabase Edge Function  jatext-api        ← supabase/functions/jatext-api/index.ts
+    │  api/turso.js, api/media.js, ... bundled in by scripts/build-edge-function.mjs
+    ▼
+Supabase Postgres  (db.nroosqwxyhkavdokxahn.supabase.co:5432)
+```
+
+* The website and the API share one public origin, so there is no CORS and the
+  session cookie/token stays first party. The APK keeps working without a rebuild
+  because it also talks to `https://jatext.us.ci`.
+* The API is the same `api/*.js` + `server/tursoBackend.js` code the old Node
+  server ran. It is portable now because `server/runtimeCompat.js` replaces
+  `node:crypto` (SHA-256/SHA-1/HMAC/PBKDF2/scrypt, all verified byte-for-byte
+  against Node) and `server/fcmRestClient.js` replaces `firebase-admin` with a
+  plain `fetch` call to the FCM v1 endpoint.
+
+## What is already configured
+
+| Thing | Where | Value |
 | --- | --- | --- |
-| Website | Cloudflare Pages | The built site, served at `https://jatext.us.ci` |
-| Backend API | Vercel | `/api/turso`, `/api/media`, sign in, push |
-| Database | Supabase | Postgres, replaces the PostgreSQL on the laptop |
+| Project | Supabase | `nroosqwxyhkavdokxahn` (ap-southeast-2, Postgres 17) |
+| Tables | Supabase → SQL editor | 28 tables + indexes, created from `scripts/dump-supabase-schema.mjs` |
+| DB role | Supabase | `jatext_api` (owns nothing, has full rights on `public`) |
+| Secrets | Supabase → Edge Functions → Secrets | `DATABASE_URL`, `AUTH_SECRET`, `PUBLIC_APP_ORIGIN`, `PG_POOL_MAX`, `PGSSLMODE` |
+| API origin | `functions/api/[[path]].js` | defaults to this project's function URL, no Pages setting needed |
+| Pages build | Cloudflare | framework **React (Vite)**, build `npm run build`, output `dist` |
 
-The Pages site forwards `/api/*` to Vercel through
-`functions/api/[[path]].js`, so the app still only ever talks to
-`https://jatext.us.ci`. That is also why the Android APK needs no change: it was
-built against that address, and the address keeps working.
+The frontend needs **no environment variables**. `JATEXT_API_ORIGIN` exists only to
+point the same build at a different backend.
 
-Pages cannot proxy to another host from `_redirects` (rewrites are limited to
-paths inside the same project), which is why the forwarding is a Pages Function.
+## The one step left: let CI publish the function
 
----
+Supabase only accepts an edge-function upload from something holding an access
+token, and CI is that something.
 
-## 1. Supabase (the database)
+1. <https://supabase.com/dashboard/account/tokens> → **Generate new token** → copy it.
+2. <https://github.com/imzachie/JaText/settings/secrets/actions> →
+   *New repository secret* → name `SUPABASE_ACCESS_TOKEN`, paste the value.
 
-1. <https://supabase.com/dashboard> → **New project**. Region: Singapore. Set a
-   database password and keep it.
-2. **Project settings → Database → Connection string**. Copy the **URI** and
-   switch on **Connection pooling** (it is the `aws-0-...pooler.supabase.com`
-   host, port **6543**, transaction mode). Serverless functions must use the
-   pooler, not the direct 5432 connection.
-3. That is all Supabase needs. JaText creates its own 28 tables on the first
-   request, so there is nothing to import.
+From then on, any push to `main` that touches `server/`, `api/`, `supabase/` or
+`runtime/` runs `.github/workflows/deploy-edge-function.yml`, which bundles the
+function and publishes it. Pushes that touch nothing there skip the job.
 
-You will end up with something shaped like:
+## Changing the API config later
 
-```
-postgresql://postgres.<ref>:<password>@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require
-```
+Secrets live in Supabase, not in the repo:
+Supabase dashboard → project → **Configuration → Environment variables → Edge Functions → Secrets**.
+Add, replace, or delete there and the next request picks it up.
 
-## 2. Vercel (the API)
+| Secret | Needed for | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | everything | already set; `postgres://jatext_api:…@db.nroosqwxyhkavdokxahn.supabase.co:5432/postgres?sslmode=require` |
+| `AUTH_SECRET` | sign-in tokens | already set; rotating it signs everyone out |
+| `PUBLIC_APP_ORIGIN` | link previews, OAuth redirects | `https://jatext.us.ci` |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google | redirect URI `https://jatext.us.ci/api/oauth-google` |
+| `FCM_SERVICE_ACCOUNT_JSON` | Android push | the whole `service_account` JSON, base64 or raw |
+| `KLIPY_API_KEY` | song search | |
 
-1. <https://vercel.com/new> → import `Ahad00010/JaText`.
-2. Framework preset **Vite**. Set **Build and Development Output Directory** to
-   `dist` (it is unused for the API, but the build must not fail). Under
-   **Functions**, no changes are needed, `api/*.js` is already the Vercel shape.
-3. **Settings → Environment Variables → Production**, add every one of these,
-   then redeploy:
-
-```
-DATABASE_URL=postgresql://postgres.<ref>:<password>@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require
-PUBLIC_APP_ORIGIN=https://jatext.us.ci
-AUTH_SECRET=<64 random hex characters>
-PG_POOL_MAX=2
-GOOGLE_CLIENT_ID=<your-id.apps.googleusercontent.com>
-GOOGLE_CLIENT_SECRET=<your-google-secret>
-FCM_SERVICE_ACCOUNT_JSON=<base64 of fcm-service-account.json>
-KLIPY_API_KEY=<klipy key>
-```
-
-Only the first four are required to be online. `PG_POOL_MAX=2` matters: the
-default of 20 connections per function instance floods Supabase's pooler.
-
-- `AUTH_SECRET` signs login tokens. Any long random string works, from
-  `openssl rand -hex 32`. Keep it the same forever or everyone is signed out.
-- Push needs `FCM_SERVICE_ACCOUNT_JSON`, not a file path. Encode the key once:
-  `base64 -w0 fcm-service-account.json` and paste the single line. The server
-  detects base64 automatically. Without it, push silently does nothing.
-- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` are the same values as before.
-  In Google Cloud, the OAuth client still lists
-  `https://jatext.us.ci` as a JavaScript origin and
-  `https://jatext.us.ci/api/oauth-google` as a redirect URI. Neither changes,
-  because the domain does not change.
-
-4. Check it works, you want `"dbConnected": true`:
+## Checks worth doing after the first deploy
 
 ```
-curl -sS https://<vercel-host>/api/auth-status
+https://jatext.us.ci/api/auth-status        → "engine":"postgresql","dbConnected":true
+https://jatext.us.ci/api/health             → the function's own router answers this
 ```
 
-## 3. Cloudflare Pages (the website)
+If `auth-status` returns `Could not reach the JaText backend`, the function is not
+deployed yet (check the Actions tab). If it deploys but `dbConnected` is false, the
+message carries the Postgres error; the usual cause is the network path to port
+5432, in which case switch `DATABASE_URL` to the session pooler host
+`aws-0-ap-southeast-2.pool.supabase.com:5432` and username `jatext_api`.
 
-Already connected in your screenshot. Keep it exactly as it is:
+## Attachments
 
-| Field | Value |
-| --- | --- |
-| Framework preset | React (Vite) |
-| Build command | `npm run build` |
-| Build output directory | `dist` |
+Uploads are stored in Postgres (`media_blobs`, `media_chunks`), which counts against
+the 500 MB database on the free plan. Moving them to Supabase Storage is the next
+planned change; until then watch **Settings → Usage** if the app gets real traffic.
 
-Then **Settings → Environment variables → Production**, and add one variable:
+## Retiring the old box
 
-```
-JATEXT_API_ORIGIN=https://<vercel-host>
-```
-
-That is the whole Pages configuration. Do not set `VITE_API_ORIGIN` (it would
-make the browser call Vercel directly and you lose first-party sign in), do not
-set `VITE_DEMO_MODE` (it turns the app into browser-only fake data), and do not
-set `VITE_CONVEX_URL` (old backend, unused).
-
-## 4. Move the domain off the laptop
-
-1. Cloudflare dashboard → **Workers & Pages → your Pages project → Custom
-   domains** → add `jatext.us.ci`. Cloudflare moves the DNS record itself.
-2. Delete the old tunnel record, and the CNAME that pointed at
-   `*.cfargotunnel.com`, if the add flow does not do it for you.
-3. On the laptop, stop the old server so nothing competes with it:
-   `sudo systemctl disable --now jatext.service` and
-   `sudo systemctl disable --now cloudflared`. Or just leave it switched off,
-   which is the same thing.
-
-## 5. Data
-
-If the laptop database has your existing accounts and messages, dump it before
-cutting over and restore into Supabase:
-
-```
-pg_dump "postgresql://jatext:<pw>@127.0.0.1:5432/jatext" -Fc > jatext.dump
-pg_restore -d "postgresql://postgres.<ref>:<pw>@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require" --no-owner jatext.dump
-```
-
-Restore uses port **5432**, not the pooler, because `pg_restore` needs a session
-connection. If you are happy starting empty, skip this entirely.
-
-## 6. The APK
-
-Nothing to rebuild. The app already points at `https://jatext.us.ci`, the
-domain keeps working through the Pages forward, and the update check reads
-`/apk-version.json` with a copy published to GitHub as the fallback, so
-downloading and self updating survive without any server of your own.
-
-## What is still laptop-flavoured
-
-- **Attachments are stored inside Postgres** (`media_blobs`, `media_chunks`).
-  It works on Supabase, but a 500 MB database fills up with videos. Moving them
-  into Supabase Storage is the next change.
-- **5 GB uploads** are still web-only, the app caps at 48 MB.
-- **Link previews and media URLs** assume `PUBLIC_APP_ORIGIN` is the public
-  origin, so it must stay `https://jatext.us.ci` on Vercel, not the
-  `*.vercel.app` host.
-- **Passkeys** stay valid, the relying party id is still `jatext.us.ci`.
-
-## Troubleshooting
-
-| Symptom | Cause |
-| --- | --- |
-| `/api/auth-status` says `dbConnected: false` | Wrong `DATABASE_URL`, or port 6543 replaced with 5432 in a function, or `sslmode=require` missing |
-| App loads, sign in spins forever | `JATEXT_API_ORIGIN` missing on Pages, so `/api/*` has nowhere to go |
-| `relation "users" does not exist` | The role in the connection string lacks permission on the schema. Supabase's `postgres` user is fine, a custom role needs `GRANT ALL ON SCHEMA public TO <role>` |
-| Downloads restart from zero every time | Stale partial file, fixed in 4.4.2. Update the APK |
-| Push never arrives | `FCM_SERVICE_ACCOUNT_JSON` mangled, or `GOOGLE_ANDROID_CLIENT_ID` unset when the app uses its own OAuth client |
+`jatext.us.ci` used to be a `CNAME` to a Cloudflare tunnel on the Ubuntu machine.
+Once this page is served by Pages (DNS → CNAME `jatext.us.ci` → the project's
+`*.pages.dev` target), that machine can stay off permanently.

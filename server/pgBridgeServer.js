@@ -61,7 +61,7 @@ if (!BRIDGE_SECRET || BRIDGE_SECRET.length < 24) {
   process.exit(1);
 }
 
-const pgClient = createPostgresPoolClient(DATABASE_URL);
+const pgClient = await createPostgresPoolClient(DATABASE_URL);
 
 function verifyBearerSecret(authHeader) {
   const prefix = "Bearer ";

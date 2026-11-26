@@ -11,9 +11,18 @@
  * video Range response costs the same as the bytes it carries.
  */
 
+/**
+ * Where the API lives. The default is the Supabase Edge Function this repo
+ * publishes (see .github/workflows/deploy-edge-function.yml), so a Pages
+ * project needs no configuration at all to serve the app. Override
+ * JATEXT_API_ORIGIN in Pages → Settings → Environment variables only to point
+ * the same frontend at another backend, e.g. during a migration.
+ */
+const DEFAULT_API_ORIGIN =
+  "https://nroosqwxyhkavdokxahn.supabase.co/functions/v1/jatext-api";
+
 function apiOrigin(env) {
-  // JATEXT_API_ORIGIN is set in Pages → Settings → Environment variables.
-  const raw = (env.JATEXT_API_ORIGIN || "https://jatext.vercel.app").trim();
+  const raw = (env.JATEXT_API_ORIGIN || DEFAULT_API_ORIGIN).trim();
   return raw.replace(/\/+$/, "");
 }
 

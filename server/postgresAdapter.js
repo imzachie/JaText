@@ -1,10 +1,26 @@
-import pg from "pg";
+let pgModule = null;
 
-const { Pool, types } = pg;
-
-// Parse PostgreSQL INT8 / BIGINT (OID 20) into JS Number so timestamps, flags (0/1),
-// and COUNT(*) behave identically to SQLite / LibSQL numbers across the backend.
-types.setTypeParser(20, (val) => (val === null ? null : Number(val)));
+/**
+ * `pg` is loaded on demand rather than at the top of the file.
+ *
+ * This module is also bundled for runtimes that do not have a Node `pg` to
+ * import, which is how the backend reaches Supabase outside a Node host. A
+ * static import there fails the whole bundle, and the SQL bridge path never
+ * needed it in the first place.
+ */
+export async function loadPg() {
+  if (!pgModule) {
+    const specifier =
+      typeof globalThis.Deno === "undefined" ? "pg" : "npm:pg@^8.23.1";
+    const mod = await import(specifier);
+    pgModule = mod.default ?? mod;
+    // Parse PostgreSQL INT8 / BIGINT (OID 20) into JS Number so timestamps,
+    // flags (0/1), and COUNT(*) behave identically to SQLite / LibSQL numbers
+    // across the backend.
+    pgModule.types.setTypeParser(20, (val) => (val === null ? null : Number(val)));
+  }
+  return pgModule;
+}
 
 /**
  * Translate SQLite / LibSQL DDL & DML statements used by JaText into standard PostgreSQL 14+.
@@ -261,7 +277,8 @@ function buildPoolConfig(rawUrl) {
 /**
  * Direct `node-postgres` (`pg.Pool`) client implementing JaText's `execute` + `batch` interface.
  */
-export function createPostgresPoolClient(connectionString) {
+export async function createPostgresPoolClient(connectionString) {
+  const { Pool } = await loadPg();
   const pool = new Pool(buildPoolConfig(connectionString));
 
   pool.on("error", (err) => {
