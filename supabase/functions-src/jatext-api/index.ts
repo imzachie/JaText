@@ -261,8 +261,15 @@ async function statusResponse(request: Request) {
   }
 
   const text = JSON.stringify(payload, null, 2);
-  const isBrowser = (request.headers.get("accept") || "").includes("text/html");
-  if (!isBrowser) {
+  // HTML unless a machine asks for JSON by name. The obvious-looking reverse test
+  // ("html if the Accept header says so") made this page unreadable to anything that
+  // sends `Accept: */*` or no Accept at all, which is what fetchers, curl and link
+  // previews do. `?format=json` and an explicit application/json are the machine
+  // contract.
+  const wantsJson =
+    new URL(request.url).searchParams.get("format") === "json" ||
+    (request.headers.get("accept") || "").includes("application/json");
+  if (wantsJson) {
     return new Response(text, {
       status,
       headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
