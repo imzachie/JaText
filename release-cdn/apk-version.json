@@ -1,7 +1,7 @@
 {
-  "versionName": "4.5.1",
-  "versionCode": 85,
-  "downloadUrl": "https://jatext.us.ci/downloads/JaText-release.apk",
-  "commitSha": "912781b94819f9e243cd1d9fd6b15c0f069cbc3a",
-  "publishedAt": "2026-11-26T08:57:19Z"
+  "versionName": "4.5.2",
+  "versionCode": 86,
+  "downloadUrl": "https://github.com/imzachie/JaText/releases/download/apk-latest/JaText-release.apk",
+  "commitSha": "8648dc7002de51b164fc71786c6bd95777ab9add",
+  "publishedAt": "2026-11-26T09:04:15Z"
 }
