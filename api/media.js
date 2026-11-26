@@ -8,7 +8,7 @@ export const config = {
 };
 
 export const MEDIA_CHUNK_BYTES = 768 * 1024; // 768 KB per DB chunk
-const DEFAULT_PUBLIC_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci")
+const DEFAULT_PUBLIC_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatextapp.pages.dev")
   .replace(/^https?:\/\//, "")
   .replace(/\/+$/, "");
 const MAX_SINGLE_SHOT_BYTES = 768 * 1024; // > 768 KB splits into media_chunks

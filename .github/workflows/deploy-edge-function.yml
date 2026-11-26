@@ -33,8 +33,10 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install build tools
-        run: npm install --no-audit --no-fund --ignore-scripts esbuild
+      # esbuild is a devDependency, so the lockfile decides its version and the
+      # install cannot drift from what a website build uses.
+      - name: Install
+        run: npm ci --no-audit --no-fund
 
       - name: Bundle the function
         run: node scripts/build-edge-function.mjs

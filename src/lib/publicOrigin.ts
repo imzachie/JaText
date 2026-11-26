@@ -24,7 +24,13 @@ function browserOrigin(): string {
   return origin;
 }
 
-const DEFAULT_PUBLIC_APP_ORIGIN = "https://jatext.us.ci";
+/**
+ * The Pages preview hostname is the deployment: it is HTTPS, it is on Cloudflare's
+ * own edge, and it needs no domain, DNS record or certificate to maintain. Used only
+ * when there is no browser origin to read (the native shell) and VITE_API_ORIGIN is
+ * not set.
+ */
+const DEFAULT_PUBLIC_APP_ORIGIN = "https://jatextapp.pages.dev";
 
 export const PUBLIC_APP_ORIGIN = (
   (import.meta.env?.VITE_API_ORIGIN as string | undefined)?.trim().replace(/\/+$/, "") ||

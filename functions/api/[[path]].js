@@ -3,7 +3,7 @@
  *
  * Cloudflare Pages only serves files, and its _redirects proxying refuses
  * external hosts, so the API has to be forwarded from a Pages Function
- * instead. This keeps one public origin (https://jatext.us.ci) for the web app
+ * instead. This keeps one public origin (https://jatextapp.pages.dev) for the web app
  * and the Android APK, which means neither of them has to know the backend
  * lives somewhere else: no CORS, and the sign-in token is first party.
  *

@@ -11,7 +11,7 @@
  *
  * Environment:
  *   DATABASE_URL              Local PostgreSQL connection string (required)
- *   PUBLIC_APP_ORIGIN         Public origin, e.g. https://jatext.us.ci (defaults to window host)
+ *   PUBLIC_APP_ORIGIN         Public origin, e.g. https://jatextapp.pages.dev (defaults to window host)
  *   PORT                      HTTP port to listen on (default 8787)
  *   HOST                      Bind address (default 127.0.0.1)
  *   AUTH_SECRET               JWT signing secret (required for logins to survive restarts)
@@ -39,7 +39,7 @@ const DIST_DIR = path.join(ROOT_DIR, "dist");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 
 const DEFAULT_ORIGIN = (process.env.PUBLIC_APP_ORIGIN || "").trim().replace(/\/+$/, "") ||
-  "https://jatext.us.ci";
+  "https://jatextapp.pages.dev";
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",

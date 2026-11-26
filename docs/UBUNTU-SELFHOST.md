@@ -1,5 +1,11 @@
 # JaText 24/7 on your own Ubuntu laptop
 
+> **RETIRED.** This is how JaText used to run: a laptop as a server, a Cloudflare
+> tunnel, and `jatext.us.ci` as the public origin. The site is now a Cloudflare Pages
+> deployment at `https://jatextapp.pages.dev` with the API in Supabase, and there is no
+> machine to configure. See `CLOUDFLARE-PAGES-SUPABASE.md`. Left here because the
+> Postgres migration and troubleshooting notes below are still the only record of them.
+
 This guide takes JaText off Vercel completely and runs the whole thing (web app, API, and PostgreSQL) on your Ubuntu laptop, published at `https://jatext.us.ci` through a free Cloudflare Tunnel.
 
 Why it is built this way:

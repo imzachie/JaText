@@ -2,8 +2,13 @@
 // Edit supabase/functions-src/jatext-api/index.ts or server/*.js instead.
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -1171,7 +1176,18 @@ var init_klipyClient = __esm({
 });
 
 // server/tursoBackend.js
-import { createClient as createWebClient } from "@libsql/client/web";
+async function loadLibsqlClient(preferWeb = true) {
+  const specifier = [
+    "@libsql",
+    "/client",
+    preferWeb ? "/web" : ""
+  ].join("");
+  const mod = await import(
+    /* @vite-ignore */
+    specifier
+  );
+  return mod.createClient || mod.default?.createClient;
+}
 function getTursoConfig() {
   const bridgeUrl = (process.env.POSTGRES_BRIDGE_URL || process.env.PG_BRIDGE_URL || "").trim();
   const bridgeSecret = (process.env.POSTGRES_BRIDGE_SECRET || process.env.PG_BRIDGE_SECRET || "").trim();
@@ -1205,7 +1221,7 @@ function getTursoConfig() {
   };
 }
 function publicAppOrigin() {
-  return (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci").trim().replace(/\/+$/, "");
+  return (process.env.PUBLIC_APP_ORIGIN || "https://jatextapp.pages.dev").trim().replace(/\/+$/, "");
 }
 function defaultWebAuthnRpId() {
   return publicAppOrigin().replace(/^https?:\/\//, "").toLowerCase();
@@ -1237,10 +1253,11 @@ async function getDb() {
     } else if (mode === "postgres") {
       cachedClient = await createPostgresPoolClient(url);
     } else if (url.startsWith("file:")) {
-      const mod = await import("@libsql/client");
-      cachedClient = mod.createClient({ url });
+      const createClient = await loadLibsqlClient(false);
+      cachedClient = createClient({ url });
     } else {
-      cachedClient = createWebClient({ url, authToken });
+      const createClient = await loadLibsqlClient(true);
+      cachedClient = createClient({ url, authToken });
     }
     cachedClientKey = key;
   }
@@ -7818,7 +7835,7 @@ var init_media = __esm({
       }
     };
     MEDIA_CHUNK_BYTES = 768 * 1024;
-    DEFAULT_PUBLIC_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci").replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    DEFAULT_PUBLIC_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatextapp.pages.dev").replace(/^https?:\/\//, "").replace(/\/+$/, "");
     MAX_SINGLE_SHOT_BYTES = 768 * 1024;
     MAX_SERVE_BYTES = 3 * 1024 * 1024;
     MAX_INLINE_IMAGE_SERVE_BYTES = 4 * 1024 * 1024;
@@ -8242,7 +8259,7 @@ var init_oauth_google = __esm({
     init_runtimeCompat();
     init_tursoBackend();
     init_rateLimiter();
-    DEFAULT_PUBLIC_HOST2 = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci").replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    DEFAULT_PUBLIC_HOST2 = (process.env.PUBLIC_APP_ORIGIN || "https://jatextapp.pages.dev").replace(/^https?:\/\//, "").replace(/\/+$/, "");
   }
 });
 
@@ -8583,7 +8600,7 @@ var init_link_preview = __esm({
     init_rateLimiter();
     MAX_HTML_BYTES = 262144;
     FETCH_TIMEOUT_MS = 5500;
-    SELF_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci").replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase();
+    SELF_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatextapp.pages.dev").replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase();
     SELF_ORIGIN = `https://${SELF_HOST}`;
   }
 });

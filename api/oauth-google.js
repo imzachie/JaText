@@ -50,7 +50,7 @@ function getStateSecret() {
   );
 }
 
-const DEFAULT_PUBLIC_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci")
+const DEFAULT_PUBLIC_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatextapp.pages.dev")
   .replace(/^https?:\/\//, "")
   .replace(/\/+$/, "");
 
