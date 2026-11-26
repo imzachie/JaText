@@ -18,9 +18,13 @@ interface ApkVersionManifest {
   publishedAt?: string;
 }
 
+/** Where CI publishes the release notes for the newest signed APK. */
+const GITHUB_APK_MANIFEST_URL =
+  "https://raw.githubusercontent.com/imzachie/JaText/main/release-cdn/apk-version.json";
+
 const FALLBACK_APK_VERSION: ApkVersionManifest = {
-  versionName: "4.5.0",
-  versionCode: 84,
+  versionName: "4.5.1",
+  versionCode: 85,
 };
 
 function usePublishedApkVersion(): ApkVersionManifest {
@@ -28,18 +32,33 @@ function usePublishedApkVersion(): ApkVersionManifest {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      try {
-        const res = await fetch(`/apk-version.json?t=${Date.now()}`, { cache: "no-store" });
-        if (!res.ok) return;
-        const json = (await res.json()) as ApkVersionManifest;
-        if (cancelled || !json?.versionName) return;
-        setManifest({
-          versionName: json.versionName,
-          versionCode: json.versionCode,
-          publishedAt: json.publishedAt,
-        });
-      } catch {
-        // Keep the fallback, the page should never show an empty version.
+      // The self hosted server serves the manifest beside the APK. When the
+      // site is hosted on a static host with no server of its own, the copy
+      // published to GitHub says the same thing, so try both.
+      const sources = [
+        `/apk-version.json?t=${Date.now()}`,
+        GITHUB_APK_MANIFEST_URL,
+      ];
+      for (const source of sources) {
+        try {
+          const res = await fetch(source, { cache: "no-store" });
+          if (!res.ok) continue;
+          // The SPA fallback answers with the page shell for a missing file,
+          // and GitHub raw serves JSON as plain text, so only the shell is
+          // rejected outright.
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("text/html")) continue;
+          const json = (await res.json()) as ApkVersionManifest;
+          if (cancelled || !json?.versionName) continue;
+          setManifest({
+            versionName: json.versionName,
+            versionCode: json.versionCode,
+            publishedAt: json.publishedAt,
+          });
+          return;
+        } catch {
+          // Try the next source, the page should never show an empty version.
+        }
       }
     };
     void load();
@@ -185,10 +204,38 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v4.5.1",
+    date: "November 26, 2026",
+    headline: "No Laptop Needed, and the App Can Still Update Itself",
+    latest: true,
+    bullets: [
+      "The site can now be hosted on a static host with Supabase for the database. The public address stays the same, so nothing in the app has to be reconfigured.",
+      "The font suite the Android build downloads from a separate repository is now part of this repository. When that repository became unreachable, every build failed over a font; it cannot any more.",
+      "The in-app update check was reading a GitHub address that stopped resolving when the account was renamed, which quietly broke updating without the self hosted server. It reads the right place now.",
+    ],
+  },
+  {
+    version: "v4.5.0",
+    date: "November 5, 2026",
+    headline: "Bulk Select, and a Way to Bring Old Encrypted Messages Back",
+    bullets: [
+      "Long press any message and pick Select to tick off as many as you want, then copy them, forward the whole batch to one chat, or delete them at once. It works in direct chats, group chats and community posts, on the web and on Android.",
+      "Privacy settings gained Restore old messages. Messages sealed to a key this device no longer had used to sit unreadable with nothing in the app that could fix it; now the vault PIN or recovery key brings those keys back.",
+      "Forwarding a selection sends every message in order instead of only the one that opened the menu.",
+    ],
+  },
+  {
+    version: "v4.4.2",
+    date: "November 5, 2026",
+    headline: "Update Downloads Recover From a Stale Partial File",
+    bullets: [
+      "Resuming an APK download could ask the server for bytes that no longer existed once a new release was published, and it kept asking for the same impossible range forever. A rejected range now throws the partial file away and starts over, and the result is checked before anything is installed.",
+    ],
+  },
+  {
     version: "v4.4.1",
     date: "November 5, 2026",
     headline: "One Send Animation, Videos That Stream, Calmer Bulk Uploads",
-    latest: true,
     bullets: [
       "Sent messages stopped animating twice. One to one chats were the only place the delivered copy did not inherit the optimistic bubble's identity, so the row was rebuilt and the entrance animation ran a second time.",
       "Videos on Android now stream from the server instead of being downloaded whole before the first frame, which is what left them spinning forever.",
@@ -617,7 +664,7 @@ export function LandingHeroPage() {
               <span className="jt-brand-name">JaText</span>
               <span className="jt-stamp-pill">
                 <span className="jt-live-dot" />
-                v4.2.1 · Live
+                v{apkVersion.versionName} · Live
               </span>
             </span>
           </a>
@@ -1141,7 +1188,7 @@ export function LandingHeroPage() {
                   <>
                     Launch the full JaText web app at{" "}
                     <strong>{PUBLIC_APP_HOST}/chats</strong> or grab the latest signed Android
-                    Release APK (v4.2.1).
+                    Release APK (v{apkVersion.versionName}).
                   </>
                 )}
               </p>
@@ -1171,7 +1218,7 @@ export function LandingHeroPage() {
                   href="/downloads/JaText-release.apk"
                   className="jt-btn-secondary jt-btn-lg"
                 >
-                  Get Android APK (v4.2.1)
+                  Get Android APK v{apkVersion.versionName}
                 </a>
               )}
             </div>
@@ -1184,7 +1231,7 @@ export function LandingHeroPage() {
           <div className="jt-footer-brand">
             <img src="/jatext-logo-icon.png" alt="JaText logo" />
             <span>
-              <strong>JaText v4.2.1</strong> · End-to-End Encrypted Messaging &amp; HD Calls
+              <strong>JaText v{apkVersion.versionName}</strong> · End-to-End Encrypted Messaging &amp; HD Calls
             </span>
           </div>
           <div className="jt-footer-links">

@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-APP_REPO="${APP_REPO:-Ahad00010/JaText}"
+APP_REPO="${APP_REPO:-imzachie/JaText}"
 APP_BRANCH="${APP_BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/JaText}"
 DOMAIN="${DOMAIN:-jatext.us.ci}"

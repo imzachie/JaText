@@ -15,9 +15,9 @@ const WELCOMED_VERSION_KEY = "jatext:welcomed-mobile-build:v1";
 const MANUAL_UPDATE_CHECK_EVENT = "jatext:manual-update-check";
 const PUBLIC_UPDATE_MANIFEST_URL = `${PUBLIC_APP_ORIGIN}/apk-version.json`;
 const PUBLIC_APK_DOWNLOAD_URL = `${PUBLIC_APP_ORIGIN}/downloads/JaText-release.apk`;
-const GITHUB_RELEASE_API = "https://api.github.com/repos/Ahad00010/JaText/releases/tags/apk-latest";
+const GITHUB_RELEASE_API = "https://api.github.com/repos/imzachie/JaText/releases/tags/apk-latest";
 const FALLBACK_GITHUB_APK_URL =
-  "https://github.com/Ahad00010/JaText/releases/download/apk-latest/JaText-release.apk";
+  "https://github.com/imzachie/JaText/releases/download/apk-latest/JaText-release.apk";
 
 export function triggerManualMobileUpdateCheck(): void {
   if (typeof window !== "undefined") {

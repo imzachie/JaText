@@ -1,0 +1,11 @@
+# Cloudflare Pages routing for a laptop-free deploy.
+#
+# Pages can only rewrite to paths inside this same project, never to another
+# host, so the API is forwarded by functions/api/[[path]].js rather than here.
+# The APK and apk-version.json are copied into dist by scripts/build.mjs, so
+# they are served as ordinary files and need no rules at all.
+
+# Single page app: /ios/chats, /chats and friends are routes, not files.
+# Pages serves a real file in preference to this rule, so assets, the APK and
+# the manifest are unaffected.
+/*    /index.html   200

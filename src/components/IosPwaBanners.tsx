@@ -25,7 +25,7 @@ import {
 const DISMISS_INSTALL_SESSION_KEY = "jatext:ios_pwa_install_banner_dismissed";
 const IOS_PWA_DEMO_LOCAL_SRC = "/ios-pwa-demo.mp4";
 const IOS_PWA_DEMO_FALLBACK_SRC =
-  "https://github.com/Ahad00010/JaText-Essential-Stuff/raw/refs/heads/main/iOS%20Demo%20on%20JaText.mp4";
+  "https://github.com/imzachie/JaText-Essential-Stuff/raw/refs/heads/main/iOS%20Demo%20on%20JaText.mp4";
 
 export function IosPwaBanners() {
   const isIosRuntime = isAuthorizedIosChatsRuntime();
