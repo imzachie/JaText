@@ -10,9 +10,12 @@ let pgModule = null;
  */
 export async function loadPg() {
   if (!pgModule) {
-    const specifier =
-      typeof globalThis.Deno === "undefined" ? "pg" : "npm:pg@^8.23.1";
-    const mod = await import(specifier);
+    // One literal specifier, so the Edge bundler can see it: the build rewrites
+    // `pg` to server/pgDenoDriver.js, which imports it through npm: statically,
+    // and Node keeps resolving it from node_modules. Deciding the specifier at
+    // runtime with a variable is what broke the deployed function, because a
+    // bundler cannot register a package it was never shown.
+    const mod = await import("pg");
     pgModule = mod.default ?? mod;
     // Parse PostgreSQL INT8 / BIGINT (OID 20) into JS Number so timestamps,
     // flags (0/1), and COUNT(*) behave identically to SQLite / LibSQL numbers
