@@ -197,6 +197,7 @@ fun NativeLoginScreen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var totpCode by remember { mutableStateOf("") }
+    var emailCode by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -384,7 +385,124 @@ fun NativeLoginScreen(
                         }
                     }
 
-                    if (!sessionState.pendingTwoFactorChallengeToken.isNullOrBlank()) {
+                    if (!sessionState.pendingEmailVerifyChallengeToken.isNullOrBlank()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            JaWebGhostButton(
+                                text = "Back",
+                                leadingIcon = Icons.AutoMirrored.Rounded.ArrowBack,
+                                onClick = {
+                                    emailCode = ""
+                                    errorMsg = null
+                                    vm.cancelEmailVerification()
+                                },
+                            )
+                        }
+                        Text(
+                            text = "Confirm your email",
+                            color = loginPalette.textPrimary,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontFamily = com.ahad00010.jatext.ui.theme.SfProDisplayFontFamily,
+                        )
+                        val masked = sessionState.pendingEmailVerifyMasked
+                        Text(
+                            text = if (masked.isNotBlank()) {
+                                "We sent a 6-digit code to $masked. JaText stays locked until you enter it."
+                            } else {
+                                "We sent a 6-digit code to your email. JaText stays locked until you enter it."
+                            },
+                            color = loginPalette.textSecondary,
+                            fontSize = 14.5.sp,
+                            lineHeight = 20.sp,
+                        )
+                        JaWebInput(
+                            value = emailCode,
+                            onValueChange = { next ->
+                                emailCode = next.filter { ch -> ch.isDigit() }.take(6)
+                                errorMsg = null
+                                vm.clearAuthError()
+                            },
+                            label = "Verification code",
+                            placeholder = "123456",
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Ascii,
+                                imeAction = ImeAction.Done,
+                            ),
+                        )
+                        if (!activeError.isNullOrBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0x1FEF4444))
+                                    .border(1.dp, Color(0x80EF4444), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 13.dp, vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = activeError,
+                                    color = Color(0xFFFCA5A5),
+                                    fontSize = 13.5.sp,
+                                    lineHeight = 19.sp,
+                                )
+                            }
+                        }
+                        JaWebPrimaryButton(
+                            text = if (busy) "Verifying..." else "Verify & continue",
+                            enabled = !busy && emailCode.trim().length >= 6,
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                busy = true
+                                errorMsg = null
+                                scope.launch {
+                                    try {
+                                        vm.verifyEmailCode(emailCode)
+                                        emailCode = ""
+                                    } catch (e: Throwable) {
+                                        errorMsg = e.message ?: "That code did not work."
+                                    } finally {
+                                        busy = false
+                                    }
+                                }
+                            },
+                        )
+                        // The wait the server asked for, counted down locally so the button
+                        // cannot be hammered; a too-early tap still answers 429 with the
+                        // real number of seconds left.
+                        var resendIn by remember(
+                            sessionState.pendingEmailVerifyChallengeToken,
+                            sessionState.pendingEmailVerifyWaitSec,
+                        ) {
+                            mutableStateOf(sessionState.pendingEmailVerifyWaitSec)
+                        }
+                        LaunchedEffect(resendIn) {
+                            if (resendIn > 0) {
+                                delay(1000)
+                                resendIn -= 1
+                            }
+                        }
+                        JaWebGhostButton(
+                            text = if (resendIn > 0) "Send a new code (${resendIn}s)" else "Send a new code",
+                            enabled = !busy && resendIn <= 0,
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                busy = true
+                                errorMsg = null
+                                scope.launch {
+                                    try {
+                                        vm.resendEmailVerificationCode()
+                                    } catch (e: Throwable) {
+                                        errorMsg = e.message ?: "Could not send another code."
+                                    } finally {
+                                        busy = false
+                                    }
+                                }
+                            },
+                        )
+                    } else if (!sessionState.pendingTwoFactorChallengeToken.isNullOrBlank()) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,

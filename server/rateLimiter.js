@@ -109,6 +109,9 @@ export function resolveRpcRateTier(op) {
     case "signInEmail":
     case "signUpEmail":
     case "verifyTwoFactorLogin":
+    case "verifyEmailCode":
+    case "sendEmailVerification":
+    case "getEmailVerification":
     case "beginPasskeyLogin":
     case "finishPasskeyLogin":
       return { tier: "auth", limit: 25, windowMs: 60_000 };

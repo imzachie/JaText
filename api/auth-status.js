@@ -1,4 +1,9 @@
-import { getDb, getFcmStatus, getTursoConfig } from "../server/tursoBackend.js";
+import {
+  getDb,
+  getFcmStatus,
+  getTursoConfig,
+  isEmailVerificationRequired,
+} from "../server/tursoBackend.js";
 import { supabaseStorageConfig } from "../server/supabaseStorage.js";
 import { enforceHttpRateLimit } from "../server/rateLimiter.js";
 
@@ -77,6 +82,7 @@ export default async function handler(req, res) {
     fcmConfigured,
     fcmProjectId: fcm.projectId,
     klipyConfigured,
+    emailVerificationRequired: isEmailVerificationRequired(),
     mediaStorage: storage.enabled ? "supabase" : "database",
     mediaBucket: storage.enabled ? storage.bucket : null,
     ...(dbError ? { error: dbError } : {}),

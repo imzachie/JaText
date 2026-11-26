@@ -5,6 +5,7 @@ import {
   spkiFromRsaJwk,
   verifySignature,
 } from "./runtimeCompat.js";
+import { isEmailSenderConfigured, sendEmail } from "./emailSender.js";
 /**
  * The libsql client is loaded through a computed specifier instead of a static
  * import. A bundler that cannot resolve a bare package name (a Deno edge runtime,
@@ -508,6 +509,14 @@ async function initSchema(db) {
       created_at INTEGER NOT NULL
     )`,
 
+    `CREATE TABLE IF NOT EXISTS email_verifications (
+      user_id TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      sent_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`,
+
     `CREATE TABLE IF NOT EXISTS media_chunks (
       media_id TEXT NOT NULL,
       chunk_index INTEGER NOT NULL,
@@ -642,6 +651,17 @@ async function initSchema(db) {
 
   const safeAlters = [
     `ALTER TABLE media_blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0`,
+    // DEFAULT 1, not 0: the people already on the server did not ask to be locked out
+    // the day verification ships. New sign-ups write 0 explicitly.
+    `ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1`,
+    // SQLite needs the table to exist before the first signup tries to write a code.
+    `CREATE TABLE IF NOT EXISTS email_verifications (
+      user_id TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      sent_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`,
     // Attachments live in Supabase Storage and the row keeps only a pointer; the
     // column is nullable so every row written before the move still serves from data.
     `ALTER TABLE media_blobs ADD COLUMN storage_key TEXT`,
@@ -1203,6 +1223,10 @@ export function mapUserRow(row, includePrivate = false) {
     ...(includePrivate
       ? {
           totpEnabled: Boolean(Number(row.totp_enabled || 0)),
+          // Rows written before this column existed are treated as confirmed: the
+          // column is added with DEFAULT 1 precisely so an existing account is never
+          // locked out of its own chats by a migration.
+          emailVerified: Number(row.email_verified ?? 1) === 1,
           isOwner: isJaTextOwnerRow(row),
         }
       : {}),
@@ -2529,11 +2553,225 @@ export async function consumeMobileOAuthHandoff(sessionId) {
 
 /* ==================== Main RPC Dispatcher ==================== */
 
+/* ==================== Email Verification (proof you own the address) ==================== */
+
+const EMAIL_CODE_TTL_MS = 10 * 60_000;
+const EMAIL_CODE_RESEND_COOLDOWN_MS = 45_000;
+const EMAIL_CODE_MAX_ATTEMPTS = 6;
+
+// Both a switch and a mailer are needed. With only one of them the app would ask a
+// person to prove something nobody can send them, which turns signup into a dead end
+// rather than a security step.
+export function isEmailVerificationRequired() {
+  return (
+    process.env.JATEXT_REQUIRE_EMAIL_VERIFICATION === "1" && isEmailSenderConfigured()
+  );
+}
+
+// Ops that let an account touch somebody else. A throwaway account may exist, set
+// itself up and store its keys, but it cannot reach a real person until the address it
+// signed up with is confirmed.
+const EMAIL_VERIFICATION_GATED_OPS = new Set([
+  "sendMessage",
+  "sendGroupMessage",
+  "sendCommunityMessage",
+  "sendFriendRequest",
+  "createGroup",
+  "createCommunity",
+  // Linking a second device is how an account becomes usable somewhere else, so an
+  // address that has not been confirmed cannot spread itself to another screen first.
+  "createDeviceLinkSession",
+  "approveDeviceLinkSession",
+]);
+
+function newNumericCode() {
+  const bytes = crypto.randomBytes(3);
+  const value = ((bytes[0] << 16) | (bytes[1] << 8) | bytes[2]) % 900_000;
+  return String(100_000 + value);
+}
+
+function hashEmailCode(code) {
+  return base64UrlEncode(
+    crypto.createHmac("sha256", getJwtSecret()).update(`email-code:${code}`).digest(),
+  );
+}
+
+function maskEmail(email) {
+  const value = String(email || "");
+  const at = value.indexOf("@");
+  if (at <= 0) return value;
+  const name = value.slice(0, at);
+  return `${name.slice(0, 1)}${"*".repeat(Math.max(1, name.length - 1))}${value.slice(at)}`;
+}
+
+export function createEmailVerificationChallengeToken(userId, email) {
+  const now = Date.now();
+  const header = base64UrlEncode(JSON.stringify({ alg: "HS256", typ: "JEMV" }));
+  const payload = base64UrlEncode(
+    JSON.stringify({
+      typ: "email_verify_challenge",
+      sub: String(userId),
+      email: String(email || ""),
+      iat: Math.floor(now / 1000),
+      exp: Math.floor((now + 15 * 60_000) / 1000),
+    }),
+  );
+  const sig = base64UrlEncode(
+    crypto.createHmac("sha256", getJwtSecret()).update(`${header}.${payload}`).digest(),
+  );
+  return `${header}.${payload}.${sig}`;
+}
+
+export function verifyEmailVerificationChallengeToken(token) {
+  if (!token || typeof token !== "string") return null;
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) return null;
+  const [header, payload, sig] = parts;
+  const expected = base64UrlEncode(
+    crypto.createHmac("sha256", getJwtSecret()).update(`${header}.${payload}`).digest(),
+  );
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(base64UrlDecode(payload).toString("utf8"));
+    if (
+      parsed?.typ !== "email_verify_challenge" ||
+      !parsed?.sub ||
+      !parsed?.exp ||
+      Number(parsed.exp) * 1000 < Date.now()
+    ) {
+      return null;
+    }
+    return { userId: String(parsed.sub), email: String(parsed.email || "") };
+  } catch {
+    return null;
+  }
+}
+
+async function issueEmailVerificationCode(db, userId, email) {
+  const now = Date.now();
+  const prev = await db.execute({
+    sql: `SELECT sent_at FROM email_verifications WHERE user_id = ? LIMIT 1`,
+    args: [userId],
+  });
+  const lastSent = Number(prev.rows[0]?.sent_at || 0);
+  if (lastSent && now - lastSent < EMAIL_CODE_RESEND_COOLDOWN_MS) {
+    const waitSec = Math.ceil((EMAIL_CODE_RESEND_COOLDOWN_MS - (now - lastSent)) / 1000);
+    throw new TursoAppError(`Please wait ${waitSec} more seconds before asking for another code.`, 429);
+  }
+  const code = newNumericCode();
+  await db.execute({
+    sql: `INSERT INTO email_verifications (user_id, code_hash, attempts, sent_at, expires_at)
+          VALUES (?, ?, 0, ?, ?)
+          ON CONFLICT(user_id) DO UPDATE SET
+            code_hash = excluded.code_hash,
+            attempts = 0,
+            sent_at = excluded.sent_at,
+            expires_at = excluded.expires_at`,
+    args: [userId, hashEmailCode(code), now, now + EMAIL_CODE_TTL_MS],
+  });
+  try {
+    await sendEmail({
+      to: email,
+      subject: `${code} is your JaText verification code`,
+      text:
+        `Your JaText verification code is ${code}.\n\n` +
+        `It expires in ${Math.round(EMAIL_CODE_TTL_MS / 60_000)} minutes. If you did not just` +
+        ` create or open a JaText account, you can ignore this email and nothing will happen.`,
+      html:
+        `<div style="font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#141417">` +
+        `<p style="margin:0 0 14px">Your JaText verification code is</p>` +
+        `<p style="margin:0 0 14px;font-size:30px;letter-spacing:6px;font-weight:700">${code}</p>` +
+        `<p style="margin:0 0 14px;color:#6b6b73">It expires in ${Math.round(EMAIL_CODE_TTL_MS / 60_000)} minutes.` +
+        ` If you did not just create or open a JaText account, ignore this email and nothing will happen.</p>` +
+        `</div>`,
+    });
+  } catch (err) {
+    // A code that was never mailed must not sit there blocking a retry behind the
+    // resend cooldown, so the row goes back the way it came.
+    await db
+      .execute({ sql: `DELETE FROM email_verifications WHERE user_id = ?`, args: [userId] })
+      .catch(() => undefined);
+    throw new TursoAppError(
+      `${err instanceof Error ? err.message : "Could not send the verification email."} Please try again in a moment.`,
+      502,
+    );
+  }
+  return {
+    maskedEmail: maskEmail(email),
+    resendAfterSec: Math.ceil(EMAIL_CODE_RESEND_COOLDOWN_MS / 1000),
+    expiresInSec: Math.floor(EMAIL_CODE_TTL_MS / 1000),
+  };
+}
+
+async function confirmEmailVerificationCode(db, userId, rawCode) {
+  const code = String(rawCode || "").replace(/[^0-9]/g, "");
+  const now = Date.now();
+  const rowRes = await db.execute({
+    sql: `SELECT code_hash, attempts, expires_at FROM email_verifications WHERE user_id = ? LIMIT 1`,
+    args: [userId],
+  });
+  const row = rowRes.rows[0];
+  if (!row) {
+    throw new TursoAppError("Ask for a code first, then type it here.", 400);
+  }
+  const clear = () =>
+    db.execute({ sql: `DELETE FROM email_verifications WHERE user_id = ?`, args: [userId] }).catch(() => undefined);
+  if (Number(row.expires_at || 0) < now) {
+    await clear();
+    throw new TursoAppError("That code expired. Ask for a new one.", 410);
+  }
+  if (Number(row.attempts || 0) >= EMAIL_CODE_MAX_ATTEMPTS) {
+    await clear();
+    throw new TursoAppError("Too many wrong tries. Ask for a new code.", 429);
+  }
+  if (code.length !== 6 || hashEmailCode(code) !== String(row.code_hash || "")) {
+    await db
+      .execute({
+        sql: `UPDATE email_verifications SET attempts = attempts + 1 WHERE user_id = ?`,
+        args: [userId],
+      })
+      .catch(() => undefined);
+    throw new TursoAppError("That code is not right. Check the email and try again.", 401);
+  }
+  await clear();
+  await db.execute({
+    sql: `UPDATE users SET email_verified = 1, updated_at = ? WHERE id = ?`,
+    args: [now, userId],
+  });
+  return { verified: true };
+}
+
+async function resolveEmailVerificationSubject(db, args, auth) {
+  if (auth?.userId) {
+    return { userId: String(auth.userId), email: String(auth.email || "") };
+  }
+  const fromChallenge = verifyEmailVerificationChallengeToken(String(args.challengeToken || "").trim());
+  if (fromChallenge) return fromChallenge;
+  throw new TursoAppError("Please sign in again.", 401);
+}
+
 export async function handleTursoRpc(op, args = {}, authHeader = "") {
   const rawToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   const auth = rawToken ? verifyAuthToken(rawToken) : null;
   const db = await getDb();
   const now = Date.now();
+
+  // Only checked while verification is actually required, so turning the feature off
+  // can never leave a signed-in account unable to message anyone.
+  if (auth?.userId && EMAIL_VERIFICATION_GATED_OPS.has(op) && isEmailVerificationRequired()) {
+    const flagRes = await db.execute({
+      sql: `SELECT email_verified FROM users WHERE id = ? LIMIT 1`,
+      args: [String(auth.userId)],
+    });
+    if (Number(flagRes.rows[0]?.email_verified ?? 1) === 0) {
+      throw new TursoAppError(
+        "Confirm your email address before you can message anyone. The code is in your inbox.",
+        403,
+      );
+    }
+  }
 
   switch (op) {
     /* ---------- Public / Auth ---------- */
@@ -2555,7 +2793,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         if (!row.password_hash) {
           // Account was created via Google OAuth; let them attach a password seamlessly or guide them!
           throw new TursoAppError(
-            "This email is already registered with Google. Tap 'Continue with Google' above.",
+            "An account already exists for this email. It was created with Google sign-in, which has since been removed from JaText, so it has no password to sign in with yet.",
           );
         }
         throw new TursoAppError("An account with this email already exists. Switch to 'Sign in'.");
@@ -2563,16 +2801,95 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const uid = newId();
       const pwHash = await hashPassword(password);
       const defaultDisplay = email.split("@")[0].slice(0, 40);
+      const requireVerification = isEmailVerificationRequired();
       await db.execute({
-        sql: `INSERT INTO users (id, email, password_hash, display_name, avatar_color, onboarding_complete, status_preference, created_at, updated_at)
-              VALUES (?, ?, ?, ?, 'black', 0, 'online', ?, ?)`,
-        args: [uid, email, pwHash, defaultDisplay, now, now],
+        sql: `INSERT INTO users (id, email, password_hash, display_name, avatar_color, onboarding_complete, status_preference, email_verified, created_at, updated_at)
+              VALUES (?, ?, ?, ?, 'black', 0, 'online', ?, ?, ?)`,
+        args: [uid, email, pwHash, defaultDisplay, requireVerification ? 0 : 1, now, now],
       });
       await terminateAllLinkedDevicesForUser(db, uid);
+      if (requireVerification) {
+        try {
+          const sent = await issueEmailVerificationCode(db, uid, email);
+          // No session yet: the code is what opens the account, so a throwaway address
+          // never becomes an identity that has to be cleaned up afterwards.
+          return {
+            ok: true,
+            requiresEmailVerification: true,
+            ...sent,
+            challengeToken: createEmailVerificationChallengeToken(uid, email),
+          };
+        } catch (err) {
+          // Nothing was delivered, so there is no account worth keeping: a brand-new
+          // row that nobody can confirm would squat on the address and turn "try again"
+          // into "an account already exists for this email". It is rolled back instead,
+          // and the failure comes back as an ordinary signup error with the provider's
+          // own words in it.
+          await db.execute({ sql: `DELETE FROM users WHERE id = ?`, args: [uid] }).catch(() => undefined);
+          throw new TursoAppError(
+            `${err instanceof Error ? err.message : "Could not send the verification email."} No account was created, so you can try again.`,
+          );
+        }
+      }
       const created = await db.execute({ sql: `SELECT * FROM users WHERE id = ?`, args: [uid] });
       return {
         token: createAuthToken(uid, email),
         me: mapUserRow(created.rows[0], true),
+      };
+    }
+
+    case "getEmailVerification": {
+      const subject = await resolveEmailVerificationSubject(db, args, auth);
+      const [userRes, pendingRes] = await Promise.all([
+        db.execute({ sql: `SELECT email_verified, email FROM users WHERE id = ? LIMIT 1`, args: [subject.userId] }),
+        db.execute({
+          sql: `SELECT sent_at, expires_at, attempts FROM email_verifications WHERE user_id = ? LIMIT 1`,
+          args: [subject.userId],
+        }),
+      ]);
+      const row = userRes.rows[0] || {};
+      const pending = pendingRes.rows[0];
+      const nowTs = Date.now();
+      return {
+        ok: true,
+        verified: Number(row.email_verified ?? 1) === 1,
+        required: isEmailVerificationRequired(),
+        maskedEmail: maskEmail(row.email || subject.email),
+        ...(pending
+          ? {
+              retryAfterSec: Math.max(
+                0,
+                Math.ceil((Number(pending.sent_at || 0) + EMAIL_CODE_RESEND_COOLDOWN_MS - nowTs) / 1000),
+              ),
+              expiresInSec: Math.max(0, Math.ceil((Number(pending.expires_at || 0) - nowTs) / 1000)),
+              attemptsLeft: Math.max(0, EMAIL_CODE_MAX_ATTEMPTS - Number(pending.attempts || 0)),
+            }
+          : {}),
+      };
+    }
+
+    case "sendEmailVerification": {
+      const subject = await resolveEmailVerificationSubject(db, args, auth);
+      const sent = await issueEmailVerificationCode(db, subject.userId, subject.email);
+      return {
+        ok: true,
+        sent: true,
+        // The countdown the button has to respect, from the number that decides it.
+        retryAfterSec: Math.round(EMAIL_CODE_RESEND_COOLDOWN_MS / 1000),
+        ...sent,
+      };
+    }
+
+    case "verifyEmailCode": {
+      const subject = await resolveEmailVerificationSubject(db, args, auth);
+      await confirmEmailVerificationCode(db, subject.userId, String(args.code || ""));
+      const userRes = await db.execute({ sql: `SELECT * FROM users WHERE id = ? LIMIT 1`, args: [subject.userId] });
+      const email = String(userRes.rows[0]?.email || subject.email || "");
+      return {
+        ok: true,
+        verified: true,
+        token: createAuthToken(subject.userId, email),
+        me: mapUserRow(userRes.rows[0], true),
       };
     }
 
@@ -2592,7 +2909,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       }
       if (!user.password_hash) {
         throw new TursoAppError(
-          "This account signs in with Google. Tap 'Continue with Google' above.",
+          "This account was created with Google sign-in, which has been removed from JaText, so there is no password to check. Create a new account with this email, or ask the app owner to reset it.",
         );
       }
       const valid = await verifyPassword(password, String(user.password_hash));
@@ -2600,6 +2917,16 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         throw new TursoAppError("Incorrect email or password.");
       }
       const uid = String(user.id);
+      if (Number(user.email_verified ?? 1) === 0 && isEmailVerificationRequired()) {
+        // Password alone is not enough to get in: that would let an unverified account
+        // pick whichever device it likes best and skip the whole point.
+        const resend = await issueEmailVerificationCode(db, uid, email).catch(() => null);
+        return {
+          requiresEmailVerification: true,
+          challengeToken: createEmailVerificationChallengeToken(uid, email),
+          ...(resend || {}),
+        };
+      }
       if (Number(user.totp_enabled || 0) === 1 && user.totp_secret) {
         return {
           requiresTwoFactor: true,
