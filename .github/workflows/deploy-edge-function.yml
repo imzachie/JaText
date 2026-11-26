@@ -54,10 +54,34 @@ jobs:
 
       # A missing token is a configuration gap, not a broken build. Skipping here
       # keeps a red X off main for people who have not added the secret yet.
+      # The runner log is only reachable through a blob host the agent cannot
+      # fetch, so the CLI output is promoted into a check annotation instead:
+      # `gh api repos/<owner>/<repo>/check-runs/<id>/annotations` shows exactly why
+      # a deploy failed without anyone opening the dashboard.
       - name: Publish
         if: env.SUPABASE_ACCESS_TOKEN != ''
-        run: supabase functions deploy jatext-api --no-verify-jwt --project-ref "$PROJECT_REF"
         timeout-minutes: 6
+        run: |
+          set +e
+          supabase functions deploy jatext-api --no-verify-jwt --project-ref "$PROJECT_REF" > /tmp/deploy.log 2>&1
+          CODE=$?
+          set -e
+          cat /tmp/deploy.log
+          if [ "$CODE" -ne 0 ]; then
+            python3 - /tmp/deploy.log <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()[-1400:]
+          enc = (
+              text.replace("%", "%25")
+              .replace(":", "%3A")
+              .replace(",", "%2C")
+              .replace("\n", "%0A")
+              .replace("\r", "")
+          )
+          print("::error title=supabase functions deploy failed::" + enc)
+          PY
+            exit "$CODE"
+          fi
 
       - name: Notice
         if: env.SUPABASE_ACCESS_TOKEN == ''
