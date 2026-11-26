@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { randomBytes } from "../server/runtimeCompat.js";
 import {
   consumeMobileOAuthHandoff,
   getTursoConfig,
@@ -336,7 +336,7 @@ export default async function handler(req, res) {
       origin,
       mobileSession,
       ts: Date.now(),
-      nonce: crypto.randomBytes(8).toString("hex"),
+      nonce: randomBytes(8).toString("hex"),
     });
     const params = new URLSearchParams({
       client_id: clientId,

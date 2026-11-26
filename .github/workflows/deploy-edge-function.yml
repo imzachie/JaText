@@ -1,0 +1,63 @@
+name: Deploy API (Supabase Edge Function)
+
+# The whole backend is a Supabase Edge Function: no server, no laptop, no second
+# platform. Push to main and the API is republished, the same way Pages
+# republishes the website. The website and the API therefore always match.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "api/**"
+      - "runtime/**"
+      - "supabase/**"
+      - "scripts/build-edge-function.mjs"
+      - ".github/workflows/deploy-edge-function.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-edge-function
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: nroosqwxyhkavdokxahn
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install build tools
+        run: npm install --no-audit --no-fund --ignore-scripts esbuild
+
+      - name: Bundle the function
+        run: node scripts/build-edge-function.mjs
+
+      - name: Fail if the bundle still needs a Node-only module
+        run: |
+          if grep -nE '^import[^;]*["'"'"'](pg|@libsql/client)["'"'"']' supabase/functions/jatext-api/index.ts; then
+            echo "The Edge Function must not statically import pg or @libsql/client." >&2
+            exit 1
+          fi
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # A missing token is a configuration gap, not a broken build. Skipping here
+      # keeps a red X off main for people who have not added the secret yet.
+      - name: Publish
+        if: env.SUPABASE_ACCESS_TOKEN != ''
+        run: supabase functions deploy jatext-api --no-verify-jwt --project-ref "$PROJECT_REF"
+        timeout-minutes: 6
+
+      - name: Notice
+        if: env.SUPABASE_ACCESS_TOKEN == ''
+        run: |
+          echo "::notice title=API not deployed::Add the SUPABASE_ACCESS_TOKEN repository secret (GitHub -> Settings -> Secrets and variables -> Actions) so pushes can publish the Edge Function."

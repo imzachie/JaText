@@ -1,8 +1,12 @@
-import crypto from "node:crypto";
-import { promisify } from "node:util";
+import {
+  canImportVerifyKey,
+  nodeLikeCrypto as crypto,
+  scrypt,
+  spkiFromRsaJwk,
+  verifySignature,
+} from "./runtimeCompat.js";
 import { createClient as createWebClient } from "@libsql/client/web";
-import { cert, getApps, initializeApp } from "firebase-admin/app";
-import { getMessaging } from "firebase-admin/messaging";
+import { createFcmClient } from "./fcmRestClient.js";
 import {
   createPostgresBridgeClient,
   createPostgresPoolClient,
@@ -10,7 +14,9 @@ import {
 import { getFcmServiceAccount, getFcmStatus } from "./fcmServiceAccount.js";
 import { getKlipyStatus, searchKlipyGifs } from "./klipyClient.js";
 
-const scryptAsync = promisify(crypto.scrypt);
+// Node's promisify(crypto.scrypt) had exactly these three arguments, and the
+// stored password hashes are only usable if the parameters stay the same.
+const scryptAsync = (password, salt, keyLen) => Promise.resolve(scrypt(password, salt, keyLen));
 
 export const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
 export const UNSEND_WINDOW_MS = 60 * 60 * 1000;
@@ -139,7 +145,7 @@ export async function getDb() {
         bridgeSecret: authToken,
       });
     } else if (mode === "postgres") {
-      cachedClient = createPostgresPoolClient(url);
+      cachedClient = await createPostgresPoolClient(url);
     } else if (url.startsWith("file:")) {
       const mod = await import("@libsql/client");
       cachedClient = mod.createClient({ url });
@@ -893,7 +899,7 @@ function decodeCborItem(buf, offset = 0) {
   }
 }
 
-function extractSpkiFromAttestationOrAuthData(attestationB64, authDataB64) {
+async function extractSpkiFromAttestationOrAuthData(attestationB64, authDataB64) {
   let authData = authDataB64 ? base64UrlDecode(authDataB64) : null;
   if (!authData && attestationB64) {
     const attMap = decodeCborItem(base64UrlDecode(attestationB64), 0).value;
@@ -937,15 +943,7 @@ function extractSpkiFromAttestationOrAuthData(attestationB64, authDataB64) {
     if (!Buffer.isBuffer(n) || !Buffer.isBuffer(e)) {
       throw new TursoAppError("Invalid RSA passkey parameters.");
     }
-    const pubKey = crypto.createPublicKey({
-      key: {
-        kty: "RSA",
-        n: base64UrlEncode(n),
-        e: base64UrlEncode(e),
-      },
-      format: "jwk",
-    });
-    const spki = pubKey.export({ type: "spki", format: "der" });
+    const spki = await spkiFromRsaJwk(n, e);
     return { spkiB64: base64UrlEncode(spki), alg: alg || -257, authData };
   }
   throw new TursoAppError("Unsupported passkey key type. Please use a standard device passkey.");
@@ -1158,24 +1156,11 @@ function computeActivityStatus(pref, presenceRow) {
 
 /* ==================== Optional Background FCM Push ==================== */
 
-function getFirebaseMessagingIfConfigured() {
+async function getFirebaseMessagingIfConfigured() {
   const creds = getFcmServiceAccount();
   if (!creds) return null;
   try {
-    const appName = "jatext-turso-fcm";
-    const app =
-      getApps().find((a) => a.name === appName) ||
-      initializeApp(
-        {
-          credential: cert({
-            projectId: creds.projectId,
-            clientEmail: creds.clientEmail,
-            privateKey: creds.privateKey,
-          }),
-        },
-        appName,
-      );
-    return getMessaging(app);
+    return createFcmClient(creds);
   } catch {
     return null;
   }
@@ -1204,7 +1189,7 @@ export async function sendDiagnosticPush(userId, options = {}) {
       ...status,
     };
   }
-  const messaging = getFirebaseMessagingIfConfigured();
+  const messaging = await getFirebaseMessagingIfConfigured();
   if (!messaging) {
     return {
       ok: false,
@@ -1387,7 +1372,7 @@ async function dispatchPushToUsersImpl(db, targetUserIds, payload) {
   if (!targetUserIds?.length) return;
   const uniqueUserIds = [...new Set(targetUserIds.map((id) => String(id || "")).filter(Boolean))];
   if (!uniqueUserIds.length) return;
-  const messaging = getFirebaseMessagingIfConfigured();
+  const messaging = await getFirebaseMessagingIfConfigured();
   if (!messaging) return;
   const placeholders = uniqueUserIds.map(() => "?").join(",");
   const res = await db.execute({
@@ -5678,7 +5663,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       let alg = providedAlg;
       let authDataBuf = authenticatorDataB64 ? base64UrlDecode(authenticatorDataB64) : null;
       if (!spkiB64 || !authDataBuf) {
-        const extracted = extractSpkiFromAttestationOrAuthData(
+        const extracted = await extractSpkiFromAttestationOrAuthData(
           attestationObjectB64,
           authenticatorDataB64,
         );
@@ -5699,12 +5684,10 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         throw new TursoAppError("User presence flag was not asserted by passkey.");
       }
 
-      // Validate that Node crypto can import the SPKI public key cleanly
-      crypto.createPublicKey({
-        key: base64UrlDecode(spkiB64),
-        format: "der",
-        type: "spki",
-      });
+      // Validate that the SPKI public key is a key we can verify with later
+      if (!(await canImportVerifyKey(base64UrlDecode(spkiB64)))) {
+        throw new TursoAppError("Unsupported passkey public key.");
+      }
 
       const signCount = authDataBuf.readUInt32BE(33);
       await db.execute({
@@ -5875,21 +5858,13 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const clientDataHash = crypto.createHash("sha256").update(clientDataBuf).digest();
       const signedPayload = Buffer.concat([authDataBuf, clientDataHash]);
       const signatureBuf = base64UrlDecode(signatureB64);
-      const pubKeyObj = crypto.createPublicKey({
-        key: base64UrlDecode(String(pkRow.public_key_spki_b64)),
-        format: "der",
-        type: "spki",
-      });
-
-      let verifiedSig = crypto.verify("sha256", signedPayload, pubKeyObj, signatureBuf);
-      if (!verifiedSig && signatureBuf.length === 64 && signatureBuf[0] !== 0x30) {
-        verifiedSig = crypto.verify(
-          "sha256",
-          signedPayload,
-          { key: pubKeyObj, dsaEncoding: "ieee-p1363" },
-          signatureBuf,
-        );
-      }
+      // Accepts DER and raw r||s ECDSA signatures, and RSA, from the stored SPKI
+      const verifiedSig = await verifySignature(
+        "sha256",
+        signedPayload,
+        base64UrlDecode(String(pkRow.public_key_spki_b64)),
+        signatureBuf,
+      );
       if (!verifiedSig) {
         throw new TursoAppError("Invalid passkey cryptographic signature.", 401);
       }
