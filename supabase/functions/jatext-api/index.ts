@@ -8874,6 +8874,15 @@ for (const key of [
   const value = env?.get?.(key);
   if (value && !process.env[key]) process.env[key] = value;
 }
+var FUNCTION_SLUG = "jatext-api";
+function routePath(pathname) {
+  const marker = pathname.indexOf("/api/");
+  if (marker >= 0) return pathname.slice(marker);
+  const prefix = `/${FUNCTION_SLUG}`;
+  if (pathname === prefix) return "/";
+  if (pathname.startsWith(`${prefix}/`)) return pathname.slice(prefix.length) || "/";
+  return pathname || "/";
+}
 var ROUTES = {
   "/api/turso": () => Promise.resolve().then(() => (init_turso(), turso_exports)),
   "/api/media": () => Promise.resolve().then(() => (init_media(), media_exports)),
@@ -9002,7 +9011,8 @@ Deno.serve(async (request) => {
     });
   }
   const url = new URL(request.url);
-  const path2 = url.pathname.replace(/\/+$/, "") || "/";
+  const path2 = routePath(url.pathname).replace(/\/+$/, "") || "/";
+  const apiPath = `${path2}${url.search}`;
   const key = ROUTES[path2] ? path2 : `/api${path2}`;
   const load = ROUTES[key];
   if (!load) {
@@ -9012,7 +9022,7 @@ Deno.serve(async (request) => {
     return Response.json({ ok: false, error: `Unknown route ${path2}` }, { status: 404 });
   }
   try {
-    const response = await invoke(load, request);
+    const response = await invoke(load, request, apiPath);
     response.headers.set("Access-Control-Allow-Origin", "*");
     return response;
   } catch (err) {
@@ -9056,11 +9066,13 @@ async function statusResponse(request) {
       headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }
     });
   }
+  const healthy = status === 200;
   status = 200;
   const safe = text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
-  const banner = status === 200 ? "Reachable" : "Not working yet";
+  const banner = healthy ? "Reachable" : "Not working yet";
+  const accent = healthy ? "#34d399" : "#f87171";
   return new Response(
-    `<!doctype html><meta charset="utf-8"><title>JaText API ${banner}</title><body style="margin:2rem;font:14px ui-monospace,Menlo,monospace;background:#0b0b0c;color:#e8e8ea"><h1 style="font-size:16px">JaText API &middot; ${banner}</h1><pre style="white-space:pre-wrap;background:#141417;border:1px solid #26262c;border-radius:8px;padding:14px">${safe}</pre></body>`,
+    `<!doctype html><meta charset="utf-8"><title>JaText API ${banner}</title><body style="margin:2rem;font:14px ui-monospace,Menlo,monospace;background:#0b0b0c;color:#e8e8ea"><h1 style="font-size:16px;color:${accent}">JaText API &middot; ${banner}</h1><pre style="white-space:pre-wrap;background:#141417;border:1px solid #26262c;border-radius:8px;padding:14px">${safe}</pre></body>`,
     { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
   );
 }
