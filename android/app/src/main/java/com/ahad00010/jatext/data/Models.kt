@@ -750,7 +750,12 @@ data class LinkPreviewInfo(
 data class ApkVersionManifest(
     val versionName: String = "",
     val versionCode: Int = 0,
-    val downloadUrl: String = "${BuildConfig.API_ORIGIN.trimEnd('/')}/downloads/JaText-release.apk",
+    // The signed APK is about 50 MB, which is over the 25 MB per asset limit of the
+    // static host that serves the site, so it is published as a GitHub Release
+    // asset instead. The manifest normally carries this anyway; the default only
+    // matters if the manifest is unreachable or predates the move.
+    val downloadUrl: String =
+        "https://github.com/imzachie/JaText/releases/download/apk-latest/JaText-release.apk",
     val commitSha: String? = null,
     val publishedAt: String? = null,
 )

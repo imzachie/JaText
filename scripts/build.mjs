@@ -58,7 +58,13 @@ writeFileSync(
 );
 console.log(`Wrote dist/web-version.json (${webVersionManifest.buildId})`);
 
-// Publish release-cdn/* into dist/ ONLY on web builds (Vercel), keeping Android APK bundles lean!
+// Publish the version manifest beside the site, so the in-app updater and the
+// landing page read the newest version from the origin they were served from.
+//
+// The APK itself is deliberately NOT copied in. Cloudflare Pages refuses any
+// single asset over 25 MB, a signed release APK is about 50 MB, and the whole
+// deployment fails over it. The download link lives in the manifest and points at
+// the GitHub Release the same workflow publishes, which has no such limit.
 const manifestSrc = resolve("release-cdn/apk-version.json");
 const apkSrc = resolve("release-cdn/JaText-release.apk");
 
@@ -68,7 +74,8 @@ if (existsSync(manifestSrc)) {
 }
 
 if (existsSync(apkSrc)) {
-  mkdirSync(resolve("dist/downloads"), { recursive: true });
-  copyFileSync(apkSrc, resolve("dist/downloads/JaText-release.apk"));
-  console.log("Copied release-cdn/JaText-release.apk -> dist/downloads/JaText-release.apk");
+  console.log(
+    "Left release-cdn/JaText-release.apk out of the site: it is larger than the " +
+      "25 MB per asset limit. The download URL in apk-version.json is used instead.",
+  );
 }
