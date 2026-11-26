@@ -261,12 +261,19 @@ async function statusResponse(request: Request) {
   }
 
   const text = JSON.stringify(payload, null, 2);
-  if (!(request.headers.get("accept") || "").includes("text/html")) {
+  const isBrowser = (request.headers.get("accept") || "").includes("text/html");
+  if (!isBrowser) {
     return new Response(text, {
       status,
       headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
     });
   }
+  // The HTML answer is always 200. A status *page* that reports 5xx gets eaten by
+  // link unfurlers, proxies and browser error screens before a person can read the
+  // reason, which is the only thing it exists for; `ok` and `error` in the body say
+  // whether it is actually healthy. Anything machine-checked asks for JSON and gets
+  // the real code.
+  status = 200;
   const safe = text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string);
   const banner = status === 200 ? "Reachable" : "Not working yet";
   return new Response(
