@@ -8347,11 +8347,13 @@ async function handler3(req, res) {
     return;
   }
   if (req.method === "GET" && action === "config") {
+    const callbackOrigin = resolveCallbackOrigin(req);
     return res.status(200).json({
       ok: true,
       configured: Boolean(clientId),
       clientId,
-      androidClientConfigured
+      androidClientConfigured,
+      redirectUri: `${callbackOrigin}/api/oauth-google`
     });
   }
   if (req.method === "GET" && action === "poll") {
