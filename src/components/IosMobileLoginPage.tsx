@@ -269,6 +269,7 @@ export function IosMobileLoginPage() {
                   ? `${t("resend_email_code")} (${resendInSec}s)`
                   : t("resend_email_code")}
               </button>
+              <p className="jt-ios-e2ee-note">{t("email_code_spam")}</p>
             </form>
           </div>
         </div>

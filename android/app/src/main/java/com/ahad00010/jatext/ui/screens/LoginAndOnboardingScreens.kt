@@ -484,6 +484,12 @@ fun NativeLoginScreen(
                                 resendIn -= 1
                             }
                         }
+                        Text(
+                            text = "Not there after a minute? Check your spam or promotions folder.",
+                            color = loginPalette.textSecondary,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.sp,
+                        )
                         JaWebGhostButton(
                             text = if (resendIn > 0) "Send a new code (${resendIn}s)" else "Send a new code",
                             enabled = !busy && resendIn <= 0,
