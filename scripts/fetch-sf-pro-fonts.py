@@ -3,7 +3,9 @@
 Fetches and prepares the official Apple SF Pro font suite (SF Pro Text, SF Pro Display,
 and SF Pro Rounded across weights & italics) AND the Apple iOS 26.4 Unicode 17.0 Color
 Emoji font (`jatext_ios_emoji.ttf`, CBDT + CBLC + GSUB ligatures) from
-Ahad00010/JaText-Essential-Stuff (main) for the JaText Android APK
+JaText-Essential-Stuff (default imzachie/JaText-Essential-Stuff, main, override
+with ESSENTIAL_STUFF_REPO / ESSENTIAL_STUFF_BRANCH / ESSENTIAL_STUFF_TOKEN) for
+the JaText Android APK
 (`android/app/src/main/res/font/`).
 
 Each raw desktop `.otf` in JaText-Essential-Stuff (~6.3 MB) embeds ~5.5 MB of macOS-only
@@ -21,16 +23,44 @@ import concurrent.futures
 import hashlib
 import io
 import json
+import os
 import shutil
 import urllib.request
 from pathlib import Path
 
-ESSENTIAL_RAW_BASE = (
-    "https://media.githubusercontent.com/media/Ahad00010/JaText-Essential-Stuff/main"
-)
-ESSENTIAL_FALLBACK_BASE = (
-    "https://github.com/Ahad00010/JaText-Essential-Stuff/raw/main"
-)
+# Where the font suite lives. It used to be hardcoded to one account, and the
+# moment that account was renamed every download in CI started answering 404,
+# which takes the APK build down with it. Both the owner and the branch are
+# configurable, and a token makes a private repo work.
+ESSENTIAL_STUFF_REPO = (
+    os.environ.get("ESSENTIAL_STUFF_REPO") or "imzachie/JaText-Essential-Stuff"
+).strip().strip("/")
+ESSENTIAL_STUFF_BRANCH = (
+    os.environ.get("ESSENTIAL_STUFF_BRANCH") or "main"
+).strip()
+ESSENTIAL_STUFF_TOKEN = (
+    os.environ.get("ESSENTIAL_STUFF_TOKEN")
+    or os.environ.get("JATEXT_ASSET_TOKEN")
+    or os.environ.get("GITHUB_TOKEN")
+    or ""
+).strip()
+
+
+def asset_bases() -> list[str]:
+    """Every URL worth trying for one file, most specific first.
+
+    raw.githubusercontent.com is the only host that accepts a token for a
+    private repo, so it leads when a token is configured. The media host serves
+    LFS pointers as real bytes, which is what the fonts are stored as.
+    """
+    repo = ESSENTIAL_STUFF_REPO
+    branch = ESSENTIAL_STUFF_BRANCH
+    bases: list[str] = []
+    if ESSENTIAL_STUFF_TOKEN:
+        bases.append(f"https://raw.githubusercontent.com/{repo}/{branch}")
+    bases.append(f"https://media.githubusercontent.com/media/{repo}/{branch}")
+    bases.append(f"https://github.com/{repo}/raw/{branch}")
+    return bases
 
 IOS_EMOJI_SHEET_REMOTE = "ios_26.4-emoji-unicode-17.0.png"
 IOS_EMOJI_SHEET_SHA256 = "41d18ec0793a7cfde47c06b994e9848de39ad50bf0abb453cb2fe9d845eea543"
@@ -98,13 +128,13 @@ def download_remote_asset(remote_name: str, expected_sha: str, raw_dir: Path) ->
         return dest
 
     last_err: Exception | None = None
-    for base in (ESSENTIAL_RAW_BASE, ESSENTIAL_FALLBACK_BASE):
+    for base in asset_bases():
         url = f"{base}/{remote_name}"
         try:
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "JaText-APK-Builder/4.1"},
-            )
+            headers = {"User-Agent": "JaText-APK-Builder/4.1"}
+            if ESSENTIAL_STUFF_TOKEN and "raw.githubusercontent.com" in base:
+                headers["Authorization"] = f"Bearer {ESSENTIAL_STUFF_TOKEN}"
+            req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=120) as resp:
                 data = resp.read()
             actual_sha = hashlib.sha256(data).hexdigest()
@@ -117,7 +147,16 @@ def download_remote_asset(remote_name: str, expected_sha: str, raw_dir: Path) ->
             return dest
         except Exception as exc:
             last_err = exc
-    raise RuntimeError(f"Failed to download {remote_name}: {last_err}")
+    hint = (
+        "Add a repo secret named ESSENTIAL_STUFF_TOKEN with a fine grained "
+        "pat that can read it"
+        if not ESSENTIAL_STUFF_TOKEN
+        else "the configured ESSENTIAL_STUFF_TOKEN cannot read it"
+    )
+    raise RuntimeError(
+        f"Failed to download {remote_name} from {ESSENTIAL_STUFF_REPO}: "
+        f"{last_err}. The repo is probably private or was renamed; {hint}."
+    )
 
 
 def download_one(entry: tuple[str, str, str, int, bool], raw_dir: Path) -> Path:
@@ -674,6 +713,21 @@ def verify_apk_fonts(apk_path: Path) -> None:
         )
 
 
+def installed_fonts_are_real(out_dir: Path) -> bool:
+    """Whether res/font already holds the real subsets rather than placeholders.
+
+    The build used to fail outright when the asset repo could not be reached,
+    even though the APK in the repo already ships the same fonts. If the real
+    files are present, generating them again from the network is pointless.
+    """
+    for res_name, *_ in SF_PRO_FONT_MANIFEST:
+        otf = out_dir / f"{res_name}.otf"
+        if not otf.exists() or otf.stat().st_size < 50_000:
+            return False
+    emoji = out_dir / f"{IOS_EMOJI_RES_NAME}.ttf"
+    return emoji.exists() and emoji.stat().st_size >= 4_000_000
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     default_out = repo_root / "android" / "app" / "src" / "main" / "res" / "font"
@@ -681,6 +735,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--fetch", action="store_true", help="Download & prepare real SF Pro + iOS Emoji fonts")
+    parser.add_argument("--force", action="store_true", help="Regenerate even when res/font already has real fonts")
     parser.add_argument("--generate-stubs", action="store_true", help="Generate valid offline OTF/TTF stubs")
     parser.add_argument("--verify-apk", type=Path, default=None, help="Verify bundled SF Pro + iOS Emoji fonts in APK")
     parser.add_argument("--out-dir", type=Path, default=default_out)
@@ -692,6 +747,13 @@ def main() -> None:
     elif args.generate_stubs:
         generate_offline_stubs(args.out_dir)
     elif args.fetch:
+        if not args.force and installed_fonts_are_real(args.out_dir):
+            print(
+                f"res/font already holds all {len(SF_PRO_FONT_MANIFEST)} SF Pro subsets "
+                f"+ {IOS_EMOJI_RES_NAME}.ttf, skipping the download. "
+                "Pass --force to rebuild them from JaText-Essential-Stuff."
+            )
+            return
         fetch_and_prepare(args.out_dir, args.cache_dir)
     else:
         parser.error("Specify --fetch, --generate-stubs, or --verify-apk <path>")

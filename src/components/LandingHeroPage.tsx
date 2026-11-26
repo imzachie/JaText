@@ -20,7 +20,7 @@ interface ApkVersionManifest {
 
 /** Where CI publishes the release notes for the newest signed APK. */
 const GITHUB_APK_MANIFEST_URL =
-  "https://raw.githubusercontent.com/Ahad00010/JaText/main/release-cdn/apk-version.json";
+  "https://raw.githubusercontent.com/imzachie/JaText/main/release-cdn/apk-version.json";
 
 const FALLBACK_APK_VERSION: ApkVersionManifest = {
   versionName: "4.5.0",

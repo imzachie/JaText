@@ -39,9 +39,9 @@ object TursoApiClient {
 
     /** Where the newest published build always lives, whatever the server state. */
     private const val GITHUB_APK_MANIFEST_URL =
-        "https://raw.githubusercontent.com/Ahad00010/JaText/main/release-cdn/apk-version.json"
+        "https://raw.githubusercontent.com/imzachie/JaText/main/release-cdn/apk-version.json"
     private const val GITHUB_APK_DOWNLOAD_URL =
-        "https://github.com/Ahad00010/JaText/releases/download/apk-latest/JaText-release.apk"
+        "https://github.com/imzachie/JaText/releases/download/apk-latest/JaText-release.apk"
 
     private const val MEDIA_CHUNK_BYTES = 768 * 1024
     private const val CHUNK_UPLOAD_THRESHOLD = 700 * 1024

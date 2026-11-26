@@ -62,6 +62,13 @@ jobs:
           key: jatext-sf-pro-fonts-${{ hashFiles('scripts/fetch-sf-pro-fonts.py', 'scripts/ios-emoji-grid.json') }}
 
       - name: Fetch and prepare Apple SF Pro + iOS 26.4 Emoji fonts from JaText-Essential-Stuff
+        env:
+          # The font repo can be private, in which case an unauthenticated
+          # download answers 404 and the whole build fails over a font. Set this
+          # repo secret to a fine grained pat that can read that one repo.
+          ESSENTIAL_STUFF_TOKEN: ${{ secrets.ESSENTIAL_STUFF_TOKEN }}
+          ESSENTIAL_STUFF_REPO: ${{ vars.ESSENTIAL_STUFF_REPO }}
+          ESSENTIAL_STUFF_BRANCH: ${{ vars.ESSENTIAL_STUFF_BRANCH }}
         run: |
           if [ ! -f ~/.cache/jatext-sf-pro-fonts/subset_v2/jatext_ios_emoji.ttf ] || [ ! -f ~/.cache/jatext-sf-pro-fonts/subset_v2/sf_pro_text_regular.otf ]; then
             python3 -m pip install --user --break-system-packages --quiet fonttools Pillow || python3 -m pip install --quiet fonttools Pillow
