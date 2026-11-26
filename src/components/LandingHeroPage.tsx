@@ -36,8 +36,8 @@ const GITHUB_APK_DOWNLOAD_URL =
   "https://github.com/imzachie/JaText/releases/download/apk-latest/JaText-release.apk";
 
 const FALLBACK_APK_VERSION: ApkVersionManifest = {
-  versionName: "4.5.2",
-  versionCode: 86,
+  versionName: "4.5.3",
+  versionCode: 87,
   downloadUrl: GITHUB_APK_DOWNLOAD_URL,
 };
 
@@ -219,10 +219,20 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v4.5.3",
+    date: "November 26, 2026",
+    headline: "The Official Address Is Now jatextapp.pages.dev",
+    latest: true,
+    bullets: [
+      "No custom domain is involved any more. The website, the API and the files it serves all live on the Pages hostname, so there is no DNS to touch and nothing left that can silently go dead.",
+      "This build talks to the new address. Updating matters: an older build still points at the domain that was switched off, and it will look signed out or unreachable even though the service itself is fine.",
+      "Passkeys are tied to the address they were created on, so a passkey saved under the old domain has to be added again in Privacy settings. Password sign-in and end-to-end encrypted history are untouched.",
+    ],
+  },
+  {
     version: "v4.5.2",
     date: "November 26, 2026",
     headline: "The Server Moved Into the Database",
-    latest: true,
     bullets: [
       "There is no separate API host any more. The backend runs inside Supabase next to the database it talks to, so a push to GitHub is the entire deployment: no server, no tunnel, nothing that can be switched off.",
       "The APK is downloaded from the release page instead of the website, because static hosting refuses files larger than 25 MB. Old links to /downloads/JaText-release.apk still work.",

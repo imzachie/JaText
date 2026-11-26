@@ -7,7 +7,7 @@ log into, no systemd unit, no cloudflared, and no Vercel.
 
 ```
 browser / APK
-    │  https://jatext.us.ci
+    │  https://jatextapp.pages.dev
     ▼
 Cloudflare Pages ──► static site (dist/)
     │
@@ -22,7 +22,7 @@ Supabase Postgres  (db.nroosqwxyhkavdokxahn.supabase.co:5432)
 
 * The website and the API share one public origin, so there is no CORS and the
   session cookie/token stays first party. The APK keeps working without a rebuild
-  because it also talks to `https://jatext.us.ci`.
+  because it also talks to `https://jatextapp.pages.dev`.
 * The API is the same `api/*.js` + `server/tursoBackend.js` code the old Node
   server ran. It is portable now because `server/runtimeCompat.js` replaces
   `node:crypto` (SHA-256/SHA-1/HMAC/PBKDF2/scrypt, all verified byte-for-byte
@@ -66,16 +66,16 @@ Add, replace, or delete there and the next request picks it up.
 | --- | --- | --- |
 | `DATABASE_URL` | everything | already set; `postgres://jatext_api:…@db.nroosqwxyhkavdokxahn.supabase.co:5432/postgres?sslmode=require` |
 | `AUTH_SECRET` | sign-in tokens | already set; rotating it signs everyone out |
-| `PUBLIC_APP_ORIGIN` | link previews, OAuth redirects | `https://jatext.us.ci` |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google | redirect URI `https://jatext.us.ci/api/oauth-google` |
+| `PUBLIC_APP_ORIGIN` | link previews, OAuth redirects | `https://jatextapp.pages.dev` |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google | redirect URI `https://jatextapp.pages.dev/api/oauth-google` |
 | `FCM_SERVICE_ACCOUNT_JSON` | Android push | the whole `service_account` JSON, base64 or raw |
 | `KLIPY_API_KEY` | song search | |
 
 ## Checks worth doing after the first deploy
 
 ```
-https://jatext.us.ci/api/auth-status        → "engine":"postgresql","dbConnected":true
-https://jatext.us.ci/api/health             → the function's own router answers this
+https://jatextapp.pages.dev/api/auth-status        → "engine":"postgresql","dbConnected":true
+https://jatextapp.pages.dev/api/health             → the function's own router answers this
 ```
 
 If `auth-status` returns `Could not reach the JaText backend`, the function is not
@@ -99,8 +99,14 @@ Uploads are stored in Postgres (`media_blobs`, `media_chunks`), which counts aga
 the 500 MB database on the free plan. Moving them to Supabase Storage is the next
 planned change; until then watch **Settings → Usage** if the app gets real traffic.
 
-## Retiring the old box
+## Why there is no domain
 
-`jatext.us.ci` used to be a `CNAME` to a Cloudflare tunnel on the Ubuntu machine.
-Once this page is served by Pages (DNS → CNAME `jatext.us.ci` → the project's
-`*.pages.dev` target), that machine can stay off permanently.
+`jatextapp.pages.dev` is the public origin on purpose. A `*.pages.dev` hostname is
+already HTTPS, already behind Cloudflare's edge, needs no DNS record, no
+certificate and no renewal, and it cannot be pointed at a machine that gets
+switched off. Nothing in the app assumes a custom domain.
+
+If a domain is ever wanted, two things have to move together: `PUBLIC_APP_ORIGIN`
+in Supabase (which also changes the passkey relying party, so passkeys are
+re-enrolled) and `API_ORIGIN` in `android/app/build.gradle`, which means a new APK
+build. Doing one without the other is how an app ends up talking to a dead host.

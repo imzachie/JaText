@@ -5,7 +5,22 @@ import {
   spkiFromRsaJwk,
   verifySignature,
 } from "./runtimeCompat.js";
-import { createClient as createWebClient } from "@libsql/client/web";
+/**
+ * The libsql client is loaded through a computed specifier instead of a static
+ * import. A bundler that cannot resolve a bare package name (a Deno edge runtime,
+ * where the npm registry is not on the module path) otherwise refuses the whole
+ * file at deploy time, even though the Turso engine is never used when the app is
+ * configured with a Postgres URL.
+ */
+async function loadLibsqlClient(preferWeb = true) {
+  const specifier = [
+    "@libsql",
+    "/client",
+    preferWeb ? "/web" : "",
+  ].join("");
+  const mod = await import(/* @vite-ignore */ specifier);
+  return mod.createClient || mod.default?.createClient;
+}
 import { createFcmClient } from "./fcmRestClient.js";
 import {
   createPostgresBridgeClient,
@@ -101,7 +116,7 @@ export function getTursoConfig() {
 }
 
 function publicAppOrigin() {
-  return (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci")
+  return (process.env.PUBLIC_APP_ORIGIN || "https://jatextapp.pages.dev")
     .trim()
     .replace(/\/+$/, "");
 }
@@ -147,10 +162,11 @@ export async function getDb() {
     } else if (mode === "postgres") {
       cachedClient = await createPostgresPoolClient(url);
     } else if (url.startsWith("file:")) {
-      const mod = await import("@libsql/client");
-      cachedClient = mod.createClient({ url });
+      const createClient = await loadLibsqlClient(false);
+      cachedClient = createClient({ url });
     } else {
-      cachedClient = createWebClient({ url, authToken });
+      const createClient = await loadLibsqlClient(true);
+      cachedClient = createClient({ url, authToken });
     }
     cachedClientKey = key;
   }

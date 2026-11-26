@@ -28,7 +28,7 @@ object StatusSongs {
 
     const val MAX_STATUS_AUDIO_MS = 30_000
 
-    private const val SONGS_BASE = "https://jatext.us.ci/songs"
+    private const val SONGS_BASE = "https://jatextapp.pages.dev/songs"
 
     val all: List<StatusSong> = listOf(
         StatusSong(

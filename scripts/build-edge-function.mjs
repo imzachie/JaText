@@ -36,6 +36,7 @@ const externals = [
   // runtime has no TCP Postgres driver and no libsql native client.
   "pg",
   "@libsql/client",
+  "@libsql/client/web",
 ];
 
 async function main() {
@@ -63,7 +64,21 @@ async function main() {
   let code = await readFile(file, "utf8");
   // pg is reached only through loadPg(), which must stay a dynamic import: an
   // Edge runtime cannot resolve it, and a static reference fails the deploy.
-  const banned = [/^import[^\n]*["']pg["']/m, /from\s+["']@libsql\/client["']/m];
+  // Anything the edge runtime has to look up by package name can fail the deploy,
+  // so the bundle may only import Node builtins (Deno serves those) and relative
+  // paths. Every optional dependency has to sit behind a computed specifier.
+  const banned = [
+    /^import[^\n]*?from\s+["'](?!node:|\.)([^"']+)["']/m,
+    /^export[^\n]*?from\s+["'](?!node:|\.)([^"']+)["']/m,
+  ];
+  for (const re of banned) {
+    const hit = code.match(re);
+    if (hit) {
+      console.error(`build left an unresolvable static import in the bundle: ${hit[0].slice(0, 120)}`);
+      process.exit(1);
+    }
+  }
+  const unused = [];
   for (const re of banned) {
     if (re.test(code)) {
       console.error(`build produced a forbidden static import: ${re}`);

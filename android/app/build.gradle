@@ -17,10 +17,10 @@ android {
         applicationId "com.ahad00010.jatext"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 86
-        versionName "4.5.2"
+        versionCode 87
+        versionName "4.5.3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField "String", "API_ORIGIN", "\"https://jatext.us.ci\""
+        buildConfigField "String", "API_ORIGIN", "\"https://jatextapp.pages.dev\""
         // Set by CI from GITHUB_SHA. Lets the OTA updater detect a rebuild that
         // kept the same versionCode, which is the case for every web-only change.
         buildConfigField "String", "BUILD_COMMIT", System.getenv("BUILD_COMMIT") ? "\"${System.getenv('BUILD_COMMIT')}\"" : "\"unknown\""
@@ -43,7 +43,7 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug {
-            buildConfigField "String", "API_ORIGIN", "\"https://jatext.us.ci\""
+            buildConfigField "String", "API_ORIGIN", "\"https://jatextapp.pages.dev\""
         }
     }
 

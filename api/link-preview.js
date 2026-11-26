@@ -107,7 +107,7 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
-const SELF_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatext.us.ci")
+const SELF_HOST = (process.env.PUBLIC_APP_ORIGIN || "https://jatextapp.pages.dev")
   .replace(/^https?:\/\//, "")
   .replace(/\/+$/, "")
   .toLowerCase();
