@@ -16,8 +16,12 @@ export default async function handler(req, res) {
   // Google sign-in is switched off (see api/oauth-google.js), so the status page has
   // to say false even while the old credentials are still sitting in the secret
   // store. Otherwise a reader sees "configured" and hunts for a bug that is not there.
+  // The switch is on unless someone explicitly sets JATEXT_GOOGLE_DISABLED=0, which
+  // is the same default api/oauth-google.js refuses on. Reading it the other way
+  // round here would advertise a sign-in method the API has already turned away.
+  const googleSignInEnabled = process.env.JATEXT_GOOGLE_DISABLED === "0";
   const googleConfigured =
-    process.env.JATEXT_GOOGLE_DISABLED !== "0" &&
+    googleSignInEnabled &&
     Boolean(
       (process.env.GOOGLE_CLIENT_ID || process.env.AUTH_GOOGLE_ID) &&
         (process.env.GOOGLE_CLIENT_SECRET || process.env.AUTH_GOOGLE_SECRET),

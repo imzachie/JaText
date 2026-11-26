@@ -8583,7 +8583,8 @@ async function handler4(req, res) {
     return;
   }
   const cfg = getTursoConfig();
-  const googleConfigured = process.env.JATEXT_GOOGLE_DISABLED !== "0" && Boolean(
+  const googleSignInEnabled = process.env.JATEXT_GOOGLE_DISABLED === "0";
+  const googleConfigured = googleSignInEnabled && Boolean(
     (process.env.GOOGLE_CLIENT_ID || process.env.AUTH_GOOGLE_ID) && (process.env.GOOGLE_CLIENT_SECRET || process.env.AUTH_GOOGLE_SECRET)
   );
   const fcm = getFcmStatus();
