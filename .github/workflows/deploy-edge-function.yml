@@ -48,9 +48,22 @@ jobs:
             exit 1
           fi
 
+      # `latest` means the action asks GitHub's API for the newest release, and that
+      # anonymous lookup gets rate limited (run #7 died here, before deploying
+      # anything). Authenticate it, and if it still fails, install the same CLI from
+      # npm: that package downloads its binary by tag, which is not API limited.
       - uses: supabase/setup-cli@v1
+        id: cli
+        continue-on-error: true
         with:
           version: latest
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install the Supabase CLI from npm instead
+        if: steps.cli.outcome != 'success'
+        run: |
+          npm install --no-save --no-package-lock supabase@latest
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       # A missing token is a configuration gap, not a broken build. Skipping here
       # keeps a red X off main for people who have not added the secret yet.
@@ -63,6 +76,10 @@ jobs:
         timeout-minutes: 6
         run: |
           set +e
+          if ! command -v supabase >/dev/null 2>&1; then
+            echo "::error title=Supabase CLI missing::neither install path produced a supabase binary"
+            exit 1
+          fi
           # --yes is not decoration: since CLI v3 a non-interactive stdout makes the
           # command refuse to apply anything ("Confirmation required ... Nothing was
           # changed") and exit 1, which looks exactly like a bundling failure.
