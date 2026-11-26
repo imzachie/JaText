@@ -1283,6 +1283,37 @@ async function getDb() {
   }
   return cachedClient;
 }
+function isSchemaPrivilegeError(err) {
+  const message = String(err?.message || err || "");
+  return /permission denied for schema|permission denied for table|must be owner of|insufficient privilege|already exists/i.test(
+    message
+  );
+}
+async function applyCreateStatements(db, statements) {
+  try {
+    await db.batch(statements, "write");
+    return;
+  } catch (err) {
+    if (!isSchemaPrivilegeError(err)) throw err;
+    const missing = [];
+    for (const table of CORE_SCHEMA_TABLES) {
+      try {
+        await db.execute({ sql: `SELECT 1 FROM ${table} LIMIT 1`, args: [] });
+      } catch {
+        missing.push(table);
+      }
+    }
+    if (missing.length) {
+      throw new TursoAppError(
+        `The database role cannot create tables, and these are missing: ${missing.join(", ")}. Run scripts/dump-supabase-schema.mjs in the SQL editor once, or grant the role CREATE on schema public.`,
+        503
+      );
+    }
+    console.warn(
+      "[JaText] Schema DDL skipped because the role has no DDL rights; using the schema that is already applied."
+    );
+  }
+}
 async function initSchema(db) {
   const statements = [
     `CREATE TABLE IF NOT EXISTS users (
@@ -1678,7 +1709,14 @@ async function initSchema(db) {
     `ALTER TABLE community_messages ADD COLUMN is_spoiler INTEGER NOT NULL DEFAULT 0`
   ];
   if (db.engine === "postgresql" || db.engine === "postgresql-bridge") {
-    await db.batch([...statements, ...safeAlters], "write");
+    await applyCreateStatements(db, statements);
+    for (const sql of safeAlters) {
+      try {
+        await db.execute({ sql, args: [] });
+      } catch (err) {
+        if (!isSchemaPrivilegeError(err)) throw err;
+      }
+    }
     return;
   }
   await db.batch(statements, "write");
@@ -7110,7 +7148,7 @@ async function flushDueScheduledMessages(db, force = false) {
   }
   return dispatchedCount;
 }
-var scryptAsync, FOURTEEN_DAYS_MS, UNSEND_WINDOW_MS, TOKEN_TTL_MS, TOKEN_RENEW_THRESHOLD_MS, MAX_LINKED_DEVICES, LINK_SESSION_TTL_MS, USERNAME_REGEX, OWNER_EMAIL, OWNER_USERNAME, TursoAppError, cachedClient, cachedClientKey, schemaReadyForKey, schemaInitPromise, customDbOverride, BASE32_ALPHABET, ANDROID_CERT_SHA256_HEX, ANDROID_PASSKEY_ORIGIN, lastScheduledSweepAt, lastUpdatesSweepAt;
+var scryptAsync, FOURTEEN_DAYS_MS, UNSEND_WINDOW_MS, TOKEN_TTL_MS, TOKEN_RENEW_THRESHOLD_MS, MAX_LINKED_DEVICES, LINK_SESSION_TTL_MS, USERNAME_REGEX, OWNER_EMAIL, OWNER_USERNAME, TursoAppError, cachedClient, cachedClientKey, schemaReadyForKey, schemaInitPromise, customDbOverride, CORE_SCHEMA_TABLES, BASE32_ALPHABET, ANDROID_CERT_SHA256_HEX, ANDROID_PASSKEY_ORIGIN, lastScheduledSweepAt, lastUpdatesSweepAt;
 var init_tursoBackend = __esm({
   "server/tursoBackend.js"() {
     init_runtimeCompat();
@@ -7140,6 +7178,7 @@ var init_tursoBackend = __esm({
     schemaReadyForKey = "";
     schemaInitPromise = null;
     customDbOverride = null;
+    CORE_SCHEMA_TABLES = ["users", "messages", "friend_requests", "media_blobs"];
     BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     ANDROID_CERT_SHA256_HEX = "82C3D98648DD3D3F1549177B17BA1A49831939122027234AA6C96CC803DF3465";
     ANDROID_PASSKEY_ORIGIN = `android:apk-key-hash:${base64UrlEncode(
