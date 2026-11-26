@@ -70,7 +70,7 @@ const ROUTES: Record<string, () => Promise<{ default: (req: unknown, res: unknow
  * upload bytes, and the JSON handlers call `JSON.parse` on a string themselves.
  * Handing both the same shape is what makes the existing code work untouched.
  */
-async function toReq(request: Request) {
+async function toReq(request: Request, overridePath?: string) {
   const url = new URL(request.url);
   const contentType = request.headers.get("content-type") || "";
   const method = request.method.toUpperCase();
@@ -89,7 +89,7 @@ async function toReq(request: Request) {
   // The handlers answer with res.json(), so they never read the stream twice.
   return {
     method,
-    url: `${url.pathname}${url.search}`,
+    url: overridePath ?? `${url.pathname}${url.search}`,
     path: url.pathname,
     headers,
     query: Object.fromEntries(url.searchParams.entries()),
@@ -200,17 +200,13 @@ Deno.serve(async (request: Request) => {
 
   if (!load) {
     if (path === "/" || path === "/health" || path === "/api/health") {
-      return Response.json({ ok: true, service: "jatext-edge", routes: Object.keys(ROUTES) });
+      return await statusResponse(request);
     }
     return Response.json({ ok: false, error: `Unknown route ${path}` }, { status: 404 });
   }
 
   try {
-    const handler = (await load()).default;
-    const req = await toReq(request);
-    const { res, finish } = toRes();
-    await handler(req, res);
-    const response = finish();
+    const response = await invoke(load, request);
     response.headers.set("Access-Control-Allow-Origin", "*");
     return response;
   } catch (err) {
@@ -219,3 +215,66 @@ Deno.serve(async (request: Request) => {
     return Response.json({ ok: false, error: message }, { status: 500 });
   }
 });
+
+/** Runs one bundled API handler against a web Request and returns its Response. */
+async function invoke(
+  load: (typeof ROUTES)[string],
+  request: Request,
+  overridePath?: string,
+) {
+  const handler = (await load()).default;
+  const req = await toReq(request, overridePath);
+  const { res, finish } = toRes();
+  await handler(req, res);
+  return finish();
+}
+
+/**
+ * What the API can actually see right now, including the database.
+ *
+ * Served as HTML when a browser asks and as JSON otherwise, because a status
+ * status endpoint nobody can read in an address bar is no help at 2am: opening
+ * https://jatextapp.pages.dev/api/health in a browser should be enough to tell
+ * the function, the database URL and the schema are all reachable, and the
+ * `error` field carries the Postgres message when they are not.
+ */
+async function statusResponse(request: Request) {
+  const payload: Record<string, unknown> = {
+    ok: false,
+    service: "jatext-edge",
+    routes: Object.keys(ROUTES),
+  };
+  let status = 503;
+
+  const load = ROUTES["/api/auth-status"];
+  if (load) {
+    try {
+      const probe = await invoke(load, request, "/api/auth-status");
+      const health = (await probe.json()) as Record<string, unknown>;
+      Object.assign(payload, health);
+      status = health?.ok ? 200 : 503;
+    } catch (err) {
+      payload.probeError = err instanceof Error ? err.message : String(err);
+    }
+  } else {
+    payload.probeError = "auth-status is not bundled";
+  }
+
+  const text = JSON.stringify(payload, null, 2);
+  if (!(request.headers.get("accept") || "").includes("text/html")) {
+    return new Response(text, {
+      status,
+      headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+  const safe = text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string);
+  const banner = status === 200 ? "Reachable" : "Not working yet";
+  return new Response(
+    `<!doctype html><meta charset="utf-8"><title>JaText API ${banner}</title>` +
+      `<body style="margin:2rem;font:14px ui-monospace,Menlo,monospace;background:#0b0b0c;color:#e8e8ea">` +
+      `<h1 style="font-size:16px">JaText API &middot; ${banner}</h1>` +
+      `<pre style="white-space:pre-wrap;background:#141417;border:1px solid #26262c;border-radius:8px;padding:14px">${safe}</pre>` +
+      `</body>`,
+    { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+  );
+}

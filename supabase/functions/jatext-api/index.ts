@@ -8884,7 +8884,7 @@ var ROUTES = {
   "/api/klipy-test": () => Promise.resolve().then(() => (init_klipy_test(), klipy_test_exports)),
   "/api/ios-404": () => Promise.resolve().then(() => (init_ios_404(), ios_404_exports))
 };
-async function toReq(request) {
+async function toReq(request, overridePath) {
   const url = new URL(request.url);
   const contentType = request.headers.get("content-type") || "";
   const method = request.method.toUpperCase();
@@ -8902,7 +8902,7 @@ async function toReq(request) {
   });
   return {
     method,
-    url: `${url.pathname}${url.search}`,
+    url: overridePath ?? `${url.pathname}${url.search}`,
     path: url.pathname,
     headers,
     query: Object.fromEntries(url.searchParams.entries()),
@@ -9007,16 +9007,12 @@ Deno.serve(async (request) => {
   const load = ROUTES[key];
   if (!load) {
     if (path2 === "/" || path2 === "/health" || path2 === "/api/health") {
-      return Response.json({ ok: true, service: "jatext-edge", routes: Object.keys(ROUTES) });
+      return await statusResponse(request);
     }
     return Response.json({ ok: false, error: `Unknown route ${path2}` }, { status: 404 });
   }
   try {
-    const handler9 = (await load()).default;
-    const req = await toReq(request);
-    const { res, finish } = toRes();
-    await handler9(req, res);
-    const response = finish();
+    const response = await invoke(load, request);
     response.headers.set("Access-Control-Allow-Origin", "*");
     return response;
   } catch (err) {
@@ -9025,3 +9021,44 @@ Deno.serve(async (request) => {
     return Response.json({ ok: false, error: message }, { status: 500 });
   }
 });
+async function invoke(load, request, overridePath) {
+  const handler9 = (await load()).default;
+  const req = await toReq(request, overridePath);
+  const { res, finish } = toRes();
+  await handler9(req, res);
+  return finish();
+}
+async function statusResponse(request) {
+  const payload = {
+    ok: false,
+    service: "jatext-edge",
+    routes: Object.keys(ROUTES)
+  };
+  let status = 503;
+  const load = ROUTES["/api/auth-status"];
+  if (load) {
+    try {
+      const probe = await invoke(load, request, "/api/auth-status");
+      const health = await probe.json();
+      Object.assign(payload, health);
+      status = health?.ok ? 200 : 503;
+    } catch (err) {
+      payload.probeError = err instanceof Error ? err.message : String(err);
+    }
+  } else {
+    payload.probeError = "auth-status is not bundled";
+  }
+  const text = JSON.stringify(payload, null, 2);
+  if (!(request.headers.get("accept") || "").includes("text/html")) {
+    return new Response(text, {
+      status,
+      headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }
+    });
+  }
+  const safe = text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
+  const banner = status === 200 ? "Reachable" : "Not working yet";
+  return new Response(
+    `<!doctype html><meta charset="utf-8"><title>JaText API ${banner}</title><body style="margin:2rem;font:14px ui-monospace,Menlo,monospace;background:#0b0b0c;color:#e8e8ea"><h1 style="font-size:16px">JaText API &middot; ${banner}</h1><pre style="white-space:pre-wrap;background:#141417;border:1px solid #26262c;border-radius:8px;padding:14px">${safe}</pre></body>`,
+    { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
+  );
+}

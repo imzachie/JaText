@@ -60,16 +60,19 @@ function forwardHeaders(request) {
 export async function onRequest(context) {
   const { request, env } = context;
   const incoming = new URL(request.url);
-  const upstream = new URL(
-    incoming.pathname + incoming.search,
-    apiOrigin(env),
-  );
+  // new URL("/api/x", "https://host/functions/v1/jatext-api") throws the base
+  // path away and yields https://host/api/x, because an absolute first argument
+  // always replaces the base's path. The backend can therefore live under a path
+  // prefix (a Supabase Edge Function URL does) only if the path is appended as a
+  // string: otherwise every call lands on a URL the host has no route for and the
+  // answer is a platform error page rather than anything the API wrote.
+  const upstream = apiOrigin(env) + incoming.pathname + incoming.search;
 
   const isBodyless = request.method === "GET" || request.method === "HEAD";
 
   try {
     const upstreamResponse = await fetch(
-      new Request(upstream.toString(), {
+      new Request(upstream, {
         method: request.method,
         headers: forwardHeaders(request),
         body: isBodyless ? undefined : request.body,
