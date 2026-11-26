@@ -321,7 +321,7 @@ export default async function handler(req, res) {
         res,
         platform,
         origin,
-        "Google Sign-In is not configured yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Vercel Environment Variables.",
+        "Google Sign-In is not configured yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET as secrets on the Supabase Edge Function.",
         mobileSession,
       );
     }
