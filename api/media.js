@@ -1,5 +1,11 @@
 import { getDb, newId, TursoAppError, verifyAuthToken } from "../server/tursoBackend.js";
 import { enforceHttpRateLimit } from "../server/rateLimiter.js";
+import {
+  fetchObjectSlice,
+  isSupabaseStorageEnabled,
+  publicObjectUrl,
+  uploadObject,
+} from "../server/supabaseStorage.js";
 
 export const config = {
   api: {
@@ -19,6 +25,18 @@ const MAX_INLINE_IMAGE_SERVE_BYTES = 4 * 1024 * 1024; // 4 MB max full 200 OK im
 // per upload, and every chunk is a separate request, so a very large file
 // takes a while rather than taking the server down.
 const MAX_TOTAL_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB max attachment
+// How much of one file the API is willing to hold in memory at once to hand to
+// Supabase Storage. An object this size moves out of the database and is then
+// served by Storage directly; anything larger keeps flowing through media_chunks
+// one 768 KB request at a time, because buffering a whole video here to save the
+// row is how an edge function runs out of memory. A request that assembles 16 MB
+// twice over (the slice, then the upload body) still leaves the isolate headroom
+// for a second concurrent upload.
+const MEDIA_STORAGE_MAX_BYTES = 16 * 1024 * 1024;
+
+function mediaObjectPath(ownerId, mediaId) {
+  return `${String(ownerId || "anon").replace(/[^\w-]/g, "_")}/${mediaId}`;
+}
 
 const NETSCAPE_INFINITE_LOOP_EXT = Buffer.from([
   0x21, 0xff, 0x0b,
@@ -214,6 +232,45 @@ async function readChunkedSlice(db, mediaId, start, end, chunkSize = MEDIA_CHUNK
   return written === outLen ? out : out.subarray(0, written);
 }
 
+/**
+ * Assemble a finished chunked upload, hand it to Storage, then throw the chunks
+ * away. Only files up to MEDIA_STORAGE_MAX_BYTES are promoted, and failures leave
+ * media_chunks exactly as they were, so the attachment still works.
+ */
+async function promoteChunksToStorage(db, mediaId, ownerId) {
+  const metaRes = await db.execute({
+    sql: `SELECT byte_size, mime_type, chunk_count, storage_key FROM media_blobs WHERE id = ? LIMIT 1`,
+    args: [mediaId],
+  });
+  const meta = metaRes.rows[0];
+  if (!meta || String(meta.storage_key || "").trim()) return false;
+  const totalSize = Number(meta.byte_size || 0);
+  if (!totalSize || totalSize > MEDIA_STORAGE_MAX_BYTES) return false;
+
+  const assembled = await readChunkedSlice(db, mediaId, 0, totalSize - 1, MEDIA_CHUNK_BYTES);
+  if (!assembled || assembled.length !== totalSize) return false;
+
+  let bytes = assembled;
+  const mime = String(meta.mime_type || "application/octet-stream");
+  if (mime === "image/gif") {
+    bytes = Buffer.from(ensureInfiniteLoopGifBuffer(assembled));
+  }
+
+  const key = mediaObjectPath(ownerId, mediaId);
+  await uploadObject(key, new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), mime);
+  await db.batch(
+    [
+      {
+        sql: `UPDATE media_blobs SET storage_key = ?, chunk_count = 0, data = ? WHERE id = ?`,
+        args: [key, new Uint8Array(0), mediaId],
+      },
+      { sql: `DELETE FROM media_chunks WHERE media_id = ?`, args: [mediaId] },
+    ],
+    "write",
+  );
+  return true;
+}
+
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === "OPTIONS") {
@@ -241,7 +298,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ ok: false, error: "Missing media id." });
       }
       const rowRes = await db.execute({
-        sql: `SELECT mime_type, file_name, byte_size, chunk_count,
+        sql: `SELECT mime_type, file_name, byte_size, chunk_count, storage_key,
                      CASE WHEN COALESCE(chunk_count, 0) = 0 THEN data ELSE NULL END AS inline_data
               FROM media_blobs
               WHERE id = ?
@@ -256,6 +313,52 @@ export default async function handler(req, res) {
       const safeName = String(row.file_name || "file").replace(/[^\w.\- ()]/g, "_");
       const totalSize = Number(row.byte_size || 0);
       const chunkCount = Number(row.chunk_count || 0);
+
+      // The row is the only thing the database has to answer for: the bytes live in
+      // Supabase Storage, which serves them (including Range requests for seeking in
+      // video) far better than this function can. Clients keep using the same
+      // /api/media?id= URL they always stored, so nothing on a phone or in a browser
+      // needs to change.
+      const storedKey = String(row.storage_key || "").trim();
+      const storagePublicUrl = storedKey ? publicObjectUrl(storedKey) : "";
+      if (storedKey && !storagePublicUrl) {
+        // The bytes are known to be in the bucket but this server cannot name the
+        // project they live in. An empty 200 would look like a broken thumbnail for
+        // ever in a cached view; this says what to fix.
+        return res.status(503).json({
+          ok: false,
+          error: "This attachment is in Supabase Storage, but the API has no storage credentials. Set SUPABASE_SERVICE_ROLE_KEY.",
+        });
+      }
+      if (storagePublicUrl) {
+        res.setHeader("Content-Type", mime);
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("X-JaText-Total-Size", String(totalSize));
+        res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+        if (req.method === "HEAD") {
+          // Metadata only, answered from the row: the app's video previewer probes
+          // HEAD for X-JaText-Total-Size and a redirect would hide that header.
+          res.setHeader("Content-Length", String(totalSize));
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          return res.status(200).end();
+        }
+        const storedRange = parseHttpRange(req.headers.range || req.headers.Range, totalSize);
+        if (storedRange?.unsatisfiable) {
+          res.setHeader("Content-Range", `bytes */${totalSize}`);
+          return res.status(416).end();
+        }
+        if (storedRange) {
+          const slice = await fetchObjectSlice(storedKey, storedRange.start, storedRange.end);
+          res.setHeader("Content-Range", `bytes ${storedRange.start}-${storedRange.start + slice.length - 1}/${totalSize}`);
+          res.setHeader("Content-Length", String(slice.length));
+          return res.status(206).send(slice);
+        }
+        // No explicit range: send the browser or phone straight to Storage so the
+        // file never passes through this function at all.
+        res.setHeader("Cache-Control", "public, max-age=300");
+        res.setHeader("Location", storagePublicUrl);
+        return res.status(302).end();
+      }
 
       res.setHeader("Content-Type", mime);
       res.setHeader("Accept-Ranges", "bytes");
@@ -435,11 +538,27 @@ export default async function handler(req, res) {
           ],
         });
 
+        // The upload is complete, so give the finished file to Storage and drop the
+        // rows it was assembled from. Without this, a video would sit in
+        // media_chunks forever and every seek would cost three queries.
+        let promoted = false;
+        if (
+          isSupabaseStorageEnabled() &&
+          Number(meta.chunk_count || 0) > 0 &&
+          chunkIndex === Number(meta.chunk_count || 0) - 1
+        ) {
+          promoted = await promoteChunksToStorage(db, mediaId, auth.userId).catch((err) => {
+            console.error("[JaText] could not move the finished upload to Storage:", err?.message || err);
+            return false;
+          });
+        }
+
         return res.status(200).json({
           ok: true,
           id: mediaId,
           index: chunkIndex,
           bytes: buf.length,
+          ...(promoted ? { storage: "supabase" } : {}),
         });
       }
 
@@ -481,6 +600,43 @@ export default async function handler(req, res) {
 
       const id = newId();
       const now = Date.now();
+
+      if (buf.length <= MEDIA_STORAGE_MAX_BYTES && isSupabaseStorageEnabled()) {
+        // Same GIF repair as the served-by-database path, applied before upload so
+        // a looping sticker stays looping when Storage answers the request itself.
+        if (mimeType === "image/gif") buf = ensureInfiniteLoopGifBuffer(buf);
+        const key = mediaObjectPath(auth.userId, id);
+        try {
+          await uploadObject(key, new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), mimeType);
+          await db.execute({
+            sql: `INSERT INTO media_blobs (
+                    id, owner_id, mime_type, file_name, byte_size, chunk_count, data, storage_key, created_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            args: [
+              id,
+              auth.userId,
+              mimeType,
+              fileName,
+              buf.length,
+              0,
+              new Uint8Array(0),
+              key,
+              now,
+            ],
+          });
+          return res.status(200).json({
+            ok: true,
+            id,
+            storageId: id,
+            url: `${origin}/api/media?id=${id}&sz=${buf.length}`,
+            storage: "supabase",
+          });
+        } catch (err) {
+          // Never lose a file over the storage hop: fall through to the database.
+          console.error("[JaText] Supabase Storage upload failed, storing in the database:", err?.message || err);
+        }
+      }
+
       if (buf.length > MAX_SINGLE_SHOT_BYTES) {
         const chunkCount = Math.ceil(buf.length / MEDIA_CHUNK_BYTES);
         const stmts = [

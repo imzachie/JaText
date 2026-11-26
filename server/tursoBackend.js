@@ -504,6 +504,7 @@ async function initSchema(db) {
       byte_size INTEGER NOT NULL,
       chunk_count INTEGER NOT NULL DEFAULT 0,
       data BLOB NOT NULL,
+      storage_key TEXT,
       created_at INTEGER NOT NULL
     )`,
 
@@ -641,6 +642,9 @@ async function initSchema(db) {
 
   const safeAlters = [
     `ALTER TABLE media_blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0`,
+    // Attachments live in Supabase Storage and the row keeps only a pointer; the
+    // column is nullable so every row written before the move still serves from data.
+    `ALTER TABLE media_blobs ADD COLUMN storage_key TEXT`,
     `ALTER TABLE users ADD COLUMN totp_secret TEXT`,
     `ALTER TABLE users ADD COLUMN totp_pending_secret TEXT`,
     `ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`,

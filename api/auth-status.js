@@ -1,4 +1,5 @@
 import { getDb, getFcmStatus, getTursoConfig } from "../server/tursoBackend.js";
+import { supabaseStorageConfig } from "../server/supabaseStorage.js";
 import { enforceHttpRateLimit } from "../server/rateLimiter.js";
 
 export default async function handler(req, res) {
@@ -19,6 +20,10 @@ export default async function handler(req, res) {
   const fcm = getFcmStatus();
   const fcmConfigured = fcm.configured;
   const klipyConfigured = Boolean(process.env.KLIPY_API_KEY);
+  // Which way the bytes of an attachment travel. "supabase" means the file goes to
+  // the Storage bucket and the database keeps only a pointer; "database" means the
+  // old path, where every byte counted against the Postgres size limit.
+  const storage = supabaseStorageConfig();
 
   let dbConnected = false;
   let userCount = null;
@@ -63,6 +68,8 @@ export default async function handler(req, res) {
     fcmConfigured,
     fcmProjectId: fcm.projectId,
     klipyConfigured,
+    mediaStorage: storage.enabled ? "supabase" : "database",
+    mediaBucket: storage.enabled ? storage.bucket : null,
     ...(dbError ? { error: dbError } : {}),
   });
 }

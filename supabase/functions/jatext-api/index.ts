@@ -1565,6 +1565,7 @@ async function initSchema(db) {
       byte_size INTEGER NOT NULL,
       chunk_count INTEGER NOT NULL DEFAULT 0,
       data BLOB NOT NULL,
+      storage_key TEXT,
       created_at INTEGER NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS media_chunks (
@@ -1690,6 +1691,9 @@ async function initSchema(db) {
   ];
   const safeAlters = [
     `ALTER TABLE media_blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0`,
+    // Attachments live in Supabase Storage and the row keeps only a pointer; the
+    // column is nullable so every row written before the move still serves from data.
+    `ALTER TABLE media_blobs ADD COLUMN storage_key TEXT`,
     `ALTER TABLE users ADD COLUMN totp_secret TEXT`,
     `ALTER TABLE users ADD COLUMN totp_pending_secret TEXT`,
     `ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`,
@@ -7427,6 +7431,124 @@ var init_turso = __esm({
   }
 });
 
+// server/supabaseStorage.js
+function firstEnv(...names) {
+  for (const name of names) {
+    const value = String(process.env[name] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+function secretKeyFromList() {
+  const raw = firstEnv("SUPABASE_SECRET_KEYS", "SUPABY_SECRETS");
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    for (const item of list) {
+      const value = String(item?.value || item?.secret || "").trim();
+      if (value) return value;
+    }
+  } catch {
+    return raw.startsWith("sb_secret_") || raw.startsWith("eyJ") ? raw : "";
+  }
+  return "";
+}
+function inferProjectUrl() {
+  const explicit = firstEnv("SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL");
+  if (explicit) return explicit;
+  const dbUrl = firstEnv("DATABASE_URL", "TURSO_DATABASE_URL");
+  const match = /^postgres(?:ql)?:\/\/(?:[^@/]*@)?db\.([a-z0-9-]+)\.supabase\.co/i.exec(dbUrl);
+  return match ? `https://${match[1]}.supabase.co` : "";
+}
+function supabaseStorageConfig() {
+  const projectUrl = inferProjectUrl();
+  const serviceKey = firstEnv(
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_SECRET_KEY"
+  ) || secretKeyFromList();
+  const bucket = firstEnv("JATEXT_MEDIA_BUCKET") || "jatext-media";
+  const signature = `${projectUrl}|${serviceKey.length}|${bucket}`;
+  if (cache2.key !== signature) {
+    const key = serviceKey;
+    cache2.key = signature;
+    cache2.cfg = projectUrl && key ? {
+      enabled: true,
+      projectUrl: projectUrl.replace(/\/+$/, ""),
+      serviceKey: key,
+      bucket
+    } : { enabled: false, projectUrl: "", serviceKey: "", bucket };
+  }
+  return cache2.cfg;
+}
+function isSupabaseStorageEnabled() {
+  return supabaseStorageConfig().enabled;
+}
+function publicObjectUrl(objectPath) {
+  const cfg = supabaseStorageConfig();
+  if (!cfg.enabled || !objectPath) return "";
+  return `${cfg.projectUrl}/storage/v1/object/public/${cfg.bucket}/${objectPath.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+}
+async function storageFetch(cfg, path2, init) {
+  const response = await fetch(`${cfg.projectUrl}/storage/v1/object/${cfg.bucket}/${path2}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${cfg.serviceKey}`,
+      ...init?.headers || {}
+    }
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    const err = new Error(
+      `Supabase Storage ${init?.method || "POST"} ${path2} failed: HTTP ${response.status}${detail ? ` ${detail.slice(0, 240)}` : ""}`
+    );
+    err.status = response.status;
+    throw err;
+  }
+  return response;
+}
+async function uploadObject(objectPath, bytes, mimeType) {
+  const cfg = supabaseStorageConfig();
+  if (!cfg.enabled) throw new Error("Supabase Storage is not configured.");
+  await storageFetch(cfg, objectPath, {
+    method: "POST",
+    headers: {
+      "Content-Type": mimeType || "application/octet-stream",
+      // Objects are content-addressed by media id, so a retry of the same bytes is
+      // a replacement rather than a duplicate.
+      "x-upsert": "true",
+      "cache-control": "public, max-age=31536000, immutable"
+    },
+    body: bytes
+  });
+  return publicObjectUrl(objectPath);
+}
+async function fetchObjectSlice(objectPath, start, end) {
+  const cfg = supabaseStorageConfig();
+  if (!cfg.enabled) throw new Error("Supabase Storage is not configured.");
+  const response = await fetch(
+    `${cfg.projectUrl}/storage/v1/object/${cfg.bucket}/${objectPath.split("/").map((part) => encodeURIComponent(part)).join("/")}`,
+    {
+      headers: {
+        Authorization: `Bearer ${cfg.serviceKey}`,
+        Range: `bytes=${start}-${end}`
+      }
+    }
+  );
+  if (response.status !== 206 && response.status !== 200) {
+    const err = new Error(`Supabase Storage range read failed: HTTP ${response.status}`);
+    err.status = response.status === 404 ? 404 : 502;
+    throw err;
+  }
+  return Buffer.from(await response.arrayBuffer());
+}
+var cache2;
+var init_supabaseStorage = __esm({
+  "server/supabaseStorage.js"() {
+    cache2 = { key: null, cfg: null };
+  }
+});
+
 // api/media.js
 var media_exports = {};
 __export(media_exports, {
@@ -7434,6 +7556,9 @@ __export(media_exports, {
   config: () => config,
   default: () => handler2
 });
+function mediaObjectPath(ownerId, mediaId) {
+  return `${String(ownerId || "anon").replace(/[^\w-]/g, "_")}/${mediaId}`;
+}
 function ensureInfiniteLoopGifBuffer(buf) {
   if (!buf || buf.length < 14) return buf;
   if (buf[0] !== 71 || buf[1] !== 73 || buf[2] !== 70 || buf[3] !== 56 || buf[4] !== 55 && buf[4] !== 57 || buf[5] !== 97) {
@@ -7595,6 +7720,36 @@ async function readChunkedSlice(db, mediaId, start, end, chunkSize = MEDIA_CHUNK
   }
   return written === outLen ? out : out.subarray(0, written);
 }
+async function promoteChunksToStorage(db, mediaId, ownerId) {
+  const metaRes = await db.execute({
+    sql: `SELECT byte_size, mime_type, chunk_count, storage_key FROM media_blobs WHERE id = ? LIMIT 1`,
+    args: [mediaId]
+  });
+  const meta = metaRes.rows[0];
+  if (!meta || String(meta.storage_key || "").trim()) return false;
+  const totalSize = Number(meta.byte_size || 0);
+  if (!totalSize || totalSize > MEDIA_STORAGE_MAX_BYTES) return false;
+  const assembled = await readChunkedSlice(db, mediaId, 0, totalSize - 1, MEDIA_CHUNK_BYTES);
+  if (!assembled || assembled.length !== totalSize) return false;
+  let bytes = assembled;
+  const mime = String(meta.mime_type || "application/octet-stream");
+  if (mime === "image/gif") {
+    bytes = Buffer.from(ensureInfiniteLoopGifBuffer(assembled));
+  }
+  const key = mediaObjectPath(ownerId, mediaId);
+  await uploadObject(key, new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), mime);
+  await db.batch(
+    [
+      {
+        sql: `UPDATE media_blobs SET storage_key = ?, chunk_count = 0, data = ? WHERE id = ?`,
+        args: [key, new Uint8Array(0), mediaId]
+      },
+      { sql: `DELETE FROM media_chunks WHERE media_id = ?`, args: [mediaId] }
+    ],
+    "write"
+  );
+  return true;
+}
 async function handler2(req, res) {
   setCors2(res);
   if (req.method === "OPTIONS") {
@@ -7617,7 +7772,7 @@ async function handler2(req, res) {
         return res.status(400).json({ ok: false, error: "Missing media id." });
       }
       const rowRes = await db.execute({
-        sql: `SELECT mime_type, file_name, byte_size, chunk_count,
+        sql: `SELECT mime_type, file_name, byte_size, chunk_count, storage_key,
                      CASE WHEN COALESCE(chunk_count, 0) = 0 THEN data ELSE NULL END AS inline_data
               FROM media_blobs
               WHERE id = ?
@@ -7632,6 +7787,39 @@ async function handler2(req, res) {
       const safeName = String(row.file_name || "file").replace(/[^\w.\- ()]/g, "_");
       const totalSize = Number(row.byte_size || 0);
       const chunkCount = Number(row.chunk_count || 0);
+      const storedKey = String(row.storage_key || "").trim();
+      const storagePublicUrl = storedKey ? publicObjectUrl(storedKey) : "";
+      if (storedKey && !storagePublicUrl) {
+        return res.status(503).json({
+          ok: false,
+          error: "This attachment is in Supabase Storage, but the API has no storage credentials. Set SUPABASE_SERVICE_ROLE_KEY."
+        });
+      }
+      if (storagePublicUrl) {
+        res.setHeader("Content-Type", mime);
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("X-JaText-Total-Size", String(totalSize));
+        res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+        if (req.method === "HEAD") {
+          res.setHeader("Content-Length", String(totalSize));
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          return res.status(200).end();
+        }
+        const storedRange = parseHttpRange(req.headers.range || req.headers.Range, totalSize);
+        if (storedRange?.unsatisfiable) {
+          res.setHeader("Content-Range", `bytes */${totalSize}`);
+          return res.status(416).end();
+        }
+        if (storedRange) {
+          const slice = await fetchObjectSlice(storedKey, storedRange.start, storedRange.end);
+          res.setHeader("Content-Range", `bytes ${storedRange.start}-${storedRange.start + slice.length - 1}/${totalSize}`);
+          res.setHeader("Content-Length", String(slice.length));
+          return res.status(206).send(slice);
+        }
+        res.setHeader("Cache-Control", "public, max-age=300");
+        res.setHeader("Location", storagePublicUrl);
+        return res.status(302).end();
+      }
       res.setHeader("Content-Type", mime);
       res.setHeader("Accept-Ranges", "bytes");
       res.setHeader("X-JaText-Total-Size", String(totalSize));
@@ -7778,11 +7966,19 @@ async function handler2(req, res) {
             new Uint8Array(buf2.buffer, buf2.byteOffset, buf2.byteLength)
           ]
         });
+        let promoted = false;
+        if (isSupabaseStorageEnabled() && Number(meta.chunk_count || 0) > 0 && chunkIndex === Number(meta.chunk_count || 0) - 1) {
+          promoted = await promoteChunksToStorage(db, mediaId, auth.userId).catch((err) => {
+            console.error("[JaText] could not move the finished upload to Storage:", err?.message || err);
+            return false;
+          });
+        }
         return res.status(200).json({
           ok: true,
           id: mediaId,
           index: chunkIndex,
-          bytes: buf2.length
+          bytes: buf2.length,
+          ...promoted ? { storage: "supabase" } : {}
         });
       }
       const contentType = String(req.headers["content-type"] || "application/octet-stream");
@@ -7813,6 +8009,38 @@ async function handler2(req, res) {
       }
       const id = newId();
       const now = Date.now();
+      if (buf.length <= MEDIA_STORAGE_MAX_BYTES && isSupabaseStorageEnabled()) {
+        if (mimeType === "image/gif") buf = ensureInfiniteLoopGifBuffer(buf);
+        const key = mediaObjectPath(auth.userId, id);
+        try {
+          await uploadObject(key, new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), mimeType);
+          await db.execute({
+            sql: `INSERT INTO media_blobs (
+                    id, owner_id, mime_type, file_name, byte_size, chunk_count, data, storage_key, created_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            args: [
+              id,
+              auth.userId,
+              mimeType,
+              fileName,
+              buf.length,
+              0,
+              new Uint8Array(0),
+              key,
+              now
+            ]
+          });
+          return res.status(200).json({
+            ok: true,
+            id,
+            storageId: id,
+            url: `${origin}/api/media?id=${id}&sz=${buf.length}`,
+            storage: "supabase"
+          });
+        } catch (err) {
+          console.error("[JaText] Supabase Storage upload failed, storing in the database:", err?.message || err);
+        }
+      }
       if (buf.length > MAX_SINGLE_SHOT_BYTES) {
         const chunkCount = Math.ceil(buf.length / MEDIA_CHUNK_BYTES);
         const stmts = [
@@ -7873,11 +8101,12 @@ async function handler2(req, res) {
     });
   }
 }
-var config, MEDIA_CHUNK_BYTES, DEFAULT_PUBLIC_HOST, MAX_SINGLE_SHOT_BYTES, MAX_SERVE_BYTES, MAX_INLINE_IMAGE_SERVE_BYTES, MAX_TOTAL_UPLOAD_BYTES, NETSCAPE_INFINITE_LOOP_EXT;
+var config, MEDIA_CHUNK_BYTES, DEFAULT_PUBLIC_HOST, MAX_SINGLE_SHOT_BYTES, MAX_SERVE_BYTES, MAX_INLINE_IMAGE_SERVE_BYTES, MAX_TOTAL_UPLOAD_BYTES, MEDIA_STORAGE_MAX_BYTES, NETSCAPE_INFINITE_LOOP_EXT;
 var init_media = __esm({
   "api/media.js"() {
     init_tursoBackend();
     init_rateLimiter();
+    init_supabaseStorage();
     config = {
       api: {
         bodyParser: false
@@ -7889,6 +8118,7 @@ var init_media = __esm({
     MAX_SERVE_BYTES = 3 * 1024 * 1024;
     MAX_INLINE_IMAGE_SERVE_BYTES = 4 * 1024 * 1024;
     MAX_TOTAL_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
+    MEDIA_STORAGE_MAX_BYTES = 16 * 1024 * 1024;
     NETSCAPE_INFINITE_LOOP_EXT = Buffer.from([
       33,
       255,
@@ -8333,6 +8563,7 @@ async function handler4(req, res) {
   const fcm = getFcmStatus();
   const fcmConfigured = fcm.configured;
   const klipyConfigured = Boolean(process.env.KLIPY_API_KEY);
+  const storage = supabaseStorageConfig();
   let dbConnected = false;
   let userCount = null;
   let dbError = null;
@@ -8370,12 +8601,15 @@ async function handler4(req, res) {
     fcmConfigured,
     fcmProjectId: fcm.projectId,
     klipyConfigured,
+    mediaStorage: storage.enabled ? "supabase" : "database",
+    mediaBucket: storage.enabled ? storage.bucket : null,
     ...dbError ? { error: dbError } : {}
   });
 }
 var init_auth_status = __esm({
   "api/auth-status.js"() {
     init_tursoBackend();
+    init_supabaseStorage();
     init_rateLimiter();
   }
 });
