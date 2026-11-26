@@ -69,7 +69,7 @@ Add, replace, or delete there and the next request picks it up.
 | `DATABASE_URL` | everything | already set; `postgres://jatext_api:…@db.nroosqwxyhkavdokxahn.supabase.co:5432/postgres?sslmode=require` |
 | `AUTH_SECRET` | sign-in tokens | already set; rotating it signs everyone out |
 | `PUBLIC_APP_ORIGIN` | link previews, OAuth redirects | `https://jatextapp.pages.dev` |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google | redirect URI `https://jatextapp.pages.dev/api/oauth-google` |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google | redirect URI `https://jatextapp.pages.dev/api/oauth-google`, and the consent screen must be **In production** (or the address added under **Test users**) or Google answers `403 access_denied`. `GET /api/oauth-google?action=config` is what the APK polls; when it returns the `clientId`, the button works, no new build needed |
 | `FCM_SERVICE_ACCOUNT_JSON` | Android push | the whole `service_account` JSON, base64 or raw |
 | `KLIPY_API_KEY` | song search | |
 | `SUPABASE_SERVICE_ROLE_KEY` | attachments in Storage | without it, uploads keep going into Postgres; `SUPABASE_URL` is not needed, the ref is read from `DATABASE_URL` |
