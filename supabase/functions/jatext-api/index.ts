@@ -690,11 +690,21 @@ var init_fcmRestClient = __esm({
   }
 });
 
+// server/pgDenoDriver.js
+var pgDenoDriver_exports = {};
+__export(pgDenoDriver_exports, {
+  default: () => default2
+});
+import { default as default2 } from "npm:pg@8.23.1";
+var init_pgDenoDriver = __esm({
+  "server/pgDenoDriver.js"() {
+  }
+});
+
 // server/postgresAdapter.js
 async function loadPg() {
   if (!pgModule) {
-    const specifier = typeof globalThis.Deno === "undefined" ? "pg" : "npm:pg@^8.23.1";
-    const mod = await import(specifier);
+    const mod = await Promise.resolve().then(() => (init_pgDenoDriver(), pgDenoDriver_exports));
     pgModule = mod.default ?? mod;
     pgModule.types.setTypeParser(20, (val) => val === null ? null : Number(val));
   }
