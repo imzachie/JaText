@@ -86,6 +86,7 @@ export type TranslationKey =
   | "email_code_sent"
   | "enter_email_code"
   | "resend_email_code"
+  | "email_code_spam"
   | "setup_2fa"
   | "enter_auth_code"
   | "passkeys"
@@ -136,6 +137,7 @@ const EN_DICT: Record<TranslationKey, string> = {
   email_code_sent: "We sent a 6-digit code to",
   enter_email_code: "Enter the code from your email",
   resend_email_code: "Send a new code",
+  email_code_spam: "Not there after a minute? Check your spam or promotions folder.",
   enter_auth_code: "Enter your authentication code",
   passkeys: "Passkeys",
   add_passkey: "Create a passkey",
@@ -187,6 +189,7 @@ const TRANSLATIONS: Record<AppLanguageCode, Partial<Record<TranslationKey, strin
     email_code_sent: "Kami telah hantar kod 6 angka ke",
     enter_email_code: "Masukkan kod daripada e-mel anda",
     resend_email_code: "Hantar kod baharu",
+    email_code_spam: "Tiada selepas seminit? Periksa folder spam atau promosi anda.",
     setup_2fa: "Sediakan pengesahan 2FA",
     enter_auth_code: "Masukkan kod pengesahan anda",
     passkeys: "Kunci Laluan (Passkey)",
@@ -236,6 +239,7 @@ const TRANSLATIONS: Record<AppLanguageCode, Partial<Record<TranslationKey, strin
     email_code_sent: "Kami telah mengirim kode 6 digit ke",
     enter_email_code: "Masukkan kode dari email Anda",
     resend_email_code: "Kirim kode baru",
+    email_code_spam: "Belum masuk setelah semenit? Coba periksa folder spam atau promosi Anda.",
     setup_2fa: "Atur autentikasi 2FA",
     enter_auth_code: "Masukkan kode autentikasi Anda",
     passkeys: "Kunci Sandi (Passkey)",
@@ -285,6 +289,7 @@ const TRANSLATIONS: Record<AppLanguageCode, Partial<Record<TranslationKey, strin
     email_code_sent: "我们已向以下邮箱发送 6 位验证码：",
     enter_email_code: "请输入邮箱中的验证码",
     resend_email_code: "重新发送验证码",
+    email_code_spam: "一分钟后还没收到？请检查垃圾邮件或促销文件夹。",
     setup_2fa: "设置 2FA 双重验证",
     enter_auth_code: "请输入身份验证器验证码",
     passkeys: "通行密钥 (Passkey)",
@@ -334,6 +339,7 @@ const TRANSLATIONS: Record<AppLanguageCode, Partial<Record<TranslationKey, strin
     email_code_sent: "我們已將 6 位數驗證碼發送至",
     enter_email_code: "請輸入電子郵件中的驗證碼",
     resend_email_code: "重新傳送驗證碼",
+    email_code_spam: "一分鐘後還沒收到？請檢查垃圾郵件或促銷資料夾。",
     setup_2fa: "設定 2FA 雙重驗證",
     enter_auth_code: "輸入你的驗證碼",
     passkeys: "通行密鑰 (Passkey)",
