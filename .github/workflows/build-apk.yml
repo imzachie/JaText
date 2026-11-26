@@ -12,6 +12,17 @@ on:
 permissions:
   contents: write
 
+# One APK build at a time, not one per branch. Two of them running together each
+# start a Gradle daemon that asks repo.maven.apache.org for the same artifacts, and
+# Maven answers the second one with 429s, which looks like a broken build and is not.
+# The same two runs would also race each other on the apk-latest tag, which is worse:
+# whichever finished last would win with an APK built from an older commit. Queued
+# rather than cancelled, because the job that ships the release is the one on main and
+# it must not lose its turn to a branch build.
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
