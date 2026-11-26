@@ -63,7 +63,10 @@ jobs:
         timeout-minutes: 6
         run: |
           set +e
-          supabase functions deploy jatext-api --no-verify-jwt --project-ref "$PROJECT_REF" > /tmp/deploy.log 2>&1
+          # --yes is not decoration: since CLI v3 a non-interactive stdout makes the
+          # command refuse to apply anything ("Confirmation required ... Nothing was
+          # changed") and exit 1, which looks exactly like a bundling failure.
+          supabase functions deploy jatext-api --no-verify-jwt --project-ref "$PROJECT_REF" --yes > /tmp/deploy.log 2>&1
           CODE=$?
           set -e
           cat /tmp/deploy.log
