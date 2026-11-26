@@ -28,8 +28,14 @@ const externals = [
   "node:fs",
   "node:fs/promises",
   "node:http",
+  // The two that a mail relay needs: `server/smtpClient.js` opens a submission
+  // connection and upgrades it with STARTTLS. Not a shim and not a polyfill - the
+  // Postgres connection already runs on the same primitives through `npm:pg`, so
+  // anything esbuild bundled here instead would be a second, worse copy.
+  "node:net",
   "node:path",
   "node:process",
+  "node:tls",
   "node:url",
   "node:util",
   // Only reachable through branches a Supabase deploy never takes: an Edge

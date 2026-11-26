@@ -49,14 +49,16 @@ export default async function handler(req, res) {
     verificationRequired: isEmailVerificationRequired(),
     ...diagnostics,
     probe,
-    // Which of the two failures this is, said out loud, because the app can only report
-    // the one sentence it got back from a send.
+    // Which failure this is, said out loud, because a signup can only report the one
+    // sentence it got back from a send.
     hint: !diagnostics.configured
       ? diagnostics.reason
       : diagnostics.warning
         ? diagnostics.warning
         : probe.ok === false
-          ? "Brevo refused the stored key. Replace it with the value shown on Brevo's own API page, then redeploy this function: a secret is only read when the function is published."
-          : "Mail is configured and Brevo accepts the key. A code that never arrives is then the recipient's spam folder, not this server.",
+          ? diagnostics.transport === "smtp"
+            ? "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published."
+            : "Brevo refused the stored API key - or the address it is called from. This runtime has no fixed egress IP for Brevo's allow-list, so set the BREVO_SMTP_* variables and use the relay, which is not IP restricted. Then redeploy this function: a secret is only read when the function is published."
+          : "Mail is configured and the provider accepts it. A code that never arrives is then the recipient's spam folder, not this server.",
   });
 }

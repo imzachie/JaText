@@ -21,6 +21,7 @@
  */
 import crypto from "node:crypto";
 import http from "node:http";
+import net from "node:net";
 import process from "node:process";
 
 const SECRET = "email-verify-test-secret";
@@ -115,6 +116,95 @@ function serveBrevo() {
         port: server.address().port,
       });
     });
+  });
+}
+
+/**
+ * A relay that speaks only what server/smtpClient.js says, and writes down what it heard.
+ * No TLS: the client is told not to require it, which is the same deal a self-hoster makes
+ * with a relay on their own box.
+ */
+function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender = false } = {}) {
+  const log = { commands: [], data: "", connections: 0 };
+  const server = net.createServer((socket) => {
+    log.connections += 1;
+    // An explicit state machine rather than pattern matching on history: AUTH LOGIN is
+    // two base64 lines whose content looks exactly like any other token, so the only way
+    // to know which one is coming is to have asked for it.
+    let stage = "command";
+    let dataBuf = "";
+    socket.setEncoding("utf8");
+    const say = (line) => socket.write(`${line}\r\n`);
+    const b64 = (value) => Buffer.from(String(value || ""), "base64").toString("utf8");
+    say("220 fake-relay ready");
+    socket.on("data", (chunk) => {
+      dataBuf += chunk;
+      if (stage === "data") {
+        const end = dataBuf.indexOf("\r\n.\r\n");
+        if (end < 0) return;
+        log.data = dataBuf.slice(0, end);
+        dataBuf = dataBuf.slice(end + 5);
+        stage = "command";
+        say(acceptData ? "250 2.0.0 Ok: queued as FAKE01" : "554 5.7.1 Service denied: sender not verified");
+      }
+      let idx = dataBuf.indexOf("\r\n");
+      while (idx >= 0) {
+        const line = dataBuf.slice(0, idx);
+        dataBuf = dataBuf.slice(idx + 2);
+        if (stage === "user") {
+          log.user = b64(line);
+          stage = "pass";
+          say("334 U2F2b3JkTmFtZTo=");
+        } else if (stage === "pass") {
+          log.pass = b64(line);
+          if (log.pass === password) {
+            stage = "command";
+            say("235 2.7.0 Authentication successful");
+          } else {
+            stage = "dead";
+            say("535 5.7.8 Authentication credentials invalid");
+          }
+        } else if (stage === "dead") {
+          say("503 5.5.1 Error: bad sequence");
+        } else {
+          log.commands.push(line);
+          const upper = line.toUpperCase();
+          if (upper.startsWith("EHLO") || upper.startsWith("HELO")) {
+            socket.write("250-fake-relay\r\n250-SIZE 10485760\r\n250-AUTH PLAIN LOGIN\r\n250 HELP\r\n");
+          } else if (upper.startsWith("AUTH LOGIN")) {
+            stage = "user";
+            say("334 VXNlcm5hbWU6");
+          } else if (upper.startsWith("AUTH")) {
+            say("504 5.5.2 unsupported auth mechanism");
+          } else if (upper.startsWith("MAIL FROM")) {
+            say(rejectSender ? "553 5.7.1 <nope>: Sender address rejected: not verified" : "250 2.1.0 Ok");
+          } else if (upper.startsWith("RCPT TO")) {
+            say("250 2.1.0 Ok");
+          } else if (upper.startsWith("DATA")) {
+            stage = "data";
+            say("354 End data with <CR><LF>.<CR><LF>");
+          } else if (upper.startsWith("QUIT")) {
+            say("221 2.0.0 Bye");
+            socket.end();
+          } else if (upper.startsWith("RSET") || upper.startsWith("NOOP")) {
+            say("250 2.0.0 Ok");
+          } else {
+            say("500 5.5.2 unrecognized command");
+          }
+        }
+        idx = dataBuf.indexOf("\r\n");
+      }
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () =>
+      resolve({
+        server,
+        log,
+        port: server.address().port,
+        close: () => new Promise((r) => server.close(() => r())),
+      }),
+    );
   });
 }
 
@@ -419,6 +509,124 @@ async function main() {
   check("and nothing is mailed", brevo.sent.length === before);
   check("the account is created verified so it can be used", Number(quiet.rows.users[0]?.email_verified) === 1);
   process.env.JATEXT_REQUIRE_EMAIL_VERIFICATION = "1";
+
+  /* ---------- 8b: the SMTP relay transport ---------- */
+  console.log("\nemail delivery: the SMTP relay is what Brevo lets an Edge Function use");
+  const relay = await serveSmtp();
+  process.env.BREVO_SMTP_HOST = "127.0.0.1";
+  process.env.BREVO_SMTP_PORT = String(relay.port);
+  process.env.BREVO_SMTP_USER = "c54426001@smtp-brevo.com";
+  process.env.BREVO_SMTP_PASS = "hunter2smtp";
+  process.env.SMTP_REQUIRE_TLS = "0";
+
+  const relayed = makeStubDb();
+  backend.setCustomDbForTesting(relayed);
+  const viaSmtp = await rpc(backend, "signUpEmail", { email: "relay@example.com", password: "hunter2hunter2" });
+  check("the relay is preferred when it is configured", sender.emailSenderConfig().kind === "smtp");
+  check("and a signup over it still asks for the code", viaSmtp.requiresEmailVerification === true, JSON.stringify(Object.keys(viaSmtp)));
+  const verbs = relay.log.commands.map((c) => c.split(" ")[0].toUpperCase());
+  check(
+    "the session is the six commands, in order, and nothing else",
+    verbs[0] === "EHLO" && verbs.includes("MAIL") && verbs.includes("RCPT") && verbs.includes("DATA") && verbs.includes("QUIT"),
+    verbs.join(","),
+  );
+  check("the login is base64 and lands on the account the relay knows", relay.log.user === "c54426001@smtp-brevo.com" && relay.log.pass === "hunter2smtp", `${relay.log.user}/${relay.log.pass}`);
+  check("the MAIL FROM is the verified sender", /MAIL FROM:<hello@jatext\.example>/.test(relay.log.commands.join(" ")), relay.log.commands.join(" | "));
+  const msg = relay.log.data;
+  const relayCode = (/(\d{6})/.exec(Buffer.from((/Content-Transfer-Encoding: base64([\s\S]*?)--/.exec(msg) || ["", ""])[1].replace(/\s+/g, ""), "base64").toString("utf8") || [])[1]) || "";
+  check("the message carries the code in the plain-text part", /^\d{6}$/.test(relayCode), relayCode);
+  check("both parts are there, and the headers are complete", /multipart\/alternative/.test(msg) && /Content-Type: text\/html/.test(msg) && /Subject: /.test(msg), msg.slice(0, 120));
+  check("the stored row is still only a hash", !String(relayed.rows.email_verifications[0]?.code_hash || "").includes(relayCode));
+
+  // The defaults around the two TLS modes, since guessing one of them wrong means either
+  // a password on a plain socket or a handshake that can never succeed.
+  const secureCfg = sender.emailSenderConfig();
+  check("port 587 means STARTTLS, not implicit TLS", secureCfg.smtp.secure === false && secureCfg.smtp.port === relay.port);
+  delete process.env.SMTP_REQUIRE_TLS;
+  const defaultTls = sender.emailSenderConfig();
+  process.env.SMTP_REQUIRE_TLS = "0";
+  const plainTls = sender.emailSenderConfig();
+  check(
+    "TLS is required by default, and only dropped when someone asks for it",
+    defaultTls.smtp.requireTls === true && plainTls.smtp.requireTls === false,
+    JSON.stringify({ defaultOn: defaultTls.smtp.requireTls, offWhenAsked: plainTls.smtp.requireTls }),
+  );
+  process.env.SMTP_REQUIRE_TLS = "1";
+  process.env.BREVO_SMTP_PORT = "465";
+  const sslCfg = sender.emailSenderConfig();
+  check("port 465 flips it to an implicit TLS session", sslCfg.smtp.secure === true && sslCfg.smtp.requireTls === true, JSON.stringify(sslCfg.smtp));
+  process.env.BREVO_SMTP_PORT = String(relay.port);
+  process.env.SMTP_REQUIRE_TLS = "0";
+
+  // Its own relay, so "the probe sent no body" is a statement about the probe rather than
+  // about everything else that used this server.
+  const probeRelay = await serveSmtp();
+  process.env.BREVO_SMTP_PORT = String(probeRelay.port);
+  const smtpProbe = await sender.probeEmailSender({ force: true });
+  check(
+    "the probe checks the envelope instead of guessing",
+    smtpProbe.ok === true && smtpProbe.transport === "smtp" && probeRelay.log.commands.some((c) => c.toUpperCase().startsWith("RCPT")),
+    JSON.stringify(smtpProbe),
+  );
+  check(
+    "and stops before any message body, so a probe cannot spend quota or reach an inbox",
+    probeRelay.log.data === "" && !probeRelay.log.commands.some((c) => c.toUpperCase().startsWith("DATA")),
+    probeRelay.log.commands.join(" | "),
+  );
+  check("it resets rather than leaving the envelope open", probeRelay.log.commands.some((c) => c.toUpperCase().startsWith("RSET")), probeRelay.log.commands.join(" | "));
+  await probeRelay.close();
+  process.env.BREVO_SMTP_PORT = String(relay.port);
+
+  // A refused login is that failure alone: falling through to an API key that Brevo
+  // refuses for another reason would bury the real cause.
+  // A sender the account has not verified is refused at MAIL FROM, which is the failure
+  // a login-only check cannot see.
+  const unverified = await serveSmtp({ rejectSender: true });
+  process.env.BREVO_SMTP_PORT = String(unverified.port);
+  const senderProbe = await sender.probeEmailSender({ force: true });
+  check(
+    "a refused sender is reported as the sender's problem, in the relay's words",
+    senderProbe.ok === false && /refused this sender/i.test(senderProbe.note || "") && /not verified/i.test(senderProbe.note || ""),
+    JSON.stringify(senderProbe),
+  );
+  await unverified.close();
+
+  const bad = await serveSmtp({ password: "something-else" });
+  process.env.BREVO_SMTP_PORT = String(bad.port);
+  const rejected = await rpc(backend, "signUpEmail", { email: "reject@example.com", password: "hunter2hunter2" }).catch((err) => err);
+  check(
+    "a refused login fails the signup with the relay's own sentence",
+    /credentials invalid/i.test(rejected?.message || ""),
+    rejected?.message,
+  );
+  check("and no fallback muddies it", !/SMTP relay was unreachable/.test(rejected?.message || ""), rejected?.message);
+  check("a rejected login leaves no account behind", bad.log.connections === 1 && rejected instanceof Error, `conns=${bad.log.connections}`);
+  await bad.close();
+
+  // An unreachable relay is the one case worth trying the other transport for.
+  let closedPort = 1;
+  const listener = net.createServer();
+  await new Promise((r) => listener.listen(0, "127.0.0.1", r));
+  closedPort = listener.address().port;
+  listener.unref();
+  listener.close();
+  process.env.BREVO_SMTP_PORT = String(closedPort);
+  process.env.SMTP_REQUIRE_TLS = "0";
+  const fallbackDb = makeStubDb();
+  backend.setCustomDbForTesting(fallbackDb);
+  const fell = await rpc(backend, "signUpEmail", { email: "fallback@example.com", password: "hunter2hunter2" });
+  check("a relay that cannot be reached falls through to the API", fell.requiresEmailVerification === true, JSON.stringify(Object.keys(fell)));
+  check("and the fallback is visible in what was used", brevo.sent.some((m) => m.body?.to?.[0]?.email === "fallback@example.com"), "no api send recorded");
+
+  process.env.BREVO_SMTP_PORT = String(relay.port);
+  const both = sender.emailSenderDiagnostics();
+  check("the diagnostics name the active transport and both halves of it", both.transport === "smtp" && both.smtpHost === "127.0.0.1" && both.keyFingerprint.length === 12, JSON.stringify(both));
+  check("and still never print a credential", !JSON.stringify(both).includes("hunter2") && !JSON.stringify(both).includes("xkeysib"), JSON.stringify(both));
+  await relay.close();
+  delete process.env.BREVO_SMTP_HOST;
+  delete process.env.BREVO_SMTP_PORT;
+  delete process.env.BREVO_SMTP_USER;
+  delete process.env.BREVO_SMTP_PASS;
 
   /* ---------- 9: provider trouble must not cost anybody their account ---------- */
   const rescue = makeStubDb();

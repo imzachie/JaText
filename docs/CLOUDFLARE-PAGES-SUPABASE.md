@@ -72,7 +72,9 @@ Add, replace, or delete there and the next request picks it up.
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google | redirect URI `https://jatextapp.pages.dev/api/oauth-google`, and the consent screen must be **In production** (or the address added under **Test users**) or Google answers `403 access_denied`. `GET /api/oauth-google?action=config` is what the APK polls; when it returns the `clientId`, the button works, no new build needed |
 | `FCM_SERVICE_ACCOUNT_JSON` | Android push | the whole `service_account` JSON, base64 or raw |
 | `KLIPY_API_KEY` | song search | |
-| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL` | the signup code email | the key starts with `xkeysib-`; the address must be one Brevo has already verified under **Senders & IPs**, or every send comes back as `sender not verified`. `BREVO_SENDER_NAME` is optional (default `JaText`), `BREVO_API_BASE` only exists for tests |
+| `BREVO_SENDER_EMAIL` | the signup code email | must be an address Brevo has already verified under **Senders, Domains, IPs → Senders**, or every send comes back as `sender not verified`. `BREVO_SENDER_NAME` is optional (default `JaText`) |
+| `BREVO_SMTP_HOST`, `BREVO_SMTP_PORT`, `BREVO_SMTP_USER`, `BREVO_SMTP_PASS` | sending that email | the relay Brevo actually allows from here: `smtp-relay.brevo.com`, `587` for STARTTLS (`465` for implicit TLS), the `…@smtp-brevo.com` login and the SMTP key. Not IP restricted, which is why it is used at all |
+| `BREVO_API_KEY` | the same email, over HTTP | starts with `xkeysib-`, 89 characters. **Useless from an Edge Function on its own**: Brevo limits API keys to allow-listed source addresses and this runtime has no fixed egress IP, so it answers 401 `unrecognised IP address`. Kept because a self-hoster on a fixed address can use it, and because the code falls back to it if the relay cannot be reached |
 | `JATEXT_REQUIRE_EMAIL_VERIFICATION` | turning the signup code on | `1` = every new account must type the emailed code before it can message anyone; anything else, or a missing `BREVO_API_KEY`, and sign-up behaves exactly as it always did |
 | `SUPABASE_SERVICE_ROLE_KEY` | attachments in Storage | without it, uploads keep going into Postgres; `SUPABASE_URL` is not needed, the ref is read from `DATABASE_URL` |
 
@@ -183,6 +185,20 @@ Details worth knowing before changing it:
   the request itself, with Brevo's own words in it. A half-made account would squat on
   the address forever and turn "try again" into "an account already exists for this
   email".
+* There are two ways to hand the mail to Brevo and they fail differently, which is why both
+  are implemented. The HTTP API key is restricted to allow-listed source addresses, and a
+  Supabase Edge Function has no fixed egress IP to put on that list, so `POST
+  /v3/smtp/email` answers `401 unrecognised IP address` no matter how correct the key is.
+  The SMTP relay is not IP restricted, and it needs nothing more than a TCP socket and
+  STARTTLS, which this runtime has - the Postgres connection is the same two primitives -
+  so `server/smtpClient.js` is about 250 lines instead of a dependency. Whatever is
+  configured is used, SMTP first when both are present, and an unreachable relay falls
+  back to the API with both errors reported.
+* `GET /api/email-test` is how a mail problem is diagnosed without reading function logs:
+  it prints which transport is live, the length and hash of the key (never the key), and
+  then asks the relay for the envelope - `MAIL FROM`, `RCPT TO`, `RSET`, `QUIT`, no `DATA`,
+  so nothing is transmitted and no quota is spent - which is the only way to learn that
+  the sender address is not verified. `?probe=0` answers without contacting anyone.
 * `GET /api/auth-status` prints `emailVerificationRequired`, which is the only way to
   tell "this feature is on" from outside the app. It reads the same two conditions, so it
   cannot advertise a gate that `handleTursoRpc` is not actually enforcing.
