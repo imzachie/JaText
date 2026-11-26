@@ -9049,8 +9049,8 @@ async function statusResponse(request) {
     payload.probeError = "auth-status is not bundled";
   }
   const text = JSON.stringify(payload, null, 2);
-  const isBrowser = (request.headers.get("accept") || "").includes("text/html");
-  if (!isBrowser) {
+  const wantsJson = new URL(request.url).searchParams.get("format") === "json" || (request.headers.get("accept") || "").includes("application/json");
+  if (wantsJson) {
     return new Response(text, {
       status,
       headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }
