@@ -2,6 +2,20 @@ import { execSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+// Vite 8 needs Node 20.19+ / 22.12+, and a host that defaults to an older Node
+// (Cloudflare Pages does, unless the repo pins a version) fails inside Vite with a
+// message that points nowhere near the real cause. Say it up front instead.
+{
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  if (major < 20 || (major === 20 && minor < 19)) {
+    console.error(
+      `Node ${process.versions.node} is too old for this build (needs >= 20.19 or >= 22.12). ` +
+        `Set NODE_VERSION=22 as an environment variable on the hosting side.`,
+    );
+    process.exit(1);
+  }
+}
+
 execSync("npx tsc -b && npx vite build", { stdio: "inherit" });
 
 // Stamp dist/web-version.json with a unique build identifier so installed iOS PWAs
