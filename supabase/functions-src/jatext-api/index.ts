@@ -51,6 +51,29 @@ for (const key of [
   if (value && !process.env[key]) process.env[key] = value;
 }
 
+/** The slug this function is deployed under, from supabase/config.toml. */
+const FUNCTION_SLUG = "jatext-api";
+
+/**
+ * Turn whatever path the runtime handed us into the API path.
+ *
+ * A deployed Supabase Edge Function sees its own slug in the URL: a request to
+ * https://<ref>.supabase.co/functions/v1/jatext-api/api/health arrives here as
+ * `/jatext-api/api/health`, not `/api/health` and not `/health`. `supabase
+ * functions serve` passes yet another shape. So the API path is located by
+ * marker rather than assumed, and everything before it is dropped: the handlers
+ * were written for `https://<origin>/api/...` and must not have to know they are
+ * being hosted behind a slug.
+ */
+function routePath(pathname: string): string {
+  const marker = pathname.indexOf("/api/");
+  if (marker >= 0) return pathname.slice(marker);
+  const prefix = `/${FUNCTION_SLUG}`;
+  if (pathname === prefix) return "/";
+  if (pathname.startsWith(`${prefix}/`)) return pathname.slice(prefix.length) || "/";
+  return pathname || "/";
+}
+
 const ROUTES: Record<string, () => Promise<{ default: (req: unknown, res: unknown) => Promise<void> }>> = {
   "/api/turso": () => import("../../../api/turso.js"),
   "/api/media": () => import("../../../api/media.js"),
@@ -194,7 +217,8 @@ Deno.serve(async (request: Request) => {
   }
 
   const url = new URL(request.url);
-  const path = url.pathname.replace(/\/+$/, "") || "/";
+  const path = routePath(url.pathname).replace(/\/+$/, "") || "/";
+  const apiPath = `${path}${url.search}`;
   const key = ROUTES[path] ? path : `/api${path}`;
   const load = ROUTES[key];
 
@@ -206,7 +230,7 @@ Deno.serve(async (request: Request) => {
   }
 
   try {
-    const response = await invoke(load, request);
+    const response = await invoke(load, request, apiPath);
     response.headers.set("Access-Control-Allow-Origin", "*");
     return response;
   } catch (err) {
@@ -280,13 +304,17 @@ async function statusResponse(request: Request) {
   // reason, which is the only thing it exists for; `ok` and `error` in the body say
   // whether it is actually healthy. Anything machine-checked asks for JSON and gets
   // the real code.
+  // The verdict has to be captured before the code is softened, or the page would
+  // print "Reachable" over a database error.
+  const healthy = status === 200;
   status = 200;
   const safe = text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string);
-  const banner = status === 200 ? "Reachable" : "Not working yet";
+  const banner = healthy ? "Reachable" : "Not working yet";
+  const accent = healthy ? "#34d399" : "#f87171";
   return new Response(
     `<!doctype html><meta charset="utf-8"><title>JaText API ${banner}</title>` +
       `<body style="margin:2rem;font:14px ui-monospace,Menlo,monospace;background:#0b0b0c;color:#e8e8ea">` +
-      `<h1 style="font-size:16px">JaText API &middot; ${banner}</h1>` +
+      `<h1 style="font-size:16px;color:${accent}">JaText API &middot; ${banner}</h1>` +
       `<pre style="white-space:pre-wrap;background:#141417;border:1px solid #26262c;border-radius:8px;padding:14px">${safe}</pre>` +
       `</body>`,
     { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
