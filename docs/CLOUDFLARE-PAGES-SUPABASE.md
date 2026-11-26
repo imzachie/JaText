@@ -35,6 +35,7 @@ Supabase Postgres  (db.nroosqwxyhkavdokxahn.supabase.co:5432)
 | --- | --- | --- |
 | Project | Supabase | `nroosqwxyhkavdokxahn` (ap-southeast-2, Postgres 17) |
 | Tables | Supabase → SQL editor | 28 tables + indexes, created from `scripts/dump-supabase-schema.mjs` |
+| Schema rights | Supabase | the app's role owns nothing and may not run DDL; the app detects that and uses the schema as applied |
 | DB role | Supabase | `jatext_api` (owns nothing, has full rights on `public`) |
 | Secrets | Supabase → Edge Functions → Secrets | `DATABASE_URL`, `AUTH_SECRET`, `PUBLIC_APP_ORIGIN`, `PG_POOL_MAX`, `PGSSLMODE` |
 | API origin | `functions/api/[[path]].js` | defaults to this project's function URL, no Pages setting needed |

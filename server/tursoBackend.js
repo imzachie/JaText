@@ -185,6 +185,49 @@ export async function getDb() {
   return cachedClient;
 }
 
+/**
+ * Statements that fail because the role is allowed to use the schema but not change
+ * it. Managed Postgres hands out exactly that kind of role on purpose, and the
+ * schema is applied out of band instead (scripts/dump-supabase-schema.mjs), so a
+ * privilege error here means "someone else owns this DDL", never "the app is broken".
+ */
+function isSchemaPrivilegeError(err) {
+  const message = String(err?.message || err || "");
+  return /permission denied for schema|permission denied for table|must be owner of|insufficient privilege|already exists/i.test(
+    message,
+  );
+}
+
+/** Tables the app cannot answer a single request without. */
+const CORE_SCHEMA_TABLES = ["users", "messages", "friend_requests", "media_blobs"];
+
+async function applyCreateStatements(db, statements) {
+  try {
+    await db.batch(statements, "write");
+    return;
+  } catch (err) {
+    if (!isSchemaPrivilegeError(err)) throw err;
+    const missing = [];
+    for (const table of CORE_SCHEMA_TABLES) {
+      try {
+        await db.execute({ sql: `SELECT 1 FROM ${table} LIMIT 1`, args: [] });
+      } catch {
+        missing.push(table);
+      }
+    }
+    if (missing.length) {
+      throw new TursoAppError(
+        `The database role cannot create tables, and these are missing: ${missing.join(", ")}. ` +
+          "Run scripts/dump-supabase-schema.mjs in the SQL editor once, or grant the role CREATE on schema public.",
+        503,
+      );
+    }
+    console.warn(
+      "[JaText] Schema DDL skipped because the role has no DDL rights; using the schema that is already applied.",
+    );
+  }
+}
+
 export async function initSchemaOnDb(db) {
   return initSchema(db);
 }
@@ -618,7 +661,18 @@ async function initSchema(db) {
   ];
 
   if (db.engine === "postgresql" || db.engine === "postgresql-bridge") {
-    await db.batch([...statements, ...safeAlters], "write");
+    await applyCreateStatements(db, statements);
+    // Each migration of an existing table goes on its own, and a statement the role
+    // is not allowed to run is skipped rather than fatal. Wrapped in one batch with
+    // the CREATEs, a single "must be owner of table users" rolled the whole thing
+    // back and every request then failed on a database that was already complete.
+    for (const sql of safeAlters) {
+      try {
+        await db.execute({ sql, args: [] });
+      } catch (err) {
+        if (!isSchemaPrivilegeError(err)) throw err;
+      }
+    }
     return;
   }
 
