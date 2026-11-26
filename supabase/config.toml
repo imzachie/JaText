@@ -5,6 +5,11 @@
 # not need the database password.
 project_id = "nroosqwxyhkavdokxahn"
 
+
+# The slug `supabase functions deploy` publishes is the directory name under
+# supabase/functions/, so this file and that folder have to agree. A mismatch
+# silently creates a second function on a URL nothing calls.
+
 # The API is called by the browser through Cloudflare Pages, which cannot attach a
 # Supabase JWT. Sign-in is handled by JaText's own tokens, so verify_jwt is off.
 [functions."jatext-api"]
