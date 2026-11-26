@@ -2812,6 +2812,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
         dmTypingRes,
         myGroupsCheck,
         stickerDeltaRes,
+        peerProfileRes,
       ] = await Promise.all([
         db.execute({
           sql: `SELECT id FROM (
@@ -2889,6 +2890,28 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
           sql: `SELECT 1 FROM sticker_library WHERE user_id = ? AND updated_at > ? LIMIT 1`,
           args: [meId, sinceTs],
         }),
+        // A profile edit that changes no message and no friendship (a new picture,
+        // name, about line or theme) used to sit undelivered until the presence beat
+        // happened to fire, which is what made a changed pfp look like it never
+        // arrived at all. Ask every poll instead. The probe is bounded to this
+        // account's own circle, so its cost follows the friend list and not the size
+        // of the users table, and COALESCE keeps the optional active-chat id a typed
+        // text comparison: a bare "$n IS NOT NULL" has no type for Postgres to infer.
+        db.execute({
+          sql: `SELECT 1 FROM users u
+                WHERE u.updated_at > ? AND u.id <> ?
+                  AND (
+                    EXISTS (
+                      SELECT 1 FROM friend_requests fr
+                      WHERE fr.status = 'accepted'
+                        AND ((fr.from_id = u.id AND fr.to_id = ?)
+                          OR (fr.to_id = u.id AND fr.from_id = ?))
+                    )
+                    OR u.id = COALESCE(?, '')
+                  )
+                LIMIT 1`,
+          args: [sinceTs, meId, meId, meId, activeFriendId],
+        }),
         args.touchPresence
           ? db.batch(
               [
@@ -2913,6 +2936,7 @@ export async function handleTursoRpc(op, args = {}, authHeader = "") {
       const needSocialRefresh =
         dmDeltaRes.rows.length > 0 ||
         frDeltaRes.rows.length > 0 ||
+        peerProfileRes.rows.length > 0 ||
         Boolean(args.includePresence);
 
       const social = needSocialRefresh ? await buildSocialAndPreviews(db, meId) : null;
