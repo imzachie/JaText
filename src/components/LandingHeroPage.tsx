@@ -23,8 +23,8 @@ const GITHUB_APK_MANIFEST_URL =
   "https://raw.githubusercontent.com/imzachie/JaText/main/release-cdn/apk-version.json";
 
 const FALLBACK_APK_VERSION: ApkVersionManifest = {
-  versionName: "4.5.0",
-  versionCode: 84,
+  versionName: "4.5.1",
+  versionCode: 85,
 };
 
 function usePublishedApkVersion(): ApkVersionManifest {
@@ -204,10 +204,38 @@ const FEATURES: FeatureItem[] = [
 
 const UPDATE_LOGS: UpdateLogEntry[] = [
   {
+    version: "v4.5.1",
+    date: "November 26, 2026",
+    headline: "No Laptop Needed, and the App Can Still Update Itself",
+    latest: true,
+    bullets: [
+      "The site can now be hosted on a static host with Supabase for the database. The public address stays the same, so nothing in the app has to be reconfigured.",
+      "The font suite the Android build downloads from a separate repository is now part of this repository. When that repository became unreachable, every build failed over a font; it cannot any more.",
+      "The in-app update check was reading a GitHub address that stopped resolving when the account was renamed, which quietly broke updating without the self hosted server. It reads the right place now.",
+    ],
+  },
+  {
+    version: "v4.5.0",
+    date: "November 5, 2026",
+    headline: "Bulk Select, and a Way to Bring Old Encrypted Messages Back",
+    bullets: [
+      "Long press any message and pick Select to tick off as many as you want, then copy them, forward the whole batch to one chat, or delete them at once. It works in direct chats, group chats and community posts, on the web and on Android.",
+      "Privacy settings gained Restore old messages. Messages sealed to a key this device no longer had used to sit unreadable with nothing in the app that could fix it; now the vault PIN or recovery key brings those keys back.",
+      "Forwarding a selection sends every message in order instead of only the one that opened the menu.",
+    ],
+  },
+  {
+    version: "v4.4.2",
+    date: "November 5, 2026",
+    headline: "Update Downloads Recover From a Stale Partial File",
+    bullets: [
+      "Resuming an APK download could ask the server for bytes that no longer existed once a new release was published, and it kept asking for the same impossible range forever. A rejected range now throws the partial file away and starts over, and the result is checked before anything is installed.",
+    ],
+  },
+  {
     version: "v4.4.1",
     date: "November 5, 2026",
     headline: "One Send Animation, Videos That Stream, Calmer Bulk Uploads",
-    latest: true,
     bullets: [
       "Sent messages stopped animating twice. One to one chats were the only place the delivered copy did not inherit the optimistic bubble's identity, so the row was rebuilt and the entrance animation ran a second time.",
       "Videos on Android now stream from the server instead of being downloaded whole before the first frame, which is what left them spinning forever.",
