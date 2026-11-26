@@ -38,6 +38,7 @@ Supabase Postgres  (db.nroosqwxyhkavdokxahn.supabase.co:5432)
 | Schema rights | Supabase | the app's role owns nothing and may not run DDL; the app detects that and uses the schema as applied |
 | DB role | Supabase | `jatext_api` (owns nothing, has full rights on `public`) |
 | Secrets | Supabase → Edge Functions → Secrets | `DATABASE_URL`, `AUTH_SECRET`, `PUBLIC_APP_ORIGIN`, `PG_POOL_MAX`, `PGSSLMODE` |
+| Attachments | Supabase → Storage | public bucket `jatext-media`, one object per file; the row keeps a `storage_key` |
 | API origin | `functions/api/[[path]].js` | defaults to this project's function URL, no Pages setting needed |
 | Pages build | Cloudflare | framework **React (Vite)**, build `npm run build`, output `dist` |
 
@@ -71,11 +72,12 @@ Add, replace, or delete there and the next request picks it up.
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google | redirect URI `https://jatextapp.pages.dev/api/oauth-google` |
 | `FCM_SERVICE_ACCOUNT_JSON` | Android push | the whole `service_account` JSON, base64 or raw |
 | `KLIPY_API_KEY` | song search | |
+| `SUPABASE_SERVICE_ROLE_KEY` | attachments in Storage | without it, uploads keep going into Postgres; `SUPABASE_URL` is not needed, the ref is read from `DATABASE_URL` |
 
 ## Checks worth doing after the first deploy
 
 ```
-https://jatextapp.pages.dev/api/auth-status        → "engine":"postgresql","dbConnected":true
+https://jatextapp.pages.dev/api/auth-status        → "engine":"postgresql","dbConnected":true,"mediaStorage":"supabase"
 https://jatextapp.pages.dev/api/health             → the function's own router answers this
 ```
 
@@ -96,9 +98,55 @@ printed before the move still work.
 
 ## Attachments
 
-Uploads are stored in Postgres (`media_blobs`, `media_chunks`), which counts against
-the 500 MB database on the free plan. Moving them to Supabase Storage is the next
-planned change; until then watch **Settings → Usage** if the app gets real traffic.
+Photos, voice notes and videos live in **Supabase Storage**, bucket `jatext-media`
+(public, one object per attachment at `<userId>/<mediaId>`). The database keeps the
+row only: mime type, file name, size and a `storage_key` pointer, so an attachment no
+longer counts against the 500 MB database. The free plan gives 1 GB of Storage and 100
+GB of egress, which is a much larger allowance than the database was.
+
+`/api/media?id=…` stays the only URL the app knows. What it does with it:
+
+| Request | Answer |
+| --- | --- |
+| `GET` with no `Range` | 302 to the public object, so the bytes never pass through the function |
+| `GET` with a `Range` | 206 slice, read from Storage and served under the same origin |
+| `HEAD` | answered from the row, including `X-JaText-Total-Size` (the APK's video downloader reads that header) |
+| `POST` | writes the object, then stores the pointer; on any Storage failure it falls back to the row |
+
+Uploads of up to 16 MB are moved whole (a single-shot upload, or a chunked upload that
+is promoted once its last chunk arrives, after which its `media_chunks` rows are
+deleted). A file larger than that keeps streaming through `media_chunks` as it always
+did: buffering a whole video in the function to save a row is how an edge function runs
+out of memory. Old attachments already in Postgres keep working, they are simply served
+from the row.
+
+`node scripts/test-media-storage.mjs` covers all of it against a stub bucket and a stub
+database, including the no-Storage-installed case.
+
+### Turning it on
+
+The bucket, the read policy and the `storage_key` column already exist on
+`nroosqwxyhkavdokxahn`. Only the secret is missing, because a key value cannot be read
+back out of the dashboard by anyone but the person looking at the screen:
+
+1. Open `https://supabase.com/dashboard/project/nroosqwxyhkavdokxahn/settings/api-keys`.
+2. Scroll to **Legacy API keys**, find the row labelled `service_role`, and click
+   **Reveal** then the copy icon next to it.
+3. Click the **gear icon** at the bottom of the left sidebar, then the
+   **Edge Functions** tab, then **Secrets**.
+4. Click **Add new secret**.
+5. In **Name** type `SUPABASE_SERVICE_ROLE_KEY`. In **Value** paste the key from step 2.
+6. Click **Add secret** (then **Save** if it asks).
+7. Open `https://jatextapp.pages.dev/api/health` and check the page says
+   `"mediaStorage": "supabase"`. `"database"` means step 5 or 6 did not take.
+8. Send a photo in a chat, then open **Storage → Browse → jatext-media** in the
+   dashboard: the file should be listed there.
+
+Nothing else needs to change. The APK, the web client and the stored message rows all
+keep using `/api/media?id=…`; the redirect happens in front of them. If the secret is
+ever removed, new uploads go back to the database, and a file already in the bucket
+answers with a 503 naming that secret instead of a blank thumbnail clients would cache
+forever.
 
 ## Why there is no domain
 
