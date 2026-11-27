@@ -864,6 +864,80 @@ async function main() {
   delete process.env.BREVO_SMTP_USER;
   delete process.env.BREVO_SMTP_PASS;
 
+  /* ---------- 8e: two ports, and the rule for when to move on to the second ---------- */
+  console.log("\nemail delivery: which port is tried, and when the next one is");
+  const live = await serveSmtp({ password: "hunter2smtp" });
+  // Accepts the connection and then says nothing: the only way to tell a shrunk
+  // per-candidate budget from the full one, because a refused port answers at once and
+  // costs nothing to rule out.
+  const blackhole = net.createServer(() => {});
+  blackhole._connections = 0;
+  blackhole.on("connection", () => {
+    blackhole._connections += 1;
+  });
+  await new Promise((r) => blackhole.listen(0, "127.0.0.1", r));
+  const blackholePort = blackhole.address().port;
+
+  process.env.BREVO_SMTP_HOST = "127.0.0.1";
+  delete process.env.BREVO_SMTP_PORT;
+  process.env.BREVO_SMTP_CANDIDATES = `${blackholePort},${live.port}`;
+  process.env.SMTP_REQUIRE_TLS = "0";
+  process.env.BREVO_SMTP_USER = "c54426001@smtp-brevo.com";
+  process.env.BREVO_SMTP_PASS = "hunter2smtp";
+
+  const parsed = sender.emailSenderConfig();
+  check("a candidate list is read in order, plain unless a mode is named", parsed.smtp.candidates.length === 2 && parsed.smtp.candidates[0].port === blackholePort && parsed.smtp.candidates[1].secure === false, JSON.stringify(parsed.smtp.candidates));
+  check("and the first of them is what the diagnostics report as the port", parsed.smtp.port === blackholePort && parsed.smtp.candidates.length === 2, JSON.stringify(sender.emailSenderDiagnostics().smtpCandidates));
+
+  const multiDb = makeStubDb();
+  backend.setCustomDbForTesting(multiDb);
+  const startedMulti = Date.now();
+  const recovered = await rpc(backend, "signUpEmail", { email: "failover@example.com", password: "hunter2hunter2" });
+  const multiMs = Date.now() - startedMulti;
+  check("a dead first port costs the short budget, not the long one", recovered.requiresEmailVerification === true && multiMs < 12_000, `${multiMs}ms`);
+  check("and the second port carried the message", live.log.commands.some((c) => c.toUpperCase().startsWith("MAIL FROM")), live.log.commands.join(" | "));
+  check("nothing went out over the API on the way", !brevo.sent.some((m) => m.body?.to?.[0]?.email === "failover@example.com"), "api send recorded");
+
+  const connectsBefore = blackhole._connections || 0;
+  const again = await rpc(backend, "signUpEmail", { email: "cached@example.com", password: "hunter2hunter2" });
+  check(
+    "the port that worked is tried first next time",
+    again.requiresEmailVerification === true && (blackhole._connections || 0) === connectsBefore,
+    `extra blackhole connects: ${(blackhole._connections || 0) - connectsBefore}`,
+  );
+
+  // A refusal is the relay answering, so the loop stops: three ports would mean three
+  // rejected logins for one wrong key, and a lockout for the privilege.
+  // The port that just worked is now cached as the preferred one, so this list deliberately
+  // contains neither of them: the question is whether a refusal ends the loop, and a cached
+  // success would answer it for the wrong reason.
+  const refuseFirst = await serveSmtp({ password: "wrong-on-purpose" });
+  const refuseSecond = await serveSmtp({ password: "also-wrong" });
+  process.env.BREVO_SMTP_CANDIDATES = `${refuseFirst.port},${refuseSecond.port}`;
+  const refused = await rpc(backend, "signUpEmail", { email: "stop@example.com", password: "hunter2hunter2" }).catch((err) => err);
+  check(
+    "a refused login stops there rather than trying the other ports",
+    /credentials invalid/i.test(refused?.message || "") && refuseSecond.log.connections === 0,
+    `${refused?.message} / connections to the second relay: ${refuseSecond.log.connections}`,
+  );
+  check("and it is not papered over with the API", !brevo.sent.some((m) => m.body?.to?.[0]?.email === "stop@example.com"), "api send recorded");
+  await refuseFirst.close();
+  await refuseSecond.close();
+
+  // Garbage in the list is not a silent "no ports": it falls back to the two defaults,
+  // which is what a typo should produce.
+  process.env.BREVO_SMTP_CANDIDATES = "nope,,";
+  const junk = sender.emailSenderConfig();
+  check("an unparsable list keeps the two documented ports rather than none", junk.smtp.candidates.length === 2 && junk.smtp.candidates[0].port === 587 && junk.smtp.candidates[1].secure === true, JSON.stringify(junk.smtp.candidates));
+  process.env.BREVO_SMTP_CANDIDATES = "465s,587:starttls";
+  const named = sender.emailSenderConfig();
+  check("and a mode can be spelled out either way", named.smtp.candidates[0].secure === true && named.smtp.candidates[1].secure === false, JSON.stringify(named.smtp.candidates));
+  delete process.env.BREVO_SMTP_CANDIDATES;
+  process.env.BREVO_SMTP_PORT = String(live.port);
+  check("an explicit single port means exactly that port", sender.emailSenderConfig().smtp.candidates.length === 1, JSON.stringify(sender.emailSenderConfig().smtp.candidates));
+  await live.close();
+  blackhole.close();
+
   /* ---------- 9: provider trouble must not cost anybody their account ---------- */
   const rescue = makeStubDb();
   backend.setCustomDbForTesting(rescue);

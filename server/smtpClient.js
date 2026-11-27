@@ -200,7 +200,44 @@ function connectSocket({ host, port, timeoutMs }) {
   });
 }
 
-function upgradeToTls(socket, host, { rejectUnauthorized = true } = {}) {
+/**
+ * Open a TLS session on a socket that has not been used yet - port 465, where the
+ * encryption is there before the protocol is.
+ *
+ * This is a separate function rather than one line in `upgradeToTls` because the two cases
+ * genuinely differ. Wrapping an existing socket (`tls.connect({ socket })`) is what a
+ * STARTTLS upgrade has to do, and it is the path that has been unreliable in the runtime
+ * this function is deployed to: the handshake simply never completes, whatever the server
+ * on the other end does. A fresh TLS connection goes through a different code path
+ * altogether, so implicit TLS must not be implemented as "connect, then wrap" - it is the
+ * fallback that has the best chance of working, and it is the one that is used whenever the
+ * port says so.
+ */
+function openTlsSocket({ host, port, timeoutMs = DEFAULT_TIMEOUT_MS, rejectUnauthorized }) {
+  return new Promise((resolve, reject) => {
+    const servername = /^[0-9.]+$/.test(host) || host.includes(":") ? undefined : host;
+    const secure = tls.connect({
+      host,
+      port,
+      ...(servername ? { servername } : {}),
+      rejectUnauthorized,
+    });
+    const timer = setTimeout(() => {
+      secure.destroy();
+      reject(new SmtpError(`Could not open a TLS session with ${host}:${port} within ${Math.round(timeoutMs / 1000)} seconds.`));
+    }, timeoutMs);
+    secure.once("error", (err) => {
+      clearTimeout(timer);
+      reject(new SmtpError(`Could not open a TLS session with ${host}:${port}: ${err?.message || err}`));
+    });
+    secure.once("secureConnect", () => {
+      clearTimeout(timer);
+      resolve(secure);
+    });
+  });
+}
+
+function upgradeToTls(socket, host, { rejectUnauthorized = true, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     // `servername` only for a hostname: SNI with an IP address is against RFC 6066, Node
     // warns about it, and the certificate a relay serves is for a hostname anyway.
@@ -211,7 +248,7 @@ function upgradeToTls(socket, host, { rejectUnauthorized = true } = {}) {
     const timer = setTimeout(() => {
       secure.destroy();
       reject(new SmtpError("The mail server did not finish the TLS handshake in time."));
-    }, 15_000);
+    }, Math.min(timeoutMs, 15_000));
     secure.once("error", (err) => {
       clearTimeout(timer);
       reject(new SmtpError(`The TLS upgrade failed: ${err?.message || err}`));
@@ -286,17 +323,19 @@ export async function smtpSendMail(options) {
     probeMode = "send",
   } = options;
 
+  const handshakeMs = Math.min(Number(timeoutMs) || DEFAULT_TIMEOUT_MS, 15_000);
+
   if (!host) throw new SmtpError("No SMTP host is configured.");
   if (!from) throw new SmtpError("No sender address is configured.");
 
   const verifyTls = options.rejectUnauthorized !== false;
-  let socket = await connectSocket({ host, port, timeoutMs });
-  if (secure) {
-    // Port 465 is implicit TLS: the session is encrypted from the first byte, so the socket
-    // is wrapped before anything is read from it. Wrapping after the greeting would mean
-    // reading a TLS handshake as text, which is the same mistake in the other direction.
-    socket = await upgradeToTls(socket, host, { rejectUnauthorized: verifyTls });
-  }
+  // Port 465 is implicit TLS: the session is encrypted from the first byte, so a socket is
+  // opened already encrypted. Connecting in plaintext and wrapping afterwards would mean
+  // reading a TLS handshake as text, and relies on the one runtime path that STARTTLS
+  // shows to be the fragile one.
+  let socket = secure
+    ? await openTlsSocket({ host, port, timeoutMs: handshakeMs, rejectUnauthorized: verifyTls })
+    : await connectSocket({ host, port, timeoutMs });
   const deadline = setTimeout(() => {
     try {
       socket.destroy();
@@ -327,7 +366,7 @@ export async function smtpSendMail(options) {
           { phase: "starttls" },
         );
       }
-      const upgraded = await upgradeToTls(socket, host, { rejectUnauthorized: verifyTls });
+      const upgraded = await upgradeToTls(socket, host, { rejectUnauthorized: verifyTls, timeoutMs: handshakeMs });
       socket = upgraded;
       reader.attach(upgraded);
       socket.write(`EHLO jatext${EOL}`);

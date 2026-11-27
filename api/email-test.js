@@ -19,6 +19,33 @@ import { enforceHttpRateLimit } from "../server/rateLimiter.js";
  * against Brevo is read-only, returns no account data, and is throttled to one call per
  * five minutes per isolate, so this route cannot be used to spend the daily quota.
  */
+/**
+ * Which of the SMTP failures this is, in the words that match the fix.
+ *
+ * Three of them look alike from the outside - a wrong port, a blocked port and a refused
+ * credential all arrive as "no session" - so the list of ports tried is what tells them
+ * apart: two ports asked and both stayed silent is a network path, while an answer that
+ * says "credentials" is something to change in Brevo.
+ */
+function smtpHint(probe, diagnostics) {
+  const note = String(probe?.note || "");
+  const attempts = Array.isArray(probe?.attempts) ? probe.attempts : [];
+  const ports = attempts.map((a) => `${a.port}/${a.secure ? "implicit TLS" : "STARTTLS"}`);
+  const allSilent =
+    attempts.length > 1 &&
+    attempts.every((a) => /handshake|TLS session|closed the connection|could not open a connection|did not answer|timed out/i.test(String(a.note || "")));
+  if (/TLS record/i.test(note)) {
+    return "The relay answered this connection with TLS from the first byte, which is port 465, while the function is configured for 587. Set BREVO_SMTP_PORT=465, or clear it and let both ports be tried.";
+  }
+  if (allSilent) {
+    return `The function could not hold a session with ${diagnostics.smtpHost} on any port it knows (${ports.join(", ")}). That is a network path question - the runtime has to be able to make an outbound connection to those ports - and not something a setting in Brevo can change.`;
+  }
+  if (/handshake|closed the connection|could not open a connection|did not answer/i.test(note)) {
+    return "The function could not hold a session with the relay at all. That is a network path question - the runtime must be able to make an outbound connection to this host and port - and it is worth checking that BREVO_SMTP_PORT and BREVO_SMTP_SSL agree with each other before anything else.";
+  }
+  return "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published.";
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -34,15 +61,24 @@ export default async function handler(req, res) {
   }
 
   let wantProbe = true;
+  let forceProbe = false;
   try {
     const url = new URL(req.url || "/", "http://localhost");
-    wantProbe = url.searchParams.get("probe") !== "0";
+    const mode = url.searchParams.get("probe");
+    wantProbe = mode !== "0";
+    // `?probe=force` answers the question now instead of from the last five minutes, which
+    // is the difference between fixing a mail setting and waiting for an isolate to die.
+    // It opens a real session per call, so it gets its own, much tighter, budget.
+    forceProbe = mode === "force";
   } catch {
     wantProbe = true;
   }
+  if (forceProbe && enforceHttpRateLimit(req, res, { scope: "email_test_force", limit: 3, windowMs: 60_000 })) {
+    return;
+  }
 
   const diagnostics = emailSenderDiagnostics();
-  const probe = wantProbe ? await probeEmailSender() : { skipped: true };
+  const probe = wantProbe ? await probeEmailSender({ force: forceProbe }) : { skipped: true };
 
   return res.status(200).json({
     ok: diagnostics.configured && (probe.skipped || probe.ok !== false),
@@ -57,12 +93,12 @@ export default async function handler(req, res) {
         ? diagnostics.warning
         : probe.ok === false
           ? diagnostics.transport === "smtp"
-            ? /TLS record/i.test(probe?.note || "")
-              ? "The relay answered this connection with TLS from the first byte, which is port 465, while the function is configured for 587. Set BREVO_SMTP_PORT=465; 587 is the one Brevo's relay does STARTTLS on."
-              : /handshake|closed the connection|could not open a connection/i.test(probe?.note || "")
-                ? "The function could not hold a session with the relay at all. That is a network path question - the runtime must be able to make an outbound connection to this host and port - and it is worth checking that BREVO_SMTP_PORT and BREVO_SMTP_SSL agree with each other before anything else."
-                : "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published."
+            ? smtpHint(probe, diagnostics)
             : "Brevo refused the stored API key - or the address it is called from. This runtime has no fixed egress IP for Brevo's allow-list, so set the BREVO_SMTP_* variables and use the relay, which is not IP restricted. Then redeploy this function: a secret is only read when the function is published."
-          : "Mail is configured and the provider accepts it. A code that never arrives is then the recipient's spam folder, not this server.",
+          : probe.ok === true
+            ? "Mail is configured and the provider accepts it" +
+              (probe.port ? ` on port ${probe.port}/${probe.mode || "submission"}` : "") +
+              ". A code that never arrives is then the recipient's spam folder, not this server."
+            : "Mail is configured, but nothing was asked of it. Drop probe=0 to ask.",
   });
 }

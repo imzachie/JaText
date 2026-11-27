@@ -7,15 +7,16 @@
  *     allow-list, and an Edge Function has no fixed egress IP to put on it, so
  *     `POST /v3/smtp/email` answers 401 with "unrecognised IP address" however correct
  *     the key is;
- *   - the SMTP relay (`smtp-relay.brevo.com:587`, an `...@smtp-brevo.com` login and a
- *     `bsk...` key) is not IP-restricted. It needs a TCP socket and STARTTLS, which this
- *     runtime does have - the Postgres connection is the same two primitives - so
- *     `server/smtpClient.js` is the ~250 lines that replace a dependency here.
+ *   - the SMTP relay (`smtp-relay.brevo.com`) is not IP-restricted, and has to be reached
+ *     over one of two TLS shapes: port 587 upgrades a plain connection with STARTTLS,
+ *     port 465 is TLS from the first byte. Those go through different code paths in the
+ *     runtime, and they fail independently, so the mailer is configured with BOTH and uses
+ *     whichever one answers - see `DEFAULT_SMTP_CANDIDATES`.
  *
- * Both are kept, because a self-hoster running `npm run selfhost` on a box with a fixed
- * address may prefer the API, and because the shape of the config is the documentation:
- * whichever of the two is present gets used, SMTP first if both are. The sender address
- * has to be one Brevo has verified either way, or every send comes back as
+ * Both transports are kept, because a self-hoster running `npm run selfhost` on a box with
+ * a fixed address may prefer the API, and because the shape of the config is the
+ * documentation: whichever of the two is present gets used, SMTP first when both are. The
+ * sender address has to be one Brevo has verified either way, or every send comes back as
  * `sender not verified` and looks like a bug in this file rather than a missing click in
  * their dashboard.
  */
@@ -24,6 +25,21 @@ import crypto from "node:crypto";
 import { probeSmtpLogin, smtpSendMail } from "./smtpClient.js";
 
 const DEFAULT_API_BASE = "https://api.brevo.com";
+
+/**
+ * The ways to hold a session with the relay, in the order they are tried.
+ *
+ * Two rather than one because they fail for different reasons and only one of them failing
+ * is survivable: the STARTTLS upgrade has to wrap a socket that is already open, which is
+ * the path that has timed out in this runtime even with a healthy server on the other end,
+ * while implicit TLS opens a fresh encrypted socket and never touches that code. Port 25
+ * is deliberately absent - hosting providers block it, and waiting on it twice would only
+ * make every signup slow.
+ */
+const DEFAULT_SMTP_CANDIDATES = [
+  { port: 587, secure: false },
+  { port: 465, secure: true },
+];
 
 /**
  * What a Brevo API key looks like: a fixed prefix, 64 hex characters, and a 16 character
@@ -49,23 +65,63 @@ function shortHash(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 12);
 }
 
+/**
+ * `587,465:implicit` or `465s` - the only two facts worth configuring about a submission
+ * port are the number and whether it starts encrypted. Anything unparsable is dropped
+ * rather than guessed at, because a candidate list that silently becomes empty means every
+ * send fails with "no host", which is a dreadful way to find out about a typo.
+ */
+function parseCandidates(raw) {
+  const list = String(raw || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [portPart, modePart = ""] = item.split(/[:=]/);
+      const port = Number(String(portPart).replace(/[^\d]/g, ""));
+      if (!port || port > 65_535) return null;
+      const secure = modePart
+        ? /^(implicit|ssl|tls|secure|s)$/i.test(modePart.trim())
+        : /[si]$/i.test(portPart) || port === 465;
+      return { port, secure };
+    })
+    .filter(Boolean);
+  return list;
+}
+
 export function emailSenderConfig() {
   const apiKey = env("BREVO_API_KEY");
   const fromEmail = env("BREVO_SENDER_EMAIL") || env("BREVO_FROM_EMAIL");
   // Overridable so a Brevo-compatible endpoint, a proxy or a test double can be pointed
   // at without touching the key.
   const base = (env("BREVO_API_BASE") || DEFAULT_API_BASE).replace(/\/+$/, "");
-  const port = Number(env("BREVO_SMTP_PORT") || env("SMTP_PORT") || "587") || 587;
+
+  const explicitPort = env("BREVO_SMTP_PORT") || env("SMTP_PORT");
+  const listed = parseCandidates(env("BREVO_SMTP_CANDIDATES") || env("SMTP_PORTS"));
+  // An explicit port means exactly that port: someone who has written it down is telling
+  // us something, and second-guessing it with a second attempt would hide their mistake
+  // behind a success on the other one.
+  let candidates = listed.length
+    ? listed
+    : explicitPort
+      ? [
+          {
+            port: Number(explicitPort.replace(/[^\d]/g, "")) || 587,
+            secure: flag("BREVO_SMTP_SSL", false) || Number(explicitPort.replace(/[^\d]/g, "")) === 465,
+          },
+        ]
+      : DEFAULT_SMTP_CANDIDATES.map((c) => ({ ...c }));
+  if (!candidates.length) candidates = DEFAULT_SMTP_CANDIDATES.map((c) => ({ ...c }));
+
   const smtp = {
     host: env("BREVO_SMTP_HOST") || env("SMTP_HOST"),
-    port,
+    // The first of them, so that everything reading `smtp.port` sees a real candidate
+    // rather than a separate notion of what the port is.
+    port: candidates[0].port,
+    secure: candidates[0].secure,
+    candidates,
     user: env("BREVO_SMTP_USER") || env("SMTP_USER"),
     pass: env("BREVO_SMTP_PASS") || env("SMTP_PASS"),
-    // 465 is implicit TLS, 587 is STARTTLS. Which one is in use is stated, not guessed.
-    // 465 is implicit TLS, 587 is STARTTLS: the port says which, and only an explicit
-    // switch overrides it. A wrong default here means a password shouted at the wrong
-    // kind of socket, so neither half is left to a guess.
-    secure: flag("BREVO_SMTP_SSL", false) || port === 465,
     // A local test relay can be plain; a real one may not be, with a password in it.
     requireTls: flag("SMTP_REQUIRE_TLS", true),
     // Off only for a relay whose certificate is not in the trust store - a private CA, or
@@ -105,15 +161,26 @@ export function isEmailSenderConfigured() {
   return emailSenderConfig().enabled;
 }
 
+function describeCandidate(c) {
+  return `${c.port}/${c.secure ? "implicit TLS" : "STARTTLS"}`;
+}
+
+/**
+ * The failures worth trying another port for: the ones where the connection never carried
+ * a decision. A refused login, a refused sender or a message the relay would not queue is
+ * an answer, and asking the same question on a different port only spends another fifteen
+ * seconds of somebody's signup and gets the same answer.
+ */
+const TRANSPORT_PHASES = new Set(["", "connect", "greeting", "starttls", "ehlo-after-tls", "tls-mode"]);
+
+function isTransportLevel(err) {
+  if (Number(err?.code)) return false;
+  return TRANSPORT_PHASES.has(String(err?.phase ?? ""));
+}
+
 /**
  * A relay we cannot get a session with at all is the one failure worth trying the other
  * transport for.
- *
- * The phases carry the distinction, so they are what this looks at rather than the wording:
- * "could not open a connection" and "the mail server closed the connection" arrive with no
- * phase, because nothing was exchanged, while "this relay is not offering STARTTLS", a
- * refused login or an untrusted certificate are answers from something that was reached and
- * knew what to say.
  *
  * A failed TLS handshake is deliberately NOT in here. It looks like a transport problem and
  * is the one case where retrying would be actively wrong: if the certificate could not be
@@ -123,7 +190,9 @@ export function isEmailSenderConfigured() {
 function isUnreachable(err) {
   if (err?.smtpPhase) return false;
   if (Number(err?.status)) return false;
-  return /could not open a connection|closed the connection|econnrefused|econnreset|enotfound|eai_again|etimedout/i.test(String(err?.message || err || ""));
+  return /could not open a connection|closed the connection|econnrefused|econnreset|enotfound|eai_again|etimedout/i.test(
+    String(err?.message || err || ""),
+  );
 }
 
 function asSendError(err, fallback) {
@@ -131,6 +200,76 @@ function asSendError(err, fallback) {
   wrapped.code = Number(err?.code) ? "email_rejected" : "email_unreachable";
   wrapped.smtpPhase = err?.phase || "";
   return wrapped;
+}
+
+/**
+ * The candidate that worked last, tried first this time.
+ *
+ * An Edge Function isolate lives for minutes, not days, so this is a courtesy to the second
+ * send in a burst rather than a fix - the real fix is that a working port answers on the
+ * first try for most signups.
+ */
+let preferredCandidate = null;
+
+function orderedCandidates(candidates) {
+  if (!preferredCandidate) return candidates;
+  const first = candidates.find((c) => c.port === preferredCandidate.port && c.secure === preferredCandidate.secure);
+  return first ? [first, ...candidates.filter((c) => c !== first)] : candidates;
+}
+
+/**
+ * A send has to answer in seconds because a signup is waiting on it, so when there is more
+ * than one port to try the budget per port shrinks to match: two fifteen-second waits would
+ * be a dead-looking button on a phone even when the second port was fine. One candidate is
+ * not a race against anything, so it keeps the full window.
+ */
+const CANDIDATE_TIMEOUT_MS = 8_000;
+
+/**
+ * Try the relay on each configured port until a session is held.
+ *
+ * @returns the result of whichever send went through, tagged with the port that did it
+ */
+async function sendOverSmtpRelay(cfg, message) {
+  const attempts = [];
+  for (const candidate of orderedCandidates(cfg.smtp.candidates)) {
+    try {
+      const result = await smtpSendMail({
+        ...cfg.smtp,
+        port: candidate.port,
+        secure: candidate.secure,
+        from: cfg.fromEmail,
+        fromName: cfg.fromName,
+        to: message.to,
+        subject: message.subject,
+        text: message.text,
+        html: message.html,
+        timeoutMs: cfg.smtp.candidates.length > 1 ? CANDIDATE_TIMEOUT_MS : undefined,
+      });
+      preferredCandidate = candidate;
+      return { ...result, port: candidate.port, mode: candidate.secure ? "implicit-tls" : "starttls" };
+    } catch (err) {
+      const transportLevel = isTransportLevel(err);
+      attempts.push({ port: candidate.port, secure: candidate.secure, transportLevel, note: String(err?.message || err) });
+      // A refusal is the relay answering, so it ends the session rather than moving on:
+      // 587 saying "credentials invalid" means 465 will say the same, and the signup
+      // deserves its error in under a second instead of after two timeouts.
+      if (!transportLevel) {
+        const wrapped = asSendError(err, "Could not send the email through the SMTP relay.");
+        wrapped.attempts = attempts;
+        throw wrapped;
+      }
+    }
+  }
+  const detail = attempts.map((a) => `${describeCandidate(a)}: ${a.note}`).join(" | ");
+  const err = new Error(
+    attempts.length > 1
+      ? `No SMTP session could be held with ${cfg.smtp.host} (${detail})`
+      : attempts[0]?.note || "Could not send the email through the SMTP relay.",
+  );
+  err.code = "email_unreachable";
+  err.attempts = attempts;
+  throw err;
 }
 
 /**
@@ -149,16 +288,12 @@ export async function sendEmail(message) {
 
   if (cfg.kind === "smtp") {
     try {
-      return await smtpSendMail({
-        ...cfg.smtp,
-        from: cfg.fromEmail,
-        fromName: cfg.fromName,
-        to: message.to,
-        subject: message.subject,
-        text: message.text,
-        html: message.html,
-      });
+      return await sendOverSmtpRelay(cfg, message);
     } catch (err) {
+      // Only a relay that never answered at all is worth asking the HTTP API about - not
+      // because it is likely to work, but because its answer names a different cause (an IP
+      // allow-list, say) than "nothing answered". A certificate this runtime will not accept
+      // is not that, and neither is a relay that refused to upgrade.
       if (cfg.apiKey && isUnreachable(err)) {
         // Fall through to the API and report that pairing, so the log says which two
         // things were tried rather than only the first one that gave up.
@@ -214,10 +349,10 @@ async function sendViaBrevoApi(cfg, { to, subject, text, html }) {
     // A 401 here is usually not a wrong key. Say which of the two it is, because the
     // fix is different and only one of them is fixable from this side.
     const ipRestricted = /unrecogni[sz]ed ip|whitelist|allow.?list|ip address/i.test(detail);
-    const message = !response.ok && response.status !== 401
+    const message = response.status !== 401
       ? `Brevo refused the email (HTTP ${response.status})${detail ? `: ${detail}` : ""}`
       : ipRestricted
-        ? `Brevo only accepts API calls from addresses on its allow-list, and this function has no fixed one to add (${detail}). Set the SMTP relay variables instead - the relay is not IP restricted.`
+        ? `Brevo only accepts API calls from addresses on its allow-list, and this function has no fixed one to add (${detail}). Use the SMTP relay instead - the relay is not IP restricted.`
         : `Brevo rejected the API key${detail ? `: ${detail}` : ""}`;
     const err = new Error(message);
     err.code = "email_rejected";
@@ -228,10 +363,10 @@ async function sendViaBrevoApi(cfg, { to, subject, text, html }) {
 }
 
 /**
- * A readable answer to "is the mail side of this deployment usable", with no key
- * material in it: the length, and twelve hexadecimal characters of a hash, which is
- * enough to tell "the stored value" apart from "the value that was meant to be stored"
- * and not enough to be worth stealing.
+ * A readable answer to "is the mail side of this deployment usable", with no key material
+ * in it: the length, and twelve hexadecimal characters of a hash, which is enough to tell
+ * "the stored value" apart from "the value that was meant to be stored" and not enough to be
+ * worth stealing.
  */
 export function emailSenderDiagnostics() {
   const cfg = emailSenderConfig();
@@ -244,6 +379,7 @@ export function emailSenderDiagnostics() {
     keyFingerprint: cfg.apiKey ? shortHash(cfg.apiKey) : "",
     smtpHost: cfg.smtp.host || "",
     smtpPort: cfg.smtp.host ? cfg.smtp.port : 0,
+    smtpCandidates: cfg.smtp.host ? cfg.smtp.candidates.map(describeCandidate) : [],
     smtpUser: cfg.smtp.user ? `${cfg.smtp.user.split("@")[0]}@${cfg.smtp.user.split("@")[1] || ""}` : "",
     smtpPassLength: cfg.smtp.pass.length,
     senderEmail: cfg.fromEmail,
@@ -260,9 +396,9 @@ let lastProbeResult = null;
 
 /**
  * Ask the configured transport one read-only question - "would these credentials send" -
- * and report the answer without any of the credential. Used by `GET /api/email-test`,
- * which is how a signup rejected with 401 is told apart from a sender that was never
- * verified in Brevo's dashboard: both otherwise arrive as the same failed send.
+ * and report the answer without any of the credential. Used by `GET /api/email-test`, which
+ * is how a signup rejected with 401 is told apart from a sender that was never verified in
+ * Brevo's dashboard: both otherwise arrive as the same failed send.
  */
 export async function probeEmailSender({ force = false } = {}) {
   const cfg = emailSenderConfig();
@@ -277,9 +413,35 @@ export async function probeEmailSender({ force = false } = {}) {
 
   let result;
   if (cfg.kind === "smtp") {
-    result = await probeSmtpLogin({ ...cfg.smtp, from: cfg.fromEmail });
+    const attempts = [];
+    for (const candidate of orderedCandidates(cfg.smtp.candidates)) {
+      const attempt = await probeSmtpLogin({
+        ...cfg.smtp,
+        port: candidate.port,
+        secure: candidate.secure,
+        from: cfg.fromEmail,
+        timeoutMs: cfg.smtp.candidates.length > 1 ? CANDIDATE_TIMEOUT_MS : 15_000,
+      });
+      attempts.push({ port: candidate.port, secure: candidate.secure, ok: attempt.ok === true, note: attempt.note || attempt.error || "" });
+      if (attempt.ok === true) {
+        preferredCandidate = candidate;
+        result = {
+          ...attempt,
+          port: candidate.port,
+          mode: candidate.secure ? "implicit-tls" : "starttls",
+        };
+        break;
+      }
+    }
+    result = result || {
+      ok: false,
+      status: 0,
+      sender: cfg.fromEmail,
+      note: attempts.map((a) => `${describeCandidate(a)}: ${a.note}`).join(" | "),
+    };
     result.transport = "smtp";
     result.sender = cfg.fromEmail;
+    result.attempts = attempts;
   } else if (cfg.apiKey) {
     try {
       const response = await fetch(`${cfg.base}/v3/contacts/lists?page=0&limit=1`, {

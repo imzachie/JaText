@@ -73,7 +73,8 @@ Add, replace, or delete there and the next request picks it up.
 | `FCM_SERVICE_ACCOUNT_JSON` | Android push | the whole `service_account` JSON, base64 or raw |
 | `KLIPY_API_KEY` | song search | |
 | `BREVO_SENDER_EMAIL` | the signup code email | must be an address Brevo has already verified under **Senders, Domains, IPs → Senders**, or every send comes back as `sender not verified`. `BREVO_SENDER_NAME` is optional (default `JaText`) |
-| `BREVO_SMTP_HOST`, `BREVO_SMTP_PORT`, `BREVO_SMTP_USER`, `BREVO_SMTP_PASS` | sending that email | the relay Brevo actually allows from here: `smtp-relay.brevo.com`, `587` for STARTTLS (`465` for implicit TLS, which the port picks by itself or `BREVO_SMTP_SSL=1` forces), the `…@smtp-brevo.com` login and the SMTP key. Not IP restricted, which is why it is used at all |
+| `BREVO_SMTP_HOST`, `BREVO_SMTP_USER`, `BREVO_SMTP_PASS` | sending that email | the relay Brevo actually allows from here: `smtp-relay.brevo.com`, the `…@smtp-brevo.com` login and the SMTP key. Not IP restricted, which is why it is used at all |
+| `BREVO_SMTP_CANDIDATES` (or `SMTP_PORTS`) | which submission ports to try | unset means `587` with STARTTLS then `465` with implicit TLS, and the first that answers is used and remembered for the rest of the isolate's life. Set `BREVO_SMTP_PORT` instead to pin exactly one port (`BREVO_SMTP_SSL=1` says it starts encrypted). Entries look like `587,465:implicit` or `465s` |
 | `SMTP_REQUIRE_TLS`, `SMTP_TLS_REJECT_UNAUTHORIZED` | how far to trust the relay | both default to on: a relay that will not upgrade is refused rather than sent a password, and a certificate the runtime does not trust ends the send. Only `SMTP_TLS_REJECT_UNAUTHORIZED=0` has a legitimate use, which is a relay whose CA is not in the store |
 | `BREVO_API_KEY` | the same email, over HTTP | starts with `xkeysib-`, 89 characters. **Useless from an Edge Function on its own**: Brevo limits API keys to allow-listed source addresses and this runtime has no fixed egress IP, so it answers 401 `unrecognised IP address`. Kept because a self-hoster on a fixed address can use it, and because the code falls back to it if the relay cannot be reached |
 | `JATEXT_REQUIRE_EMAIL_VERIFICATION` | turning the signup code on | `1` = every new account must type the emailed code before it can message anyone; anything else, or a missing `BREVO_API_KEY`, and sign-up behaves exactly as it always did |
@@ -192,19 +193,35 @@ Details worth knowing before changing it:
   /v3/smtp/email` answers `401 unrecognised IP address` no matter how correct the key is.
   The SMTP relay is not IP restricted, and it needs nothing more than a TCP socket and
   STARTTLS, which this runtime has - the Postgres connection is the same two primitives -
-  so `server/smtpClient.js` is about 250 lines instead of a dependency. Two things about
+  so `server/smtpClient.js` is about 250 lines instead of a dependency. Both Brevo ports are
+  tried in order, because they fail for unrelated reasons: the STARTTLS upgrade has to wrap a
+  socket that is already open, and that path has timed out in the edge runtime with a healthy
+  server at the other end, while implicit TLS opens a fresh encrypted socket and never touches
+  it. A port that never answers costs eight seconds rather than twenty when there is another
+  one to ask, and a port that answers "credentials invalid" ends it there, because the next
+  port would say the same and the account would only get locked. Two things about
   that session are easy to get wrong and both are checked by a test: the socket's `data`
   listener has to come off before `tls.connect({ socket })` and go back on the secure socket
   afterwards, or the plaintext reader eats the TLS records and the handshake times out
-  looking like a dead relay; and `465` is a session wrapped from the first byte rather than
-  `587` with a flag, so it is a separate mode and not a default. Whatever is
-  configured is used, SMTP first when both are present, and an unreachable relay falls
+  looking like a dead relay; and `465` is a session of its own, opened already encrypted,
+  rather than `587` with a flag - so the mode comes from the port and is never guessed. Both Brevo ports are tried
+  in order, because they fail for unrelated reasons: the STARTTLS upgrade has to wrap a socket
+  that is already open, and that path has timed out in the edge runtime with a healthy server
+  at the other end, while implicit TLS opens a fresh encrypted socket and never touches it. A
+  port that never answers costs eight seconds rather than twenty when there is another one to
+  ask, and a port that answers "credentials invalid" ends it there - the next port would say
+  the same, and three failed logins is how an account gets locked. Whatever transport is
+  configured is used, SMTP first when both are, and a relay that never answers at all falls
   back to the API with both errors reported.
 * `GET /api/email-test` is how a mail problem is diagnosed without reading function logs:
   it prints which transport is live, the length and hash of the key (never the key), and
   then asks the relay for the envelope - `MAIL FROM`, `RCPT TO`, `RSET`, `QUIT`, no `DATA`,
   so nothing is transmitted and no quota is spent - which is the only way to learn that
-  the sender address is not verified. `?probe=0` answers without contacting anyone.
+  the sender address is not verified. `?probe=0` answers without contacting anyone, and
+  `?probe=force` asks again right now instead of answering from the last five minutes - which
+  matters because a secret is only read when the function is published, while a *cold isolate*
+  picks one up by itself, so a port change can be tested in a couple of minutes without a
+  deploy.
 * `GET /api/auth-status` prints `emailVerificationRequired`, which is the only way to
   tell "this feature is on" from outside the app. It reads the same two conditions, so it
   cannot advertise a gate that `handleTursoRpc` is not actually enforcing.
