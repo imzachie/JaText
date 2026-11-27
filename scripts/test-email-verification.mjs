@@ -163,7 +163,7 @@ function makeTlsFixture() {
  * The stub therefore obeys the discipline it is used to check, and stops reading the
  * plaintext socket before the secure one starts.
  */
-function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender = false, tls: tlsMaterial = null, hideTls = false, implicit = false, tlsRecordGreeting = false, splitReply = false } = {}) {
+function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender = false, tls: tlsMaterial = null, hideTls = false, implicit = false, tlsRecordGreeting = false, splitReply = false, host = "127.0.0.1" } = {}) {
   const log = { commands: [], data: "", connections: 0, upgraded: false, secure: [], tlsError: "" };
   const context = tlsMaterial ? tls.createSecureContext(tlsMaterial) : null;
   const server = net.createServer((socket) => {
@@ -301,7 +301,7 @@ function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender =
     say("220 fake-relay ready");
   });
   return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () =>
+    server.listen(0, host, () =>
       resolve({
         server,
         log,
@@ -799,6 +799,9 @@ async function main() {
     process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "0";
     const implicitDb = makeStubDb();
     backend.setCustomDbForTesting(implicitDb);
+    // The greeting is emitted by the stub in the same turn the secure socket is made, which
+    // is before this side has anything attached - the ordering that loses a first line on a
+    // runtime that does not buffer for a late listener.
     const overImplicit = await rpc(backend, "signUpEmail", { email: "implicit@example.com", password: "hunter2hunter2" });
     check(
       "an implicit-TLS relay is spoken to from the first byte",
@@ -928,13 +931,69 @@ async function main() {
   // which is what a typo should produce.
   process.env.BREVO_SMTP_CANDIDATES = "nope,,";
   const junk = sender.emailSenderConfig();
-  check("an unparsable list keeps the two documented ports rather than none", junk.smtp.candidates.length === 2 && junk.smtp.candidates[0].port === 587 && junk.smtp.candidates[1].secure === true, JSON.stringify(junk.smtp.candidates));
+  check(
+    "an unparsable list keeps the documented ports rather than none",
+    junk.smtp.candidates.length === 3 && junk.smtp.candidates[0].port === 587 && junk.smtp.candidates[1].secure === true && junk.smtp.candidates[2].port === 2525,
+    JSON.stringify(junk.smtp.candidates),
+  );
+  check("and the first of them is still the port in the documentation", sender.emailSenderDiagnostics().smtpPort === 587, JSON.stringify(sender.emailSenderDiagnostics().smtpCandidates));
   process.env.BREVO_SMTP_CANDIDATES = "465s,587:starttls";
   const named = sender.emailSenderConfig();
   check("and a mode can be spelled out either way", named.smtp.candidates[0].secure === true && named.smtp.candidates[1].secure === false, JSON.stringify(named.smtp.candidates));
   delete process.env.BREVO_SMTP_CANDIDATES;
   process.env.BREVO_SMTP_PORT = String(live.port);
   check("an explicit single port means exactly that port", sender.emailSenderConfig().smtp.candidates.length === 1, JSON.stringify(sender.emailSenderConfig().smtp.candidates));
+  process.env.BREVO_SMTP_SERVERNAME = "smtp-relay.sendinblue.com";
+  check(
+    "the certificate name can be stated when the host and the certificate disagree",
+    sender.emailSenderConfig().smtp.servername === "smtp-relay.sendinblue.com",
+    JSON.stringify(sender.emailSenderConfig().smtp.servername),
+  );
+  // A name stated in the config has to be the name checked against the certificate, or the
+  // switch would only move the failure along: the stub's certificate is for `localhost`.
+  const nameRelay = await serveSmtp({ tls: pem, host: "localhost" });
+  process.env.BREVO_SMTP_PORT = String(nameRelay.port);
+  process.env.BREVO_SMTP_SSL = "0";
+  process.env.SMTP_REQUIRE_TLS = "0";
+  process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "0";
+  // Verification left ON, and the certificate *trusted* by pinning it, which is the only way
+  // to tell "the name was checked" from "nobody looked": with `SMTP_TLS_REJECT_UNAUTHORIZED=0`
+  // the name is not checked by anyone, which is the trap this whole option exists to avoid.
+  process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "1";
+  process.env.SMTP_TLS_CA_PEM = pem.cert.toString("utf8");
+  process.env.BREVO_SMTP_HOST = "localhost";
+  const wrongName = await rpc(backend, "signUpEmail", { email: "sni@example.com", password: "hunter2hunter2" }).catch((err) => err);
+  check(
+    "a stated name the certificate does not cover ends the send",
+    /not this host|no host names|not certified|altname|hostname|mismatch/i.test(String(wrongName?.message || "")),
+    String(wrongName?.message || wrongName).slice(0, 150),
+  );
+  // Same trusted certificate, no stated name: it must go through, or the previous check
+  // proved nothing.
+  delete process.env.BREVO_SMTP_SERVERNAME;
+  const pinnedDb = makeStubDb();
+  backend.setCustomDbForTesting(pinnedDb);
+  const pinned = await rpc(backend, "signUpEmail", { email: "pinned@example.com", password: "hunter2hunter2" });
+  check("and pinning the CA keeps the session instead of excusing it", pinned.requiresEmailVerification === true, JSON.stringify(Object.keys(pinned)));
+
+  // The same trust, on the other TLS mode. `ca` is threaded into both, and an option that
+  // only reaches one of them is a bug that shows up as somebody disabling verification.
+  const pinnedImplicit = await serveSmtp({ tls: pem, implicit: true, host: "localhost" });
+  process.env.BREVO_SMTP_PORT = String(pinnedImplicit.port);
+  process.env.BREVO_SMTP_SSL = "1";
+  const implicitPinned = await rpc(backend, "signUpEmail", { email: "pinned465@example.com", password: "hunter2hunter2" });
+  check(
+    "a pinned CA works on port 465 too, with the name still checked",
+    implicitPinned.requiresEmailVerification === true && pinnedImplicit.log.upgraded === true,
+    JSON.stringify(Object.keys(implicitPinned)),
+  );
+  await pinnedImplicit.close();
+  process.env.BREVO_SMTP_PORT = String(relay.port);
+  process.env.BREVO_SMTP_SSL = "0";
+  await nameRelay.close();
+  delete process.env.SMTP_TLS_CA_PEM;
+  process.env.BREVO_SMTP_HOST = "127.0.0.1";
+  process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "0";
   await live.close();
   blackhole.close();
 

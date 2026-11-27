@@ -39,6 +39,11 @@ const DEFAULT_API_BASE = "https://api.brevo.com";
 const DEFAULT_SMTP_CANDIDATES = [
   { port: 587, secure: false },
   { port: 465, secure: true },
+  // Brevo documents this as the fallback "when 587 is blocked", which is the situation this
+  // list exists for. It is STARTTLS like 587, so a runtime that cannot complete an upgrade
+  // gains nothing here - but a network that filters ports 587 and 465 and leaves this one
+  // open is a real hosting pattern, and 8 seconds is the whole cost of covering it.
+  { port: 2525, secure: false },
 ];
 
 /**
@@ -121,6 +126,14 @@ export function emailSenderConfig() {
     secure: candidates[0].secure,
     candidates,
     user: env("BREVO_SMTP_USER") || env("SMTP_USER"),
+    // The name to send for SNI and to require in the certificate, when the host we dial is
+    // not the name the relay's certificate carries. See `server/smtpClient.js`.
+    servername: env("BREVO_SMTP_SERVERNAME") || env("SMTP_SERVERNAME"),
+    // A CA bundle, inline, because a file path is meaningless in an Edge Function. This is
+    // the honest way to trust a relay with a private CA: `SMTP_TLS_REJECT_UNAUTHORIZED=0`
+    // gives up on the name check as well, and that check is the one that matters when a
+    // password is on the wire.
+    ca: env("SMTP_TLS_CA_PEM") || undefined,
     pass: env("BREVO_SMTP_PASS") || env("SMTP_PASS"),
     // A local test relay can be plain; a real one may not be, with a password in it.
     requireTls: flag("SMTP_REQUIRE_TLS", true),
@@ -415,6 +428,7 @@ export async function probeEmailSender({ force = false } = {}) {
   if (cfg.kind === "smtp") {
     const attempts = [];
     for (const candidate of orderedCandidates(cfg.smtp.candidates)) {
+      const startedAt = Date.now();
       const attempt = await probeSmtpLogin({
         ...cfg.smtp,
         port: candidate.port,
@@ -422,7 +436,17 @@ export async function probeEmailSender({ force = false } = {}) {
         from: cfg.fromEmail,
         timeoutMs: cfg.smtp.candidates.length > 1 ? CANDIDATE_TIMEOUT_MS : 15_000,
       });
-      attempts.push({ port: candidate.port, secure: candidate.secure, ok: attempt.ok === true, note: attempt.note || attempt.error || "" });
+      attempts.push({
+        port: candidate.port,
+        secure: candidate.secure,
+        ok: attempt.ok === true,
+        ms: Date.now() - startedAt,
+        // The session's own report where there was one, and the server's words where there
+        // was not: enough to tell "the port is filtered" from "the handshake completed and
+        // the relay closed the session" from "the certificate says a different name".
+        tls: attempt.tls,
+        note: attempt.note || attempt.error || "",
+      });
       if (attempt.ok === true) {
         preferredCandidate = candidate;
         result = {

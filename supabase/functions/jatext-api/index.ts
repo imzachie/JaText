@@ -554,8 +554,8 @@ function encodeHeaderValue(value) {
 function looksLikeTlsRecord(buf) {
   return buf.length >= 3 && buf[0] >= 20 && buf[0] <= 23 && buf[1] === 3;
 }
-function createReplyReader(socket) {
-  let buffer = Buffer.alloc(0);
+function createReplyReader(socket, prelude) {
+  let buffer = prelude && prelude.length ? Buffer.from(prelude) : Buffer.alloc(0);
   const queued = [];
   const waiting = [];
   let failure = null;
@@ -605,7 +605,8 @@ function createReplyReader(socket) {
     buffer = Buffer.alloc(0);
     return leftover.length > 0;
   };
-  nextReply.attach = (tlsSocket) => {
+  nextReply.attach = (tlsSocket, prelude2) => {
+    if (prelude2 && prelude2.length) buffer = Buffer.concat([prelude2, buffer]);
     tlsSocket.on("data", onData);
     tlsSocket.on("error", onError);
     tlsSocket.on("close", onClose);
@@ -653,33 +654,87 @@ function connectSocket({ host, port, timeoutMs }) {
     });
   });
 }
-function openTlsSocket({ host, port, timeoutMs = DEFAULT_TIMEOUT_MS, rejectUnauthorized }) {
+function openTlsSocket({ host, port, timeoutMs = DEFAULT_TIMEOUT_MS, rejectUnauthorized, servername: askedFor, ca }) {
   return new Promise((resolve, reject) => {
-    const servername = /^[0-9.]+$/.test(host) || host.includes(":") ? void 0 : host;
+    const servername = askedFor || (/^[0-9.]+$/.test(host) || host.includes(":") ? void 0 : host);
     const secure = tls.connect({
       host,
       port,
       ...servername ? { servername } : {},
-      rejectUnauthorized
+      rejectUnauthorized,
+      // A private relay with a certificate from a CA the runtime does not carry should be
+      // *trusted*, not excused: `rejectUnauthorized: false` throws away the name check with
+      // the chain check, while a pinned CA keeps both.
+      ...ca ? { ca } : {}
+    });
+    const fail = (err) => {
+      clearTimeout(timer);
+      secure.destroy();
+      reject(err);
+    };
+    let collect = true;
+    const prelude = [];
+    secure.on("data", (chunk) => {
+      if (collect) prelude.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8"));
     });
     const timer = setTimeout(() => {
-      secure.destroy();
-      reject(new SmtpError(`Could not open a TLS session with ${host}:${port} within ${Math.round(timeoutMs / 1e3)} seconds.`));
+      fail(new SmtpError(`Could not open a TLS session with ${host}:${port} within ${Math.round(timeoutMs / 1e3)} seconds.`));
     }, timeoutMs);
     secure.once("error", (err) => {
-      clearTimeout(timer);
-      reject(new SmtpError(`Could not open a TLS session with ${host}:${port}: ${err?.message || err}`));
+      fail(new SmtpError(`Could not open a TLS session with ${host}:${port}: ${err?.message || err}`));
     });
     secure.once("secureConnect", () => {
       clearTimeout(timer);
-      resolve(secure);
+      collect = false;
+      const identity = checkPeerIdentity(secure, servername || host, rejectUnauthorized);
+      if (identity) return fail(identity);
+      resolve({ socket: secure, prelude: Buffer.concat(prelude), tls: describeSession(secure) });
     });
   });
 }
-function upgradeToTls(socket, host, { rejectUnauthorized = true, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+function checkPeerIdentity(secure, host, rejectUnauthorized) {
+  if (!rejectUnauthorized) return null;
+  let cert = null;
+  try {
+    cert = secure.getPeerCertificate?.() || null;
+  } catch {
+    cert = null;
+  }
+  if (!cert || !Object.keys(cert).length) {
+    return new SmtpError(`The mail server presented no certificate for ${host}, so the session is not trusted.`, { phase: "tls-verify" });
+  }
+  const subject = String(cert.subject?.CN || "");
+  const names = [subject, ...Array.isArray(cert.subjectaltname) ? cert.subjectaltname : String(cert.subjectaltname || "").split(/,\s*/)].filter(Boolean);
+  const sanList = names.flatMap((n) => String(n).replace(/^(DNS:|IP:)/i, "").trim()).filter(Boolean);
+  const matched = sanList.some((name) => name.startsWith("*.") ? host.endsWith(name.slice(1)) : name === host);
+  if (!matched && !sanList.length) {
+    return new SmtpError(`The certificate from ${host} lists no host names (it says "${subject}"), so it cannot be checked.`, { phase: "tls-verify" });
+  }
+  if (!matched) {
+    const wild = sanList.find((name) => name.endsWith(".com") && name.includes("smtp-relay"));
+    return new SmtpError(
+      `The certificate from ${host} is for ${sanList.slice(0, 3).join(", ") || "another name"}, not this host.` + (wild ? ` Set BREVO_SMTP_SERVERNAME=${wild} to name it, rather than switching verification off.` : ""),
+      { phase: "tls-verify" }
+    );
+  }
+  return null;
+}
+function describeSession(secure) {
+  try {
+    return {
+      protocol: String(secure.getProtocol?.() || ""),
+      cipher: String(secure.getCipher?.()?.name || ""),
+      authorized: secure.authorized === true,
+      subject: String(secure.getPeerCertificate?.()?.subject?.CN || "")
+    };
+  } catch {
+    return {};
+  }
+}
+function upgradeToTls(socket, host, { rejectUnauthorized = true, timeoutMs = DEFAULT_TIMEOUT_MS, servername: askedFor, ca } = {}) {
   return new Promise((resolve, reject) => {
-    const servername = /^[0-9.]+$/.test(host) || host.includes(":") ? void 0 : host;
-    const secure = tls.connect({ socket, ...servername ? { servername } : {}, rejectUnauthorized });
+    const servername = askedFor || (/^[0-9.]+$/.test(host) || host.includes(":") ? void 0 : host);
+    const secure = tls.connect({ socket, ...servername ? { servername } : {}, rejectUnauthorized, ...ca ? { ca } : {} });
     const timer = setTimeout(() => {
       secure.destroy();
       reject(new SmtpError("The mail server did not finish the TLS handshake in time."));
@@ -688,9 +743,20 @@ function upgradeToTls(socket, host, { rejectUnauthorized = true, timeoutMs = DEF
       clearTimeout(timer);
       reject(new SmtpError(`The TLS upgrade failed: ${err?.message || err}`));
     });
+    let collect = true;
+    const prelude = [];
+    secure.on("data", (chunk) => {
+      if (collect) prelude.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8"));
+    });
     secure.once("secureConnect", () => {
       clearTimeout(timer);
-      resolve(secure);
+      collect = false;
+      const identity = checkPeerIdentity(secure, servername || host, rejectUnauthorized);
+      if (identity) {
+        secure.destroy();
+        return reject(identity);
+      }
+      resolve({ socket: secure, prelude: Buffer.concat(prelude), tls: describeSession(secure) });
     });
   });
 }
@@ -746,7 +812,15 @@ async function smtpSendMail(options) {
   if (!host) throw new SmtpError("No SMTP host is configured.");
   if (!from) throw new SmtpError("No sender address is configured.");
   const verifyTls = options.rejectUnauthorized !== false;
-  let socket = secure ? await openTlsSocket({ host, port, timeoutMs: handshakeMs, rejectUnauthorized: verifyTls }) : await connectSocket({ host, port, timeoutMs });
+  let session = null;
+  let socket = secure ? (session = await openTlsSocket({
+    host,
+    port,
+    timeoutMs: handshakeMs,
+    rejectUnauthorized: verifyTls,
+    servername: options.servername,
+    ca: options.ca
+  }), session.socket) : await connectSocket({ host, port, timeoutMs });
   const deadline = setTimeout(() => {
     try {
       socket.destroy();
@@ -755,8 +829,9 @@ async function smtpSendMail(options) {
   }, timeoutMs);
   const clear = () => clearTimeout(deadline);
   try {
-    const reader = createReplyReader(socket);
+    const reader = createReplyReader(socket, session?.prelude);
     let caps = "";
+    const tlsInfo = !secure;
     expect(await reader(), [220], "greeting");
     socket.write(`EHLO jatext${EOL}`);
     const hello = expect(await reader(), [250], "ehlo");
@@ -770,9 +845,14 @@ async function smtpSendMail(options) {
           { phase: "starttls" }
         );
       }
-      const upgraded = await upgradeToTls(socket, host, { rejectUnauthorized: verifyTls, timeoutMs: handshakeMs });
-      socket = upgraded;
-      reader.attach(upgraded);
+      const upgraded = await upgradeToTls(socket, host, {
+        rejectUnauthorized: verifyTls,
+        timeoutMs: handshakeMs,
+        servername: options.servername,
+        ca: options.ca
+      });
+      socket = upgraded.socket;
+      reader.attach(socket, upgraded.prelude);
       socket.write(`EHLO jatext${EOL}`);
       const afterTls = expect(await reader(), [250], "ehlo-after-tls");
       caps = afterTls.text.toUpperCase();
@@ -812,7 +892,7 @@ async function smtpSendMail(options) {
     const accepted = expect(await reader(), [250], "queue");
     socket.write(`QUIT${EOL}`);
     await reader().catch(() => null);
-    return { sent: true, transport: "smtp", response: accepted.text || "accepted" };
+    return { sent: true, transport: "smtp", response: accepted.text || "accepted", tls: session?.tls || (tlsInfo ? describeSession(socket) : void 0) };
   } finally {
     clear();
     try {
@@ -840,7 +920,14 @@ async function probeSmtpLogin({ host, port = 587, user = "", pass = "", from = "
       timeoutMs,
       probeMode: "envelope"
     });
-    return { ok: true, note: result.response || "smtp login accepted", sender: from || user };
+    return {
+      ok: true,
+      note: result.response || "smtp login accepted",
+      sender: from || user,
+      // Which TLS mode got a session, so the answer to "did the handshake work" does not
+      // have to be inferred from whether mail arrived.
+      tls: result.tls
+    };
   } catch (err) {
     const phase = String(err?.phase || "");
     if (err?.code === 535) {
@@ -917,6 +1004,14 @@ function emailSenderConfig() {
     secure: candidates[0].secure,
     candidates,
     user: env("BREVO_SMTP_USER") || env("SMTP_USER"),
+    // The name to send for SNI and to require in the certificate, when the host we dial is
+    // not the name the relay's certificate carries. See `server/smtpClient.js`.
+    servername: env("BREVO_SMTP_SERVERNAME") || env("SMTP_SERVERNAME"),
+    // A CA bundle, inline, because a file path is meaningless in an Edge Function. This is
+    // the honest way to trust a relay with a private CA: `SMTP_TLS_REJECT_UNAUTHORIZED=0`
+    // gives up on the name check as well, and that check is the one that matters when a
+    // password is on the wire.
+    ca: env("SMTP_TLS_CA_PEM") || void 0,
     pass: env("BREVO_SMTP_PASS") || env("SMTP_PASS"),
     // A local test relay can be plain; a real one may not be, with a password in it.
     requireTls: flag("SMTP_REQUIRE_TLS", true),
@@ -1108,6 +1203,7 @@ async function probeEmailSender({ force = false } = {}) {
   if (cfg.kind === "smtp") {
     const attempts = [];
     for (const candidate of orderedCandidates(cfg.smtp.candidates)) {
+      const startedAt = Date.now();
       const attempt = await probeSmtpLogin({
         ...cfg.smtp,
         port: candidate.port,
@@ -1115,7 +1211,17 @@ async function probeEmailSender({ force = false } = {}) {
         from: cfg.fromEmail,
         timeoutMs: cfg.smtp.candidates.length > 1 ? CANDIDATE_TIMEOUT_MS : 15e3
       });
-      attempts.push({ port: candidate.port, secure: candidate.secure, ok: attempt.ok === true, note: attempt.note || attempt.error || "" });
+      attempts.push({
+        port: candidate.port,
+        secure: candidate.secure,
+        ok: attempt.ok === true,
+        ms: Date.now() - startedAt,
+        // The session's own report where there was one, and the server's words where there
+        // was not: enough to tell "the port is filtered" from "the handshake completed and
+        // the relay closed the session" from "the certificate says a different name".
+        tls: attempt.tls,
+        note: attempt.note || attempt.error || ""
+      });
       if (attempt.ok === true) {
         preferredCandidate = candidate;
         result = {
@@ -1168,7 +1274,12 @@ var init_emailSender = __esm({
     DEFAULT_API_BASE = "https://api.brevo.com";
     DEFAULT_SMTP_CANDIDATES = [
       { port: 587, secure: false },
-      { port: 465, secure: true }
+      { port: 465, secure: true },
+      // Brevo documents this as the fallback "when 587 is blocked", which is the situation this
+      // list exists for. It is STARTTLS like 587, so a runtime that cannot complete an upgrade
+      // gains nothing here - but a network that filters ports 587 and 465 and leaves this one
+      // open is a real hosting pattern, and 8 seconds is the whole cost of covering it.
+      { port: 2525, secure: false }
     ];
     BREVO_KEY_SHAPE = /^xkeysib-[0-9a-f]{64}-[A-Za-z0-9]{16}$/;
     TRANSPORT_PHASES = /* @__PURE__ */ new Set(["", "connect", "greeting", "starttls", "ehlo-after-tls", "tls-mode"]);
