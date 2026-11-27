@@ -218,7 +218,11 @@ Details worth knowing before changing it:
   it prints which transport is live, the length and hash of the key (never the key), and
   then asks the relay for the envelope - `MAIL FROM`, `RCPT TO`, `RSET`, `QUIT`, no `DATA`,
   so nothing is transmitted and no quota is spent - which is the only way to learn that
-  the sender address is not verified. `?probe=0` answers without contacting anyone, and
+  the sender address is not verified. `?send=<address>&token=<JATEXT_TEST_SEND_TOKEN>` goes
+  further and puts one real message in that inbox - the only proof that mail actually
+  arrives, and the reason it is off until the deployment sets a token: without one the route
+  refuses, because an endpoint that sends to any address the caller names is an open relay
+  against somebody's daily quota. `?probe=0` answers without contacting anyone, and
   `?probe=force` asks again right now instead of answering from the last five minutes - which
   matters because a secret is only read when the function is published, while a *cold isolate*
   picks one up by itself, so a port change can be tested in a couple of minutes without a

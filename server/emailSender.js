@@ -67,7 +67,12 @@ function flag(name, fallback) {
 }
 
 function shortHash(value) {
-  return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 12);
+  return hashHex(value).slice(0, 12);
+}
+
+/** The whole digest, for comparing two values without letting the comparison leak anything. */
+function hashHex(value) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
 /**
@@ -212,6 +217,10 @@ function asSendError(err, fallback) {
   const wrapped = new Error(err?.message || fallback);
   wrapped.code = Number(err?.code) ? "email_rejected" : "email_unreachable";
   wrapped.smtpPhase = err?.phase || "";
+  // The per-port record travels with the error, because "one send failed" and "three ports
+  // were asked and here is what each said" are different amounts of information, and the
+  // second one is what a log line or a signup response has to carry for anybody to act on it.
+  wrapped.attempts = err?.attempts;
   return wrapped;
 }
 
@@ -231,12 +240,29 @@ function orderedCandidates(candidates) {
 }
 
 /**
- * A send has to answer in seconds because a signup is waiting on it, so when there is more
- * than one port to try the budget per port shrinks to match: two fifteen-second waits would
- * be a dead-looking button on a phone even when the second port was fine. One candidate is
- * not a race against anything, so it keeps the full window.
+ * A send has to answer in seconds because a signup is waiting on it, so the ports share one
+ * budget rather than each getting its own: three ports at eight seconds each is half a
+ * minute of a dead-looking button on a phone, which is worse than the failure it is trying
+ * to work around. The first port gets up to eight seconds; whatever is left of twelve goes to
+ * the rest, in order; a port that cannot answer inside its share is not "down", it is
+ * reported as not tried. One candidate is not a race against anything, so it keeps the full
+ * window.
  */
 const CANDIDATE_TIMEOUT_MS = 8_000;
+const SEND_BUDGET_MS = 12_000;
+
+/**
+ * How long one port may take, given how many there are.
+ *
+ * Split evenly rather than first-come-first-served, because the failure this protects against
+ * is the specific one where the two dead ports eat the whole budget and the working port at
+ * the end of the list is never asked. A submission relay that is well answers in under a
+ * second, so a few seconds each is enough for all of them and the total stays bounded.
+ */
+function candidateShare(count) {
+  if (count <= 1) return CANDIDATE_TIMEOUT_MS * 2;
+  return Math.max(2_000, Math.floor(SEND_BUDGET_MS / count));
+}
 
 /**
  * Try the relay on each configured port until a session is held.
@@ -245,7 +271,20 @@ const CANDIDATE_TIMEOUT_MS = 8_000;
  */
 async function sendOverSmtpRelay(cfg, message) {
   const attempts = [];
+  const share = candidateShare(cfg.smtp.candidates.length);
+  const until = Date.now() + share * cfg.smtp.candidates.length;
   for (const candidate of orderedCandidates(cfg.smtp.candidates)) {
+    const left = until - Date.now();
+    if (left <= 500) {
+      attempts.push({
+        port: candidate.port,
+        secure: candidate.secure,
+        transportLevel: true,
+        notTried: true,
+        note: "not tried: the budget for one send was already spent, and this port would not have had time to answer",
+      });
+      continue;
+    }
     try {
       const result = await smtpSendMail({
         ...cfg.smtp,
@@ -257,7 +296,7 @@ async function sendOverSmtpRelay(cfg, message) {
         subject: message.subject,
         text: message.text,
         html: message.html,
-        timeoutMs: cfg.smtp.candidates.length > 1 ? CANDIDATE_TIMEOUT_MS : undefined,
+        timeoutMs: cfg.smtp.candidates.length > 1 ? Math.min(share, left) : undefined,
       });
       preferredCandidate = candidate;
       return { ...result, port: candidate.port, mode: candidate.secure ? "implicit-tls" : "starttls" };
@@ -401,6 +440,52 @@ export function emailSenderDiagnostics() {
   };
 }
 
+/**
+ * Send one real message, on purpose, to an address the operator names.
+ *
+ * `GET /api/email-test` proves the credentials are accepted; this proves a message reaches
+ * an inbox, which is the question underneath it. It is the only route in the API that
+ * *sends* to an arbitrary address, so it is guarded by a secret rather than by obscurity:
+ * with `JATEXT_TEST_SEND_TOKEN` unset it refuses, and with it set the caller has to know the
+ * value. Without that, this endpoint would be an open relay against somebody's daily quota.
+ *
+ * @returns {{sent: true, to: string, transport: string, port?: number, mode?: string}}
+ */
+export async function requestTestSend({ to, token } = {}) {
+  const expected = env("JATEXT_TEST_SEND_TOKEN");
+  if (!expected) {
+    const err = new Error(
+      "Test sends are not enabled. Set JATEXT_TEST_SEND_TOKEN to any private value and pass it as ?token= when a real message should be sent.",
+    );
+    err.code = "email_test_disabled";
+    throw err;
+  }
+  const given = String(token || "");
+  // Compared by hash, so a timing difference cannot say how close a guess was. This is a
+  // public endpoint and the value is a credential.
+  const same = (a, b) => crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  if (!given || !same(hashHex(given), hashHex(expected))) {
+    const err = new Error("The token for a test send is not the one this deployment has.");
+    err.code = "email_test_unauthorized";
+    throw err;
+  }
+  const address = String(to || "").trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
+    const err = new Error("Pass a valid address as ?send=you@example.com.");
+    err.code = "email_test_bad_address";
+    throw err;
+  }
+  const result = await sendEmail({
+    to: address,
+    subject: "JaText mail test",
+    text:
+      "This is the mail test from the JaText deployment.\n\nIf it arrived, the verification codes for signup will arrive too.\nNothing about your account changed, and no code is in this message.\n",
+    html:
+      "<p>This is the mail test from the <strong>JaText</strong> deployment.</p><p>If it arrived, the verification codes for signup will arrive too. Nothing about your account changed, and no code is in this message.</p>",
+  });
+  return { sent: true, to: address, ...result };
+}
+
 // A public route that talks to a third party on this account's behalf has to be its own
 // throttle, or it becomes a way to spend somebody's daily quota from the street.
 const PROBE_COOLDOWN_MS = 5 * 60_000;
@@ -426,36 +511,44 @@ export async function probeEmailSender({ force = false } = {}) {
 
   let result;
   if (cfg.kind === "smtp") {
-    const attempts = [];
-    for (const candidate of orderedCandidates(cfg.smtp.candidates)) {
-      const startedAt = Date.now();
-      const attempt = await probeSmtpLogin({
-        ...cfg.smtp,
-        port: candidate.port,
-        secure: candidate.secure,
-        from: cfg.fromEmail,
-        timeoutMs: cfg.smtp.candidates.length > 1 ? CANDIDATE_TIMEOUT_MS : 15_000,
-      });
-      attempts.push({
-        port: candidate.port,
-        secure: candidate.secure,
-        ok: attempt.ok === true,
-        ms: Date.now() - startedAt,
-        // The session's own report where there was one, and the server's words where there
-        // was not: enough to tell "the port is filtered" from "the handshake completed and
-        // the relay closed the session" from "the certificate says a different name".
-        tls: attempt.tls,
-        note: attempt.note || attempt.error || "",
-      });
-      if (attempt.ok === true) {
-        preferredCandidate = candidate;
-        result = {
-          ...attempt,
+    // Every port at the same time. A probe sends nothing, so two successes cost nothing and
+    // the alternative is a diagnostic that takes as long as the sum of every failure - which
+    // is the reason nobody reads diagnostics like these.
+    const startedAt = Date.now();
+    const candidates = orderedCandidates(cfg.smtp.candidates);
+    const settled = await Promise.all(
+      candidates.map(async (candidate) => {
+        const attempt = await probeSmtpLogin({
+          ...cfg.smtp,
           port: candidate.port,
-          mode: candidate.secure ? "implicit-tls" : "starttls",
+          secure: candidate.secure,
+          from: cfg.fromEmail,
+          timeoutMs: CANDIDATE_TIMEOUT_MS,
+        }).catch((err) => ({ ok: false, note: String(err?.message || err) }));
+        return {
+          port: candidate.port,
+          secure: candidate.secure,
+          ok: attempt.ok === true,
+          ms: Date.now() - startedAt,
+          // The session's own report where there was one, and the server's words where there
+          // was not: enough to tell "the port is filtered" from "the handshake completed and
+          // the relay closed the session" from "the certificate says a different name".
+          tls: attempt.tls,
+          note: attempt.note || attempt.error || "",
+          attempt,
         };
-        break;
-      }
+      }),
+    );
+    const attempts = settled.map((a) => ({ port: a.port, secure: a.secure, ok: a.ok, ms: a.ms, tls: a.tls, note: a.note }));
+    const winner = settled.find((a) => a.ok);
+    if (winner) {
+      preferredCandidate = candidates.find((c) => c.port === winner.port && c.secure === winner.secure) || null;
+      result = {
+        ...winner.attempt,
+        port: winner.port,
+        mode: winner.secure ? "implicit-tls" : "starttls",
+        ms: winner.ms,
+      };
     }
     result = result || {
       ok: false,

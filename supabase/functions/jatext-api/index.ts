@@ -971,7 +971,10 @@ function flag(name, fallback) {
   return !/^(0|false|no|off)$/.test(raw);
 }
 function shortHash(value) {
-  return crypto2.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 12);
+  return hashHex(value).slice(0, 12);
+}
+function hashHex(value) {
+  return crypto2.createHash("sha256").update(String(value || "")).digest("hex");
 }
 function parseCandidates(raw) {
   const list = String(raw || "").split(",").map((item) => item.trim()).filter(Boolean).map((item) => {
@@ -1059,6 +1062,7 @@ function asSendError(err, fallback) {
   const wrapped = new Error(err?.message || fallback);
   wrapped.code = Number(err?.code) ? "email_rejected" : "email_unreachable";
   wrapped.smtpPhase = err?.phase || "";
+  wrapped.attempts = err?.attempts;
   return wrapped;
 }
 function orderedCandidates(candidates) {
@@ -1066,9 +1070,26 @@ function orderedCandidates(candidates) {
   const first = candidates.find((c) => c.port === preferredCandidate.port && c.secure === preferredCandidate.secure);
   return first ? [first, ...candidates.filter((c) => c !== first)] : candidates;
 }
+function candidateShare(count) {
+  if (count <= 1) return CANDIDATE_TIMEOUT_MS * 2;
+  return Math.max(2e3, Math.floor(SEND_BUDGET_MS / count));
+}
 async function sendOverSmtpRelay(cfg, message) {
   const attempts = [];
+  const share = candidateShare(cfg.smtp.candidates.length);
+  const until = Date.now() + share * cfg.smtp.candidates.length;
   for (const candidate of orderedCandidates(cfg.smtp.candidates)) {
+    const left = until - Date.now();
+    if (left <= 500) {
+      attempts.push({
+        port: candidate.port,
+        secure: candidate.secure,
+        transportLevel: true,
+        notTried: true,
+        note: "not tried: the budget for one send was already spent, and this port would not have had time to answer"
+      });
+      continue;
+    }
     try {
       const result = await smtpSendMail({
         ...cfg.smtp,
@@ -1080,7 +1101,7 @@ async function sendOverSmtpRelay(cfg, message) {
         subject: message.subject,
         text: message.text,
         html: message.html,
-        timeoutMs: cfg.smtp.candidates.length > 1 ? CANDIDATE_TIMEOUT_MS : void 0
+        timeoutMs: cfg.smtp.candidates.length > 1 ? Math.min(share, left) : void 0
       });
       preferredCandidate = candidate;
       return { ...result, port: candidate.port, mode: candidate.secure ? "implicit-tls" : "starttls" };
@@ -1189,6 +1210,36 @@ function emailSenderDiagnostics() {
     apiBase: cfg.base
   };
 }
+async function requestTestSend({ to, token } = {}) {
+  const expected = env("JATEXT_TEST_SEND_TOKEN");
+  if (!expected) {
+    const err = new Error(
+      "Test sends are not enabled. Set JATEXT_TEST_SEND_TOKEN to any private value and pass it as ?token= when a real message should be sent."
+    );
+    err.code = "email_test_disabled";
+    throw err;
+  }
+  const given = String(token || "");
+  const same = (a, b) => crypto2.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  if (!given || !same(hashHex(given), hashHex(expected))) {
+    const err = new Error("The token for a test send is not the one this deployment has.");
+    err.code = "email_test_unauthorized";
+    throw err;
+  }
+  const address = String(to || "").trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
+    const err = new Error("Pass a valid address as ?send=you@example.com.");
+    err.code = "email_test_bad_address";
+    throw err;
+  }
+  const result = await sendEmail({
+    to: address,
+    subject: "JaText mail test",
+    text: "This is the mail test from the JaText deployment.\n\nIf it arrived, the verification codes for signup will arrive too.\nNothing about your account changed, and no code is in this message.\n",
+    html: "<p>This is the mail test from the <strong>JaText</strong> deployment.</p><p>If it arrived, the verification codes for signup will arrive too. Nothing about your account changed, and no code is in this message.</p>"
+  });
+  return { sent: true, to: address, ...result };
+}
 async function probeEmailSender({ force = false } = {}) {
   const cfg = emailSenderConfig();
   const now = Date.now();
@@ -1201,36 +1252,41 @@ async function probeEmailSender({ force = false } = {}) {
   }
   let result;
   if (cfg.kind === "smtp") {
-    const attempts = [];
-    for (const candidate of orderedCandidates(cfg.smtp.candidates)) {
-      const startedAt = Date.now();
-      const attempt = await probeSmtpLogin({
-        ...cfg.smtp,
-        port: candidate.port,
-        secure: candidate.secure,
-        from: cfg.fromEmail,
-        timeoutMs: cfg.smtp.candidates.length > 1 ? CANDIDATE_TIMEOUT_MS : 15e3
-      });
-      attempts.push({
-        port: candidate.port,
-        secure: candidate.secure,
-        ok: attempt.ok === true,
-        ms: Date.now() - startedAt,
-        // The session's own report where there was one, and the server's words where there
-        // was not: enough to tell "the port is filtered" from "the handshake completed and
-        // the relay closed the session" from "the certificate says a different name".
-        tls: attempt.tls,
-        note: attempt.note || attempt.error || ""
-      });
-      if (attempt.ok === true) {
-        preferredCandidate = candidate;
-        result = {
-          ...attempt,
+    const startedAt = Date.now();
+    const candidates = orderedCandidates(cfg.smtp.candidates);
+    const settled = await Promise.all(
+      candidates.map(async (candidate) => {
+        const attempt = await probeSmtpLogin({
+          ...cfg.smtp,
           port: candidate.port,
-          mode: candidate.secure ? "implicit-tls" : "starttls"
+          secure: candidate.secure,
+          from: cfg.fromEmail,
+          timeoutMs: CANDIDATE_TIMEOUT_MS
+        }).catch((err) => ({ ok: false, note: String(err?.message || err) }));
+        return {
+          port: candidate.port,
+          secure: candidate.secure,
+          ok: attempt.ok === true,
+          ms: Date.now() - startedAt,
+          // The session's own report where there was one, and the server's words where there
+          // was not: enough to tell "the port is filtered" from "the handshake completed and
+          // the relay closed the session" from "the certificate says a different name".
+          tls: attempt.tls,
+          note: attempt.note || attempt.error || "",
+          attempt
         };
-        break;
-      }
+      })
+    );
+    const attempts = settled.map((a) => ({ port: a.port, secure: a.secure, ok: a.ok, ms: a.ms, tls: a.tls, note: a.note }));
+    const winner = settled.find((a) => a.ok);
+    if (winner) {
+      preferredCandidate = candidates.find((c) => c.port === winner.port && c.secure === winner.secure) || null;
+      result = {
+        ...winner.attempt,
+        port: winner.port,
+        mode: winner.secure ? "implicit-tls" : "starttls",
+        ms: winner.ms
+      };
     }
     result = result || {
       ok: false,
@@ -1267,7 +1323,7 @@ async function probeEmailSender({ force = false } = {}) {
   lastProbeResult = result;
   return { ...result, cached: false };
 }
-var DEFAULT_API_BASE, DEFAULT_SMTP_CANDIDATES, BREVO_KEY_SHAPE, TRANSPORT_PHASES, preferredCandidate, CANDIDATE_TIMEOUT_MS, PROBE_COOLDOWN_MS, lastProbeAt, lastProbeResult;
+var DEFAULT_API_BASE, DEFAULT_SMTP_CANDIDATES, BREVO_KEY_SHAPE, TRANSPORT_PHASES, preferredCandidate, CANDIDATE_TIMEOUT_MS, SEND_BUDGET_MS, PROBE_COOLDOWN_MS, lastProbeAt, lastProbeResult;
 var init_emailSender = __esm({
   "server/emailSender.js"() {
     init_smtpClient();
@@ -1285,6 +1341,7 @@ var init_emailSender = __esm({
     TRANSPORT_PHASES = /* @__PURE__ */ new Set(["", "connect", "greeting", "starttls", "ehlo-after-tls", "tls-mode"]);
     preferredCandidate = null;
     CANDIDATE_TIMEOUT_MS = 8e3;
+    SEND_BUDGET_MS = 12e3;
     PROBE_COOLDOWN_MS = 5 * 6e4;
     lastProbeAt = 0;
     lastProbeResult = null;
@@ -10121,13 +10178,34 @@ async function handler8(req, res) {
   if (req.method !== "GET") {
     return res.status(405).json({ ok: false, error: "Only GET is supported." });
   }
+  let url;
+  try {
+    url = new URL(req.url || "/", "http://localhost");
+  } catch {
+    url = new URL("http://localhost/");
+  }
+  const sendTo = url.searchParams.get("send");
+  if (sendTo) {
+    if (enforceHttpRateLimit(req, res, { scope: "email_test_send", limit: 3, windowMs: 5 * 6e4 })) {
+      return;
+    }
+    try {
+      const result = await requestTestSend({ to: sendTo, token: url.searchParams.get("token") });
+      return res.status(200).json({ ok: true, ...result });
+    } catch (err) {
+      return res.status(err?.code === "email_test_unauthorized" || err?.code === "email_test_disabled" ? 403 : 400).json({
+        ok: false,
+        error: String(err?.message || err),
+        code: String(err?.code || "email_test_failed")
+      });
+    }
+  }
   if (enforceHttpRateLimit(req, res, { scope: "email_test", limit: 20, windowMs: 6e4 })) {
     return;
   }
   let wantProbe = true;
   let forceProbe = false;
   try {
-    const url = new URL(req.url || "/", "http://localhost");
     const mode = url.searchParams.get("probe");
     wantProbe = mode !== "0";
     forceProbe = mode === "force";
