@@ -22,6 +22,11 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import net from "node:net";
+import tls from "node:tls";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import process from "node:process";
 
 const SECRET = "email-verify-test-secret";
@@ -124,21 +129,62 @@ function serveBrevo() {
  * No TLS: the client is told not to require it, which is the same deal a self-hoster makes
  * with a relay on their own box.
  */
-function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender = false } = {}) {
-  const log = { commands: [], data: "", connections: 0 };
+/**
+ * A certificate for one run, generated on the spot. `localhost` only, because the client
+ * connects by IP and would otherwise be shown a name nobody asked for.
+ */
+function makeTlsFixture() {
+  let dir = "";
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "jatext-smtp-"));
+    const cert = path.join(dir, "cert.pem");
+    const key = path.join(dir, "key.pem");
+    execFileSync(
+      "openssl",
+      ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost"],
+      { stdio: "ignore" },
+    );
+    return { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
+  } catch {
+    return null; // no openssl on this machine: the TLS assertions report themselves skipped
+  } finally {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A relay that speaks only what `server/smtpClient.js` says, and writes down what it heard.
+ *
+ * It can also perform a real STARTTLS negotiation, which is the part that matters: a
+ * plaintext-only stub cannot fail a handshake, and the bug this file guards is the client
+ * leaving a `data` listener attached across the upgrade - a stream with a listener is in
+ * flowing mode, so the plaintext reader eats the server's TLS records as text and the
+ * handshake sits there until it times out. That failure only exists once a handshake does.
+ * The stub therefore obeys the discipline it is used to check, and stops reading the
+ * plaintext socket before the secure one starts.
+ */
+function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender = false, tls: tlsMaterial = null, hideTls = false, implicit = false, tlsRecordGreeting = false, splitReply = false } = {}) {
+  const log = { commands: [], data: "", connections: 0, upgraded: false, secure: [], tlsError: "" };
+  const context = tlsMaterial ? tls.createSecureContext(tlsMaterial) : null;
   const server = net.createServer((socket) => {
     log.connections += 1;
     // An explicit state machine rather than pattern matching on history: AUTH LOGIN is
     // two base64 lines whose content looks exactly like any other token, so the only way
     // to know which one is coming is to have asked for it.
     let stage = "command";
+    let secure = null;
     let dataBuf = "";
     socket.setEncoding("utf8");
-    const say = (line) => socket.write(`${line}\r\n`);
+    // Once the session is encrypted every reply has to leave through the secure socket.
+    // Answering on the plaintext one at that point puts a 250 in front of a handshake the
+    // client has already left, which is how a stub can appear to work while proving nothing.
+    let say = (line) => (secure ?? socket).write(`${line}\r\n`);
     const b64 = (value) => Buffer.from(String(value || ""), "base64").toString("utf8");
-    say("220 fake-relay ready");
-    socket.on("data", (chunk) => {
+    const onData = (chunk) => {
       dataBuf += chunk;
+      drain();
+    };
+    const drain = () => {
       if (stage === "data") {
         const end = dataBuf.indexOf("\r\n.\r\n");
         if (end < 0) return;
@@ -167,10 +213,29 @@ function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender =
         } else if (stage === "dead") {
           say("503 5.5.1 Error: bad sequence");
         } else {
-          log.commands.push(line);
+          // Recorded per channel rather than in one list, so "nothing was said in the clear
+          // after the upgrade" is a fact about the plaintext socket, not about where the
+          // parser happened to append.
+          if (secure) log.secure.push(line);
+          else log.commands.push(line);
           const upper = line.toUpperCase();
           if (upper.startsWith("EHLO") || upper.startsWith("HELO")) {
-            socket.write("250-fake-relay\r\n250-SIZE 10485760\r\n250-AUTH PLAIN LOGIN\r\n250 HELP\r\n");
+            const caps = secure || !context || hideTls ? "" : "250-STARTTLS\r\n";
+            // Written through the channel, not straight at `socket`: the second EHLO arrives
+            // after the upgrade, and a capability list sent in the clear there is plaintext
+            // thrown into a TLS session, which the other side can only read as a corrupt
+            // record.
+            (secure ?? socket).write(`250-fake-relay\r\n250-SIZE 10485760\r\n${caps}250-AUTH PLAIN LOGIN\r\n250 HELP\r\n`);
+          } else if (upper === "STARTTLS" && context && !secure) {
+            say("220 2.0.0 Ready to start TLS");
+            socket.off("data", onData);
+            secure = new tls.TLSSocket(socket, { isServer: true, secureContext: context });
+            secure.setEncoding("utf8");
+            secure.on("data", onData);
+            secure.on("error", (err) => {
+              log.tlsError = String(err?.message || err);
+            });
+            log.upgraded = true;
           } else if (upper.startsWith("AUTH LOGIN")) {
             stage = "user";
             say("334 VXNlcm5hbWU6");
@@ -194,7 +259,46 @@ function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender =
         }
         idx = dataBuf.indexOf("\r\n");
       }
-    });
+    };
+    socket.on("data", onData);
+    if (tlsRecordGreeting) {
+      // A close_notify alert, which is what a TLS server hands back when a plaintext client
+      // says "EHLO" at it: a record header, not text. The bytes are the whole point.
+      socket.end(Buffer.from([0x15, 0x03, 0x01, 0x00, 0x02, 0x02, 0x28]));
+      return;
+    }
+    if (splitReply) {
+      // The greeting's last line in two writes - "220 fake-rela" then "y ready" - so a
+      // reader that replaces its buffer instead of extending it loses the beginning of the
+      // reply. A split is not a continuation: "220-" would promise a second line, which
+      // would be the stub's bug rather than the client's.
+      socket.write("220 fake-rela");
+      setTimeout(() => socket.write("y ready\r\n"), 40);
+      const plainSay = say;
+      say = (line) => {
+        const mid = line.indexOf("\r\n");
+        const target = secure ?? socket;
+        if (mid < 0 || mid === line.length - 2) return plainSay(line);
+        target.write(`${line.slice(0, mid + 2)}\r`);
+        setTimeout(() => target.write(line.slice(mid + 2)), 30);
+        return undefined;
+      };
+      return;
+    }
+    if (implicit && context) {
+      // TLS from the first byte, which is the whole difference between 465 and 587 and the
+      // reason the two cannot share a default. The greeting goes out through the secure
+      // socket too: a plaintext "220" to a TLS client is the corrupt-record error this
+      // section is testing for, not something to emit by accident.
+      secure = new tls.TLSSocket(socket, { isServer: true, secureContext: context });
+      secure.setEncoding("utf8");
+      secure.on("data", onData);
+      secure.on("error", (err) => {
+        log.tlsError = String(err?.message || err);
+      });
+      log.upgraded = true;
+    }
+    say("220 fake-relay ready");
   });
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () =>
@@ -622,6 +726,138 @@ async function main() {
   const both = sender.emailSenderDiagnostics();
   check("the diagnostics name the active transport and both halves of it", both.transport === "smtp" && both.smtpHost === "127.0.0.1" && both.keyFingerprint.length === 12, JSON.stringify(both));
   check("and still never print a credential", !JSON.stringify(both).includes("hunter2") && !JSON.stringify(both).includes("xkeysib"), JSON.stringify(both));
+  /* ---------- 8c: a real STARTTLS session, against a real TLS server ---------- */
+  // Everything above talks plaintext, because those relays never offered an upgrade. The
+  // one failure a plaintext stub cannot produce is the upgrade itself: the first version
+  // of this client failed in production with a working credential and a working relay,
+  // because its plaintext reader stayed attached and ate the TLS records.
+  const pem = makeTlsFixture();
+  if (!pem) {
+    console.log("  skip  no openssl on this machine: the STARTTLS assertions did not run");
+  } else {
+    const tlsRelay = await serveSmtp({ tls: pem });
+    process.env.BREVO_SMTP_PORT = String(tlsRelay.port);
+    process.env.SMTP_REQUIRE_TLS = "1";
+    process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "0"; // a certificate generated seconds ago, so untrusted by design
+    const tlsDb = makeStubDb();
+    backend.setCustomDbForTesting(tlsDb);
+    const overTls = await rpc(backend, "signUpEmail", { email: "starttls@example.com", password: "hunter2hunter2" });
+    check("a signup completes over an upgraded session", overTls.requiresEmailVerification === true, JSON.stringify(Object.keys(overTls)));
+    check("the server did see the upgrade", tlsRelay.log.upgraded === true, JSON.stringify(tlsRelay.log).slice(0, 160));
+    check(
+      "the login and the message both go over the encrypted channel",
+      tlsRelay.log.secure.some((c) => c.toUpperCase().startsWith("AUTH LOGIN")) && tlsRelay.log.secure.some((c) => c.toUpperCase().startsWith("DATA")),
+      tlsRelay.log.secure.join(" | "),
+    );
+    const afterUpgrade = tlsRelay.log.commands.slice(tlsRelay.log.commands.findIndex((c) => c.toUpperCase() === "STARTTLS") + 1);
+    check("the plaintext channel ends with the upgrade request", tlsRelay.log.commands.at(-1).toUpperCase() === "STARTTLS", tlsRelay.log.commands.join(" | "));
+    check("and nothing at all is said in the clear after it", afterUpgrade.length === 0, afterUpgrade.join(" | "));
+    const tlsCode = (() => {
+      const body = Buffer.from((/Content-Transfer-Encoding: base64([\s\S]*?)--/.exec(tlsRelay.log.data) || ["", ""])[1].replace(/\s+/g, ""), "base64").toString("utf8");
+      return (/(\d{6})/.exec(body) || [])[1] || "";
+    })();
+    check("the code that crossed TLS is the one that was stored", /^\d{6}$/.test(tlsCode) && String(tlsDb.rows.email_verifications[0]?.code_hash || "").length > 0, tlsCode);
+
+    // Certificate checking has to be on unless somebody turns it off, or the transport
+    // looks encrypted while really encrypting to whoever answered first.
+    const strictRelay = await serveSmtp({ tls: pem });
+    process.env.BREVO_SMTP_PORT = String(strictRelay.port);
+    delete process.env.SMTP_TLS_REJECT_UNAUTHORIZED;
+    const strict = await rpc(backend, "signUpEmail", { email: "strict@example.com", password: "hunter2hunter2" }).catch((err) => err);
+    check(
+      "a certificate the runtime does not trust stops the send by default",
+      /self-signed|unable to verify|certificate/i.test(strict?.message || ""),
+      strict?.message,
+    );
+    check("and it never gets as far as a password", !strictRelay.log.secure.some((c) => c.toUpperCase().startsWith("AUTH")), strictRelay.log.secure.join(" | ") || "(no secure traffic)");
+    check(
+      "an untrusted certificate is not retried over the API",
+      !/SMTP relay was unreachable/i.test(String(strict?.message || "")) && !brevo.sent.some((m) => m.body?.to?.[0]?.email === "strict@example.com"),
+      `${strict?.message} / api sends to strict@: ${brevo.sent.filter((m) => m.body?.to?.[0]?.email === "strict@example.com").length}`,
+    );
+
+    // A relay that will not upgrade must be refused, not quietly used in the clear.
+    const noTls = await serveSmtp({ tls: pem, hideTls: true });
+    process.env.BREVO_SMTP_PORT = String(noTls.port);
+    const plainRefused = await rpc(backend, "signUpEmail", { email: "cleartext@example.com", password: "hunter2hunter2" }).catch((err) => err);
+    check(
+      "a relay that will not upgrade is refused while TLS is required",
+      /not offering STARTTLS/i.test(plainRefused?.message || ""),
+      plainRefused?.message,
+    );
+    check(
+      "and that refusal is not mistaken for a dead relay, so it is not retried over the API",
+      !/SMTP relay was unreachable/i.test(plainRefused?.message || "") && !brevo.sent.some((m) => m.body?.to?.[0]?.email === "cleartext@example.com"),
+      plainRefused?.message,
+    );
+    check("no password was offered to it either", !noTls.log.commands.some((c) => c.toUpperCase().startsWith("AUTH")), noTls.log.commands.join(" | "));
+
+    /* ---------- 8d: the other TLS mode, and the mistake of mixing the two up ---------- */
+    const implicitRelay = await serveSmtp({ tls: pem, implicit: true });
+    process.env.BREVO_SMTP_PORT = String(implicitRelay.port);
+    process.env.BREVO_SMTP_SSL = "1";
+    process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "0";
+    const implicitDb = makeStubDb();
+    backend.setCustomDbForTesting(implicitDb);
+    const overImplicit = await rpc(backend, "signUpEmail", { email: "implicit@example.com", password: "hunter2hunter2" });
+    check(
+      "an implicit-TLS relay is spoken to from the first byte",
+      overImplicit.requiresEmailVerification === true && implicitRelay.log.commands.length === 0 && implicitRelay.log.secure.length > 0,
+      `plain=${implicitRelay.log.commands.join(",")} secure=${implicitRelay.log.secure.length}`,
+    );
+    check("and the login still lands on the encrypted channel", /AUTH/.test(implicitRelay.log.secure.join(" | ")), implicitRelay.log.secure.join(" | "));
+    check("the code arrived over it", /\d{6}/.test(implicitRelay.log.data), implicitRelay.log.data.slice(0, 40));
+
+    // The same mistake when the server answers it, which is the case the reader can name.
+    // A server that says nothing at all is only caught by the deadline, so this one says
+    // what a real TLS endpoint says, and both the wording and the speed are checkable.
+    const alertRelay = await serveSmtp({ tlsRecordGreeting: true });
+    process.env.BREVO_SMTP_PORT = String(alertRelay.port);
+    process.env.BREVO_SMTP_SSL = "0";
+    process.env.SMTP_REQUIRE_TLS = "0";
+    const alertStarted = Date.now();
+    const alertErr = await rpc(backend, "signUpEmail", { email: "alert@example.com", password: "hunter2hunter2" }).catch((err) => err);
+    const alertMs = Date.now() - alertStarted;
+    check(
+      "a TLS record where a greeting belongs is named at once, not after the deadline",
+      alertMs < 5_000 && /TLS record/i.test(String(alertErr?.message || "")),
+      `${alertMs}ms / ${String(alertErr?.message || alertErr).slice(0, 120)}`,
+    );
+    check(
+      "and it is not mistaken for a dead relay the API ought to cover",
+      !/SMTP relay was unreachable/i.test(String(alertErr?.message || "")) && !brevo.sent.some((m) => m.body?.to?.[0]?.email === "alert@example.com"),
+      String(alertErr?.message || "").slice(0, 120),
+    );
+    check("no credential reached it", !alertRelay.log.commands.some((c) => c.toUpperCase().startsWith("AUTH")), alertRelay.log.commands.join(" | ") || "(nothing)");
+    check("and the name of the switch that fixes it is in the message", /BREVO_SMTP_SSL/.test(String(alertErr?.message || "")), String(alertErr?.message || "").slice(0, 160));
+
+    // A reply split across two packets separates "reads a socket" from "reads a socket
+    // carefully", and on localhost at MTU size nothing else will ever show it.
+    const splitRelay = await serveSmtp({ splitReply: true });
+    process.env.BREVO_SMTP_PORT = String(splitRelay.port);
+    process.env.BREVO_SMTP_SSL = "0";
+    process.env.SMTP_REQUIRE_TLS = "0";
+    const splitDb = makeStubDb();
+    backend.setCustomDbForTesting(splitDb);
+    const splitRes = await rpc(backend, "signUpEmail", { email: "split@example.com", password: "hunter2hunter2" });
+    check(
+      "a reply that arrives in pieces is still one reply",
+      splitRes.requiresEmailVerification === true && splitRelay.log.data.includes("Subject:"),
+      JSON.stringify(Object.keys(splitRes)).slice(0, 120),
+    );
+
+    await splitRelay.close();
+    await alertRelay.close();
+    await implicitRelay.close();
+    await noTls.close();
+    await strictRelay.close();
+    await tlsRelay.close();
+    process.env.BREVO_SMTP_PORT = String(relay.port);
+    process.env.BREVO_SMTP_SSL = "0";
+    process.env.SMTP_REQUIRE_TLS = "0";
+    delete process.env.SMTP_TLS_REJECT_UNAUTHORIZED;
+  }
+
   await relay.close();
   delete process.env.BREVO_SMTP_HOST;
   delete process.env.BREVO_SMTP_PORT;

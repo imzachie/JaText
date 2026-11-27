@@ -551,11 +551,11 @@ function encodeHeaderValue(value) {
   const encoded = Buffer.from(text, "utf8").toString("base64");
   return `=?UTF-8?B?${encoded}?=`;
 }
-function readReady(reader) {
-  return reader();
+function looksLikeTlsRecord(buf) {
+  return buf.length >= 3 && buf[0] >= 20 && buf[0] <= 23 && buf[1] === 3;
 }
 function createReplyReader(socket) {
-  let buffer = "";
+  let buffer = Buffer.alloc(0);
   const queued = [];
   const waiting = [];
   let failure = null;
@@ -564,30 +564,58 @@ function createReplyReader(socket) {
     if (resolve) resolve(line);
     else queued.push(line);
   };
-  socket.setEncoding("utf8");
-  socket.on("data", (chunk) => {
-    buffer += String(chunk);
-    let idx = buffer.indexOf("\n");
-    while (idx >= 0) {
-      const line = buffer.slice(0, idx).replace(/\r$/, "");
-      buffer = buffer.slice(idx + 1);
-      push(line);
-      idx = buffer.indexOf("\n");
+  const fail = (err) => {
+    failure = err;
+    while (waiting.length) waiting.shift()(null);
+  };
+  const onData = (chunk) => {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+    if (buffer.length === 0 && looksLikeTlsRecord(buf)) {
+      fail(
+        new SmtpError(
+          "The mail server answered with a TLS record on a connection opened in plaintext, which means that port speaks TLS from the first byte. Set BREVO_SMTP_SSL=1 for port 465, or BREVO_SMTP_PORT=587 for STARTTLS.",
+          { phase: "greeting" }
+        )
+      );
+      return;
     }
-  });
-  socket.on("error", (err) => {
-    failure = err instanceof Error ? err : new Error(String(err));
-    while (waiting.length) waiting.shift()(null);
-  });
-  socket.on("close", () => {
-    if (!failure) failure = new Error("the mail server closed the connection");
-    while (waiting.length) waiting.shift()(null);
-  });
-  return async function nextReply() {
+    buffer = buffer.length === 0 ? buf : Buffer.concat([buffer, buf]);
+    let idx = buffer.indexOf(10);
+    while (idx >= 0) {
+      const line = buffer.subarray(0, idx).toString("utf8").replace(/\r$/, "");
+      buffer = buffer.subarray(idx + 1);
+      push(line);
+      idx = buffer.indexOf(10);
+    }
+  };
+  const onError = (err) => {
+    fail(err instanceof Error ? err : new Error(String(err)));
+  };
+  const onClose = () => {
+    fail(new Error("the mail server closed the connection"));
+  };
+  socket.on("data", onData);
+  socket.on("error", onError);
+  socket.on("close", onClose);
+  nextReply.detach = () => {
+    socket.off("data", onData);
+    socket.off("error", onError);
+    socket.off("close", onClose);
+    const leftover = buffer;
+    buffer = Buffer.alloc(0);
+    return leftover.length > 0;
+  };
+  nextReply.attach = (tlsSocket) => {
+    tlsSocket.on("data", onData);
+    tlsSocket.on("error", onError);
+    tlsSocket.on("close", onClose);
+  };
+  return nextReply;
+  async function nextReply() {
     const lines = [];
     for (; ; ) {
-      let line = queued.shift() ?? null;
-      if (!line) {
+      let line = queued.shift();
+      if (line === void 0) {
         if (failure) throw new SmtpError(`Could not talk to the mail server: ${failure.message}`);
         line = await new Promise((resolve) => waiting.push(resolve));
         if (line == null) {
@@ -600,7 +628,7 @@ function createReplyReader(socket) {
         return { code, text: lines.join(" ") };
       }
     }
-  };
+  }
 }
 function expect(reply, codes, phase) {
   if (!codes.includes(reply.code)) {
@@ -625,9 +653,10 @@ function connectSocket({ host, port, timeoutMs }) {
     });
   });
 }
-function upgradeToTls(socket, host) {
+function upgradeToTls(socket, host, { rejectUnauthorized = true } = {}) {
   return new Promise((resolve, reject) => {
-    const secure = tls.connect({ socket, servername: host, ALPNProtocols: [] });
+    const servername = /^[0-9.]+$/.test(host) || host.includes(":") ? void 0 : host;
+    const secure = tls.connect({ socket, ...servername ? { servername } : {}, rejectUnauthorized });
     const timer = setTimeout(() => {
       secure.destroy();
       reject(new SmtpError("The mail server did not finish the TLS handshake in time."));
@@ -692,7 +721,11 @@ async function smtpSendMail(options) {
   } = options;
   if (!host) throw new SmtpError("No SMTP host is configured.");
   if (!from) throw new SmtpError("No sender address is configured.");
+  const verifyTls = options.rejectUnauthorized !== false;
   let socket = await connectSocket({ host, port, timeoutMs });
+  if (secure) {
+    socket = await upgradeToTls(socket, host, { rejectUnauthorized: verifyTls });
+  }
   const deadline = setTimeout(() => {
     try {
       socket.destroy();
@@ -701,28 +734,32 @@ async function smtpSendMail(options) {
   }, timeoutMs);
   const clear = () => clearTimeout(deadline);
   try {
-    let reader = createReplyReader(socket);
+    const reader = createReplyReader(socket);
     let caps = "";
     expect(await reader(), [220], "greeting");
     socket.write(`EHLO jatext${EOL}`);
     const hello = expect(await reader(), [250], "ehlo");
     caps = hello.text.toUpperCase();
-    if (!secure) {
-      if (caps.includes("STARTTLS")) {
-        socket.write(`STARTTLS${EOL}`);
-        expect(await reader(), [220], "starttls");
-        const upgraded = await upgradeToTls(socket, host);
-        socket = upgraded;
-        reader = createReplyReader(socket);
-        socket.write(`EHLO jatext${EOL}`);
-        const afterTls = expect(await reader(), [250], "ehlo-after-tls");
-        caps = afterTls.text.toUpperCase();
-      } else if (requireTls) {
+    if (!secure && caps.includes("STARTTLS")) {
+      socket.write(`STARTTLS${EOL}`);
+      expect(await reader(), [220], "starttls");
+      if (reader.detach()) {
         throw new SmtpError(
-          `${host}:${port} is not offering STARTTLS, and sending a password over a plain connection is not on.`,
+          "The mail server sent more than the STARTTLS acknowledgement, and those bytes belong to the TLS session.",
           { phase: "starttls" }
         );
       }
+      const upgraded = await upgradeToTls(socket, host, { rejectUnauthorized: verifyTls });
+      socket = upgraded;
+      reader.attach(upgraded);
+      socket.write(`EHLO jatext${EOL}`);
+      const afterTls = expect(await reader(), [250], "ehlo-after-tls");
+      caps = afterTls.text.toUpperCase();
+    } else if (requireTls && !secure) {
+      throw new SmtpError(
+        `${host}:${port} is not offering STARTTLS, and sending a password over a plain connection is not on.`,
+        { phase: "starttls" }
+      );
     }
     if (user || pass) {
       if (!caps.includes("AUTH")) {
@@ -741,9 +778,9 @@ async function smtpSendMail(options) {
     expect(await reader(), [250, 251], "rcpt-to");
     if (probeMode === "envelope") {
       socket.write(`RSET${EOL}`);
-      await readReady(reader).catch(() => null);
+      await reader().catch(() => null);
       socket.write(`QUIT${EOL}`);
-      await readReady(reader).catch(() => null);
+      await reader().catch(() => null);
       return { sent: false, transport: "smtp", response: "sender and recipient accepted", senderAccepted: true };
     }
     socket.write(`DATA${EOL}`);
@@ -753,7 +790,7 @@ async function smtpSendMail(options) {
     socket.write(`${stuffed}${EOL}.${EOL}`);
     const accepted = expect(await reader(), [250], "queue");
     socket.write(`QUIT${EOL}`);
-    await readReady(reader).catch(() => null);
+    await reader().catch(() => null);
     return { sent: true, transport: "smtp", response: accepted.text || "accepted" };
   } finally {
     clear();
@@ -763,7 +800,7 @@ async function smtpSendMail(options) {
     }
   }
 }
-async function probeSmtpLogin({ host, port = 587, user = "", pass = "", from = "", requireTls = true, timeoutMs = 15e3 }) {
+async function probeSmtpLogin({ host, port = 587, user = "", pass = "", from = "", requireTls = true, rejectUnauthorized = true, timeoutMs = 15e3 }) {
   if (!host) return { ok: false, error: "No SMTP host is configured." };
   try {
     const result = await smtpSendMail({
@@ -776,6 +813,9 @@ async function probeSmtpLogin({ host, port = 587, user = "", pass = "", from = "
       subject: "probe",
       text: "probe",
       requireTls,
+      // The same trust rules as a real send, or the probe fails on a relay the mailer would
+      // happily use and reports a problem that is not there.
+      rejectUnauthorized,
       timeoutMs,
       probeMode: "envelope"
     });
@@ -841,7 +881,10 @@ function emailSenderConfig() {
     // kind of socket, so neither half is left to a guess.
     secure: flag("BREVO_SMTP_SSL", false) || port === 465,
     // A local test relay can be plain; a real one may not be, with a password in it.
-    requireTls: flag("SMTP_REQUIRE_TLS", true)
+    requireTls: flag("SMTP_REQUIRE_TLS", true),
+    // Off only for a relay whose certificate is not in the trust store - a private CA, or
+    // the self-signed one the tests in this repo generate for exactly this purpose.
+    rejectUnauthorized: flag("SMTP_TLS_REJECT_UNAUTHORIZED", true)
   };
   const smtpReady = Boolean(smtp.host && smtp.user && smtp.pass);
   const kind = smtpReady ? "smtp" : apiKey ? "brevo-api" : "none";
@@ -866,8 +909,9 @@ function isEmailSenderConfigured() {
   return emailSenderConfig().enabled;
 }
 function isUnreachable(err) {
-  const text = String(err?.message || err || "");
-  return !Number(err?.code) && /could not open|did not answer|closed|tls|handshake|econn|enotfound|eai_again/i.test(text);
+  if (err?.smtpPhase) return false;
+  if (Number(err?.status)) return false;
+  return /could not open a connection|closed the connection|econnrefused|econnreset|enotfound|eai_again|etimedout/i.test(String(err?.message || err || ""));
 }
 function asSendError(err, fallback) {
   const wrapped = new Error(err?.message || fallback);
@@ -9855,7 +9899,7 @@ async function handler8(req, res) {
     probe,
     // Which failure this is, said out loud, because a signup can only report the one
     // sentence it got back from a send.
-    hint: !diagnostics.configured ? diagnostics.reason : diagnostics.warning ? diagnostics.warning : probe.ok === false ? diagnostics.transport === "smtp" ? "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published." : "Brevo refused the stored API key - or the address it is called from. This runtime has no fixed egress IP for Brevo's allow-list, so set the BREVO_SMTP_* variables and use the relay, which is not IP restricted. Then redeploy this function: a secret is only read when the function is published." : "Mail is configured and the provider accepts it. A code that never arrives is then the recipient's spam folder, not this server."
+    hint: !diagnostics.configured ? diagnostics.reason : diagnostics.warning ? diagnostics.warning : probe.ok === false ? diagnostics.transport === "smtp" ? /TLS record/i.test(probe?.note || "") ? "The relay answered this connection with TLS from the first byte, which is port 465, while the function is configured for 587. Set BREVO_SMTP_PORT=465; 587 is the one Brevo's relay does STARTTLS on." : /handshake|closed the connection|could not open a connection/i.test(probe?.note || "") ? "The function could not hold a session with the relay at all. That is a network path question - the runtime must be able to make an outbound connection to this host and port - and it is worth checking that BREVO_SMTP_PORT and BREVO_SMTP_SSL agree with each other before anything else." : "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published." : "Brevo refused the stored API key - or the address it is called from. This runtime has no fixed egress IP for Brevo's allow-list, so set the BREVO_SMTP_* variables and use the relay, which is not IP restricted. Then redeploy this function: a secret is only read when the function is published." : "Mail is configured and the provider accepts it. A code that never arrives is then the recipient's spam folder, not this server."
   });
 }
 var init_email_test = __esm({
