@@ -9,6 +9,12 @@
  * two primitives - and it does not need a dependency: a submission session is six
  * commands, a base64 login, and a message.
  *
+ * Two TLS modes, because a relay offers one of them and mixing them up is the difference
+ * between mail and a twenty second wait: 587 is plaintext until STARTTLS upgrades it, and
+ * 465 is TLS from the first byte. The upgrade is the dangerous one, since the socket that
+ * carried the plaintext protocol is the socket TLS is then layered on, so the reader has to
+ * be lifted off it and put back afterwards rather than duplicated.
+ *
  * Deliberately small: one recipient, no pipelining, no 8BITMIME negotiation, no
  * retries. Anything the relay rejects is reported as its own sentence, because
  * "535 authentication failed" and "554 sender not allowed" need different fixes and
@@ -42,17 +48,27 @@ function encodeHeaderValue(value) {
   return `=?UTF-8?B?${encoded}?=`;
 }
 
-function readReady(reader) {
-  return reader();
+/** A TLS record, visible in the first three bytes: change-cipher-spec, alert, handshake
+ * and application-data are 0x14-0x17, and the version half after them is always 0x03. */
+function looksLikeTlsRecord(buf) {
+  return buf.length >= 3 && buf[0] >= 0x14 && buf[0] <= 0x17 && buf[1] === 0x03;
 }
 
 /**
- * Line-buffered view of a socket. Replies in SMTP are one or more lines where the
- * third character is `-` until the last one, so "read a reply" has to be the unit
- * rather than "read a line".
+ * A reply reader over a socket that may later be swapped for a TLS session.
+ *
+ * Replies in SMTP are one or more lines where the fourth character is `-` until the last
+ * one, so "read a reply" has to be the unit rather than "read a line".
+ *
+ * Bytes rather than characters, deliberately. A server answered this connection with a TLS
+ * handshake record when the client expected SMTP, and reading that as text is what made the
+ * failure cost twenty seconds and then report itself as "the mail server closed the
+ * connection" - which is a perfectly reasonable thing for a fallback to believe, and the
+ * wrong conclusion. The record type is visible before any decoding, so it is checked before
+ * decoding, and that case is now one line in the right words in under a second.
  */
 function createReplyReader(socket) {
-  let buffer = "";
+  let buffer = Buffer.alloc(0);
   const queued = [];
   const waiting = [];
   let failure = null;
@@ -63,32 +79,88 @@ function createReplyReader(socket) {
     else queued.push(line);
   };
 
-  socket.setEncoding("utf8");
-  socket.on("data", (chunk) => {
-    buffer += String(chunk);
-    let idx = buffer.indexOf("\n");
-    while (idx >= 0) {
-      const line = buffer.slice(0, idx).replace(/\r$/, "");
-      buffer = buffer.slice(idx + 1);
-      push(line);
-      idx = buffer.indexOf("\n");
-    }
-  });
-  socket.on("error", (err) => {
-    failure = err instanceof Error ? err : new Error(String(err));
+  const fail = (err) => {
+    failure = err;
     while (waiting.length) waiting.shift()(null);
-  });
-  socket.on("close", () => {
-    if (!failure) failure = new Error("the mail server closed the connection");
-    while (waiting.length) waiting.shift()(null);
-  });
+  };
 
-  return async function nextReply() {
+  const onData = (chunk) => {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+    // Only at the start of a message: a chunk that continues a line is SMTP text by
+    // definition, and its bytes are the tail of whatever the last chunk left over.
+    if (buffer.length === 0 && looksLikeTlsRecord(buf)) {
+      fail(
+        new SmtpError(
+          "The mail server answered with a TLS record on a connection opened in plaintext, which means that port speaks TLS from the first byte. Set BREVO_SMTP_SSL=1 for port 465, or BREVO_SMTP_PORT=587 for STARTTLS.",
+          { phase: "greeting" },
+        ),
+      );
+      return;
+    }
+    // Concatenate, never replace: a reply line can be split across packets, and a server is
+    // free to send the last line of a multi-line answer whenever it likes. Overwriting the
+    // tail of the previous chunk loses the half of a reply that was waiting to be completed
+    // - a bug that only shows up on a real network, which is why the tests split one.
+    buffer = buffer.length === 0 ? buf : Buffer.concat([buffer, buf]);
+    let idx = buffer.indexOf(0x0a);
+    while (idx >= 0) {
+      const line = buffer.subarray(0, idx).toString("utf8").replace(/\r$/, "");
+      buffer = buffer.subarray(idx + 1);
+      push(line);
+      idx = buffer.indexOf(0x0a);
+    }
+  };
+
+  const onError = (err) => {
+    fail(err instanceof Error ? err : new Error(String(err)));
+  };
+
+  const onClose = () => {
+    fail(new Error("the mail server closed the connection"));
+  };
+
+  // No setEncoding on purpose: the raw bytes are what decide whether this is SMTP at all.
+  socket.on("data", onData);
+  socket.on("error", onError);
+  socket.on("close", onClose);
+
+  /**
+   * Hand the socket over to TLS.
+   *
+   * This is the part that has to be exact rather than nearly right: a `data` listener puts
+   * a stream in flowing mode, so a reader still listening when STARTTLS completes consumes
+   * the server's TLS records as text and the handshake then sits there until it times out.
+   * Every listener therefore comes off first, and any bytes that had already arrived with
+   * them, because those bytes belong to the TLS session and there is no way to feed them
+   * back in. Whatever is returned is expected to be empty; the caller says so loudly if it
+   * is not.
+   */
+  nextReply.detach = () => {
+    socket.off("data", onData);
+    socket.off("error", onError);
+    socket.off("close", onClose);
+    const leftover = buffer;
+    buffer = Buffer.alloc(0);
+    return leftover.length > 0;
+  };
+
+  /** Attach the same reader to the socket that TLS just produced. */
+  nextReply.attach = (tlsSocket) => {
+    tlsSocket.on("data", onData);
+    tlsSocket.on("error", onError);
+    tlsSocket.on("close", onClose);
+  };
+
+  return nextReply;
+
+  async function nextReply() {
     const lines = [];
     for (;;) {
-      let line = queued.shift() ?? null;
-      if (!line) {
+      let line = queued.shift();
+      if (line === undefined) {
         if (failure) throw new SmtpError(`Could not talk to the mail server: ${failure.message}`);
+        // A parked resolver, not a subscription: a reply that arrived while nothing was
+        // waiting for one is still in `queued`, and it must not be missed.
         line = await new Promise((resolve) => waiting.push(resolve));
         if (line == null) {
           throw new SmtpError(`Could not talk to the mail server: ${failure?.message || "connection lost"}`);
@@ -100,7 +172,7 @@ function createReplyReader(socket) {
         return { code, text: lines.join(" ") };
       }
     }
-  };
+  }
 }
 
 function expect(reply, codes, phase) {
@@ -128,9 +200,14 @@ function connectSocket({ host, port, timeoutMs }) {
   });
 }
 
-function upgradeToTls(socket, host) {
+function upgradeToTls(socket, host, { rejectUnauthorized = true } = {}) {
   return new Promise((resolve, reject) => {
-    const secure = tls.connect({ socket, servername: host, ALPNProtocols: [] });
+    // `servername` only for a hostname: SNI with an IP address is against RFC 6066, Node
+    // warns about it, and the certificate a relay serves is for a hostname anyway.
+    // No ALPN list either - an empty one says "no protocol I understand", which some
+    // servers answer by never finishing the handshake at all.
+    const servername = /^[0-9.]+$/.test(host) || host.includes(":") ? undefined : host;
+    const secure = tls.connect({ socket, ...(servername ? { servername } : {}), rejectUnauthorized });
     const timer = setTimeout(() => {
       secure.destroy();
       reject(new SmtpError("The mail server did not finish the TLS handshake in time."));
@@ -187,7 +264,8 @@ export function buildMimeMessage({ from, fromName, to, subject, text, html, head
 /**
  * @param {{host:string, port?:number, user?:string, pass?:string, secure?:boolean,
  *           from:string, fromName?:string, to:string, subject:string, text:string,
- *           html?:string, timeoutMs?:number, requireTls?:boolean}} options
+ *           html?:string, timeoutMs?:number, requireTls?:boolean,
+ *           rejectUnauthorized?:boolean, probeMode?:"send"|"envelope"}} options
  * @returns {Promise<{sent:true, transport:"smtp", response:string}>}
  */
 export async function smtpSendMail(options) {
@@ -211,7 +289,14 @@ export async function smtpSendMail(options) {
   if (!host) throw new SmtpError("No SMTP host is configured.");
   if (!from) throw new SmtpError("No sender address is configured.");
 
+  const verifyTls = options.rejectUnauthorized !== false;
   let socket = await connectSocket({ host, port, timeoutMs });
+  if (secure) {
+    // Port 465 is implicit TLS: the session is encrypted from the first byte, so the socket
+    // is wrapped before anything is read from it. Wrapping after the greeting would mean
+    // reading a TLS handshake as text, which is the same mistake in the other direction.
+    socket = await upgradeToTls(socket, host, { rejectUnauthorized: verifyTls });
+  }
   const deadline = setTimeout(() => {
     try {
       socket.destroy();
@@ -222,7 +307,10 @@ export async function smtpSendMail(options) {
   const clear = () => clearTimeout(deadline);
 
   try {
-    let reader = createReplyReader(socket);
+    // One reader for the whole session, rewired across the upgrade rather than replaced. A
+    // second reader wired alongside the TLS session would look like it worked and quietly
+    // parse everything twice, so the same object follows the bytes.
+    const reader = createReplyReader(socket);
     let caps = "";
 
     expect(await reader(), [220], "greeting");
@@ -230,22 +318,26 @@ export async function smtpSendMail(options) {
     const hello = expect(await reader(), [250], "ehlo");
     caps = hello.text.toUpperCase();
 
-    if (!secure) {
-      if (caps.includes("STARTTLS")) {
-        socket.write(`STARTTLS${EOL}`);
-        expect(await reader(), [220], "starttls");
-        const upgraded = await upgradeToTls(socket, host);
-        socket = upgraded;
-        reader = createReplyReader(socket);
-        socket.write(`EHLO jatext${EOL}`);
-        const afterTls = expect(await reader(), [250], "ehlo-after-tls");
-        caps = afterTls.text.toUpperCase();
-      } else if (requireTls) {
+    if (!secure && caps.includes("STARTTLS")) {
+      socket.write(`STARTTLS${EOL}`);
+      expect(await reader(), [220], "starttls");
+      if (reader.detach()) {
         throw new SmtpError(
-          `${host}:${port} is not offering STARTTLS, and sending a password over a plain connection is not on.`,
+          "The mail server sent more than the STARTTLS acknowledgement, and those bytes belong to the TLS session.",
           { phase: "starttls" },
         );
       }
+      const upgraded = await upgradeToTls(socket, host, { rejectUnauthorized: verifyTls });
+      socket = upgraded;
+      reader.attach(upgraded);
+      socket.write(`EHLO jatext${EOL}`);
+      const afterTls = expect(await reader(), [250], "ehlo-after-tls");
+      caps = afterTls.text.toUpperCase();
+    } else if (requireTls && !secure) {
+      throw new SmtpError(
+        `${host}:${port} is not offering STARTTLS, and sending a password over a plain connection is not on.`,
+        { phase: "starttls" },
+      );
     }
 
     if (user || pass) {
@@ -271,9 +363,9 @@ export async function smtpSendMail(options) {
       // address is not a verified sender on the account, which is the other way a code can
       // fail to arrive, and it is invisible to a login-only check.
       socket.write(`RSET${EOL}`);
-      await readReady(reader).catch(() => null);
+      await reader().catch(() => null);
       socket.write(`QUIT${EOL}`);
-      await readReady(reader).catch(() => null);
+      await reader().catch(() => null);
       return { sent: false, transport: "smtp", response: "sender and recipient accepted", senderAccepted: true };
     }
 
@@ -288,7 +380,7 @@ export async function smtpSendMail(options) {
     const accepted = expect(await reader(), [250], "queue");
 
     socket.write(`QUIT${EOL}`);
-    await readReady(reader).catch(() => null);
+    await reader().catch(() => null);
     return { sent: true, transport: "smtp", response: accepted.text || "accepted" };
   } finally {
     clear();
@@ -305,7 +397,7 @@ export async function smtpSendMail(options) {
  * an SMTP relay. Same credentials, same server, no message, so it cannot spend quota or
  * land in anybody's inbox.
  */
-export async function probeSmtpLogin({ host, port = 587, user = "", pass = "", from = "", requireTls = true, timeoutMs = 15_000 }) {
+export async function probeSmtpLogin({ host, port = 587, user = "", pass = "", from = "", requireTls = true, rejectUnauthorized = true, timeoutMs = 15_000 }) {
   if (!host) return { ok: false, error: "No SMTP host is configured." };
   try {
     const result = await smtpSendMail({
@@ -318,6 +410,9 @@ export async function probeSmtpLogin({ host, port = 587, user = "", pass = "", f
       subject: "probe",
       text: "probe",
       requireTls,
+      // The same trust rules as a real send, or the probe fails on a relay the mailer would
+      // happily use and reports a problem that is not there.
+      rejectUnauthorized,
       timeoutMs,
       probeMode: "envelope",
     });

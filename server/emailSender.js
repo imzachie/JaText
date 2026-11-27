@@ -68,6 +68,9 @@ export function emailSenderConfig() {
     secure: flag("BREVO_SMTP_SSL", false) || port === 465,
     // A local test relay can be plain; a real one may not be, with a password in it.
     requireTls: flag("SMTP_REQUIRE_TLS", true),
+    // Off only for a relay whose certificate is not in the trust store - a private CA, or
+    // the self-signed one the tests in this repo generate for exactly this purpose.
+    rejectUnauthorized: flag("SMTP_TLS_REJECT_UNAUTHORIZED", true),
   };
   const smtpReady = Boolean(smtp.host && smtp.user && smtp.pass);
   const kind = smtpReady ? "smtp" : apiKey ? "brevo-api" : "none";
@@ -102,10 +105,25 @@ export function isEmailSenderConfigured() {
   return emailSenderConfig().enabled;
 }
 
-/** A relay we cannot reach at all is the one failure worth trying the other way for. */
+/**
+ * A relay we cannot get a session with at all is the one failure worth trying the other
+ * transport for.
+ *
+ * The phases carry the distinction, so they are what this looks at rather than the wording:
+ * "could not open a connection" and "the mail server closed the connection" arrive with no
+ * phase, because nothing was exchanged, while "this relay is not offering STARTTLS", a
+ * refused login or an untrusted certificate are answers from something that was reached and
+ * knew what to say.
+ *
+ * A failed TLS handshake is deliberately NOT in here. It looks like a transport problem and
+ * is the one case where retrying would be actively wrong: if the certificate could not be
+ * verified, the fallback sends the same message to the same destination over a channel this
+ * code has no reason to consider safer.
+ */
 function isUnreachable(err) {
-  const text = String(err?.message || err || "");
-  return !Number(err?.code) && /could not open|did not answer|closed|tls|handshake|econn|enotfound|eai_again/i.test(text);
+  if (err?.smtpPhase) return false;
+  if (Number(err?.status)) return false;
+  return /could not open a connection|closed the connection|econnrefused|econnreset|enotfound|eai_again|etimedout/i.test(String(err?.message || err || ""));
 }
 
 function asSendError(err, fallback) {

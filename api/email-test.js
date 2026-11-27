@@ -57,7 +57,11 @@ export default async function handler(req, res) {
         ? diagnostics.warning
         : probe.ok === false
           ? diagnostics.transport === "smtp"
-            ? "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published."
+            ? /TLS record/i.test(probe?.note || "")
+              ? "The relay answered this connection with TLS from the first byte, which is port 465, while the function is configured for 587. Set BREVO_SMTP_PORT=465; 587 is the one Brevo's relay does STARTTLS on."
+              : /handshake|closed the connection|could not open a connection/i.test(probe?.note || "")
+                ? "The function could not hold a session with the relay at all. That is a network path question - the runtime must be able to make an outbound connection to this host and port - and it is worth checking that BREVO_SMTP_PORT and BREVO_SMTP_SSL agree with each other before anything else."
+                : "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published."
             : "Brevo refused the stored API key - or the address it is called from. This runtime has no fixed egress IP for Brevo's allow-list, so set the BREVO_SMTP_* variables and use the relay, which is not IP restricted. Then redeploy this function: a secret is only read when the function is published."
           : "Mail is configured and the provider accepts it. A code that never arrives is then the recipient's spam folder, not this server.",
   });
