@@ -163,7 +163,7 @@ function makeTlsFixture() {
  * The stub therefore obeys the discipline it is used to check, and stops reading the
  * plaintext socket before the secure one starts.
  */
-function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender = false, tls: tlsMaterial = null, hideTls = false, implicit = false, tlsRecordGreeting = false, splitReply = false, host = "127.0.0.1" } = {}) {
+function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender = false, tls: tlsMaterial = null, hideTls = false, implicit = false, tlsRecordGreeting = false, splitReply = false, stall = false, host = "127.0.0.1" } = {}) {
   const log = { commands: [], data: "", connections: 0, upgraded: false, secure: [], tlsError: "" };
   const context = tlsMaterial ? tls.createSecureContext(tlsMaterial) : null;
   const server = net.createServer((socket) => {
@@ -261,6 +261,11 @@ function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender =
       }
     };
     socket.on("data", onData);
+    if (stall) {
+      // Accepts, then says nothing: the shape of a filtered port or a wedged relay, and the
+      // only way to test a budget that has to survive one.
+      return;
+    }
     if (tlsRecordGreeting) {
       // A close_notify alert, which is what a TLS server hands back when a plaintext client
       // says "EHLO" at it: a record header, not text. The bytes are the whole point.
@@ -898,6 +903,52 @@ async function main() {
   const recovered = await rpc(backend, "signUpEmail", { email: "failover@example.com", password: "hunter2hunter2" });
   const multiMs = Date.now() - startedMulti;
   check("a dead first port costs the short budget, not the long one", recovered.requiresEmailVerification === true && multiMs < 12_000, `${multiMs}ms`);
+
+  // Every port stalled: the send has to give up inside the budget with all three answers in
+  // hand, not one answer after three timeouts. And the port that would have worked must not
+  // be starved by the two that never will, which is the specific way a budget like this is
+  // got wrong.
+  // A relay that has never succeeded yet, so the cached preference from the check above does
+  // not quietly move it to the front of the list and make this test about nothing.
+  const stallA = await serveSmtp({ stall: true });
+  const stallB = await serveSmtp({ stall: true });
+  const freshGood = await serveSmtp();
+  process.env.BREVO_SMTP_CANDIDATES = `${stallA.port},${stallB.port},${freshGood.port}`;
+  const stalledStart = Date.now();
+  const lateWin = await sender.sendEmail({ to: "third@example.com", subject: "x", text: "y" }).catch((err) => err);
+  const lateMs = Date.now() - stalledStart;
+  check(
+    "two stalled ports do not starve the third one",
+    lateWin?.sent === true && freshGood.log.commands.some((c) => c.toUpperCase().startsWith("MAIL FROM")) && lateMs < 11_000,
+    `${lateMs}ms / ${String(lateWin?.message || "").slice(0, 120)}`,
+  );
+
+  // No API key for this one: a relay that never answers is exactly the case that falls
+  // through to the HTTP API, and this check is about what the SMTP layer did first.
+  const savedKey = process.env.BREVO_API_KEY;
+  delete process.env.BREVO_API_KEY;
+  const stallC = await serveSmtp({ stall: true });
+  process.env.BREVO_SMTP_CANDIDATES = `${stallA.port},${stallB.port},${stallC.port}`;
+  const allStalled = await sender.sendEmail({ to: "nobody@example.com", subject: "x", text: "y" }).catch((err) => err);
+  const stalledMs = Date.now() - stalledStart - lateMs;
+  check(
+    "when no port answers, the send gives up inside the budget with all three answers",
+    allStalled instanceof Error && (allStalled.attempts || []).length === 3 && stalledMs < 15_000,
+    `${stalledMs}ms / ${JSON.stringify((allStalled?.attempts || []).map((a) => `${a.port}:${String(a.note).slice(0, 20)}`))}`,
+  );
+  check("and every port was actually asked", stallA.log.connections >= 1 && stallB.log.connections >= 1 && stallC.log.connections >= 1, `${stallA.log.connections}/${stallB.log.connections}/${stallC.log.connections}`);
+  process.env.BREVO_API_KEY = savedKey;
+  const viaApi = await sender.sendEmail({ to: "fallback2@example.com", subject: "x", text: "y" }).catch((err) => err);
+  check(
+    "and with a key present the same dead ports still get the API asked",
+    viaApi?.sent === true && viaApi.transport === "smtp-then-api",
+    JSON.stringify(viaApi).slice(0, 160),
+  );
+  check("the API send is the one that carried it", brevo.sent.some((m) => m.body?.to?.[0]?.email === "fallback2@example.com"), "no api send recorded");
+  await stallA.close();
+  await stallB.close();
+  await stallC.close();
+  await freshGood.close();
   check("and the second port carried the message", live.log.commands.some((c) => c.toUpperCase().startsWith("MAIL FROM")), live.log.commands.join(" | "));
   check("nothing went out over the API on the way", !brevo.sent.some((m) => m.body?.to?.[0]?.email === "failover@example.com"), "api send recorded");
 
@@ -1015,6 +1066,36 @@ async function main() {
   check("and nothing is left behind to block that address", rescue.rows.users.length === 0, `users=${rescue.rows.users.length}`);
   const retried = await rpc(backend, "signUpEmail", { email: "rescue@example.com", password: "hunter2hunter2" }).catch(() => null);
   check("it can be tried again the moment the provider recovers", !retried || retried.requiresEmailVerification === true, JSON.stringify(retried && Object.keys(retried)));
+
+  /* ---------- 10: the operator send, which is the only proof a mailbox got mail ---------- */
+  console.log("\nemail delivery: sending one message on purpose");
+  // Back to the HTTP API on purpose: every relay server this run started is closed by now,
+  // and "smtp-then-api" would answer a different question than the one this section asks.
+  for (const key of ["BREVO_SMTP_HOST", "BREVO_SMTP_PORT", "BREVO_SMTP_USER", "BREVO_SMTP_PASS", "BREVO_SMTP_CANDIDATES"]) {
+    delete process.env[key];
+  }
+  brevo.mode = "ok";
+  const disabled = await sender.requestTestSend({ to: "boss@example.com", token: "whatever" }).catch((err) => err);
+  check("no token configured means no test sends", /not enabled/i.test(disabled?.message || "") && disabled?.code === "email_test_disabled", disabled?.message);
+  check("and nothing left the process", !brevo.sent.some((m) => m.body?.to?.[0]?.email === "boss@example.com"), "a send happened");
+
+  process.env.JATEXT_TEST_SEND_TOKEN = "a-private-value";
+  const wrongToken = await sender.requestTestSend({ to: "boss@example.com", token: "a-private-valud" }).catch((err) => err);
+  check(
+    "a wrong token is refused, and says nothing about how close it was",
+    wrongToken?.code === "email_test_unauthorized" && !/expected|length/i.test(wrongToken?.message || ""),
+    `${wrongToken?.code}: ${wrongToken?.message}`,
+  );
+  const emptyToken = await sender.requestTestSend({ to: "boss@example.com" }).catch((err) => err);
+  check("so is no token at all", emptyToken?.code === "email_test_unauthorized", emptyToken?.code);
+  const badAddress = await sender.requestTestSend({ to: "not-an-address", token: "a-private-value" }).catch((err) => err);
+  check("and an address that is not an address is refused before anything is sent", /valid address/i.test(badAddress?.message || ""), badAddress?.message);
+
+  const sent = await sender.requestTestSend({ to: "boss@example.com", token: "a-private-value" });
+  check("with the token it sends, through whichever transport is live", sent.sent === true && sent.transport === "brevo-api", JSON.stringify(sent));
+  const mail = brevo.sent.find((m) => m.body?.to?.[0]?.email === "boss@example.com");
+  check("the message says what it is, and carries no code", /mail test/i.test(mail?.body?.subject || "") && !/\d{6}/.test(mail?.body?.textContent || ""), JSON.stringify(mail?.body?.subject));
+  delete process.env.JATEXT_TEST_SEND_TOKEN;
 
   brevo.server.close();
   console.log(failures === 0 ? "\nemail verification checks passed" : `\n${failures} check(s) failed`);

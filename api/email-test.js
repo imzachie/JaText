@@ -1,4 +1,4 @@
-import { emailSenderDiagnostics, probeEmailSender } from "../server/emailSender.js";
+import { emailSenderDiagnostics, probeEmailSender, requestTestSend } from "../server/emailSender.js";
 import { isEmailVerificationRequired } from "../server/tursoBackend.js";
 import { enforceHttpRateLimit } from "../server/rateLimiter.js";
 
@@ -56,6 +56,33 @@ export default async function handler(req, res) {
   if (req.method !== "GET") {
     return res.status(405).json({ ok: false, error: "Only GET is supported." });
   }
+  // Parsed once, for both of the optional modes below.
+  let url;
+  try {
+    url = new URL(req.url || "/", "http://localhost");
+  } catch {
+    url = new URL("http://localhost/");
+  }
+  // `?send=<address>&token=<JATEXT_TEST_SEND_TOKEN>` puts one real message in an inbox, which
+  // is the difference between "the relay accepts the credentials" and "mail arrives". It is
+  // the only thing here that sends to an address chosen by the caller, so it is off until the
+  // deployment sets a token, and it gets the tightest budget of the three.
+  const sendTo = url.searchParams.get("send");
+  if (sendTo) {
+    if (enforceHttpRateLimit(req, res, { scope: "email_test_send", limit: 3, windowMs: 5 * 60_000 })) {
+      return;
+    }
+    try {
+      const result = await requestTestSend({ to: sendTo, token: url.searchParams.get("token") });
+      return res.status(200).json({ ok: true, ...result });
+    } catch (err) {
+      return res.status(err?.code === "email_test_unauthorized" || err?.code === "email_test_disabled" ? 403 : 400).json({
+        ok: false,
+        error: String(err?.message || err),
+        code: String(err?.code || "email_test_failed"),
+      });
+    }
+  }
   if (enforceHttpRateLimit(req, res, { scope: "email_test", limit: 20, windowMs: 60_000 })) {
     return;
   }
@@ -63,7 +90,6 @@ export default async function handler(req, res) {
   let wantProbe = true;
   let forceProbe = false;
   try {
-    const url = new URL(req.url || "/", "http://localhost");
     const mode = url.searchParams.get("probe");
     wantProbe = mode !== "0";
     // `?probe=force` answers the question now instead of from the last five minutes, which
