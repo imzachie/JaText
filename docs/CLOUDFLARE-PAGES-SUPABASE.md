@@ -78,6 +78,7 @@ Add, replace, or delete there and the next request picks it up.
 | `SMTP_REQUIRE_TLS`, `SMTP_TLS_REJECT_UNAUTHORIZED`, `SMTP_TLS_CA_PEM` | how far to trust the relay | both defaults are on: a relay that will not upgrade is refused rather than sent a password, and a certificate the runtime does not trust ends the send. A relay whose CA is not in the store should be **pinned** with `SMTP_TLS_CA_PEM` (the PEM inline - a file path means nothing in an Edge Function), which keeps the name check. `SMTP_TLS_REJECT_UNAUTHORIZED=0` gives both checks up and is a development setting |
 | `BREVO_SMTP_SERVERNAME` | the name the certificate is checked against | Brevo's relay answers on `smtp-relay.brevo.com` while some of its nodes present a `*.sendinblue.com` certificate, so a strict client can fail the handshake for a reason that has nothing to do with the credentials. Set this to a name the certificate does cover (`smtp-relay.sendinblue.com`) instead of switching verification off |
 | `BREVO_API_KEY` | the same email, over HTTP | starts with `xkeysib-`, 89 characters. **Useless from an Edge Function on its own**: Brevo limits API keys to allow-listed source addresses and this runtime has no fixed egress IP, so it answers 401 `unrecognised IP address`. Kept because a self-hoster on a fixed address can use it, and because the code falls back to it if the relay cannot be reached |
+| `JATEXT_EMAIL_TRANSPORT` | which transport sends | unset (or `auto`) prefers the SMTP relay, and stands down from it for ten minutes once two sends in a row waited on a port that never answered - or after a single send whose certificate named a loopback address, which means something inside the runtime terminated the TLS session and the mail server was never reached. `api` never asks the relay at all; `smtp` asks it even during that cooldown, which is how a repair is tested without waiting it out |
 | `JATEXT_REQUIRE_EMAIL_VERIFICATION` | turning the signup code on | `1` = every new account must type the emailed code before it can message anyone; anything else, or a missing `BREVO_API_KEY`, and sign-up behaves exactly as it always did |
 | `SUPABASE_SERVICE_ROLE_KEY` | attachments in Storage | without it, uploads keep going into Postgres; `SUPABASE_URL` is not needed, the ref is read from `DATABASE_URL` |
 
@@ -213,9 +214,16 @@ Details worth knowing before changing it:
   ask, and a port that answers "credentials invalid" ends it there - the next port would say
   the same, and three failed logins is how an account gets locked. Whatever transport is
   configured is used, SMTP first when both are, and a relay that never answers at all falls
-  back to the API with both errors reported.
+  back to the API with both errors reported. A transport that has proved it cannot work
+  here stops being paid for: two sends in which a port was waited on and nothing came back
+  put the SMTP relay on a ten-minute cooldown, after which mail goes over the API until the
+  relay is asked again - and a certificate whose names are all loopback addresses opens
+  that cooldown in one send, because that is this runtime terminating the TLS session
+  rather than any mail server, so the send itself still goes out over the API instead of
+  failing the signup. `JATEXT_EMAIL_TRANSPORT` overrides the choice from either side.
 * `GET /api/email-test` is how a mail problem is diagnosed without reading function logs:
-  it prints which transport is live, the length and hash of the key (never the key), and
+  it prints which transport is live - and, when the SMTP relay is on a cooldown, that it is,
+  why, and until when - the length and hash of the key (never the key), and
   then asks the relay for the envelope - `MAIL FROM`, `RCPT TO`, `RSET`, `QUIT`, no `DATA`,
   so nothing is transmitted and no quota is spent - which is the only way to learn that
   the sender address is not verified. `?send=<address>&token=<JATEXT_TEST_SEND_TOKEN>` goes

@@ -58,6 +58,27 @@ function env(name) {
   return String(process.env[name] || "").trim();
 }
 
+/**
+ * Stop asking a transport that has already proved it cannot work here.
+ *
+ * Two things are being confused by a mailer with no memory, and they cost the same twelve
+ * seconds each time: a relay having a bad minute, and a runtime that cannot hold an SMTP
+ * session at all. The second one was measured, not guessed - on 587, 465 and 2525 the TCP
+ * connection opens, the plaintext greeting arrives, and the encrypted half of the session
+ * never carries a byte. So two sends in which a port was waited on and nothing came back put
+ * the transport on a cooldown, and one send where the certificate turns out to name the
+ * function's own loopback address opens it immediately, because nothing about that is a
+ * transient condition.
+ *
+ * It is per isolate, it is a cooldown rather than a verdict forever, and only a transport that
+ * failed to carry a conversation counts: a refused login or a refused sender is an account
+ * problem, and taking mail away from everybody for that would be a clever way to cause the
+ * outage it is trying to avoid.
+ */
+const SMTP_CIRCUIT_FAILURES = 2;
+const SMTP_CIRCUIT_COOLDOWN_MS = 10 * 60_000;
+const smtpCircuit = { failures: 0, openedAt: 0, note: "" };
+
 /** An env switch with a default that has to be spelled out, because both of the two
  * places using it want the opposite one and neither is the safe guess. */
 function flag(name, fallback) {
@@ -147,7 +168,20 @@ export function emailSenderConfig() {
     rejectUnauthorized: flag("SMTP_TLS_REJECT_UNAUTHORIZED", true),
   };
   const smtpReady = Boolean(smtp.host && smtp.user && smtp.pass);
-  const kind = smtpReady ? "smtp" : apiKey ? "brevo-api" : "none";
+  // Which transport to use when both are configured. `auto` (the default) prefers the relay,
+  // because the HTTP API is gated behind an IP allow-list that a function with a rotating
+  // address pool cannot satisfy, and stands down from the relay once it has proved it cannot
+  // carry a session here; `api` is the answer for a deployment whose Brevo account does not
+  // review source addresses, where the API is far the faster of the two; `smtp` is for the
+  // opposite case, and for tests that must not be able to hide behind the fallback.
+  const preference = (env("JATEXT_EMAIL_TRANSPORT") || "auto").toLowerCase();
+  const breakerOpen = smtpCircuit.openedAt > 0 && Date.now() - smtpCircuit.openedAt < SMTP_CIRCUIT_COOLDOWN_MS;
+  // `smtp` outranks an open circuit - it is how an operator says "I repaired it, ask again"
+  // without waiting out the cooldown - while `api` stands down from a perfectly healthy
+  // relay. `auto` (the default) is the only state the breaker itself controls.
+  const wantSmtp = preference === "smtp" || (preference !== "api" && smtpReady && !breakerOpen);
+  const kind = wantSmtp && smtpReady ? "smtp" : apiKey ? "brevo-api" : "none";
+  const cooldownUntil = breakerOpen ? new Date(smtpCircuit.openedAt + SMTP_CIRCUIT_COOLDOWN_MS).toISOString() : "";
 
   let warning = "";
   if (kind === "brevo-api" && apiKey && !BREVO_KEY_SHAPE.test(apiKey)) {
@@ -161,6 +195,13 @@ export function emailSenderConfig() {
     enabled: Boolean(fromEmail && (smtpReady || apiKey)),
     kind,
     smtpReady,
+    preference,
+    breaker: {
+      failures: smtpCircuit.failures,
+      open: breakerOpen,
+      note: smtpCircuit.note,
+      until: cooldownUntil,
+    },
     smtp,
     apiKey,
     fromEmail,
@@ -170,7 +211,9 @@ export function emailSenderConfig() {
     reason: fromEmail
       ? !smtpReady && !apiKey
         ? "Neither the SMTP relay nor an API key is configured, so nothing can be sent"
-        : ""
+        : kind !== "smtp" && smtpReady && preference !== "api" && breakerOpen
+          ? `The SMTP relay is on cooldown${smtpCircuit.note ? ` (${smtpCircuit.note})` : ""}, so mail goes over the HTTP API until ${cooldownUntil}`
+          : ""
       : "No BREVO_SENDER_EMAIL is set, which has to be an address Brevo has verified",
   };
 }
@@ -221,6 +264,10 @@ function asSendError(err, fallback) {
   // were asked and here is what each said" are different amounts of information, and the
   // second one is what a log line or a signup response has to carry for anybody to act on it.
   wrapped.attempts = err?.attempts;
+  // And this one travels with it because it changes what the failure means: an intercepted
+  // TLS session is not the relay refusing anything, and the caller has to be able to tell
+  // that apart without parsing the sentence.
+  wrapped.intercepted = err?.intercepted === true;
   return wrapped;
 }
 
@@ -285,6 +332,7 @@ async function sendOverSmtpRelay(cfg, message) {
       });
       continue;
     }
+    const startedAt = Date.now();
     try {
       const result = await smtpSendMail({
         ...cfg.smtp,
@@ -302,7 +350,32 @@ async function sendOverSmtpRelay(cfg, message) {
       return { ...result, port: candidate.port, mode: candidate.secure ? "implicit-tls" : "starttls" };
     } catch (err) {
       const transportLevel = isTransportLevel(err);
-      attempts.push({ port: candidate.port, secure: candidate.secure, transportLevel, note: String(err?.message || err) });
+      // `ms` and `phase` are what separate "nothing is listening here" from "something is
+      // listening and the conversation never happens", and only the second one costs a user
+      // twelve seconds every time. A refused port answers in milliseconds and is free to
+      // ignore; a port that hangs is the one a conclusion can be drawn from.
+      attempts.push({
+        port: candidate.port,
+        secure: candidate.secure,
+        transportLevel,
+        intercepted: err?.intercepted === true,
+        ms: Date.now() - startedAt,
+        phase: err?.phase || "",
+        note: String(err?.message || err),
+      });
+      if (err?.intercepted === true) {
+        // One send is enough for this, and it has to happen here rather than after the
+        // loop: an intercepted error is not transport-level, so the throw below ends the
+        // loop and anything parked after it would never run. The certificate is not the
+        // relay's, so no amount of retrying and no setting on the mail side will change
+        // the answer - the transport is judged in one question instead of two timeouts.
+        smtpCircuit.failures = SMTP_CIRCUIT_FAILURES;
+        smtpCircuit.openedAt = Date.now();
+        smtpCircuit.note = `the mail server's certificate named a loopback address, so something between this runtime and port ${candidate.port} is terminating TLS`;
+        console.warn(
+          `[email] the SMTP transport is on cooldown for ${Math.round(SMTP_CIRCUIT_COOLDOWN_MS / 60_000)} minutes (${smtpCircuit.note}); mail goes over the HTTP API until then.`,
+        );
+      }
       // A refusal is the relay answering, so it ends the session rather than moving on:
       // 587 saying "credentials invalid" means 465 will say the same, and the signup
       // deserves its error in under a second instead of after two timeouts.
@@ -325,6 +398,61 @@ async function sendOverSmtpRelay(cfg, message) {
 }
 
 /**
+ * Was this send slow because nothing answered?
+ *
+ * The rule is deliberately narrow, because the failures worth reporting are quick ones: a
+ * refused connection, a refused sender and a refused login all answer in milliseconds and each
+ * deserves its own error in full. Only a send that spent real time waiting on silence is
+ * evidence about the runtime rather than about the account.
+ */
+function isStuckTransport(err) {
+  const attempts = err?.attempts || [];
+  if (!attempts.length || !attempts.every((a) => a.transportLevel)) return false;
+  return Math.max(...attempts.map((a) => Number(a.ms) || 0)) >= 1_000;
+}
+
+/**
+ * The sentence a strike is remembered by: which port was waited on, and for how long.
+ *
+ * The breaker's note is what `/api/email-test` later prints as the reason mail is going
+ * over the API, so an empty note would report a cooldown with no cause attached - the one
+ * thing an operator needs in order to decide whether to wait it out or intervene.
+ */
+function stuckNote(err) {
+  const attempts = err?.attempts || [];
+  const slowest = attempts.reduce((a, b) => (Number(b.ms || 0) > Number(a.ms || 0) ? b : a), attempts[0] || {});
+  if (!slowest.port) return "the relay did not answer inside the send budget";
+  return `${describeCandidate(slowest)} timed out waiting ${Math.round(Number(slowest.ms) || 0)}ms for the relay to answer`;
+}
+
+function recordSmtpFailure(note) {
+  smtpCircuit.failures += 1;
+  smtpCircuit.note = String(note || smtpCircuit.note || "");
+  if (smtpCircuit.failures >= SMTP_CIRCUIT_FAILURES) {
+    smtpCircuit.openedAt = Date.now();
+    console.warn(
+      `[email] the SMTP transport is on cooldown for ${Math.round(SMTP_CIRCUIT_COOLDOWN_MS / 60_000)} minutes` +
+        `${smtpCircuit.note ? ` (${smtpCircuit.note})` : ""}; mail goes over the HTTP API until then.`,
+    );
+  }
+}
+
+/**
+ * Forget the verdict.
+ *
+ * The circuit is a judgement about a configuration, so changing the configuration is what
+ * should clear it - an operator who points the relay at another host, or a test that runs its
+ * next case against another port, must not inherit a ten-minute sentence about the last one.
+ * Nothing calls this on a *successful API* send: that is not evidence the relay got better, and
+ * clearing it there would make every other signup pay the twelve seconds again.
+ */
+export function resetSmtpCircuit() {
+  smtpCircuit.failures = 0;
+  smtpCircuit.openedAt = 0;
+  smtpCircuit.note = "";
+}
+
+/**
  * @param {{to: string, subject: string, text: string, html?: string}} message
  * @returns {Promise<{sent: true, transport: string, messageId?: string}>}
  * @throws if the send fails, with the provider's own words so the reason is readable
@@ -340,13 +468,20 @@ export async function sendEmail(message) {
 
   if (cfg.kind === "smtp") {
     try {
-      return await sendOverSmtpRelay(cfg, message);
+      const sent = await sendOverSmtpRelay(cfg, message);
+      if (smtpCircuit.failures) resetSmtpCircuit();
+      return sent;
     } catch (err) {
+      if (isStuckTransport(err)) recordSmtpFailure(stuckNote(err));
       // Only a relay that never answered at all is worth asking the HTTP API about - not
       // because it is likely to work, but because its answer names a different cause (an IP
-      // allow-list, say) than "nothing answered". A certificate this runtime will not accept
-      // is not that, and neither is a relay that refused to upgrade.
-      if (cfg.apiKey && isUnreachable(err)) {
+      // allow-list, say) than "nothing answered". An ordinary certificate this runtime will
+      // not accept is not that, and neither is a relay that refused to upgrade. Interception
+      // is the exception: there the mail server was never reached at all, the SMTP path is
+      // known to be blocked from inside this runtime, and the HTTPS API is a different path
+      // to the same provider, so the message still goes out instead of failing the signup
+      // over a port nobody is allowed to use here.
+      if (cfg.apiKey && (isUnreachable(err) || err?.intercepted === true)) {
         // Fall through to the API and report that pairing, so the log says which two
         // things were tried rather than only the first one that gave up.
         const apiErr = await sendViaBrevoApi(cfg, message).catch((inner) => inner);
@@ -429,6 +564,10 @@ export function emailSenderDiagnostics() {
     warning: cfg.warning || "",
     keyLength: cfg.apiKey.length,
     keyFingerprint: cfg.apiKey ? shortHash(cfg.apiKey) : "",
+    transportPreference: cfg.preference,
+    smtpBreakerOpen: cfg.breaker.open,
+    smtpBreakerNote: cfg.breaker.note,
+    smtpBreakerUntil: cfg.breaker.until,
     smtpHost: cfg.smtp.host || "",
     smtpPort: cfg.smtp.host ? cfg.smtp.port : 0,
     smtpCandidates: cfg.smtp.host ? cfg.smtp.candidates.map(describeCandidate) : [],
@@ -514,22 +653,31 @@ export async function probeEmailSender({ force = false } = {}) {
     // Every port at the same time. A probe sends nothing, so two successes cost nothing and
     // the alternative is a diagnostic that takes as long as the sum of every failure - which
     // is the reason nobody reads diagnostics like these.
-    const startedAt = Date.now();
     const candidates = orderedCandidates(cfg.smtp.candidates);
     const settled = await Promise.all(
       candidates.map(async (candidate) => {
+        const startedAt = Date.now();
         const attempt = await probeSmtpLogin({
           ...cfg.smtp,
           port: candidate.port,
           secure: candidate.secure,
           from: cfg.fromEmail,
           timeoutMs: CANDIDATE_TIMEOUT_MS,
-        }).catch((err) => ({ ok: false, note: String(err?.message || err) }));
+        }).catch((err) => ({
+          ok: false,
+          note: String(err?.message || err),
+          phase: err?.phase || "",
+          intercepted: err?.intercepted === true,
+        }));
         return {
           port: candidate.port,
           secure: candidate.secure,
           ok: attempt.ok === true,
+          // Each port timed on its own clock: with every candidate asked at once, a shared
+          // start would report "whoever finished first" as if it were "whoever was fastest".
           ms: Date.now() - startedAt,
+          phase: attempt.phase || "",
+          intercepted: attempt.intercepted === true,
           // The session's own report where there was one, and the server's words where there
           // was not: enough to tell "the port is filtered" from "the handshake completed and
           // the relay closed the session" from "the certificate says a different name".
@@ -539,7 +687,16 @@ export async function probeEmailSender({ force = false } = {}) {
         };
       }),
     );
-    const attempts = settled.map((a) => ({ port: a.port, secure: a.secure, ok: a.ok, ms: a.ms, tls: a.tls, note: a.note }));
+    const attempts = settled.map((a) => ({
+      port: a.port,
+      secure: a.secure,
+      ok: a.ok,
+      ms: a.ms,
+      phase: a.phase,
+      intercepted: a.intercepted,
+      tls: a.tls,
+      note: a.note,
+    }));
     const winner = settled.find((a) => a.ok);
     if (winner) {
       preferredCandidate = candidates.find((c) => c.port === winner.port && c.secure === winner.secure) || null;
@@ -549,13 +706,23 @@ export async function probeEmailSender({ force = false } = {}) {
         mode: winner.secure ? "implicit-tls" : "starttls",
         ms: winner.ms,
       };
+    } else {
+      // The failure result is built before the interception flag rather than around it:
+      // flagging first made the object truthy and skipped this default, so an intercepted
+      // probe came back with no `ok: false` at all and the route read it as a pass.
+      result = {
+        ok: false,
+        status: 0,
+        sender: cfg.fromEmail,
+        note: attempts.map((a) => `${describeCandidate(a)}: ${a.note}`).join(" | "),
+      };
+      if (attempts.some((a) => a.intercepted)) {
+        // The probe is read-only, so it changes nothing about the transport; this only says out
+        // loud what the last send already concluded, because "a proxy is terminating your TLS"
+        // is the one sentence that makes a three-port timeout list legible.
+        result.intercepted = true;
+      }
     }
-    result = result || {
-      ok: false,
-      status: 0,
-      sender: cfg.fromEmail,
-      note: attempts.map((a) => `${describeCandidate(a)}: ${a.note}`).join(" | "),
-    };
     result.transport = "smtp";
     result.sender = cfg.fromEmail;
     result.attempts = attempts;
