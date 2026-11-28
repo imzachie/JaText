@@ -990,6 +990,9 @@ import crypto2 from "node:crypto";
 function env(name) {
   return String(process.env[name] || "").trim();
 }
+function smtpBreakerOpen() {
+  return smtpCircuit.openedAt > 0 && Date.now() - smtpCircuit.openedAt < SMTP_CIRCUIT_COOLDOWN_MS;
+}
 function flag(name, fallback) {
   const raw = env(name).toLowerCase();
   if (!raw) return fallback;
@@ -1049,7 +1052,7 @@ function emailSenderConfig() {
   };
   const smtpReady = Boolean(smtp.host && smtp.user && smtp.pass);
   const preference = (env("JATEXT_EMAIL_TRANSPORT") || "auto").toLowerCase();
-  const breakerOpen = smtpCircuit.openedAt > 0 && Date.now() - smtpCircuit.openedAt < SMTP_CIRCUIT_COOLDOWN_MS;
+  const breakerOpen = smtpBreakerOpen();
   const wantSmtp = preference === "smtp" || preference !== "api" && smtpReady && !breakerOpen;
   const kind = wantSmtp && smtpReady ? "smtp" : apiKey ? "brevo-api" : "none";
   const cooldownUntil = breakerOpen ? new Date(smtpCircuit.openedAt + SMTP_CIRCUIT_COOLDOWN_MS).toISOString() : "";
@@ -1266,7 +1269,8 @@ async function sendViaBrevoApi(cfg, { to, subject, text, html }) {
   if (!response.ok) {
     const detail = String(parsed?.message || raw || "").slice(0, 240);
     const ipRestricted = /unrecogni[sz]ed ip|whitelist|allow.?list|ip address/i.test(detail);
-    const message = response.status !== 401 ? `Brevo refused the email (HTTP ${response.status})${detail ? `: ${detail}` : ""}` : ipRestricted ? `Brevo only accepts API calls from addresses on its allow-list, and this function has no fixed one to add (${detail}). Use the SMTP relay instead - the relay is not IP restricted.` : `Brevo rejected the API key${detail ? `: ${detail}` : ""}`;
+    const channel = cfg.smtpReady && !smtpBreakerOpen() ? "Use the SMTP relay instead - the relay is not IP restricted." : `${cfg.smtpReady ? "The SMTP relay is blocked from this runtime too" : "No SMTP relay is configured"}, so the API is the only channel: set Brevo's Security > Authorised IPs to "No IP review" (app.brevo.com/security/authorised_ips) - adding this address cannot work, because the function's egress address rotates.`;
+    const message = response.status !== 401 ? `Brevo refused the email (HTTP ${response.status})${detail ? `: ${detail}` : ""}` : ipRestricted ? `Brevo only accepts API calls from addresses on its allow-list, and this function has no fixed one to add (${detail}). ${channel}` : `Brevo rejected the API key${detail ? `: ${detail}` : ""}`;
     const err = new Error(message);
     err.code = "email_rejected";
     err.status = response.status;
