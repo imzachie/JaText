@@ -277,7 +277,6 @@ function openTlsSocket({ host, port, timeoutMs = DEFAULT_TIMEOUT_MS, rejectUnaut
  * lets the name be stated, and this says which of the two happened.
  */
 function checkPeerIdentity(secure, host, rejectUnauthorized) {
-  if (!rejectUnauthorized) return null;
   let cert = null;
   try {
     cert = secure.getPeerCertificate?.() || null;
@@ -285,17 +284,68 @@ function checkPeerIdentity(secure, host, rejectUnauthorized) {
     cert = null;
   }
   if (!cert || !Object.keys(cert).length) {
-    return new SmtpError(`The mail server presented no certificate for ${host}, so the session is not trusted.`, { phase: "tls-verify" });
+    // With verification on, no certificate is itself a failure; with it off there is
+    // nothing to say - the operator has already forgone both checks.
+    return rejectUnauthorized
+      ? new SmtpError(`The mail server presented no certificate for ${host}, so the session is not trusted.`, { phase: "tls-verify" })
+      : null;
   }
   const subject = String(cert.subject?.CN || "");
   const names = [subject, ...(Array.isArray(cert.subjectaltname) ? cert.subjectaltname : String(cert.subjectaltname || "").split(/,\s*/))].filter(Boolean);
-  const sanList = names.flatMap((n) => String(n).replace(/^(DNS:|IP:)/i, "").trim()).filter(Boolean);
+  // Node writes subjectAltName as `DNS:one, IP Address:127.0.0.1`, so both prefixes have to
+  // come off before a name is compared with anything - or the certificate that *does* cover
+  // the host fails the check, and the only difference a user sees is the prefix. Duplicated,
+  // because a CN that repeats the first SAN would otherwise show the same name twice in the
+  // sentence a user reads.
+  const sanList = [...new Set(names.flatMap((n) => String(n).split(/,\s*/).map((x) => x.replace(/^(?:DNS|IP Address|IP):/i, "").trim()).filter(Boolean)))];
+  // A relay out on the internet is never certified under an address that means "this machine".
+  // Only IP literals count: `127.0.0.1` and `::1` cannot be a name any public relay was
+  // certified under, while `localhost` as a DNS name is also what this repository's own test
+  // fixtures serve and what a local relay legitimately presents. An IP-literal loopback SAN
+  // means a proxy inside the runtime answered the TLS handshake itself, on the caller's own
+  // loopback, and the mail server was never reached. `::1` arrives in either of its two
+  // spellings - Deno prints the compressed form, Node expands it to `0:0:0:0:0:0:0:1` - so
+  // the check parses the groups rather than matching one rendering of the address.
+  const isLoopbackName = (name) => {
+    if (/^127\./.test(name)) return true;
+    if (!name.includes(":")) return false;
+    const halves = name.split("::");
+    if (halves.length > 2) return false;
+    let groups;
+    if (halves.length === 2) {
+      const left = halves[0] ? halves[0].split(":") : [];
+      const right = halves[1] ? halves[1].split(":") : [];
+      const fill = 8 - left.length - right.length;
+      if (fill < 0) return false;
+      groups = [...left, ...Array(fill).fill("0"), ...right];
+    } else {
+      groups = name.split(":");
+    }
+    return groups.length === 8 && groups.slice(0, 7).every((g) => /^0+$/.test(g)) && /^0*1$/.test(groups[7]);
+  };
   const matched = sanList.some((name) => (name.startsWith("*.") ? host.endsWith(name.slice(1)) : name === host));
-  if (!matched && !sanList.length) {
-    // No names to match against is unusual, and verifying is better than trusting blindly.
-    return new SmtpError(`The certificate from ${host} lists no host names (it says "${subject}"), so it cannot be checked.`, { phase: "tls-verify" });
+  // Interception is checked before the trust switch on purpose. It is not a claim about
+  // whether this certificate ought to be trusted; it is a claim that the peer is not the
+  // relay at all - something on this machine answered the handshake - and that stays true
+  // when SMTP_TLS_REJECT_UNAUTHORIZED=0, which only forgives an untrusted chain. The check
+  // has to run here as well because on some runtimes the built-in name check fails the
+  // handshake before `secureConnect` ever fires, and on others it never runs at all.
+  if (!matched && sanList.length > 0 && sanList.every(isLoopbackName)) {
+    const err = new SmtpError(
+      `Something between this runtime and ${host} terminated the TLS session with a certificate for ${sanList.slice(0, 2).join(", ")}, ` +
+        `which is a loopback address, so the mail server was never reached. Submission ports are commonly blocked this way; ` +
+        `send over the HTTPS API instead (JATEXT_EMAIL_TRANSPORT=api).`,
+      { phase: "tls-verify" },
+    );
+    err.intercepted = true;
+    return err;
   }
+  if (!rejectUnauthorized) return null;
   if (!matched) {
+    if (!sanList.length) {
+      // No names to match against is unusual, and verifying is better than trusting blindly.
+      return new SmtpError(`The certificate from ${host} lists no host names (it says "${subject}"), so it cannot be checked.`, { phase: "tls-verify" });
+    }
     const wild = sanList.find((name) => name.endsWith(".com") && name.includes("smtp-relay"));
     return new SmtpError(
       `The certificate from ${host} is for ${sanList.slice(0, 3).join(", ") || "another name"}, not this host.` +
@@ -590,6 +640,9 @@ export async function probeSmtpLogin({ host, port = 587, user = "", pass = "", f
           `A "sender not verified" here means the address has to be confirmed in Brevo's Senders list first.`,
       };
     }
-    return { ok: false, status: Number(err?.code || 0) || 0, note: err?.message || String(err), phase };
+    // `intercepted` travels with the note because a probe that says only "certificate does
+    // not match" hides the one fact that decides what to do about it: the certificate was
+    // for this machine, so no setting on the mail side can change the answer.
+    return { ok: false, status: Number(err?.code || 0) || 0, note: err?.message || String(err), phase, intercepted: err?.intercepted === true };
   }
 }

@@ -153,6 +153,33 @@ function makeTlsFixture() {
 }
 
 /**
+ * A certificate for one run whose every name is a loopback IP literal: the shape a TLS
+ * interceptor inside the runtime answers the handshake with, and the reason a real signup
+ * failed with a certificate "for IP Address:127.0.0.1, IP Address:::1". `::1` rather than
+ * `127.0.0.1` on purpose - the host this test dials is `127.0.0.1`, and a certificate that
+ * covered the dialled host would be a match rather than an interception, which is the
+ * difference the whole check turns on.
+ */
+function makeLoopbackTlsFixture() {
+  let dir = "";
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "jatext-loopback-"));
+    const cert = path.join(dir, "cert.pem");
+    const key = path.join(dir, "key.pem");
+    execFileSync(
+      "openssl",
+      ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=::1", "-addext", "subjectAltName=IP:::1"],
+      { stdio: "ignore" },
+    );
+    return { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
+  } catch {
+    return null;
+  } finally {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
  * A relay that speaks only what `server/smtpClient.js` says, and writes down what it heard.
  *
  * It can also perform a real STARTTLS negotiation, which is the part that matters: a
@@ -163,7 +190,7 @@ function makeTlsFixture() {
  * The stub therefore obeys the discipline it is used to check, and stops reading the
  * plaintext socket before the secure one starts.
  */
-function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender = false, tls: tlsMaterial = null, hideTls = false, implicit = false, tlsRecordGreeting = false, splitReply = false, stall = false, host = "127.0.0.1" } = {}) {
+function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender = false, tls: tlsMaterial = null, hideTls = false, implicit = false, tlsRecordGreeting = false, splitReply = false, stall = false, stallFor = 0, host = "127.0.0.1" } = {}) {
   const log = { commands: [], data: "", connections: 0, upgraded: false, secure: [], tlsError: "" };
   const context = tlsMaterial ? tls.createSecureContext(tlsMaterial) : null;
   const server = net.createServer((socket) => {
@@ -263,7 +290,14 @@ function serveSmtp({ password = "hunter2smtp", acceptData = true, rejectSender =
     socket.on("data", onData);
     if (stall) {
       // Accepts, then says nothing: the shape of a filtered port or a wedged relay, and the
-      // only way to test a budget that has to survive one.
+      // only way to test a budget that has to survive one. `stallFor` ends the silence by
+      // closing the socket after that many milliseconds instead of holding it open to the
+      // client's own deadline: the same silence, at a duration the test chooses, so a
+      // breaker strike costs seconds rather than a twenty-second timeout per send.
+      if (stallFor > 0) {
+        const killer = setTimeout(() => socket.destroy(), stallFor);
+        socket.once("close", () => clearTimeout(killer));
+      }
       return;
     }
     if (tlsRecordGreeting) {
@@ -621,6 +655,7 @@ async function main() {
 
   /* ---------- 8b: the SMTP relay transport ---------- */
   console.log("\nemail delivery: the SMTP relay is what Brevo lets an Edge Function use");
+  sender.resetSmtpCircuit();
   const relay = await serveSmtp();
   process.env.BREVO_SMTP_HOST = "127.0.0.1";
   process.env.BREVO_SMTP_PORT = String(relay.port);
@@ -736,6 +771,7 @@ async function main() {
   // one failure a plaintext stub cannot produce is the upgrade itself: the first version
   // of this client failed in production with a working credential and a working relay,
   // because its plaintext reader stayed attached and ate the TLS records.
+  sender.resetSmtpCircuit();
   const pem = makeTlsFixture();
   if (!pem) {
     console.log("  skip  no openssl on this machine: the STARTTLS assertions did not run");
@@ -874,6 +910,7 @@ async function main() {
 
   /* ---------- 8e: two ports, and the rule for when to move on to the second ---------- */
   console.log("\nemail delivery: which port is tried, and when the next one is");
+  sender.resetSmtpCircuit();
   const live = await serveSmtp({ password: "hunter2smtp" });
   // Accepts the connection and then says nothing: the only way to tell a shrunk
   // per-candidate budget from the full one, because a refused port answers at once and
@@ -951,6 +988,12 @@ async function main() {
   await freshGood.close();
   check("and the second port carried the message", live.log.commands.some((c) => c.toUpperCase().startsWith("MAIL FROM")), live.log.commands.join(" | "));
   check("nothing went out over the API on the way", !brevo.sent.some((m) => m.body?.to?.[0]?.email === "failover@example.com"), "api send recorded");
+  // The two sends above were two strikes (all ports waited on, nothing came back), so the
+  // breaker is open and `auto` would route everything from here to the API - which would
+  // make the next two checks pass for a reason that has nothing to do with what they ask.
+  // Clear the verdict: the questions below are about port order and refusal, and both need
+  // the relay to be the transport that is asked.
+  sender.resetSmtpCircuit();
 
   const connectsBefore = blackhole._connections || 0;
   const again = await rpc(backend, "signUpEmail", { email: "cached@example.com", password: "hunter2hunter2" });
@@ -1047,6 +1090,202 @@ async function main() {
   process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "0";
   await live.close();
   blackhole.close();
+
+  /* ---------- 8g: a transport that cannot work stops being paid for ---------- */
+  console.log("\nemail delivery: a transport that cannot work stops being asked again");
+  sender.resetSmtpCircuit();
+  process.env.BREVO_SMTP_HOST = "127.0.0.1";
+  process.env.BREVO_SMTP_SSL = "0";
+  process.env.SMTP_REQUIRE_TLS = "0";
+  process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "0";
+  process.env.BREVO_SMTP_USER = "c54426001@smtp-brevo.com";
+  process.env.BREVO_SMTP_PASS = "hunter2smtp";
+  delete process.env.BREVO_SMTP_CANDIDATES;
+  delete process.env.BREVO_SMTP_SERVERNAME;
+  delete process.env.JATEXT_EMAIL_TRANSPORT;
+
+  // A refusal and a closed port are answers, not evidence about the runtime: both come
+  // back in milliseconds, and neither may count towards a cooldown that takes the relay
+  // away from every other signup.
+  const refuseG = await serveSmtp({ password: "wrong-on-purpose" });
+  process.env.BREVO_SMTP_PORT = String(refuseG.port);
+  const refusedG = await sender.sendEmail({ to: "refused-g@example.com", subject: "x", text: "y" }).catch((err) => err);
+  const afterRefused = sender.emailSenderConfig();
+  check(
+    "a refused login is an answer, not a strike",
+    refusedG instanceof Error &&
+      /credentials invalid/i.test(refusedG.message) &&
+      afterRefused.breaker.failures === 0 &&
+      !afterRefused.breaker.open &&
+      afterRefused.kind === "smtp",
+    JSON.stringify({ message: String(refusedG?.message).slice(0, 80), breaker: afterRefused.breaker, kind: afterRefused.kind }),
+  );
+  await refuseG.close();
+
+  const silentG = await serveSmtp();
+  const silentPort = silentG.port;
+  await silentG.close();
+  process.env.BREVO_SMTP_PORT = String(silentPort);
+  const closedG = await sender.sendEmail({ to: "closed-g@example.com", subject: "x", text: "y" }).catch((err) => err);
+  const afterClosed = sender.emailSenderConfig();
+  check(
+    "a closed port is an answer too, and with a key present the API carries the message",
+    closedG?.sent === true && afterClosed.breaker.failures === 0 && !afterClosed.breaker.open && afterClosed.kind === "smtp",
+    JSON.stringify({ result: closedG, breaker: afterClosed.breaker, kind: afterClosed.kind }),
+  );
+
+  // A port that accepts and then never answers: the one failure that is evidence about the
+  // runtime rather than about the account. Two of them open the cooldown; `stallFor` ends
+  // each silence after a chosen interval so the two strikes cost seconds, not two
+  // twenty-second budgets.
+  const stallG1 = await serveSmtp({ stall: true, stallFor: 1_500 });
+  const stallG2 = await serveSmtp({ stall: true, stallFor: 1_500 });
+  process.env.BREVO_SMTP_PORT = String(stallG1.port);
+  await sender.sendEmail({ to: "strike1@example.com", subject: "x", text: "y" }).catch(() => null);
+  const afterStrike1 = sender.emailSenderConfig();
+  check(
+    "one send that waited on a silent port is a strike, not a cooldown",
+    afterStrike1.breaker.failures === 1 && !afterStrike1.breaker.open && afterStrike1.kind === "smtp",
+    JSON.stringify(afterStrike1.breaker),
+  );
+  process.env.BREVO_SMTP_PORT = String(stallG2.port);
+  const strike2 = await sender.sendEmail({ to: "strike2@example.com", subject: "x", text: "y" }).catch((err) => err);
+  const afterStrike2 = sender.emailSenderConfig();
+  check(
+    "the second strike opens the cooldown, with the wait named in it, and the mail still goes",
+    strike2?.sent === true &&
+      afterStrike2.breaker.failures === 2 &&
+      afterStrike2.breaker.open === true &&
+      /timed out waiting/.test(afterStrike2.breaker.note) &&
+      afterStrike2.kind === "brevo-api" &&
+      /until \d{4}-\d{2}-\d{2}T/.test(afterStrike2.reason),
+    JSON.stringify({ breaker: afterStrike2.breaker, kind: afterStrike2.kind, reason: afterStrike2.reason, result: strike2 }),
+  );
+  const diagG = sender.emailSenderDiagnostics();
+  check(
+    "the diagnostics carry the cooldown an operator has to see",
+    diagG.transportPreference === "auto" &&
+      diagG.smtpBreakerOpen === true &&
+      /timed out waiting/.test(diagG.smtpBreakerNote) &&
+      /\d{4}-\d{2}-\d{2}T/.test(diagG.smtpBreakerUntil),
+    JSON.stringify({ preference: diagG.transportPreference, open: diagG.smtpBreakerOpen, note: diagG.smtpBreakerNote, until: diagG.smtpBreakerUntil }),
+  );
+  const stallG1Before = stallG1.log.connections;
+  const straightApi = await sender.sendEmail({ to: "straight-api@example.com", subject: "x", text: "y" }).catch((err) => err);
+  check(
+    "while the cooldown is open the relay is not asked at all",
+    straightApi?.sent === true && straightApi.transport === "brevo-api" && stallG1.log.connections === stallG1Before,
+    JSON.stringify({ result: straightApi, conns: `${stallG1Before}->${stallG1.log.connections}` }),
+  );
+
+  // The certificate a TLS interceptor inside the runtime answers with: every name on it is
+  // an address that means "this machine", and none of them is the host being dialled. On
+  // this runtime the handshake has to run with verification off for `secureConnect` to fire
+  // at all (Node's built-in name check fails the handshake first), which is also the case
+  // the check has to survive: the interception verdict is about who the peer is, not about
+  // whether this certificate ought to be trusted.
+  const loopPem = makeLoopbackTlsFixture();
+  if (!loopPem) {
+    console.log("  skip  no openssl on this machine: the interception assertions did not run");
+  } else {
+    sender.resetSmtpCircuit();
+    const loopRelay = await serveSmtp({ tls: loopPem, host: "127.0.0.1" });
+    process.env.BREVO_SMTP_HOST = "127.0.0.1";
+    process.env.BREVO_SMTP_PORT = String(loopRelay.port);
+    process.env.BREVO_SMTP_SSL = "0";
+    process.env.SMTP_REQUIRE_TLS = "0";
+    process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "0";
+
+    const probeLoop = await sender.probeEmailSender({ force: true });
+    const probeLoopCfg = sender.emailSenderConfig();
+    check(
+      "the probe says the certificate was this machine's, not the relay's",
+      probeLoop.ok === false && probeLoop.intercepted === true && /loopback address/.test(String(probeLoop.note)),
+      JSON.stringify({ ok: probeLoop.ok, intercepted: probeLoop.intercepted, note: String(probeLoop.note).slice(0, 160) }),
+    );
+    check(
+      "and asking costs the transport nothing",
+      probeLoopCfg.breaker.failures === 0 && !probeLoopCfg.breaker.open,
+      JSON.stringify(probeLoopCfg.breaker),
+    );
+
+    // With a key configured the message still goes out: the SMTP path is blocked from the
+    // inside, the HTTPS path is a different one, and a failed signup is a worse answer than
+    // a transport switch this code already knows how to make.
+    const interceptSend = await sender.sendEmail({ to: "intercepted@example.com", subject: "x", text: "y" }).catch((err) => err);
+    const afterIntercept = sender.emailSenderConfig();
+    check(
+      "the send that hit the interception still goes out, over the HTTPS API",
+      interceptSend?.sent === true && interceptSend.transport === "smtp-then-api",
+      JSON.stringify(interceptSend).slice(0, 200),
+    );
+    check(
+      "and one such send is enough to stop asking the relay, with the port named in the verdict",
+      afterIntercept.breaker.failures === 2 &&
+        afterIntercept.breaker.open === true &&
+        new RegExp(String(loopRelay.port)).test(afterIntercept.breaker.note) &&
+        /loopback address/.test(afterIntercept.breaker.note) &&
+        afterIntercept.kind === "brevo-api" &&
+        /until \d{4}-\d{2}-\d{2}T/.test(afterIntercept.reason),
+      JSON.stringify({ breaker: afterIntercept.breaker, kind: afterIntercept.kind, reason: afterIntercept.reason }),
+    );
+
+    // Without a key there is no API to fall to, so the error itself has to carry the
+    // actionable sentence - and it has to say `intercepted`, because that flag is what tells
+    // the caller this was not the relay refusing anything.
+    sender.resetSmtpCircuit();
+    const savedGKey = process.env.BREVO_API_KEY;
+    delete process.env.BREVO_API_KEY;
+    const interceptErr = await sender.sendEmail({ to: "intercepted2@example.com", subject: "x", text: "y" }).catch((err) => err);
+    check(
+      "with no API key the failure names the interception and the switch that fixes it",
+      interceptErr instanceof Error &&
+        interceptErr.intercepted === true &&
+        /loopback address/.test(interceptErr.message) &&
+        /JATEXT_EMAIL_TRANSPORT=api/.test(interceptErr.message),
+      String(interceptErr?.message || interceptErr).slice(0, 220),
+    );
+    const errCfg = sender.emailSenderConfig();
+    check(
+      "and it still opens the cooldown in one send",
+      errCfg.breaker.failures === 2 && errCfg.breaker.open === true && new RegExp(String(loopRelay.port)).test(errCfg.breaker.note),
+      JSON.stringify(errCfg.breaker),
+    );
+    process.env.BREVO_API_KEY = savedGKey;
+
+    // The two switches over an open cooldown: `smtp` outranks it - an operator saying "I
+    // repaired it, ask again" - and `api` stands down from a healthy relay as well.
+    process.env.JATEXT_EMAIL_TRANSPORT = "smtp";
+    check("smtp can be forced even while the cooldown is open", sender.emailSenderConfig().kind === "smtp", sender.emailSenderConfig().kind);
+    process.env.JATEXT_EMAIL_TRANSPORT = "api";
+    check("and api stands down from the relay either way", sender.emailSenderConfig().kind === "brevo-api", sender.emailSenderConfig().kind);
+    delete process.env.JATEXT_EMAIL_TRANSPORT;
+    check("back on auto, the open cooldown is what routes the mail", sender.emailSenderConfig().kind === "brevo-api", sender.emailSenderConfig().kind);
+
+    sender.resetSmtpCircuit();
+    const cleared = sender.emailSenderConfig();
+    check(
+      "resetting forgets the verdict and the relay is asked again",
+      cleared.breaker.failures === 0 && !cleared.breaker.open && cleared.breaker.note === "" && cleared.kind === "smtp",
+      JSON.stringify(cleared.breaker),
+    );
+
+    await loopRelay.close();
+  }
+  await stallG1.close();
+  await stallG2.close();
+
+  // Back to the state section 9 found: the relay configured but not listening, so the
+  // rescue below exercises the refusal-and-fallback path rather than a cooldown.
+  process.env.BREVO_SMTP_HOST = "127.0.0.1";
+  process.env.BREVO_SMTP_PORT = String(relay.port);
+  process.env.BREVO_SMTP_SSL = "0";
+  process.env.SMTP_REQUIRE_TLS = "0";
+  process.env.SMTP_TLS_REJECT_UNAUTHORIZED = "0";
+  delete process.env.BREVO_SMTP_CANDIDATES;
+  delete process.env.BREVO_SMTP_SERVERNAME;
+  delete process.env.JATEXT_EMAIL_TRANSPORT;
+  sender.resetSmtpCircuit();
 
   /* ---------- 9: provider trouble must not cost anybody their account ---------- */
   const rescue = makeStubDb();

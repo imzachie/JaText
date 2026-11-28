@@ -37,6 +37,14 @@ function smtpHint(probe, diagnostics) {
   if (/TLS record/i.test(note)) {
     return "The relay answered this connection with TLS from the first byte, which is port 465, while the function is configured for 587. Set BREVO_SMTP_PORT=465, or clear it and let both ports be tried.";
   }
+  if (probe?.intercepted || attempts.some((a) => a.intercepted)) {
+    return (
+      `Something inside this runtime is terminating the TLS session itself - the certificate it presented names a loopback ` +
+      `address, which a relay on the internet never does. Outbound submission is blocked here and no Brevo setting changes that. ` +
+      `Send over the HTTPS API instead: set JATEXT_EMAIL_TRANSPORT=api (and, if Brevo answers 401, switch its ` +
+      `Security > Authorised IPs to "No IP review"), then redeploy this function.`
+    );
+  }
   if (allSilent) {
     return `The function could not hold a session with ${diagnostics.smtpHost} on any port it knows (${ports.join(", ")}). That is a network path question - the runtime has to be able to make an outbound connection to those ports - and not something a setting in Brevo can change.`;
   }
@@ -44,6 +52,44 @@ function smtpHint(probe, diagnostics) {
     return "The function could not hold a session with the relay at all. That is a network path question - the runtime must be able to make an outbound connection to this host and port - and it is worth checking that BREVO_SMTP_PORT and BREVO_SMTP_SSL agree with each other before anything else.";
   }
   return "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published.";
+}
+
+/**
+ * The HTTP API refused, which is one of two things, and the words have to say which.
+ *
+ * A key that is not the key is fixable from the dashboard in a minute. A source address that is
+ * not on the account's allow-list is not fixable from here at all - an Edge Function has no fixed
+ * egress IP to add, only a pool of them - so the answer is to stop restricting by IP, which
+ * Brevo itself recommends for exactly this shape of integration. The address it complained about
+ * is quoted back because it is already in Brevo's message and because it is the thing that makes
+ * the difference obvious.
+ */
+function apiHint(probe, diagnostics) {
+  const note = String(probe?.note || "");
+  if (/unrecogni[sz]ed ip|authoris|authorized ip|allow.?list|ip address/i.test(note)) {
+    const ip = (note.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b|[0-9a-f:]{15,}:\w+/i) || [])[0] || "";
+    return (
+      `Brevo is refusing this deployment's source address${ip ? ` (${ip})` : ""}, and an Edge Function has no fixed one to add to that list.` +
+      ` Set Brevo's Security > Authorised IPs to "No IP review" - app.brevo.com/security/authorised_ips - and mail starts within a minute.` +
+      ` The key is not the problem${diagnostics.keyLength ? `, and its length (${diagnostics.keyLength}) is what a real one looks like` : ""}.`
+    );
+  }
+  return (
+    "Brevo refused the stored API key. Copy the value from Brevo's own SMTP & API page, set it as BREVO_API_KEY, and redeploy this " +
+    "function, because a secret is only read when the function is published."
+  );
+}
+
+/**
+ * Nothing is wrong right now, and saying so is the whole point: a deployment that has given up
+ * on a transport has to be able to see that it did, and when it will ask again.
+ */
+function breakerHint(diagnostics) {
+  return (
+    `Mail is going over the HTTP API, because the SMTP relay was judged unusable from this runtime${diagnostics.smtpBreakerNote ? `: ${diagnostics.smtpBreakerNote}` : ""}. ` +
+    `It will be asked again after ${diagnostics.smtpBreakerUntil || "the cooldown ends"}, and ${diagnostics.smtpBreakerUntil ? "until then, " : ""}` +
+    `set JATEXT_EMAIL_TRANSPORT=smtp to test a repair immediately, or =api to stop asking at all.`
+  );
 }
 
 export default async function handler(req, res) {
@@ -120,7 +166,9 @@ export default async function handler(req, res) {
         : probe.ok === false
           ? diagnostics.transport === "smtp"
             ? smtpHint(probe, diagnostics)
-            : "Brevo refused the stored API key - or the address it is called from. This runtime has no fixed egress IP for Brevo's allow-list, so set the BREVO_SMTP_* variables and use the relay, which is not IP restricted. Then redeploy this function: a secret is only read when the function is published."
+            : apiHint(probe, diagnostics)
+        : diagnostics.smtpBreakerOpen
+          ? breakerHint(diagnostics)
           : probe.ok === true
             ? "Mail is configured and the provider accepts it" +
               (probe.port ? ` on port ${probe.port}/${probe.mode || "submission"}` : "") +

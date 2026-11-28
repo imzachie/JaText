@@ -693,7 +693,6 @@ function openTlsSocket({ host, port, timeoutMs = DEFAULT_TIMEOUT_MS, rejectUnaut
   });
 }
 function checkPeerIdentity(secure, host, rejectUnauthorized) {
-  if (!rejectUnauthorized) return null;
   let cert = null;
   try {
     cert = secure.getPeerCertificate?.() || null;
@@ -701,16 +700,42 @@ function checkPeerIdentity(secure, host, rejectUnauthorized) {
     cert = null;
   }
   if (!cert || !Object.keys(cert).length) {
-    return new SmtpError(`The mail server presented no certificate for ${host}, so the session is not trusted.`, { phase: "tls-verify" });
+    return rejectUnauthorized ? new SmtpError(`The mail server presented no certificate for ${host}, so the session is not trusted.`, { phase: "tls-verify" }) : null;
   }
   const subject = String(cert.subject?.CN || "");
   const names = [subject, ...Array.isArray(cert.subjectaltname) ? cert.subjectaltname : String(cert.subjectaltname || "").split(/,\s*/)].filter(Boolean);
-  const sanList = names.flatMap((n) => String(n).replace(/^(DNS:|IP:)/i, "").trim()).filter(Boolean);
+  const sanList = [...new Set(names.flatMap((n) => String(n).split(/,\s*/).map((x) => x.replace(/^(?:DNS|IP Address|IP):/i, "").trim()).filter(Boolean)))];
+  const isLoopbackName = (name) => {
+    if (/^127\./.test(name)) return true;
+    if (!name.includes(":")) return false;
+    const halves = name.split("::");
+    if (halves.length > 2) return false;
+    let groups;
+    if (halves.length === 2) {
+      const left = halves[0] ? halves[0].split(":") : [];
+      const right = halves[1] ? halves[1].split(":") : [];
+      const fill = 8 - left.length - right.length;
+      if (fill < 0) return false;
+      groups = [...left, ...Array(fill).fill("0"), ...right];
+    } else {
+      groups = name.split(":");
+    }
+    return groups.length === 8 && groups.slice(0, 7).every((g) => /^0+$/.test(g)) && /^0*1$/.test(groups[7]);
+  };
   const matched = sanList.some((name) => name.startsWith("*.") ? host.endsWith(name.slice(1)) : name === host);
-  if (!matched && !sanList.length) {
-    return new SmtpError(`The certificate from ${host} lists no host names (it says "${subject}"), so it cannot be checked.`, { phase: "tls-verify" });
+  if (!matched && sanList.length > 0 && sanList.every(isLoopbackName)) {
+    const err = new SmtpError(
+      `Something between this runtime and ${host} terminated the TLS session with a certificate for ${sanList.slice(0, 2).join(", ")}, which is a loopback address, so the mail server was never reached. Submission ports are commonly blocked this way; send over the HTTPS API instead (JATEXT_EMAIL_TRANSPORT=api).`,
+      { phase: "tls-verify" }
+    );
+    err.intercepted = true;
+    return err;
   }
+  if (!rejectUnauthorized) return null;
   if (!matched) {
+    if (!sanList.length) {
+      return new SmtpError(`The certificate from ${host} lists no host names (it says "${subject}"), so it cannot be checked.`, { phase: "tls-verify" });
+    }
     const wild = sanList.find((name) => name.endsWith(".com") && name.includes("smtp-relay"));
     return new SmtpError(
       `The certificate from ${host} is for ${sanList.slice(0, 3).join(", ") || "another name"}, not this host.` + (wild ? ` Set BREVO_SMTP_SERVERNAME=${wild} to name it, rather than switching verification off.` : ""),
@@ -941,7 +966,7 @@ async function probeSmtpLogin({ host, port = 587, user = "", pass = "", from = "
         note: `${phase === "mail-from" ? "The relay refused this sender" : "The relay refused this recipient"}: ${err.message}. A "sender not verified" here means the address has to be confirmed in Brevo's Senders list first.`
       };
     }
-    return { ok: false, status: Number(err?.code || 0) || 0, note: err?.message || String(err), phase };
+    return { ok: false, status: Number(err?.code || 0) || 0, note: err?.message || String(err), phase, intercepted: err?.intercepted === true };
   }
 }
 var EOL, DEFAULT_TIMEOUT_MS, SmtpError;
@@ -1023,7 +1048,11 @@ function emailSenderConfig() {
     rejectUnauthorized: flag("SMTP_TLS_REJECT_UNAUTHORIZED", true)
   };
   const smtpReady = Boolean(smtp.host && smtp.user && smtp.pass);
-  const kind = smtpReady ? "smtp" : apiKey ? "brevo-api" : "none";
+  const preference = (env("JATEXT_EMAIL_TRANSPORT") || "auto").toLowerCase();
+  const breakerOpen = smtpCircuit.openedAt > 0 && Date.now() - smtpCircuit.openedAt < SMTP_CIRCUIT_COOLDOWN_MS;
+  const wantSmtp = preference === "smtp" || preference !== "api" && smtpReady && !breakerOpen;
+  const kind = wantSmtp && smtpReady ? "smtp" : apiKey ? "brevo-api" : "none";
+  const cooldownUntil = breakerOpen ? new Date(smtpCircuit.openedAt + SMTP_CIRCUIT_COOLDOWN_MS).toISOString() : "";
   let warning = "";
   if (kind === "brevo-api" && apiKey && !BREVO_KEY_SHAPE.test(apiKey)) {
     warning = `BREVO_API_KEY does not look like a Brevo API key (expected "xkeysib-" plus 64 hex characters plus a 16 character suffix, 89 in all; this one is ${apiKey.length}). A key copied short is the usual reason, and Brevo answers it with 401.`;
@@ -1032,13 +1061,20 @@ function emailSenderConfig() {
     enabled: Boolean(fromEmail && (smtpReady || apiKey)),
     kind,
     smtpReady,
+    preference,
+    breaker: {
+      failures: smtpCircuit.failures,
+      open: breakerOpen,
+      note: smtpCircuit.note,
+      until: cooldownUntil
+    },
     smtp,
     apiKey,
     fromEmail,
     base,
     fromName: env("BREVO_SENDER_NAME") || "JaText",
     warning,
-    reason: fromEmail ? !smtpReady && !apiKey ? "Neither the SMTP relay nor an API key is configured, so nothing can be sent" : "" : "No BREVO_SENDER_EMAIL is set, which has to be an address Brevo has verified"
+    reason: fromEmail ? !smtpReady && !apiKey ? "Neither the SMTP relay nor an API key is configured, so nothing can be sent" : kind !== "smtp" && smtpReady && preference !== "api" && breakerOpen ? `The SMTP relay is on cooldown${smtpCircuit.note ? ` (${smtpCircuit.note})` : ""}, so mail goes over the HTTP API until ${cooldownUntil}` : "" : "No BREVO_SENDER_EMAIL is set, which has to be an address Brevo has verified"
   };
 }
 function isEmailSenderConfigured() {
@@ -1063,6 +1099,7 @@ function asSendError(err, fallback) {
   wrapped.code = Number(err?.code) ? "email_rejected" : "email_unreachable";
   wrapped.smtpPhase = err?.phase || "";
   wrapped.attempts = err?.attempts;
+  wrapped.intercepted = err?.intercepted === true;
   return wrapped;
 }
 function orderedCandidates(candidates) {
@@ -1090,6 +1127,7 @@ async function sendOverSmtpRelay(cfg, message) {
       });
       continue;
     }
+    const startedAt = Date.now();
     try {
       const result = await smtpSendMail({
         ...cfg.smtp,
@@ -1107,7 +1145,23 @@ async function sendOverSmtpRelay(cfg, message) {
       return { ...result, port: candidate.port, mode: candidate.secure ? "implicit-tls" : "starttls" };
     } catch (err2) {
       const transportLevel = isTransportLevel(err2);
-      attempts.push({ port: candidate.port, secure: candidate.secure, transportLevel, note: String(err2?.message || err2) });
+      attempts.push({
+        port: candidate.port,
+        secure: candidate.secure,
+        transportLevel,
+        intercepted: err2?.intercepted === true,
+        ms: Date.now() - startedAt,
+        phase: err2?.phase || "",
+        note: String(err2?.message || err2)
+      });
+      if (err2?.intercepted === true) {
+        smtpCircuit.failures = SMTP_CIRCUIT_FAILURES;
+        smtpCircuit.openedAt = Date.now();
+        smtpCircuit.note = `the mail server's certificate named a loopback address, so something between this runtime and port ${candidate.port} is terminating TLS`;
+        console.warn(
+          `[email] the SMTP transport is on cooldown for ${Math.round(SMTP_CIRCUIT_COOLDOWN_MS / 6e4)} minutes (${smtpCircuit.note}); mail goes over the HTTP API until then.`
+        );
+      }
       if (!transportLevel) {
         const wrapped = asSendError(err2, "Could not send the email through the SMTP relay.");
         wrapped.attempts = attempts;
@@ -1123,6 +1177,32 @@ async function sendOverSmtpRelay(cfg, message) {
   err.attempts = attempts;
   throw err;
 }
+function isStuckTransport(err) {
+  const attempts = err?.attempts || [];
+  if (!attempts.length || !attempts.every((a) => a.transportLevel)) return false;
+  return Math.max(...attempts.map((a) => Number(a.ms) || 0)) >= 1e3;
+}
+function stuckNote(err) {
+  const attempts = err?.attempts || [];
+  const slowest = attempts.reduce((a, b) => Number(b.ms || 0) > Number(a.ms || 0) ? b : a, attempts[0] || {});
+  if (!slowest.port) return "the relay did not answer inside the send budget";
+  return `${describeCandidate(slowest)} timed out waiting ${Math.round(Number(slowest.ms) || 0)}ms for the relay to answer`;
+}
+function recordSmtpFailure(note) {
+  smtpCircuit.failures += 1;
+  smtpCircuit.note = String(note || smtpCircuit.note || "");
+  if (smtpCircuit.failures >= SMTP_CIRCUIT_FAILURES) {
+    smtpCircuit.openedAt = Date.now();
+    console.warn(
+      `[email] the SMTP transport is on cooldown for ${Math.round(SMTP_CIRCUIT_COOLDOWN_MS / 6e4)} minutes${smtpCircuit.note ? ` (${smtpCircuit.note})` : ""}; mail goes over the HTTP API until then.`
+    );
+  }
+}
+function resetSmtpCircuit() {
+  smtpCircuit.failures = 0;
+  smtpCircuit.openedAt = 0;
+  smtpCircuit.note = "";
+}
 async function sendEmail(message) {
   const cfg = emailSenderConfig();
   if (!cfg.enabled) {
@@ -1132,9 +1212,12 @@ async function sendEmail(message) {
   }
   if (cfg.kind === "smtp") {
     try {
-      return await sendOverSmtpRelay(cfg, message);
+      const sent = await sendOverSmtpRelay(cfg, message);
+      if (smtpCircuit.failures) resetSmtpCircuit();
+      return sent;
     } catch (err) {
-      if (cfg.apiKey && isUnreachable(err)) {
+      if (isStuckTransport(err)) recordSmtpFailure(stuckNote(err));
+      if (cfg.apiKey && (isUnreachable(err) || err?.intercepted === true)) {
         const apiErr = await sendViaBrevoApi(cfg, message).catch((inner) => inner);
         if (apiErr instanceof Error && !apiErr.code) throw asSendError(apiErr, "Could not send the email.");
         if (!(apiErr instanceof Error)) return { sent: true, transport: "smtp-then-api" };
@@ -1200,6 +1283,10 @@ function emailSenderDiagnostics() {
     warning: cfg.warning || "",
     keyLength: cfg.apiKey.length,
     keyFingerprint: cfg.apiKey ? shortHash(cfg.apiKey) : "",
+    transportPreference: cfg.preference,
+    smtpBreakerOpen: cfg.breaker.open,
+    smtpBreakerNote: cfg.breaker.note,
+    smtpBreakerUntil: cfg.breaker.until,
     smtpHost: cfg.smtp.host || "",
     smtpPort: cfg.smtp.host ? cfg.smtp.port : 0,
     smtpCandidates: cfg.smtp.host ? cfg.smtp.candidates.map(describeCandidate) : [],
@@ -1252,22 +1339,31 @@ async function probeEmailSender({ force = false } = {}) {
   }
   let result;
   if (cfg.kind === "smtp") {
-    const startedAt = Date.now();
     const candidates = orderedCandidates(cfg.smtp.candidates);
     const settled = await Promise.all(
       candidates.map(async (candidate) => {
+        const startedAt = Date.now();
         const attempt = await probeSmtpLogin({
           ...cfg.smtp,
           port: candidate.port,
           secure: candidate.secure,
           from: cfg.fromEmail,
           timeoutMs: CANDIDATE_TIMEOUT_MS
-        }).catch((err) => ({ ok: false, note: String(err?.message || err) }));
+        }).catch((err) => ({
+          ok: false,
+          note: String(err?.message || err),
+          phase: err?.phase || "",
+          intercepted: err?.intercepted === true
+        }));
         return {
           port: candidate.port,
           secure: candidate.secure,
           ok: attempt.ok === true,
+          // Each port timed on its own clock: with every candidate asked at once, a shared
+          // start would report "whoever finished first" as if it were "whoever was fastest".
           ms: Date.now() - startedAt,
+          phase: attempt.phase || "",
+          intercepted: attempt.intercepted === true,
           // The session's own report where there was one, and the server's words where there
           // was not: enough to tell "the port is filtered" from "the handshake completed and
           // the relay closed the session" from "the certificate says a different name".
@@ -1277,7 +1373,16 @@ async function probeEmailSender({ force = false } = {}) {
         };
       })
     );
-    const attempts = settled.map((a) => ({ port: a.port, secure: a.secure, ok: a.ok, ms: a.ms, tls: a.tls, note: a.note }));
+    const attempts = settled.map((a) => ({
+      port: a.port,
+      secure: a.secure,
+      ok: a.ok,
+      ms: a.ms,
+      phase: a.phase,
+      intercepted: a.intercepted,
+      tls: a.tls,
+      note: a.note
+    }));
     const winner = settled.find((a) => a.ok);
     if (winner) {
       preferredCandidate = candidates.find((c) => c.port === winner.port && c.secure === winner.secure) || null;
@@ -1287,13 +1392,17 @@ async function probeEmailSender({ force = false } = {}) {
         mode: winner.secure ? "implicit-tls" : "starttls",
         ms: winner.ms
       };
+    } else {
+      result = {
+        ok: false,
+        status: 0,
+        sender: cfg.fromEmail,
+        note: attempts.map((a) => `${describeCandidate(a)}: ${a.note}`).join(" | ")
+      };
+      if (attempts.some((a) => a.intercepted)) {
+        result.intercepted = true;
+      }
     }
-    result = result || {
-      ok: false,
-      status: 0,
-      sender: cfg.fromEmail,
-      note: attempts.map((a) => `${describeCandidate(a)}: ${a.note}`).join(" | ")
-    };
     result.transport = "smtp";
     result.sender = cfg.fromEmail;
     result.attempts = attempts;
@@ -1323,7 +1432,7 @@ async function probeEmailSender({ force = false } = {}) {
   lastProbeResult = result;
   return { ...result, cached: false };
 }
-var DEFAULT_API_BASE, DEFAULT_SMTP_CANDIDATES, BREVO_KEY_SHAPE, TRANSPORT_PHASES, preferredCandidate, CANDIDATE_TIMEOUT_MS, SEND_BUDGET_MS, PROBE_COOLDOWN_MS, lastProbeAt, lastProbeResult;
+var DEFAULT_API_BASE, DEFAULT_SMTP_CANDIDATES, BREVO_KEY_SHAPE, SMTP_CIRCUIT_FAILURES, SMTP_CIRCUIT_COOLDOWN_MS, smtpCircuit, TRANSPORT_PHASES, preferredCandidate, CANDIDATE_TIMEOUT_MS, SEND_BUDGET_MS, PROBE_COOLDOWN_MS, lastProbeAt, lastProbeResult;
 var init_emailSender = __esm({
   "server/emailSender.js"() {
     init_smtpClient();
@@ -1338,6 +1447,9 @@ var init_emailSender = __esm({
       { port: 2525, secure: false }
     ];
     BREVO_KEY_SHAPE = /^xkeysib-[0-9a-f]{64}-[A-Za-z0-9]{16}$/;
+    SMTP_CIRCUIT_FAILURES = 2;
+    SMTP_CIRCUIT_COOLDOWN_MS = 10 * 6e4;
+    smtpCircuit = { failures: 0, openedAt: 0, note: "" };
     TRANSPORT_PHASES = /* @__PURE__ */ new Set(["", "connect", "greeting", "starttls", "ehlo-after-tls", "tls-mode"]);
     preferredCandidate = null;
     CANDIDATE_TIMEOUT_MS = 8e3;
@@ -10160,6 +10272,9 @@ function smtpHint(probe, diagnostics) {
   if (/TLS record/i.test(note)) {
     return "The relay answered this connection with TLS from the first byte, which is port 465, while the function is configured for 587. Set BREVO_SMTP_PORT=465, or clear it and let both ports be tried.";
   }
+  if (probe?.intercepted || attempts.some((a) => a.intercepted)) {
+    return `Something inside this runtime is terminating the TLS session itself - the certificate it presented names a loopback address, which a relay on the internet never does. Outbound submission is blocked here and no Brevo setting changes that. Send over the HTTPS API instead: set JATEXT_EMAIL_TRANSPORT=api (and, if Brevo answers 401, switch its Security > Authorised IPs to "No IP review"), then redeploy this function.`;
+  }
   if (allSilent) {
     return `The function could not hold a session with ${diagnostics.smtpHost} on any port it knows (${ports.join(", ")}). That is a network path question - the runtime has to be able to make an outbound connection to those ports - and not something a setting in Brevo can change.`;
   }
@@ -10167,6 +10282,17 @@ function smtpHint(probe, diagnostics) {
     return "The function could not hold a session with the relay at all. That is a network path question - the runtime must be able to make an outbound connection to this host and port - and it is worth checking that BREVO_SMTP_PORT and BREVO_SMTP_SSL agree with each other before anything else.";
   }
   return "The SMTP relay refused the login or the sender. Check BREVO_SMTP_USER and BREVO_SMTP_PASS against Brevo's SMTP page, and the sender address against its Senders list; after any secret changes, redeploy this function, because a secret is only read when the function is published.";
+}
+function apiHint(probe, diagnostics) {
+  const note = String(probe?.note || "");
+  if (/unrecogni[sz]ed ip|authoris|authorized ip|allow.?list|ip address/i.test(note)) {
+    const ip = (note.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b|[0-9a-f:]{15,}:\w+/i) || [])[0] || "";
+    return `Brevo is refusing this deployment's source address${ip ? ` (${ip})` : ""}, and an Edge Function has no fixed one to add to that list. Set Brevo's Security > Authorised IPs to "No IP review" - app.brevo.com/security/authorised_ips - and mail starts within a minute. The key is not the problem${diagnostics.keyLength ? `, and its length (${diagnostics.keyLength}) is what a real one looks like` : ""}.`;
+  }
+  return "Brevo refused the stored API key. Copy the value from Brevo's own SMTP & API page, set it as BREVO_API_KEY, and redeploy this function, because a secret is only read when the function is published.";
+}
+function breakerHint(diagnostics) {
+  return `Mail is going over the HTTP API, because the SMTP relay was judged unusable from this runtime${diagnostics.smtpBreakerNote ? `: ${diagnostics.smtpBreakerNote}` : ""}. It will be asked again after ${diagnostics.smtpBreakerUntil || "the cooldown ends"}, and ${diagnostics.smtpBreakerUntil ? "until then, " : ""}set JATEXT_EMAIL_TRANSPORT=smtp to test a repair immediately, or =api to stop asking at all.`;
 }
 async function handler8(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -10224,7 +10350,7 @@ async function handler8(req, res) {
     probe,
     // Which failure this is, said out loud, because a signup can only report the one
     // sentence it got back from a send.
-    hint: !diagnostics.configured ? diagnostics.reason : diagnostics.warning ? diagnostics.warning : probe.ok === false ? diagnostics.transport === "smtp" ? smtpHint(probe, diagnostics) : "Brevo refused the stored API key - or the address it is called from. This runtime has no fixed egress IP for Brevo's allow-list, so set the BREVO_SMTP_* variables and use the relay, which is not IP restricted. Then redeploy this function: a secret is only read when the function is published." : probe.ok === true ? "Mail is configured and the provider accepts it" + (probe.port ? ` on port ${probe.port}/${probe.mode || "submission"}` : "") + ". A code that never arrives is then the recipient's spam folder, not this server." : "Mail is configured, but nothing was asked of it. Drop probe=0 to ask."
+    hint: !diagnostics.configured ? diagnostics.reason : diagnostics.warning ? diagnostics.warning : probe.ok === false ? diagnostics.transport === "smtp" ? smtpHint(probe, diagnostics) : apiHint(probe, diagnostics) : diagnostics.smtpBreakerOpen ? breakerHint(diagnostics) : probe.ok === true ? "Mail is configured and the provider accepts it" + (probe.port ? ` on port ${probe.port}/${probe.mode || "submission"}` : "") + ". A code that never arrives is then the recipient's spam folder, not this server." : "Mail is configured, but nothing was asked of it. Drop probe=0 to ask."
   });
 }
 var init_email_test = __esm({
