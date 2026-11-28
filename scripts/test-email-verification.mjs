@@ -65,6 +65,13 @@ function mintToken(sub, email) {
 function serveBrevo() {
   const sent = [];
   let mode = "ok";
+  // Brevo's own words when its Authorised IPs setting refuses a call, down to the link
+  // it hands back. The exact shape a real deployment answered with once, and the one the
+  // advice attached to it has to be right about.
+  const ipBlocked = JSON.stringify({
+    message:
+      "We have detected you are using an unrecognised IP address 203.0.113.99. If you performed this action make sure to add the new IP address in this link: https://app.brevo.com/security/authorised_ips",
+  });
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const chunks = [];
@@ -80,6 +87,10 @@ function serveBrevo() {
             );
             return;
           }
+          if (mode === "ip-blocked") {
+            res.writeHead(401, { "Content-Type": "application/json" }).end(ipBlocked);
+            return;
+          }
           res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ count: 0, lists: [] }));
           return;
         }
@@ -88,6 +99,10 @@ function serveBrevo() {
             res.writeHead(400, { "Content-Type": "application/json" }).end(
               JSON.stringify({ message: "The sender email has not been verified" }),
             );
+            return;
+          }
+          if (mode === "ip-blocked") {
+            res.writeHead(401, { "Content-Type": "application/json" }).end(ipBlocked);
             return;
           }
           if (mode === "hang") {
@@ -1134,6 +1149,21 @@ async function main() {
     JSON.stringify({ result: closedG, breaker: afterClosed.breaker, kind: afterClosed.kind }),
   );
 
+  // The advice attached to a refused API call has to match what else can carry the mail.
+  // With the relay healthy the refusal points at the relay - that is the channel that is
+  // not IP restricted - and the stub refuses the way Brevo really did, in its own words,
+  // so the branch that ships is the one a deployment actually hits.
+  brevo.mode = "ip-blocked";
+  const ipBlockedHealthy = await sender.sendEmail({ to: "ip-healthy@example.com", subject: "x", text: "y" }).catch((err) => err);
+  check(
+    "while the relay is healthy the refused API call points at the relay",
+    ipBlockedHealthy instanceof Error &&
+      /unrecognised IP address/.test(ipBlockedHealthy.message) &&
+      /Use the SMTP relay instead/.test(ipBlockedHealthy.message),
+    String(ipBlockedHealthy?.message || ipBlockedHealthy).slice(0, 240),
+  );
+  brevo.mode = "ok";
+
   // A port that accepts and then never answers: the one failure that is evidence about the
   // runtime rather than about the account. Two of them open the cooldown; `stallFor` ends
   // each silence after a chosen interval so the two strikes cost seconds, not two
@@ -1177,6 +1207,40 @@ async function main() {
     straightApi?.sent === true && straightApi.transport === "brevo-api" && stallG1.log.connections === stallG1Before,
     JSON.stringify({ result: straightApi, conns: `${stallG1Before}->${stallG1.log.connections}` }),
   );
+
+  // The same refusal with the relay already judged unusable must not recommend it: the
+  // sentence would sit right next to the evidence that the relay is dead, and an operator
+  // who follows it configures the wrong half of the problem. This is the exact shape a
+  // real signup came back with - interception caught, API refused on the allow-list - and
+  // the advice has to name the one setting that makes the API work instead.
+  brevo.mode = "ip-blocked";
+  const ipBlockedOpen = await sender.sendEmail({ to: "ip-open@example.com", subject: "x", text: "y" }).catch((err) => err);
+  check(
+    "with the cooldown open the refused API call says the API is the only channel",
+    ipBlockedOpen instanceof Error &&
+      /No IP review/.test(ipBlockedOpen.message) &&
+      /blocked from this runtime/.test(ipBlockedOpen.message) &&
+      !/Use the SMTP relay instead/.test(ipBlockedOpen.message),
+    String(ipBlockedOpen?.message || ipBlockedOpen).slice(0, 260),
+  );
+
+  // An API-only deployment gets the same setting named without a relay being blamed for
+  // anything: there is no relay to point at, so the sentence has to say that instead.
+  const savedUser8g = process.env.BREVO_SMTP_USER;
+  const savedPass8g = process.env.BREVO_SMTP_PASS;
+  delete process.env.BREVO_SMTP_USER;
+  delete process.env.BREVO_SMTP_PASS;
+  const ipBlockedNoRelay = await sender.sendEmail({ to: "ip-norelay@example.com", subject: "x", text: "y" }).catch((err) => err);
+  check(
+    "without a relay configured the refusal says so rather than pointing at a relay",
+    ipBlockedNoRelay instanceof Error &&
+      /No SMTP relay is configured/.test(ipBlockedNoRelay.message) &&
+      /No IP review/.test(ipBlockedNoRelay.message),
+    String(ipBlockedNoRelay?.message || ipBlockedNoRelay).slice(0, 260),
+  );
+  brevo.mode = "ok";
+  process.env.BREVO_SMTP_USER = savedUser8g;
+  process.env.BREVO_SMTP_PASS = savedPass8g;
 
   // The certificate a TLS interceptor inside the runtime answers with: every name on it is
   // an address that means "this machine", and none of them is the host being dialled. On

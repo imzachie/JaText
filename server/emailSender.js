@@ -79,6 +79,13 @@ const SMTP_CIRCUIT_FAILURES = 2;
 const SMTP_CIRCUIT_COOLDOWN_MS = 10 * 60_000;
 const smtpCircuit = { failures: 0, openedAt: 0, note: "" };
 
+/** Whether the cooldown is still running, judged against the clock at the moment somebody
+ * asks rather than against a flag somebody would have to remember to clear when ten
+ * minutes pass. */
+function smtpBreakerOpen() {
+  return smtpCircuit.openedAt > 0 && Date.now() - smtpCircuit.openedAt < SMTP_CIRCUIT_COOLDOWN_MS;
+}
+
 /** An env switch with a default that has to be spelled out, because both of the two
  * places using it want the opposite one and neither is the safe guess. */
 function flag(name, fallback) {
@@ -175,7 +182,7 @@ export function emailSenderConfig() {
   // review source addresses, where the API is far the faster of the two; `smtp` is for the
   // opposite case, and for tests that must not be able to hide behind the fallback.
   const preference = (env("JATEXT_EMAIL_TRANSPORT") || "auto").toLowerCase();
-  const breakerOpen = smtpCircuit.openedAt > 0 && Date.now() - smtpCircuit.openedAt < SMTP_CIRCUIT_COOLDOWN_MS;
+  const breakerOpen = smtpBreakerOpen();
   // `smtp` outranks an open circuit - it is how an operator says "I repaired it, ask again"
   // without waiting out the cooldown - while `api` stands down from a perfectly healthy
   // relay. `auto` (the default) is the only state the breaker itself controls.
@@ -536,10 +543,21 @@ async function sendViaBrevoApi(cfg, { to, subject, text, html }) {
     // A 401 here is usually not a wrong key. Say which of the two it is, because the
     // fix is different and only one of them is fixable from this side.
     const ipRestricted = /unrecogni[sz]ed ip|whitelist|allow.?list|ip address/i.test(detail);
+    // The advice at the end depends on what else this deployment has. Pointing at the
+    // relay is right when the relay works, and actively wrong when the relay is the thing
+    // just proved unusable: a message that recommends the channel while sitting next to
+    // its own evidence that the channel is dead is how an operator ends up configuring
+    // the wrong half of the problem. When there is no relay at all, naming it as a
+    // fallback is equally unhelpful, so each state gets the sentence that matches it.
+    const channel = cfg.smtpReady && !smtpBreakerOpen()
+      ? "Use the SMTP relay instead - the relay is not IP restricted."
+      : `${cfg.smtpReady ? "The SMTP relay is blocked from this runtime too" : "No SMTP relay is configured"}, so the API is the only channel: ` +
+        `set Brevo's Security > Authorised IPs to "No IP review" (app.brevo.com/security/authorised_ips) - ` +
+        `adding this address cannot work, because the function's egress address rotates.`;
     const message = response.status !== 401
       ? `Brevo refused the email (HTTP ${response.status})${detail ? `: ${detail}` : ""}`
       : ipRestricted
-        ? `Brevo only accepts API calls from addresses on its allow-list, and this function has no fixed one to add (${detail}). Use the SMTP relay instead - the relay is not IP restricted.`
+        ? `Brevo only accepts API calls from addresses on its allow-list, and this function has no fixed one to add (${detail}). ${channel}`
         : `Brevo rejected the API key${detail ? `: ${detail}` : ""}`;
     const err = new Error(message);
     err.code = "email_rejected";
